@@ -510,6 +510,50 @@ function loadNoteSourceServiceModule(
         loadNoteSourceConfig: () => Promise<{
           task_sources: string[];
         }>;
+        loadNoteSourceSnapshot: (taskSources: string[]) => Promise<{
+          defaultSourceRoot: string | null;
+          notes: Array<{
+            content: string;
+            fileName: string;
+            modifiedAtMs: number | null;
+            path: string;
+            sourceRoot: string;
+            title: string;
+          }>;
+          sourceRoots: string[];
+        }>;
+        loadNoteSourceIndex: (taskSources: string[]) => Promise<{
+          defaultSourceRoot: string | null;
+          notes: Array<{
+            fileName: string;
+            modifiedAtMs: number | null;
+            path: string;
+            sizeBytes: number;
+            sourceRoot: string;
+          }>;
+          sourceRoots: string[];
+        }>;
+        createNoteSource: (taskSources: string[], content: string) => Promise<{
+          content: string;
+          fileName: string;
+          modifiedAtMs: number | null;
+          path: string;
+          sourceRoot: string;
+          title: string;
+        }>;
+        saveNoteSource: (taskSources: string[], path: string, content: string) => Promise<{
+          content: string;
+          fileName: string;
+          modifiedAtMs: number | null;
+          path: string;
+          sourceRoot: string;
+          title: string;
+        }>;
+        runNoteSourceInspection: (taskSources: string[], reason: string) => Promise<{
+          accepted_sources?: string[];
+          ok?: boolean;
+          reason?: string;
+        }>;
       };
     },
     rpcMethods,
@@ -3006,6 +3050,279 @@ test("note source config prefers cached task sources when the backend returns an
     const config = await loadNoteSourceConfig();
     assert.deepEqual(config.task_sources, ["/Users/runtime/CialloClaw/workspace/todos"]);
     assert.deepEqual(syncedTaskSources, [["/Users/runtime/CialloClaw/workspace/todos"]]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("note source snapshot and index retry with runtime defaults after stale source path failures", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const staleSource = "C:/Users/33721/AppData/Local/CialloClaw/workspace/todos";
+  const runtimeSource = "D:/runtime/CialloClaw/workspace/todos";
+  const syncedTaskSources: string[][] = [];
+  const snapshotCalls: string[][] = [];
+  const indexCalls: string[][] = [];
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem(
+      "cialloclaw.settings",
+      JSON.stringify({
+        settings: {
+          task_automation: {
+            task_sources: [staleSource],
+          },
+        },
+      }),
+    );
+
+    const { loadNoteSourceIndex, loadNoteSourceSnapshot } = loadNoteSourceServiceModule(
+      undefined,
+      {
+        invoke: async (command, args) => {
+          if (command === "desktop_get_runtime_defaults") {
+            return {
+              workspace_path: "D:/runtime/CialloClaw/workspace",
+              task_sources: [runtimeSource],
+            };
+          }
+
+          if (command === "desktop_sync_settings_snapshot") {
+            const settings = args?.settings as { task_automation?: { task_sources?: string[] } } | undefined;
+            syncedTaskSources.push(settings?.task_automation?.task_sources ?? []);
+            return undefined;
+          }
+
+          if (command === "desktop_load_source_notes") {
+            const sources = (args?.sources as string[] | undefined) ?? [];
+            snapshotCalls.push(sources);
+            if (sources[0] === staleSource) {
+              throw new Error(`task inspection source not found: ${staleSource}`);
+            }
+
+            return {
+              default_source_root: runtimeSource,
+              notes: [
+                {
+                  content: "Runtime note",
+                  file_name: "notes.md",
+                  modified_at_ms: 123,
+                  path: `${runtimeSource}/notes.md`,
+                  source_root: runtimeSource,
+                  title: "notes",
+                },
+              ],
+              source_roots: sources,
+            };
+          }
+
+          if (command === "desktop_load_source_note_index") {
+            const sources = (args?.sources as string[] | undefined) ?? [];
+            indexCalls.push(sources);
+            if (sources[0] === staleSource) {
+              throw new Error(`task inspection source not found: ${staleSource}`);
+            }
+
+            return {
+              default_source_root: runtimeSource,
+              notes: [
+                {
+                  file_name: "notes.md",
+                  modified_at_ms: 123,
+                  path: `${runtimeSource}/notes.md`,
+                  size_bytes: 64,
+                  source_root: runtimeSource,
+                },
+              ],
+              source_roots: sources,
+            };
+          }
+
+          throw new Error(`unexpected desktop command: ${command}`);
+        },
+      },
+    );
+
+    const snapshot = await loadNoteSourceSnapshot([staleSource]);
+    const index = await loadNoteSourceIndex([staleSource]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.deepEqual(snapshotCalls, [[staleSource], [runtimeSource]]);
+    assert.deepEqual(indexCalls, [[staleSource], [runtimeSource]]);
+    assert.equal(snapshot.defaultSourceRoot, runtimeSource);
+    assert.deepEqual(snapshot.sourceRoots, [runtimeSource]);
+    assert.equal(snapshot.notes[0]?.path, `${runtimeSource}/notes.md`);
+    assert.equal(index.defaultSourceRoot, runtimeSource);
+    assert.deepEqual(index.sourceRoots, [runtimeSource]);
+    assert.equal(index.notes[0]?.sourceRoot, runtimeSource);
+
+    const savedSettings = JSON.parse(localStorage.getItem("cialloclaw.settings") ?? "{}") as {
+      settings?: { task_automation?: { task_sources?: string[] } };
+    };
+    assert.deepEqual(savedSettings.settings?.task_automation?.task_sources, [runtimeSource]);
+    assert.equal(
+      syncedTaskSources.some((sources) => JSON.stringify(sources) === JSON.stringify([runtimeSource])),
+      true,
+    );
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("note source create, save, and inspection retry with runtime defaults after stale source path failures", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const staleSource = "C:/Users/33721/AppData/Local/CialloClaw/workspace/todos";
+  const runtimeSource = "D:/runtime/CialloClaw/workspace/todos";
+  const createCalls: string[][] = [];
+  const saveCalls: string[][] = [];
+  const inspectionCalls: string[][] = [];
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem(
+      "cialloclaw.settings",
+      JSON.stringify({
+        settings: {
+          task_automation: {
+            task_sources: [staleSource],
+          },
+        },
+      }),
+    );
+
+    const { createNoteSource, runNoteSourceInspection, saveNoteSource } = loadNoteSourceServiceModule(
+      {
+        runTaskInspector: async (params) => {
+          const request = params as { reason: string; target_sources: string[] };
+          inspectionCalls.push(request.target_sources);
+          if (request.target_sources[0] === staleSource) {
+            throw new Error(`task inspection source not found: ${staleSource}`);
+          }
+
+          return {
+            accepted_sources: request.target_sources,
+            ok: true,
+            reason: request.reason,
+          };
+        },
+      },
+      {
+        invoke: async (command, args) => {
+          if (command === "desktop_get_runtime_defaults") {
+            return {
+              workspace_path: "D:/runtime/CialloClaw/workspace",
+              task_sources: [runtimeSource],
+            };
+          }
+
+          if (command === "desktop_sync_settings_snapshot") {
+            return undefined;
+          }
+
+          if (command === "desktop_create_source_note") {
+            const sources = (args?.sources as string[] | undefined) ?? [];
+            createCalls.push(sources);
+            if (sources[0] === staleSource) {
+              throw new Error(`task inspection source not found: ${staleSource}`);
+            }
+
+            return {
+              content: args?.content,
+              file_name: "notes.md",
+              modified_at_ms: 456,
+              path: `${runtimeSource}/notes.md`,
+              source_root: runtimeSource,
+              title: "notes",
+            };
+          }
+
+          if (command === "desktop_save_source_note") {
+            const sources = (args?.sources as string[] | undefined) ?? [];
+            saveCalls.push(sources);
+            if (sources[0] === staleSource) {
+              throw new Error(`task inspection source not found: ${staleSource}`);
+            }
+
+            return {
+              content: args?.content,
+              file_name: "notes.md",
+              modified_at_ms: 789,
+              path: args?.path,
+              source_root: runtimeSource,
+              title: "notes",
+            };
+          }
+
+          throw new Error(`unexpected desktop command: ${command}`);
+        },
+      },
+    );
+
+    const createdNote = await createNoteSource([staleSource], "New note");
+    const savedNote = await saveNoteSource([staleSource], `${runtimeSource}/notes.md`, "Updated note");
+    const inspectionResult = await runNoteSourceInspection([staleSource], "manual refresh");
+
+    assert.deepEqual(createCalls, [[staleSource], [runtimeSource]]);
+    assert.deepEqual(saveCalls, [[staleSource], [runtimeSource]]);
+    assert.deepEqual(inspectionCalls, [[staleSource], [runtimeSource]]);
+    assert.equal(createdNote.sourceRoot, runtimeSource);
+    assert.equal(createdNote.content, "New note");
+    assert.equal(savedNote.path, `${runtimeSource}/notes.md`);
+    assert.equal(savedNote.content, "Updated note");
+    assert.deepEqual(inspectionResult, {
+      accepted_sources: [runtimeSource],
+      ok: true,
+      reason: "manual refresh",
+    });
+
+    const savedSettings = JSON.parse(localStorage.getItem("cialloclaw.settings") ?? "{}") as {
+      settings?: { task_automation?: { task_sources?: string[] } };
+    };
+    assert.deepEqual(savedSettings.settings?.task_automation?.task_sources, [runtimeSource]);
   } finally {
     if (originalWindow === undefined) {
       Reflect.deleteProperty(globalThis, "window");
