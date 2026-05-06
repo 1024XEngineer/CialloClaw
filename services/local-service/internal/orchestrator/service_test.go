@@ -14537,6 +14537,9 @@ func TestFresherTaskRecordRestoresRuntimeAnchorsWhenStorageProjectionIsNewer(t *
 		Snapshot: contextsvc.TaskContextSnapshot{
 			PageURL:     "https://example.com/build",
 			AppName:     "Chrome",
+			BrowserKind: "chrome",
+			ProcessPath: "C:/Program Files/Google/Chrome/Application/chrome.exe",
+			ProcessID:   4242,
 			WindowTitle: "Browser - Build Dashboard",
 		},
 	}
@@ -14564,6 +14567,9 @@ func TestFresherTaskRecordRestoresRuntimeAnchorsWhenStorageProjectionIsNewer(t *
 	}
 	if selected.Snapshot.PageURL != runtimeTask.Snapshot.PageURL ||
 		selected.Snapshot.AppName != runtimeTask.Snapshot.AppName ||
+		selected.Snapshot.BrowserKind != runtimeTask.Snapshot.BrowserKind ||
+		selected.Snapshot.ProcessPath != runtimeTask.Snapshot.ProcessPath ||
+		selected.Snapshot.ProcessID != runtimeTask.Snapshot.ProcessID ||
 		selected.Snapshot.WindowTitle != runtimeTask.Snapshot.WindowTitle {
 		t.Fatalf("expected runtime snapshot anchors to fill the newer partial storage snapshot, got %+v", selected.Snapshot)
 	}
@@ -14571,6 +14577,26 @@ func TestFresherTaskRecordRestoresRuntimeAnchorsWhenStorageProjectionIsNewer(t *
 		len(selected.Snapshot.Files) != 1 ||
 		selected.Snapshot.Files[0] != storageTask.Snapshot.Files[0] {
 		t.Fatalf("expected newer storage snapshot payload to stay selected, got %+v", selected.Snapshot)
+	}
+}
+
+func TestSnapshotFromTaskPreservesAttachOnlySnapshot(t *testing.T) {
+	attachOnlyTask := runengine.TaskRecord{
+		TaskID: "task_attach_only",
+		Title:  "Resume attached browser task",
+		Snapshot: contextsvc.TaskContextSnapshot{
+			BrowserKind: "edge",
+			ProcessPath: "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+			ProcessID:   5150,
+		},
+	}
+
+	snapshot := snapshotFromTask(attachOnlyTask)
+	if snapshot.BrowserKind != "edge" || snapshot.ProcessPath != attachOnlyTask.Snapshot.ProcessPath || snapshot.ProcessID != 5150 {
+		t.Fatalf("expected attach-only snapshot to survive resume reconstruction, got %+v", snapshot)
+	}
+	if snapshot.InputType != "" || snapshot.Text != "" {
+		t.Fatalf("expected attach-only snapshot to avoid synthetic text fallback, got %+v", snapshot)
 	}
 }
 
