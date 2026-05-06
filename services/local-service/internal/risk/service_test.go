@@ -1,6 +1,9 @@
 package risk
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestServiceDefaultLevel(t *testing.T) {
 	service := NewService()
@@ -135,6 +138,40 @@ func TestServiceAssess(t *testing.T) {
 			},
 		},
 		{
+			name: "browser_navigate_requires_approval",
+			input: AssessmentInput{
+				OperationName:       "browser_navigate",
+				TargetObject:        "https://example.com/new-page",
+				CapabilityAvailable: true,
+				ImpactScope: ImpactScope{
+					Webpages: []string{"https://example.com/new-page"},
+				},
+			},
+			want: AssessmentResult{
+				RiskLevel:        RiskLevelYellow,
+				ApprovalRequired: true,
+				Reason:           ReasonWebpageApproval,
+				ImpactScope:      ImpactScope{Webpages: []string{"https://example.com/new-page"}},
+			},
+		},
+		{
+			name: "browser_interact_requires_approval",
+			input: AssessmentInput{
+				OperationName:       "browser_interact",
+				TargetObject:        "Example Docs",
+				CapabilityAvailable: true,
+				ImpactScope: ImpactScope{
+					Webpages: []string{"Example Docs"},
+				},
+			},
+			want: AssessmentResult{
+				RiskLevel:        RiskLevelYellow,
+				ApprovalRequired: true,
+				Reason:           ReasonWebpageApproval,
+				ImpactScope:      ImpactScope{Webpages: []string{"Example Docs"}},
+			},
+		},
+		{
 			name: "write_file_unknown_workspace_requires_approval",
 			input: AssessmentInput{
 				OperationName:       "write_file",
@@ -234,6 +271,9 @@ func TestServiceAssess(t *testing.T) {
 			}
 			if got.ImpactScope.OverwriteOrDeleteRisk != tc.want.ImpactScope.OverwriteOrDeleteRisk {
 				t.Fatalf("expected overwrite_or_delete_risk %v, got %v", tc.want.ImpactScope.OverwriteOrDeleteRisk, got.ImpactScope.OverwriteOrDeleteRisk)
+			}
+			if strings.Join(got.ImpactScope.Webpages, "\n") != strings.Join(tc.want.ImpactScope.Webpages, "\n") {
+				t.Fatalf("expected webpages %+v, got %+v", tc.want.ImpactScope.Webpages, got.ImpactScope.Webpages)
 			}
 		})
 	}
