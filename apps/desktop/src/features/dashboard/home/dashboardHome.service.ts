@@ -1357,7 +1357,7 @@ export async function loadDashboardHomeData(): Promise<DashboardHomeData> {
     : (loadWarnings.push(formatDashboardHomeLoadWarning("建议流", recommendationsResult.reason)), createEmptyRecommendationResult());
   const mirrorOverview = mirrorOverviewResult.status === "fulfilled"
     ? mirrorOverviewResult.value
-    : null;
+    : (loadWarnings.push(formatDashboardHomeLoadWarning("镜子概览", mirrorOverviewResult.reason)), null);
   const noteBuckets = noteBucketsResult.status === "fulfilled"
     ? noteBucketsResult.value
     : null;

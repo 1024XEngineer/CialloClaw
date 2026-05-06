@@ -6509,9 +6509,10 @@ test("dashboard home keeps module and recommendation failures local instead of b
       const data = await service.loadDashboardHomeData();
 
       assert.equal(data.stateGroups.length, 4);
-      assert.equal(data.loadWarnings.length, 2);
+      assert.equal(data.loadWarnings.length, 3);
       assert.match(data.loadWarnings[0], /便签摘要同步失败：notes module unavailable/);
       assert.match(data.loadWarnings[1], /建议流同步失败：recommendations unavailable/);
+      assert.match(data.loadWarnings[2], /镜子概览同步失败：mirror overview unavailable/);
       assert.equal(data.focusLine.headline, "当前整体风险等级为 低");
       assert.equal(data.summonTemplates.length, 1);
       assert.equal(data.voiceSequences.length, 0);
@@ -6543,6 +6544,9 @@ test("dashboard home keeps module and recommendation failures local instead of b
       }),
       getRecommendations: async () => {
         throw new Error("recommendations unavailable");
+      },
+      getMirrorOverview: async () => {
+        throw new Error("mirror overview unavailable");
       },
       listNotepad: async () => ({
         items: [],
