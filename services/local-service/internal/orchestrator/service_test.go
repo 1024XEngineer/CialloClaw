@@ -91,6 +91,10 @@ type stubPlaywrightClient struct {
 	searchResult     tools.BrowserPageSearchResult
 	interactResult   tools.BrowserPageInteractResult
 	structuredResult tools.BrowserStructuredDOMResult
+	attachResult     tools.BrowserAttachedPageResult
+	snapshotResult   tools.BrowserSnapshotResult
+	navigateResult   tools.BrowserNavigationResult
+	tabsResult       tools.BrowserTabsListResult
 	err              error
 }
 
@@ -140,6 +144,10 @@ func (s stubPlaywrightClient) ReadPage(_ context.Context, url string) (tools.Bro
 	return result, nil
 }
 
+func (s stubPlaywrightClient) ReadPageAttached(ctx context.Context, url string, _ tools.BrowserAttachConfig) (tools.BrowserPageReadResult, error) {
+	return s.ReadPage(ctx, url)
+}
+
 func (localHTTPPlaywrightClient) ReadPage(_ context.Context, url string) (tools.BrowserPageReadResult, error) {
 	response, err := http.Get(url)
 	if err != nil {
@@ -168,16 +176,68 @@ func (localHTTPPlaywrightClient) ReadPage(_ context.Context, url string) (tools.
 	}, nil
 }
 
+func (c localHTTPPlaywrightClient) ReadPageAttached(ctx context.Context, url string, _ tools.BrowserAttachConfig) (tools.BrowserPageReadResult, error) {
+	return c.ReadPage(ctx, url)
+}
+
 func (localHTTPPlaywrightClient) SearchPage(_ context.Context, url, query string, _ int) (tools.BrowserPageSearchResult, error) {
 	return tools.BrowserPageSearchResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (localHTTPPlaywrightClient) SearchPageAttached(_ context.Context, _, _ string, _ int, _ tools.BrowserAttachConfig) (tools.BrowserPageSearchResult, error) {
+	return tools.BrowserPageSearchResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (s stubPlaywrightClient) SearchPageAttached(ctx context.Context, url, query string, limit int, _ tools.BrowserAttachConfig) (tools.BrowserPageSearchResult, error) {
+	return s.SearchPage(ctx, url, query, limit)
 }
 
 func (localHTTPPlaywrightClient) InteractPage(_ context.Context, _ string, _ []map[string]any) (tools.BrowserPageInteractResult, error) {
 	return tools.BrowserPageInteractResult{}, tools.ErrPlaywrightSidecarFailed
 }
 
+func (localHTTPPlaywrightClient) InteractPageAttached(_ context.Context, _ string, _ []map[string]any, _ tools.BrowserAttachConfig) (tools.BrowserPageInteractResult, error) {
+	return tools.BrowserPageInteractResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (s stubPlaywrightClient) InteractPageAttached(ctx context.Context, url string, actions []map[string]any, _ tools.BrowserAttachConfig) (tools.BrowserPageInteractResult, error) {
+	return s.InteractPage(ctx, url, actions)
+}
+
 func (localHTTPPlaywrightClient) StructuredDOM(_ context.Context, _ string) (tools.BrowserStructuredDOMResult, error) {
 	return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (localHTTPPlaywrightClient) StructuredDOMAttached(_ context.Context, _ string, _ tools.BrowserAttachConfig) (tools.BrowserStructuredDOMResult, error) {
+	return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (s stubPlaywrightClient) StructuredDOMAttached(ctx context.Context, url string, _ tools.BrowserAttachConfig) (tools.BrowserStructuredDOMResult, error) {
+	return s.StructuredDOM(ctx, url)
+}
+
+func (localHTTPPlaywrightClient) AttachCurrentPage(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserAttachedPageResult, error) {
+	return tools.BrowserAttachedPageResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (localHTTPPlaywrightClient) SnapshotBrowser(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserSnapshotResult, error) {
+	return tools.BrowserSnapshotResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (localHTTPPlaywrightClient) NavigateBrowser(_ context.Context, _ tools.BrowserNavigateRequest) (tools.BrowserNavigationResult, error) {
+	return tools.BrowserNavigationResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (localHTTPPlaywrightClient) ListBrowserTabs(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserTabsListResult, error) {
+	return tools.BrowserTabsListResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (localHTTPPlaywrightClient) FocusBrowserTab(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserAttachedPageResult, error) {
+	return tools.BrowserAttachedPageResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (localHTTPPlaywrightClient) InteractBrowser(_ context.Context, _ tools.BrowserInteractRequest) (tools.BrowserPageInteractResult, error) {
+	return tools.BrowserPageInteractResult{}, tools.ErrPlaywrightSidecarFailed
 }
 
 func (c *recordingScreenCaptureClient) StartSession(ctx context.Context, input tools.ScreenSessionStartInput) (tools.ScreenSessionState, error) {
@@ -258,6 +318,48 @@ func (s stubPlaywrightClient) StructuredDOM(_ context.Context, url string) (tool
 		result.URL = url
 	}
 	return result, nil
+}
+
+func (s stubPlaywrightClient) AttachCurrentPage(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserAttachedPageResult, error) {
+	if s.err != nil {
+		return tools.BrowserAttachedPageResult{}, s.err
+	}
+	return s.attachResult, nil
+}
+
+func (s stubPlaywrightClient) SnapshotBrowser(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserSnapshotResult, error) {
+	if s.err != nil {
+		return tools.BrowserSnapshotResult{}, s.err
+	}
+	return s.snapshotResult, nil
+}
+
+func (s stubPlaywrightClient) NavigateBrowser(_ context.Context, _ tools.BrowserNavigateRequest) (tools.BrowserNavigationResult, error) {
+	if s.err != nil {
+		return tools.BrowserNavigationResult{}, s.err
+	}
+	return s.navigateResult, nil
+}
+
+func (s stubPlaywrightClient) ListBrowserTabs(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserTabsListResult, error) {
+	if s.err != nil {
+		return tools.BrowserTabsListResult{}, s.err
+	}
+	return s.tabsResult, nil
+}
+
+func (s stubPlaywrightClient) FocusBrowserTab(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserAttachedPageResult, error) {
+	if s.err != nil {
+		return tools.BrowserAttachedPageResult{}, s.err
+	}
+	return s.attachResult, nil
+}
+
+func (s stubPlaywrightClient) InteractBrowser(_ context.Context, _ tools.BrowserInteractRequest) (tools.BrowserPageInteractResult, error) {
+	if s.err != nil {
+		return tools.BrowserPageInteractResult{}, s.err
+	}
+	return s.interactResult, nil
 }
 
 func (s stubOCRWorkerClient) ExtractText(_ context.Context, _ string) (tools.OCRTextResult, error) {
@@ -13004,6 +13106,47 @@ func TestServicePluginDetailGetFallsBackToStaticCatalogWhenPluginRuntimeServiceM
 	if len(result["tools"].([]map[string]any)) == 0 {
 		t.Fatalf("expected static plugin detail fallback to retain declared tool contracts, got %+v", result)
 	}
+}
+
+func TestServicePluginDetailGetIncludesBrowserToolMetadata(t *testing.T) {
+	service := newTestService()
+	result, err := service.PluginDetailGet(map[string]any{
+		"plugin_id":       "playwright",
+		"include_runtime": true,
+		"include_metrics": true,
+		"include_events":  true,
+	})
+	if err != nil {
+		t.Fatalf("plugin detail get failed: %v", err)
+	}
+	pluginValue := result["plugin"].(map[string]any)
+	if pluginValue["plugin_id"] != "playwright" {
+		t.Fatalf("expected playwright plugin detail header, got %+v", pluginValue)
+	}
+	tools := result["tools"].([]map[string]any)
+	if len(tools) != 10 {
+		t.Fatalf("expected playwright plugin detail to expose ten tools, got %+v", tools)
+	}
+	for _, toolName := range []string{"browser_attach_current", "browser_snapshot", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact"} {
+		item := pluginToolItemByName(tools, toolName)
+		if item == nil {
+			t.Fatalf("expected playwright plugin detail to include %q, got %+v", toolName, tools)
+		}
+		deliveryMapping := item["delivery_mapping"].(map[string]any)
+		citationSources := deliveryMapping["citation_source_types"].([]string)
+		if len(citationSources) != 1 || citationSources[0] != "web" {
+			t.Fatalf("expected browser tool %q to retain web citation mapping, got %+v", toolName, deliveryMapping)
+		}
+	}
+}
+
+func pluginToolItemByName(items []map[string]any, toolName string) map[string]any {
+	for _, item := range items {
+		if item["tool_name"] == toolName {
+			return item
+		}
+	}
+	return nil
 }
 
 func TestServiceSnapshotUsesStablePrimaryWorker(t *testing.T) {

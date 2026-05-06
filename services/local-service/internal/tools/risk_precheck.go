@@ -16,7 +16,7 @@ const (
 	RiskLevelRed    = string(risksvc.RiskLevelRed)
 )
 
-// WorkspaceBoundaryInfo 描述当前工具调用涉及的工作区边界信息。
+// WorkspaceBoundaryInfo describes the workspace boundary touched by a tool call.
 type WorkspaceBoundaryInfo struct {
 	WorkspacePath string `json:"workspace_path,omitempty"`
 	TargetPath    string `json:"target_path,omitempty"`
@@ -24,13 +24,13 @@ type WorkspaceBoundaryInfo struct {
 	Exists        *bool  `json:"exists,omitempty"`
 }
 
-// PlatformCapabilityInfo 预留平台能力信息，后续可继续扩展审批/检查点能力接线。
+// PlatformCapabilityInfo keeps platform capability facts for approval and checkpoint wiring.
 type PlatformCapabilityInfo struct {
 	Available                 bool `json:"available"`
 	SupportsWorkspaceBoundary bool `json:"supports_workspace_boundary"`
 }
 
-// RiskPrecheckInput 是风险预检查的最小输入。
+// RiskPrecheckInput is the minimal input for a local risk precheck.
 type RiskPrecheckInput struct {
 	Metadata  ToolMetadata           `json:"metadata"`
 	ToolName  string                 `json:"tool_name"`
@@ -39,7 +39,7 @@ type RiskPrecheckInput struct {
 	Platform  PlatformCapabilityInfo `json:"platform"`
 }
 
-// RiskPrecheckResult 是风险预检查的最小输出。
+// RiskPrecheckResult is the minimal output from a local risk precheck.
 type RiskPrecheckResult struct {
 	RiskLevel          string         `json:"risk_level"`
 	ApprovalRequired   bool           `json:"approval_required"`
@@ -50,12 +50,12 @@ type RiskPrecheckResult struct {
 	ImpactScope        map[string]any `json:"impact_scope,omitempty"`
 }
 
-// RiskPrechecker 在执行前完成本地风险判定，不直接触发工具执行。
+// RiskPrechecker evaluates local risk before execution without invoking the tool.
 type RiskPrechecker interface {
 	Precheck(ctx context.Context, input RiskPrecheckInput) (RiskPrecheckResult, error)
 }
 
-// DefaultRiskPrechecker 提供最小可用的默认策略。
+// DefaultRiskPrechecker provides the default minimum viable policy.
 type DefaultRiskPrechecker struct {
 	service *risksvc.Service
 }
@@ -85,7 +85,7 @@ func (p DefaultRiskPrechecker) Precheck(_ context.Context, input RiskPrecheckInp
 	}, nil
 }
 
-// BuildRiskPrecheckInput 从执行上下文中提取风险判定所需的最小信息。
+// BuildRiskPrecheckInput extracts the minimal risk facts from the execution context.
 func BuildRiskPrecheckInput(metadata ToolMetadata, toolName string, execCtx *ToolExecuteContext, input map[string]any) RiskPrecheckInput {
 	precheckInput := RiskPrecheckInput{
 		Metadata: metadata,
@@ -175,7 +175,17 @@ func extractTargetPath(toolName string, input map[string]any) (string, bool) {
 			return value, true
 		}
 	}
-	if isWebpageTool(toolName) {
+	if toolName == "browser_navigate" {
+		if value, ok := input["url"].(string); ok && strings.TrimSpace(value) != "" {
+			return value, true
+		}
+	}
+	if isAttachedBrowserTool(toolName) {
+		if value, ok := browserAttachTarget(input); ok {
+			return value, true
+		}
+	}
+	if isLegacyWebpageTool(toolName) {
 		if value, ok := input["url"].(string); ok && strings.TrimSpace(value) != "" {
 			return value, true
 		}
@@ -259,9 +269,39 @@ func webpagesFromTarget(target string) []string {
 	return []string{trimmed}
 }
 
+func browserAttachTarget(input map[string]any) (string, bool) {
+	attach, ok := input["attach"].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	target, ok := attach["target"].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	for _, key := range []string{"url", "title_contains"} {
+		if value, ok := target[key].(string); ok && strings.TrimSpace(value) != "" {
+			return value, true
+		}
+	}
+	return "", false
+}
+
 func isWebpageTool(toolName string) bool {
-	switch toolName {
+	return isLegacyWebpageTool(toolName) || isAttachedBrowserTool(toolName)
+}
+
+func isLegacyWebpageTool(toolName string) bool {
+	switch strings.TrimSpace(toolName) {
 	case "page_read", "page_search", "page_interact", "structured_dom":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAttachedBrowserTool(toolName string) bool {
+	switch strings.TrimSpace(toolName) {
+	case "browser_attach_current", "browser_snapshot", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact":
 		return true
 	default:
 		return false
