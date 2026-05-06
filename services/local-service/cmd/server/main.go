@@ -2,7 +2,11 @@ package main
 
 import (
 	"context"
+	"flag"
+	"fmt"
+	"io"
 	"log"
+	"os"
 	"os/signal"
 	"syscall"
 
@@ -10,24 +14,63 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 )
 
-// main 处理当前模块的相关逻辑。
-func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+type appStarter interface {
+	Start(context.Context) error
+}
 
-	cfg := config.Load()
-	app, err := bootstrap.New(cfg)
-	if err != nil {
-		log.Fatalf("bootstrap local service: %v", err)
+var (
+	loadConfigForMain = func(options config.LoadOptions) config.Config {
+		return config.Load(options)
+	}
+	newBootstrapForMain = func(cfg config.Config) (appStarter, error) {
+		return bootstrap.New(cfg)
+	}
+	logPrintfForMain     = log.Printf
+	notifyContextForMain = signal.NotifyContext
+	runMainForProcess    = run
+	logFatalForMain      = log.Fatal
+)
+
+func run(ctx context.Context, args []string) error {
+	flags := flag.NewFlagSet("local-service", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+
+	dataDir := flags.String("data-dir", "", "Path to the per-user application data directory.")
+	namedPipe := flags.String("named-pipe", "", "Windows named pipe path for the local RPC transport.")
+	debugHTTP := flags.String("debug-http", "", "Debug HTTP listen address for local diagnostics.")
+	if err := flags.Parse(args); err != nil {
+		return err
 	}
 
-	log.Printf(
-		"local service transport=%s named_pipe=%s debug_http=%s",
+	cfg := loadConfigForMain(config.LoadOptions{
+		DataDir:          *dataDir,
+		NamedPipeName:    *namedPipe,
+		DebugHTTPAddress: *debugHTTP,
+	})
+	app, err := newBootstrapForMain(cfg)
+	if err != nil {
+		return fmt.Errorf("bootstrap local service: %w", err)
+	}
+
+	logPrintfForMain(
+		"local service transport=%s named_pipe=%s debug_http=%s data_dir=%s",
 		cfg.RPC.Transport,
 		cfg.RPC.NamedPipeName,
 		cfg.RPC.DebugHTTPAddress,
+		cfg.DataDir,
 	)
 	if err := app.Start(ctx); err != nil {
-		log.Fatalf("run local service: %v", err)
+		return fmt.Errorf("run local service: %w", err)
+	}
+
+	return nil
+}
+
+func main() {
+	ctx, stop := notifyContextForMain(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := runMainForProcess(ctx, os.Args[1:]); err != nil {
+		logFatalForMain(err)
 	}
 }

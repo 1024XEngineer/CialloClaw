@@ -1,5 +1,3 @@
-// Package config defines local-service configuration defaults and runtime path
-// resolution.
 package config
 
 import (
@@ -15,7 +13,6 @@ const (
 	defaultDatabaseFileName     = "cialloclaw.db"
 )
 
-// ModelConfig describes the runtime model configuration.
 type ModelConfig struct {
 	Provider             string
 	ModelID              string
@@ -30,25 +27,26 @@ type ModelConfig struct {
 	ContextKeepRecent    int
 }
 
-// RPCConfig describes the JSON-RPC transport configuration.
 type RPCConfig struct {
 	Transport        string
 	NamedPipeName    string
 	DebugHTTPAddress string
 }
 
-// Config contains the assembled local-service runtime configuration.
+type LoadOptions struct {
+	DataDir          string
+	NamedPipeName    string
+	DebugHTTPAddress string
+}
+
 type Config struct {
 	RPC           RPCConfig
+	DataDir       string
 	WorkspaceRoot string
 	DatabasePath  string
 	Model         ModelConfig
 }
 
-// DefaultRuntimeRoot resolves the canonical local runtime root. The resolver
-// prefers explicit environment overrides, then platform user-scoped app-data
-// locations, and falls back to a relative directory only when no profile root
-// is available.
 func DefaultRuntimeRoot() string {
 	return defaultRuntimeRootFromValues(
 		runtime.GOOS,
@@ -59,8 +57,6 @@ func DefaultRuntimeRoot() string {
 	)
 }
 
-// DefaultWorkspaceRoot resolves the canonical workspace root used by the local
-// service runtime.
 func DefaultWorkspaceRoot() string {
 	if value := cleanPathEnv("CIALLOCLAW_WORKSPACE_ROOT"); value != "" {
 		return value
@@ -68,8 +64,6 @@ func DefaultWorkspaceRoot() string {
 	return filepath.Join(DefaultRuntimeRoot(), defaultWorkspaceDirName)
 }
 
-// DefaultDatabasePath resolves the canonical SQLite database path used by the
-// local service runtime.
 func DefaultDatabasePath() string {
 	if value := cleanPathEnv("CIALLOCLAW_DATABASE_PATH"); value != "" {
 		return value
@@ -104,16 +98,43 @@ func defaultRuntimeRootFromValues(goos, runtimeOverride, localAppData, homeDir, 
 	return filepath.Join(defaultRuntimeDirectoryName)
 }
 
-// Load returns the assembled local-service configuration.
-func Load() Config {
+func Load(options ...LoadOptions) Config {
+	loadOptions := LoadOptions{}
+	if len(options) > 0 {
+		loadOptions = options[0]
+	}
+
+	dataDir := resolveOptionalPath(loadOptions.DataDir)
+	if dataDir == "" {
+		dataDir = DefaultRuntimeRoot()
+	}
+
+	namedPipeName := resolveOptionalPipeName(loadOptions.NamedPipeName)
+	if namedPipeName == "" {
+		namedPipeName = `\\.\pipe\cialloclaw-rpc`
+	}
+
+	debugHTTPAddress := resolveOptionalDebugHTTPAddress(loadOptions.DebugHTTPAddress)
+	if debugHTTPAddress == "" {
+		debugHTTPAddress = ":4317"
+	}
+
+	workspaceRoot := DefaultWorkspaceRoot()
+	databasePath := DefaultDatabasePath()
+	if strings.TrimSpace(loadOptions.DataDir) != "" {
+		workspaceRoot = filepath.Join(dataDir, defaultWorkspaceDirName)
+		databasePath = filepath.Join(dataDir, "data", defaultDatabaseFileName)
+	}
+
 	return Config{
 		RPC: RPCConfig{
 			Transport:        "named_pipe",
-			NamedPipeName:    `\\.\pipe\cialloclaw-rpc`,
-			DebugHTTPAddress: ":4317",
+			NamedPipeName:    namedPipeName,
+			DebugHTTPAddress: debugHTTPAddress,
 		},
-		WorkspaceRoot: DefaultWorkspaceRoot(),
-		DatabasePath:  DefaultDatabasePath(),
+		DataDir:       dataDir,
+		WorkspaceRoot: workspaceRoot,
+		DatabasePath:  databasePath,
 		Model: ModelConfig{
 			Provider:             "openai_responses",
 			ModelID:              "gpt-5.4",
@@ -128,4 +149,34 @@ func Load() Config {
 			ContextKeepRecent:    4,
 		},
 	}
+}
+
+func resolveOptionalPath(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+
+	return filepath.Clean(trimmed)
+}
+
+func resolveOptionalPipeName(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+
+	if strings.HasPrefix(trimmed, `\\.\pipe\`) {
+		return trimmed
+	}
+
+	if strings.HasPrefix(trimmed, `\.\pipe\`) {
+		return `\` + trimmed
+	}
+
+	return trimmed
+}
+
+func resolveOptionalDebugHTTPAddress(raw string) string {
+	return strings.TrimSpace(raw)
 }

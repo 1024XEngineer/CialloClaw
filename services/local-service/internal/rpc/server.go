@@ -1,4 +1,3 @@
-// Package rpc hosts the local JSON-RPC server and debug transports.
 package rpc
 
 import (
@@ -10,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -18,9 +18,6 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/orchestrator"
 )
 
-// Server is the transport entrypoint for local-service.
-// It accepts debug HTTP, named-pipe streams, and dispatches stable JSON-RPC
-// methods into the orchestrator.
 type Server struct {
 	transport       string
 	namedPipeName   string
@@ -30,7 +27,6 @@ type Server struct {
 	now             func() time.Time
 }
 
-// NewServer constructs the RPC server and registers debug endpoints.
 func NewServer(cfg serviceconfig.RPCConfig, orchestrator *orchestrator.Service) *Server {
 	server := &Server{
 		transport:     cfg.Transport,
@@ -56,9 +52,6 @@ func NewServer(cfg serviceconfig.RPCConfig, orchestrator *orchestrator.Service) 
 	return server
 }
 
-// Start serves every transport enabled by the current config.
-// During P0 it intentionally keeps both debug HTTP and named pipe available for
-// local integration work.
 func (s *Server) Start(ctx context.Context) error {
 	errCh := make(chan error, 2)
 
@@ -90,7 +83,6 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 }
 
-// Shutdown closes the debug HTTP server when it was started.
 func (s *Server) Shutdown(ctx context.Context) error {
 	if s.debugHTTPServer == nil {
 		return nil
@@ -103,7 +95,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return nil
 }
 
-// handleHealthz returns a minimal health snapshot plus orchestrator state.
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	writeDebugCORSHeaders(w)
 	setDebugCORSOrigin(w, r)
@@ -122,7 +113,6 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleHTTPRPC serves debug-time HTTP JSON-RPC requests.
 func (s *Server) handleHTTPRPC(w http.ResponseWriter, r *http.Request) {
 	writeDebugCORSHeaders(w)
 	setDebugCORSOrigin(w, r)
@@ -151,7 +141,6 @@ func (s *Server) handleHTTPRPC(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(response)
 }
 
-// handleDebugEvents returns buffered notifications for a task.
 func (s *Server) handleDebugEvents(w http.ResponseWriter, r *http.Request) {
 	writeDebugCORSHeaders(w)
 	setDebugCORSOrigin(w, r)
@@ -186,8 +175,6 @@ func (s *Server) handleDebugEvents(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleDebugEventStream polls and emits task notifications over SSE for debug
-// consumers.
 func (s *Server) handleDebugEventStream(w http.ResponseWriter, r *http.Request) {
 	writeDebugCORSHeaders(w)
 	setDebugCORSOrigin(w, r)
@@ -262,7 +249,7 @@ func setDebugCORSOrigin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	host := strings.ToLower(parsed.Hostname())
-	if host != "localhost" && host != "127.0.0.1" {
+	if !isAllowedDebugOriginHost(host) {
 		return
 	}
 
@@ -270,14 +257,79 @@ func setDebugCORSOrigin(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Vary", "Origin")
 }
 
-// handleStreamConn serves JSON-RPC requests on a long-lived stream and then
-// replays buffered notifications on the same connection.
+func isAllowedDebugOriginHost(host string) bool {
+	normalized := strings.TrimSpace(strings.ToLower(host))
+	switch normalized {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	default:
+		return strings.HasSuffix(normalized, ".localhost")
+	}
+}
+
+type streamEnvelopeWriter struct {
+	encoder *json.Encoder
+	writeMu sync.Mutex
+}
+
+func (w *streamEnvelopeWriter) writeEnvelope(envelope any) error {
+	w.writeMu.Lock()
+	defer w.writeMu.Unlock()
+	return w.encoder.Encode(envelope)
+}
+
+type streamTaskCoordinator struct {
+	mu    sync.Mutex
+	locks map[string]*sync.Mutex
+}
+
+func newStreamTaskCoordinator() *streamTaskCoordinator {
+	return &streamTaskCoordinator{locks: map[string]*sync.Mutex{}}
+}
+
+func (c *streamTaskCoordinator) withTaskLocks(taskIDs map[string]bool, fn func()) {
+	if c == nil || len(taskIDs) == 0 {
+		fn()
+		return
+	}
+
+	orderedTaskIDs := make([]string, 0, len(taskIDs))
+	for taskID := range taskIDs {
+		orderedTaskIDs = append(orderedTaskIDs, taskID)
+	}
+	sort.Strings(orderedTaskIDs)
+
+	locks := make([]*sync.Mutex, 0, len(orderedTaskIDs))
+	c.mu.Lock()
+	for _, taskID := range orderedTaskIDs {
+		lock := c.locks[taskID]
+		if lock == nil {
+			lock = &sync.Mutex{}
+			c.locks[taskID] = lock
+		}
+		locks = append(locks, lock)
+	}
+	c.mu.Unlock()
+
+	for _, lock := range locks {
+		lock.Lock()
+	}
+	defer func() {
+		for index := len(locks) - 1; index >= 0; index-- {
+			locks[index].Unlock()
+		}
+	}()
+
+	fn()
+}
+
 func (s *Server) handleStreamConn(conn net.Conn) {
 	defer conn.Close()
 
 	decoder := json.NewDecoder(conn)
-	encoder := json.NewEncoder(conn)
-	var writeMu sync.Mutex
+	writer := &streamEnvelopeWriter{encoder: json.NewEncoder(conn)}
+	taskCoordinator := newStreamTaskCoordinator()
+	var taskStartRequestMu sync.Mutex
 
 	for {
 		var request requestEnvelope
@@ -286,7 +338,7 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 				return
 			}
 
-			_ = encoder.Encode(newErrorEnvelope(nil, &rpcError{
+			_ = writer.writeEnvelope(newErrorEnvelope(nil, &rpcError{
 				Code:    errInvalidParams,
 				Message: "INVALID_PARAMS",
 				Detail:  "invalid json-rpc payload",
@@ -295,37 +347,67 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 			return
 		}
 
-		streamedRuntimeCounts := map[string]int{}
-		requestTaskIDs, requestSessionID, requestTraceID := requestRoutingHints(request)
-		var requestTaskMu sync.RWMutex
-		addRequestTaskID := func(taskID string) {
-			trimmed := strings.TrimSpace(taskID)
-			if trimmed == "" {
-				return
-			}
-			requestTaskMu.Lock()
-			if requestTaskIDs == nil {
-				requestTaskIDs = map[string]bool{}
-			}
-			requestTaskIDs[trimmed] = true
-			requestTaskMu.Unlock()
-		}
-		hasRequestTaskID := func(taskID string) bool {
-			requestTaskMu.RLock()
-			defer requestTaskMu.RUnlock()
-			return requestTaskIDs != nil && requestTaskIDs[taskID]
-		}
-		matchesTaskStart := func(sessionID, traceID string) bool {
-			switch {
-			case requestTraceID != "":
-				return requestTraceID == traceID
-			case requestSessionID != "":
-				return requestSessionID == sessionID
-			default:
-				return false
-			}
-		}
+		go s.handleStreamRequest(request, writer, taskCoordinator, &taskStartRequestMu)
+	}
+}
 
+func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnvelopeWriter, taskCoordinator *streamTaskCoordinator, taskStartMu *sync.Mutex) {
+	if shouldTrackStartedTask(request.Method) {
+		// Task-starting requests on one shared desktop stream must stay serialized.
+		// Their runtime-notification correlation temporarily learns task ids from
+		// task-start events, and parallel submits on the same connection can
+		// otherwise cross-wire notifications before that mapping is established.
+		taskStartMu.Lock()
+		defer taskStartMu.Unlock()
+	}
+
+	streamedRuntimeCounts := map[string]int{}
+	var streamedRuntimeMu sync.Mutex
+	requestTaskIDs, requestSessionID, requestTraceID := requestRoutingHints(request)
+	var requestTaskMu sync.RWMutex
+	addRequestTaskID := func(taskID string) {
+		trimmed := strings.TrimSpace(taskID)
+		if trimmed == "" {
+			return
+		}
+		requestTaskMu.Lock()
+		if requestTaskIDs == nil {
+			requestTaskIDs = map[string]bool{}
+		}
+		requestTaskIDs[trimmed] = true
+		requestTaskMu.Unlock()
+	}
+	hasRequestTaskID := func(taskID string) bool {
+		requestTaskMu.RLock()
+		defer requestTaskMu.RUnlock()
+		return requestTaskIDs != nil && requestTaskIDs[taskID]
+	}
+	matchesTaskStart := func(sessionID, traceID string) bool {
+		switch {
+		case requestTraceID != "":
+			return requestTraceID == traceID
+		case requestSessionID != "":
+			return requestSessionID == sessionID
+		default:
+			return false
+		}
+	}
+	markRuntimeNotificationStreamed := func(key string) {
+		streamedRuntimeMu.Lock()
+		streamedRuntimeCounts[key]++
+		streamedRuntimeMu.Unlock()
+	}
+	consumeStreamedRuntimeNotification := func(key string) bool {
+		streamedRuntimeMu.Lock()
+		defer streamedRuntimeMu.Unlock()
+		if streamedRuntimeCounts[key] == 0 {
+			return false
+		}
+		streamedRuntimeCounts[key]--
+		return true
+	}
+
+	taskCoordinator.withTaskLocks(requestTaskIDs, func() {
 		unsubscribeRuntime := func() {}
 		if requestTaskIDs != nil || shouldTrackStartedTask(request.Method) {
 			unsubscribeRuntime = s.orchestrator.SubscribeRuntimeNotifications(func(taskID string, method string, params map[string]any) {
@@ -336,10 +418,8 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 				if notificationTaskID == "" || !hasRequestTaskID(notificationTaskID) {
 					return
 				}
-				writeMu.Lock()
-				defer writeMu.Unlock()
-				if err := encoder.Encode(newNotificationEnvelope(method, params)); err == nil {
-					streamedRuntimeCounts[notificationKey(method, notificationTaskID, params)]++
+				if err := writer.writeEnvelope(newNotificationEnvelope(method, params)); err == nil {
+					markRuntimeNotificationStreamed(notificationKey(method, notificationTaskID, params))
 				}
 			})
 		}
@@ -358,10 +438,7 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 		unsubscribeTaskStart()
 		unsubscribeRuntime()
 
-		writeMu.Lock()
-		err := encoder.Encode(response)
-		writeMu.Unlock()
-		if err != nil {
+		if err := writer.writeEnvelope(response); err != nil {
 			return
 		}
 
@@ -375,23 +452,17 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 				method := stringValue(notification, "method", "task.updated")
 				params := mapValue(notification, "params")
 				key := notificationKey(method, taskID, params)
-				if isLiveRuntimeMethod(method) && streamedRuntimeCounts[key] > 0 {
-					streamedRuntimeCounts[key]--
+				if isLiveRuntimeMethod(method) && consumeStreamedRuntimeNotification(key) {
 					continue
 				}
-				writeMu.Lock()
-				err := encoder.Encode(newNotificationEnvelope(method, params))
-				writeMu.Unlock()
-				if err != nil {
+				if err := writer.writeEnvelope(newNotificationEnvelope(method, params)); err != nil {
 					return
 				}
 			}
 		}
-	}
+	})
 }
 
-// dispatch is the single RPC dispatch path that validates protocol shape,
-// resolves handlers, decodes params, and rewraps orchestrator output.
 func (s *Server) dispatch(request requestEnvelope) any {
 	if request.JSONRPC != "2.0" {
 		return newErrorEnvelope(request.ID, &rpcError{
@@ -425,13 +496,10 @@ func (s *Server) dispatch(request requestEnvelope) any {
 	return newSuccessEnvelope(request.ID, data, s.nowRFC3339())
 }
 
-// nowRFC3339 returns the unified response timestamp format.
 func (s *Server) nowRFC3339() string {
 	return s.now().Format(time.RFC3339)
 }
 
-// taskIDsFromResponse recursively collects task_id values from a success
-// response so the transport can replay related notifications afterward.
 func taskIDsFromResponse(response any) []string {
 	success, ok := response.(successEnvelope)
 	if !ok {
@@ -526,8 +594,6 @@ func normalizeNotificationKey(method, taskID string, params map[string]any) map[
 	}
 }
 
-// collectTaskIDs walks arbitrary decoded response payloads and gathers every
-// embedded task_id.
 func collectTaskIDs(rawValue any, ids map[string]struct{}) {
 	switch value := rawValue.(type) {
 	case map[string]any:
@@ -550,7 +616,6 @@ func collectTaskIDs(rawValue any, ids map[string]struct{}) {
 	}
 }
 
-// marshalSSEData encodes arbitrary debug payloads into an SSE data field.
 func marshalSSEData(value any) string {
 	encoded, err := json.Marshal(value)
 	if err != nil {
