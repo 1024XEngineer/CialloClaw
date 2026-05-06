@@ -9,7 +9,7 @@ import type {
 } from "@cialloclaw/protocol";
 
 export type TaskPriority = "critical" | "high" | "steady";
-export type TaskDataSource = "rpc" | "mock" | "fallback";
+export type TaskDataSource = "rpc";
 export type TaskTabsValue = "details" | "subtasks" | "outputs" | "notes";
 export type AssistantCardKey = "agent" | "files" | "context";
 
