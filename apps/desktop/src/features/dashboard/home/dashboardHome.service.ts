@@ -758,6 +758,7 @@ function buildOverviewSummons(
     templates.push({
       duration: 6_200,
       message: highValueSignals[0] ?? safetyState.headline,
+      module: "safety",
       nextStep: getSummonNextStep(quickActions, safetyState),
       priority: "urgent",
       reason: safetyState.subline,
@@ -770,6 +771,7 @@ function buildOverviewSummons(
     templates.push({
       duration: 6_000,
       message: focusSummary.title,
+      module: "tasks",
       nextStep: getSummonNextStep(quickActions, taskState),
       priority: getSummonPriority("tasks", stateKeys.tasks),
       reason: [focusSummary.current_step, focusSummary.next_action, overflowSignal].filter(Boolean).join(" · "),
@@ -785,6 +787,7 @@ function buildOverviewSummons(
     templates.push({
       duration: 5_800,
       message: highValueSignals[0],
+      module: targetState.module,
       nextStep: getSummonNextStep(quickActions, targetState),
       priority: targetState.module === "safety" ? "urgent" : getSummonPriority(targetState.module, targetState.key),
       reason: targetState.subline,
@@ -793,6 +796,32 @@ function buildOverviewSummons(
   }
 
   return dedupeSummonTemplates(templates);
+}
+
+function buildModuleSummarySummons(
+  stateKeys: Record<DashboardHomeModuleKey, DashboardHomeEventStateKey>,
+  stateMap: Record<DashboardHomeEventStateKey, DashboardHomeStateData>,
+): Array<Omit<DashboardHomeSummonEvent, "id">> {
+  const modules: DashboardHomeModuleKey[] = ["notes", "memory", "safety", "tasks"];
+
+  return dedupeSummonTemplates(
+    modules.flatMap((module) => {
+      const state = stateMap[stateKeys[module]];
+      if (!state.headline.trim()) {
+        return [];
+      }
+
+      return [{
+        duration: 5_600,
+        message: state.headline,
+        module,
+        nextStep: state.navigationTarget?.label ?? dashboardModuleNextSteps[module],
+        priority: getSummonPriority(module, state.key),
+        reason: state.subline,
+        stateKey: state.key,
+      } satisfies Omit<DashboardHomeSummonEvent, "id">];
+    }),
+  );
 }
 
 function buildRecommendationSummons(
@@ -807,6 +836,7 @@ function buildRecommendationSummons(
     return {
       duration: 6_200,
       message: item.text,
+      module,
       nextStep: dashboardModuleNextSteps[module],
       priority: getSummonPriority(module, stateKeys[module]),
       reason: highlights[0] ?? `来自 ${dashboardModuleLabels[module]} 模块的实时建议`,
@@ -890,8 +920,9 @@ function buildDashboardHomeData(input: {
   stateMap[stateKeys.safety] = buildSafetyState(stateKeys.safety, input.overview, input.moduleResults.safety);
 
   const overviewSummons = buildOverviewSummons(input.overview, stateKeys, stateMap);
+  const moduleSummons = buildModuleSummarySummons(stateKeys, stateMap);
   const recommendationSummons = buildRecommendationSummons(input.recommendations.items, stateKeys, input.moduleResults);
-  const summonTemplates = dedupeSummonTemplates([...overviewSummons, ...recommendationSummons]);
+  const summonTemplates = dedupeSummonTemplates([...overviewSummons, ...moduleSummons, ...recommendationSummons]);
 
   return {
     focusLine: buildFocusLine(input.overview, input.moduleResults.tasks, summonTemplates),

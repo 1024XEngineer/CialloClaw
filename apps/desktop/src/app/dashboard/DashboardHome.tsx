@@ -49,6 +49,34 @@ function getCenterState(activeStateKey: DashboardHomeEventStateKey | null) {
   return "hover_input" as const;
 }
 
+function pickNextSummonIndex(
+  templates: Array<Omit<DashboardHomeSummonEvent, "id">>,
+  previousIndex: number,
+  previousModule: DashboardHomeModuleKey | null,
+) {
+  const total = templates.length;
+  if (total <= 1) {
+    return 0;
+  }
+
+  const candidateIndexes = templates
+    .map((template, index) => ({ index, module: template.module }))
+    .filter((candidate) => candidate.index !== previousIndex && candidate.module !== previousModule)
+    .map((candidate) => candidate.index);
+
+  const fallbackIndexes = templates
+    .map((_, index) => index)
+    .filter((index) => index !== previousIndex);
+
+  const pool = candidateIndexes.length > 0 ? candidateIndexes : fallbackIndexes;
+  const nextIndex = pool[Math.floor(Math.random() * pool.length)];
+  if (nextIndex !== previousIndex) {
+    return nextIndex;
+  }
+
+  return (nextIndex + 1) % total;
+}
+
 type DashboardHomeProps = {
   data: DashboardHomeData;
   onVoiceOpen: () => void;
@@ -69,8 +97,9 @@ export function DashboardHome({
   const [hoveredEntranceKey, setHoveredEntranceKey] = useState<string | null>(null);
   const [activeStateKey, setActiveStateKey] = useState<DashboardHomeEventStateKey | null>(null);
   const [summons, setSummons] = useState<DashboardHomeSummonEvent[]>([]);
-  const summonIndexRef = useRef(0);
   const summonIdRef = useRef(0);
+  const lastSummonIndexRef = useRef(-1);
+  const lastSummonModuleRef = useRef<DashboardHomeModuleKey | null>(null);
   const summonTimerRef = useRef<number | null>(null);
 
   const activeState = activeStateKey ? data.stateMap[activeStateKey] : null;
@@ -87,8 +116,16 @@ export function DashboardHome({
       return;
     }
 
-    const template = data.summonTemplates[summonIndexRef.current % data.summonTemplates.length];
-    summonIndexRef.current += 1;
+    // Summons are local presentation state, so balancing the module order here
+    // does not change the formal dashboard data contract or backend ranking.
+    const nextIndex = pickNextSummonIndex(
+      data.summonTemplates,
+      lastSummonIndexRef.current,
+      lastSummonModuleRef.current,
+    );
+    lastSummonIndexRef.current = nextIndex;
+    const template = data.summonTemplates[nextIndex];
+    lastSummonModuleRef.current = template.module;
 
     setSummons((current) => {
       if (current.length >= 1) {
@@ -109,8 +146,9 @@ export function DashboardHome({
   }, [data.summonTemplates]);
 
   useEffect(() => {
-    summonIndexRef.current = 0;
     summonIdRef.current = 0;
+    lastSummonIndexRef.current = -1;
+    lastSummonModuleRef.current = null;
     setSummons([]);
 
     if (data.summonTemplates.length === 0) {

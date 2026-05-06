@@ -124,6 +124,7 @@ export type DashboardHomeSummonEvent = {
   copyDuration?: number;
   id: string;
   hideCopy?: boolean;
+  module: DashboardHomeModuleKey;
   stateKey: DashboardHomeEventStateKey;
   message: string;
   reason: string;

@@ -1779,6 +1779,16 @@ test("dashboard event panel routes task-detail actions through the shared naviga
   assert.match(panelSource, /activeState\.navigationTarget\?\.label/);
 });
 
+test("dashboard home randomizes summons while preferring a different module when alternatives exist", () => {
+  const dashboardHomeSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/DashboardHome.tsx"), "utf8");
+
+  assert.match(dashboardHomeSource, /function pickNextSummonIndex\(/);
+  assert.match(dashboardHomeSource, /candidate\.module !== previousModule/);
+  assert.match(dashboardHomeSource, /const pool = candidateIndexes\.length > 0 \? candidateIndexes : fallbackIndexes/);
+  assert.match(dashboardHomeSource, /Math\.floor\(Math\.random\(\) \* pool\.length\)/);
+  assert.match(dashboardHomeSource, /lastSummonModuleRef\.current = template\.module/);
+});
+
 test("mirror page stays RPC-only instead of exposing a page-level mock toggle", () => {
   const mirrorAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/MirrorApp.tsx"), "utf8");
 
@@ -6612,6 +6622,128 @@ test("dashboard home prioritizes live overview summons and task-detail targets o
       getRecommendations: async () => ({
         cooldown_hit: false,
         items: [],
+      }),
+    },
+  );
+});
+
+test("dashboard home prioritizes overview and module signals before recommendation-only fallback copy", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<{
+          stateMap: Record<string, { navigationTarget?: { kind: string; label: string; module: string; taskId?: string } }>;
+          summonTemplates: Array<{ message: string; module: string; nextStep?: string; reason: string; stateKey: string }>;
+        }>;
+      };
+
+      const data = await service.loadDashboardHomeData();
+
+      assert.ok(data.summonTemplates.length >= 4);
+      assert.deepEqual(
+        data.summonTemplates.slice(0, 4).map((item) => item.module),
+        ["safety", "tasks", "notes", "memory"],
+      );
+      assert.equal(data.summonTemplates[0]?.message, "刚生成了新的摘要草稿。");
+      assert.equal(data.summonTemplates[1]?.nextStep, "打开任务详情");
+      assert.equal(data.stateMap.task_working?.navigationTarget?.kind, "task_detail");
+      assert.equal(data.stateMap.task_working?.navigationTarget?.taskId, "task_focus_001");
+    },
+    {
+      getDashboardModule: async (params: unknown) => {
+        const moduleName = (params as { module?: string }).module ?? "unknown";
+
+        if (moduleName === "tasks") {
+          return {
+            highlights: ["继续推进当前摘要任务"],
+            module: moduleName,
+            summary: {
+              blocked_tasks: 0,
+              focus_runtime_summary: {
+                active_steering_count: 0,
+                events_count: 1,
+                latest_event_type: null,
+                loop_stop_reason: null,
+                observation_signals: [],
+              },
+              focus_task_id: "task_focus_001",
+              processing_tasks: 1,
+              waiting_auth_tasks: 1,
+            },
+            tab: "focus",
+          };
+        }
+
+        if (moduleName === "notes") {
+          return {
+            highlights: ["两条便签接近执行窗口", "建议先整理今日提醒"],
+            module: moduleName,
+            summary: {
+              completed_tasks: 3,
+              exceptions: 1,
+            },
+            tab: "queue",
+          };
+        }
+
+        if (moduleName === "memory") {
+          return {
+            highlights: ["本周复盘已经形成初稿", "最近三次协作都提到了同一风险边界"],
+            module: moduleName,
+            summary: {},
+            tab: "overview",
+          };
+        }
+
+        if (moduleName === "safety") {
+          return {
+            highlights: ["建议先处理待授权操作，再继续推进其它任务。"],
+            module: moduleName,
+            summary: {},
+            tab: "guard",
+          };
+        }
+
+        return {
+          highlights: [],
+          module: moduleName,
+          summary: {},
+          tab: "overview",
+        };
+      },
+      getDashboardOverview: async () => ({
+        overview: {
+          focus_summary: {
+            current_step: "生成摘要",
+            next_action: "等待处理完成",
+            status: "processing",
+            task_id: "task_focus_001",
+            title: "整理 Q3 复盘要点",
+            updated_at: "2026-04-07T10:40:00+08:00",
+          },
+          high_value_signal: ["刚生成了新的摘要草稿。"],
+          quick_actions: ["打开任务详情"],
+          trust_summary: {
+            has_restore_point: true,
+            pending_authorizations: 2,
+            risk_level: "yellow",
+            workspace_path: "workspace",
+          },
+        },
+      }),
+      getRecommendations: async () => ({
+        cooldown_hit: false,
+        items: [
+          {
+            feedback_score: 0.8,
+            intent: { confidence: 0.8, name: "task_follow_up" },
+            recommendation_id: "rec_001",
+            text: "继续推进当前任务。",
+          },
+        ],
       }),
     },
   );
