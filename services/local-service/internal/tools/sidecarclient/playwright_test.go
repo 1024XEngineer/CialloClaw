@@ -29,6 +29,12 @@ func attachedBrowserInputWithoutTarget() map[string]any {
 	}
 }
 
+func attachedBrowserInputWithEndpoint(endpointURL string) map[string]any {
+	input := attachedBrowserInputWithoutTarget()
+	input["attach"].(map[string]any)["endpoint_url"] = endpointURL
+	return input
+}
+
 type stubPlaywrightClient struct {
 	readResult       tools.BrowserPageReadResult
 	searchResult     tools.BrowserPageSearchResult
@@ -346,6 +352,40 @@ func TestBrowserAttachToolsValidateAttachContract(t *testing.T) {
 	interactInput["actions"] = []any{map[string]any{"selector": "a.next"}}
 	if err := NewBrowserInteractTool().Validate(interactInput); err == nil {
 		t.Fatal("expected browser_interact validate to require action type")
+	}
+}
+
+func TestAttachConfigFromInputAllowsLoopbackEndpointsOnly(t *testing.T) {
+	tests := []struct {
+		name        string
+		endpointURL string
+		wantErr     bool
+	}{
+		{name: "empty endpoint", endpointURL: "", wantErr: false},
+		{name: "localhost endpoint", endpointURL: "http://localhost:9222", wantErr: false},
+		{name: "ipv4 loopback endpoint", endpointURL: "http://127.0.0.1:9222", wantErr: false},
+		{name: "ipv4 loopback range endpoint", endpointURL: "http://127.1.2.3:9222", wantErr: false},
+		{name: "ipv6 loopback endpoint", endpointURL: "http://[::1]:9222", wantErr: false},
+		{name: "private network endpoint", endpointURL: "http://192.168.1.10:9222", wantErr: true},
+		{name: "public hostname endpoint", endpointURL: "http://example.com:9222", wantErr: true},
+		{name: "missing host endpoint", endpointURL: "http:///devtools/browser/demo", wantErr: true},
+		{name: "invalid endpoint", endpointURL: "://bad", wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := attachedBrowserInputWithEndpoint(test.endpointURL)
+			if test.endpointURL == "" {
+				input = attachedBrowserInputWithoutTarget()
+			}
+			_, err := attachConfigFromInput(input)
+			if test.wantErr && err == nil {
+				t.Fatalf("expected endpoint %q to be rejected", test.endpointURL)
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("expected endpoint %q to be allowed, got %v", test.endpointURL, err)
+			}
+		})
 	}
 }
 
