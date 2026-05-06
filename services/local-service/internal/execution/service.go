@@ -1100,6 +1100,9 @@ func (s *Service) resolveToolExecution(request Request, deliveryResult map[strin
 	if _, err := s.tools.Get(intentName); err != nil {
 		return "", nil, false
 	}
+	if browserInput, ok := resolveBrowserToolInput(intentName, args); ok {
+		return intentName, browserInput, true
+	}
 
 	switch intentName {
 	case "read_file":
@@ -3161,6 +3164,9 @@ func (s *Service) resolveGovernanceToolExecution(request Request) (string, map[s
 			if budgetDowngradeDisallowsDirectTool(request, intentName) {
 				return "", nil, nil, false, nil
 			}
+			if browserInput, ok := resolveBrowserToolInput(intentName, args); ok {
+				return intentName, browserInput, s.toolExecutionContext(s.workspace, request), true, nil
+			}
 			switch intentName {
 			case "read_file":
 				pathValue := stringValue(args, "path", stringValue(args, "target_path", ""))
@@ -3260,6 +3266,34 @@ func (s *Service) resolveGovernanceToolExecution(request Request) (string, map[s
 	}
 	toolName, toolInput := "write_file", map[string]any{"path": writePath, "content": ""}
 	return toolName, toolInput, s.toolExecutionContext(s.workspace, request), true, nil
+}
+
+func resolveBrowserToolInput(intentName string, args map[string]any) (map[string]any, bool) {
+	attach := mapValue(args, "attach")
+	if len(attach) == 0 {
+		return nil, false
+	}
+	input := map[string]any{"attach": cloneMap(attach)}
+	switch intentName {
+	case "browser_attach_current", "browser_snapshot", "browser_tabs_list", "browser_tab_focus":
+		return input, true
+	case "browser_navigate":
+		urlValue := stringValue(args, "url", "")
+		if urlValue == "" {
+			return nil, false
+		}
+		input["url"] = urlValue
+		return input, true
+	case "browser_interact":
+		actions, ok := args["actions"]
+		if !ok {
+			return nil, false
+		}
+		input["actions"] = actions
+		return input, true
+	default:
+		return nil, false
+	}
 }
 
 func (s *Service) toolExecutionContext(workspacePath string, request Request) *tools.ToolExecuteContext {

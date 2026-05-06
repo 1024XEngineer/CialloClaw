@@ -2896,11 +2896,18 @@ func TestAssessGovernancePageSearchPreservesQueryInput(t *testing.T) {
 func TestResolveToolExecutionSupportsWorkerAndInteractiveIntents(t *testing.T) {
 	service, _ := newTestExecutionServiceWithWorkers(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient(), sidecarclient.NewNoopOCRWorkerClient(), sidecarclient.NewNoopMediaWorkerClient())
 	tests := []struct {
-		name     string
-		request  Request
-		wantTool string
-		wantKey  string
+		name       string
+		request    Request
+		wantTool   string
+		wantKey    string
+		wantAttach bool
 	}{
+		{name: "browser_attach_current", request: Request{Intent: map[string]any{"name": "browser_attach_current", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "browser_kind": "chrome"}}}}, wantTool: "browser_attach_current", wantKey: "attach", wantAttach: true},
+		{name: "browser_snapshot", request: Request{Intent: map[string]any{"name": "browser_snapshot", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "target": map[string]any{"url": "https://example.com"}}}}}, wantTool: "browser_snapshot", wantKey: "attach", wantAttach: true},
+		{name: "browser_navigate", request: Request{Intent: map[string]any{"name": "browser_navigate", "arguments": map[string]any{"url": "https://example.com/next", "attach": map[string]any{"mode": "cdp", "browser_kind": "edge"}}}}, wantTool: "browser_navigate", wantKey: "url", wantAttach: true},
+		{name: "browser_tabs_list", request: Request{Intent: map[string]any{"name": "browser_tabs_list", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "browser_kind": "chrome"}}}}, wantTool: "browser_tabs_list", wantKey: "attach", wantAttach: true},
+		{name: "browser_tab_focus", request: Request{Intent: map[string]any{"name": "browser_tab_focus", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "target": map[string]any{"page_index": 1.0}}}}}, wantTool: "browser_tab_focus", wantKey: "attach", wantAttach: true},
+		{name: "browser_interact", request: Request{Intent: map[string]any{"name": "browser_interact", "arguments": map[string]any{"actions": []any{map[string]any{"type": "click", "selector": "button"}}, "attach": map[string]any{"mode": "cdp", "target": map[string]any{"url": "https://example.com"}}}}}, wantTool: "browser_interact", wantKey: "actions", wantAttach: true},
 		{name: "page_interact", request: Request{Intent: map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com", "actions": []any{map[string]any{"type": "click", "selector": "button"}}}}}, wantTool: "page_interact", wantKey: "url"},
 		{name: "structured_dom", request: Request{Intent: map[string]any{"name": "structured_dom", "arguments": map[string]any{"url": "https://example.com"}}}, wantTool: "structured_dom", wantKey: "url"},
 		{name: "extract_text", request: Request{Intent: map[string]any{"name": "extract_text", "arguments": map[string]any{"path": "notes/demo.txt"}}}, wantTool: "extract_text", wantKey: "path"},
@@ -2916,6 +2923,10 @@ func TestResolveToolExecutionSupportsWorkerAndInteractiveIntents(t *testing.T) {
 			if _, exists := input[test.wantKey]; !exists {
 				t.Fatalf("expected input key %s, got %+v", test.wantKey, input)
 			}
+			_, hasAttach := input["attach"]
+			if hasAttach != test.wantAttach {
+				t.Fatalf("expected attach=%v, got %+v", test.wantAttach, input)
+			}
 		})
 	}
 }
@@ -2923,10 +2934,14 @@ func TestResolveToolExecutionSupportsWorkerAndInteractiveIntents(t *testing.T) {
 func TestResolveGovernanceToolExecutionSupportsWorkerAndInteractiveIntents(t *testing.T) {
 	service, workspaceRoot := newTestExecutionServiceWithWorkers(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient(), sidecarclient.NewNoopOCRWorkerClient(), sidecarclient.NewNoopMediaWorkerClient())
 	tests := []struct {
-		name     string
-		request  Request
-		wantTool string
+		name       string
+		request    Request
+		wantTool   string
+		wantAttach bool
 	}{
+		{name: "browser_attach_current", request: Request{TaskID: "task_browser_attach", RunID: "run_browser_attach", DeliveryType: "bubble", ResultTitle: "浏览器附着结果", Intent: map[string]any{"name": "browser_attach_current", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "browser_kind": "chrome"}}}}, wantTool: "browser_attach_current", wantAttach: true},
+		{name: "browser_navigate", request: Request{TaskID: "task_browser_nav", RunID: "run_browser_nav", DeliveryType: "bubble", ResultTitle: "浏览器导航结果", Intent: map[string]any{"name": "browser_navigate", "arguments": map[string]any{"url": "https://example.com/next", "attach": map[string]any{"mode": "cdp", "browser_kind": "edge"}}}}, wantTool: "browser_navigate", wantAttach: true},
+		{name: "browser_interact", request: Request{TaskID: "task_browser_interact", RunID: "run_browser_interact", DeliveryType: "bubble", ResultTitle: "浏览器交互结果", Intent: map[string]any{"name": "browser_interact", "arguments": map[string]any{"actions": []any{map[string]any{"type": "click", "selector": "button"}}, "attach": map[string]any{"mode": "cdp", "target": map[string]any{"url": "https://example.com"}}}}}, wantTool: "browser_interact", wantAttach: true},
 		{name: "page_interact", request: Request{TaskID: "task_001", RunID: "run_001", DeliveryType: "bubble", ResultTitle: "页面交互结果", Intent: map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com", "actions": []any{map[string]any{"type": "click", "selector": "button"}}}}}, wantTool: "page_interact"},
 		{name: "structured_dom", request: Request{TaskID: "task_002", RunID: "run_002", DeliveryType: "bubble", ResultTitle: "结构化结果", Intent: map[string]any{"name": "structured_dom", "arguments": map[string]any{"url": "https://example.com"}}}, wantTool: "structured_dom"},
 		{name: "ocr_pdf", request: Request{TaskID: "task_003", RunID: "run_003", DeliveryType: "bubble", ResultTitle: "OCR 结果", Intent: map[string]any{"name": "ocr_pdf", "arguments": map[string]any{"path": "docs/demo.pdf", "language": "eng"}}}, wantTool: "ocr_pdf"},
@@ -2946,6 +2961,10 @@ func TestResolveGovernanceToolExecutionSupportsWorkerAndInteractiveIntents(t *te
 			}
 			if len(input) == 0 {
 				t.Fatalf("expected tool input, got %+v", input)
+			}
+			_, hasAttach := input["attach"]
+			if hasAttach != test.wantAttach {
+				t.Fatalf("expected attach=%v, got %+v", test.wantAttach, input)
 			}
 		})
 	}
