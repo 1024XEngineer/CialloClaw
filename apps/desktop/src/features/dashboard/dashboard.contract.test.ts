@@ -6646,11 +6646,9 @@ test("dashboard home prioritizes overview and module signals before recommendati
 
       const data = await service.loadDashboardHomeData();
 
-      assert.ok(data.summonTemplates.length >= 4);
-      assert.deepEqual(
-        data.summonTemplates.slice(0, 4).map((item) => item.module),
-        ["safety", "tasks", "notes", "memory"],
-      );
+      assert.ok(data.summonTemplates.length >= 3);
+      assert.deepEqual(data.summonTemplates.slice(0, 3).map((item) => item.module), ["safety", "tasks", "memory"]);
+      assert.equal(data.summonTemplates.some((item) => item.module === "notes"), false);
       assert.equal(data.summonTemplates[0]?.message, "刚生成了新的摘要草稿。");
       assert.equal(data.summonTemplates[1]?.nextStep, "打开任务详情");
       assert.equal(data.stateMap.task_working?.navigationTarget?.kind, "task_detail");
@@ -6829,6 +6827,76 @@ test("dashboard home reuses formal mirror profile fields for memory copy", async
           preferred_output: "bubble",
           work_style: "偏好即时结果回显",
         },
+      }),
+    },
+  );
+});
+
+test("dashboard home keeps notes copy module-native and skips fake empty-note summons", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<{
+          stateMap: Record<string, { headline: string; subline: string; context?: Array<{ text: string }> }>;
+          summonTemplates: Array<{ module: string }>;
+        }>;
+      };
+
+      const data = await service.loadDashboardHomeData();
+
+      assert.equal(data.stateMap.notes_scheduled?.headline, "这里还没有可协作的事项");
+      assert.equal(data.stateMap.notes_scheduled?.subline, "当前例外项 1 条，建议优先整理最接近执行窗口的事项。");
+      assert.equal(data.stateMap.notes_scheduled?.context?.[0]?.text, "暂无便签");
+      assert.equal(data.summonTemplates.some((item) => item.module === "notes"), false);
+    },
+    {
+      getDashboardModule: async (params: unknown) => {
+        const moduleName = (params as { module?: string }).module ?? "unknown";
+
+        if (moduleName === "notes") {
+          return {
+            highlights: ["最近恢复点 rp_1777961976151255500 已可用于安全回显。", "最近审计动作：generate_text -> openai_responses:deepseek-v4-flas..."],
+            module: moduleName,
+            summary: {
+              completed_tasks: 2,
+              exceptions: 1,
+            },
+            tab: "queue",
+          };
+        }
+
+        return {
+          highlights: [],
+          module: moduleName,
+          summary: {},
+          tab: moduleName === "tasks" ? "focus" : "overview",
+        };
+      },
+      getDashboardOverview: async () => ({
+        overview: {
+          focus_summary: null,
+          high_value_signal: [],
+          quick_actions: [],
+          trust_summary: {
+            has_restore_point: true,
+            pending_authorizations: 0,
+            risk_level: "green",
+            workspace_path: "workspace",
+          },
+        },
+      }),
+      getRecommendations: async () => ({
+        cooldown_hit: false,
+        items: [],
+      }),
+      getMirrorOverview: async () => ({
+        daily_summary: null,
+        history_summary: [],
+        memory_references: [],
+        profile: null,
       }),
     },
   );

@@ -282,6 +282,10 @@ function isCrossDomainGovernanceHighlight(text: string) {
   return /恢复点|审计|授权|回显|风险|generate_text|openai_responses|tool_call|workspace/i.test(text);
 }
 
+function getNotesHighlights(result: AgentDashboardModuleGetResult | null | undefined) {
+  return getModuleHighlights(result).filter((item) => !isCrossDomainGovernanceHighlight(item));
+}
+
 function getMemoryHighlights(result: AgentDashboardModuleGetResult | null | undefined) {
   return getModuleHighlights(result).filter((item) => !isCrossDomainGovernanceHighlight(item));
 }
@@ -570,39 +574,74 @@ function buildNotesItems(recommendations: RecommendationItem[]): DashboardHomeNo
     }));
 }
 
+function buildNotesHeadline(noteItems: DashboardHomeNoteItem[]) {
+  if (noteItems.length > 0) {
+    return `近期便签 ${noteItems.length} 条待整理`;
+  }
+
+  return "这里还没有可协作的事项";
+}
+
+function buildNotesSubline(noteItems: DashboardHomeNoteItem[], exceptions: number) {
+  if (noteItems[0]) {
+    return noteItems[0].text;
+  }
+
+  if (exceptions === 0) {
+    return "等你把想记住的事情交给便签协作后，这里会按近期要做、后续安排、重复事项和已结束四组方式整理出来。";
+  }
+
+  return `当前例外项 ${exceptions} 条，建议优先整理最接近执行窗口的事项。`;
+}
+
+function buildNotesContext(noteItems: DashboardHomeNoteItem[], highlights: string[]) {
+  if (noteItems.length > 0) {
+    return [
+      {
+        iconKey: "note",
+        text: `推荐事项 ${noteItems.length} 条`,
+        type: "active" as const,
+      },
+      {
+        iconKey: "calendar",
+        text: noteItems[0]?.text ?? "打开便签页查看待处理事项。",
+        type: "hint" as const,
+      },
+      {
+        iconKey: "repeat",
+        text: highlights[0] ?? "打开便签页查看正式状态。",
+        type: "normal" as const,
+      },
+    ];
+  }
+
+  return [
+    {
+      iconKey: "note",
+      text: "暂无便签",
+      type: "normal" as const,
+    },
+    {
+      iconKey: "calendar",
+      text: "等你把想记住的事情交给便签协作后，这里会按近期要做、后续安排、重复事项和已结束四组方式整理出来。",
+      type: "hint" as const,
+    },
+  ];
+}
+
 function buildNotesState(
   stateKey: DashboardHomeEventStateKey,
   notesModule: AgentDashboardModuleGetResult,
   recommendations: RecommendationItem[],
 ) {
   const state = cloneStateData(dashboardHomeStates[stateKey]);
-  const highlights = getModuleHighlights(notesModule);
+  const highlights = getNotesHighlights(notesModule);
   const noteItems = buildNotesItems(recommendations);
-  const completedTasks = getModuleSummaryNumber(notesModule, "completed_tasks");
   const exceptions = getModuleSummaryNumber(notesModule, "exceptions");
 
-  state.headline = noteItems[0]?.text ?? highlights[0] ?? `便签池里有 ${completedTasks} 条已整理记录`;
-  state.subline =
-    highlights[0] && highlights[1]
-      ? `${highlights[0]} ${highlights[1]}`
-      : highlights[0] ?? `当前例外项 ${exceptions} 条，建议优先整理最接近执行窗口的事项。`;
-  state.context = [
-    {
-      iconKey: "note",
-      text: `推荐事项 ${noteItems.length || 0} 条`,
-      type: noteItems.length > 0 ? "active" : "normal",
-    },
-    {
-      iconKey: "repeat",
-      text: `已完成任务 ${completedTasks} 条`,
-      type: "normal",
-    },
-    {
-      iconKey: "calendar",
-      text: highlights[0] ?? "保持便签整理节奏，准备转正式任务。",
-      type: "hint",
-    },
-  ];
+  state.headline = buildNotesHeadline(noteItems);
+  state.subline = buildNotesSubline(noteItems, exceptions);
+  state.context = buildNotesContext(noteItems, highlights);
   state.notes = noteItems.length > 0 ? noteItems : state.notes;
   state.navigationTarget = buildModuleNavigationTarget("notes");
 
@@ -965,6 +1004,10 @@ function buildModuleSummarySummons(
     modules.flatMap((module) => {
       const state = stateMap[stateKeys[module]];
       if (!state.headline.trim()) {
+        return [];
+      }
+
+      if (module === "notes" && state.headline === "这里还没有可协作的事项") {
         return [];
       }
 
