@@ -11,6 +11,7 @@ type ShellBallMascotProps = {
   edgeDockRevealed?: boolean;
   edgeDockSide?: "left" | "right" | null;
   hasPendingAgentLoading?: boolean;
+  hasPendingApproval?: boolean;
   visualState: ShellBallVisualState;
   voicePreview?: ShellBallVoicePreview;
   showVoiceHints?: boolean;
@@ -111,13 +112,42 @@ export function shouldSuppressShellBallMascotHotspotGestures(input: {
 
 export function getShellBallMascotPetState(input: {
   hasPendingAgentLoading?: boolean;
+  hasPendingApproval?: boolean;
   happyActive: boolean;
   visualState: ShellBallVisualState;
 }): ShellBallMascotPetState {
-  if (input.hasPendingAgentLoading) {
+  if (input.hasPendingAgentLoading || input.visualState === "processing") {
     return {
       listenLocked: false,
       mode: "think",
+    };
+  }
+
+  if (input.visualState === "voice_locked") {
+    return {
+      listenLocked: true,
+      mode: "listen",
+    };
+  }
+
+  if (input.visualState === "voice_listening") {
+    return {
+      listenLocked: false,
+      mode: "listen",
+    };
+  }
+
+  if (input.visualState === "confirming_intent") {
+    return {
+      listenLocked: false,
+      mode: "alert",
+    };
+  }
+
+  if (input.hasPendingApproval || input.visualState === "waiting_auth") {
+    return {
+      listenLocked: false,
+      mode: "safe",
     };
   }
 
@@ -128,46 +158,17 @@ export function getShellBallMascotPetState(input: {
     };
   }
 
-  switch (input.visualState) {
-    case "confirming_intent":
-      return {
-        listenLocked: false,
-        mode: "alert",
-      };
-    case "processing":
-      return {
-        listenLocked: false,
-        mode: "think",
-      };
-    case "waiting_auth":
-      return {
-        listenLocked: false,
-        mode: "safe",
-      };
-    case "voice_listening":
-      return {
-        listenLocked: false,
-        mode: "listen",
-      };
-    case "voice_locked":
-      return {
-        listenLocked: true,
-        mode: "listen",
-      };
-    case "hover_input":
-    case "idle":
-    default:
-      return {
-        listenLocked: false,
-        mode: "idle",
-      };
-  }
+  return {
+    listenLocked: false,
+    mode: "idle",
+  };
 }
 
 export function ShellBallMascot({
   edgeDockRevealed = false,
   edgeDockSide = null,
   hasPendingAgentLoading = false,
+  hasPendingApproval = false,
   visualState,
   voicePreview = null,
   showVoiceHints = true,
@@ -209,6 +210,7 @@ export function ShellBallMascot({
   const shouldRouteHotspotDrag = visualState !== "voice_listening" && visualState !== "voice_locked";
   const petState = getShellBallMascotPetState({
     hasPendingAgentLoading,
+    hasPendingApproval,
     happyActive,
     visualState,
   });

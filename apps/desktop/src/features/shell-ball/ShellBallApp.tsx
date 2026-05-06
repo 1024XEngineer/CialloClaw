@@ -346,6 +346,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   const inlineInputMode = snapshot.inputBarMode === "hidden" ? "interactive" : snapshot.inputBarMode;
   const visibleBubbleItems = getShellBallVisibleBubbleItems(snapshot.bubbleItems);
   const hasPendingAgentLoading = visibleBubbleItems.some((item) => item.role === "agent" && item.desktop.presentationHint === "loading");
+  const hasPendingApproval = snapshot.bubbleItems.some((item) => item.desktop.inlineApproval?.status === "idle");
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -985,6 +986,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       mascotRef={mascotRef}
       floatingBallSize={floatingBallSize}
       hasPendingAgentLoading={hasPendingAgentLoading}
+      hasPendingApproval={hasPendingApproval}
       fileDropActive={shouldShowShellBallFileDropOverlay({
         fileDropActive,
       })}
