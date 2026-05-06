@@ -16,6 +16,9 @@ import {
   getRecommendations,
   submitRecommendationFeedback,
 } from "@/rpc/methods";
+import { describeNotePreview, buildNoteSummary } from "@/features/dashboard/notes/notePage.mapper";
+import { loadNoteBucket } from "@/features/dashboard/notes/notePage.service";
+import type { NoteListItem } from "@/features/dashboard/notes/notePage.types";
 import {
   dashboardHomeStates,
 } from "./dashboardHome.presets";
@@ -93,6 +96,16 @@ type DashboardTaskRuntimeSummary = {
     loop_stop_reason: string | null;
     observation_signals: string[];
   };
+};
+
+type DashboardHomeNoteBuckets = {
+  closed: NoteListItem[];
+  later: NoteListItem[];
+  primaryItem: NoteListItem | null;
+  recurring: NoteListItem[];
+  summary: ReturnType<typeof buildNoteSummary>;
+  upcoming: NoteListItem[];
+  warnings: string[];
 };
 
 const emptyFocusRuntimeSummary: DashboardTaskRuntimeSummary["focusRuntimeSummary"] = {
@@ -278,6 +291,39 @@ function getModuleHighlights(result: AgentDashboardModuleGetResult | null | unde
   return Array.isArray(result?.highlights) ? result.highlights.filter(Boolean) : [];
 }
 
+async function loadDashboardHomeNoteBuckets(): Promise<DashboardHomeNoteBuckets> {
+  const [upcomingResult, laterResult, recurringResult, closedResult] = await Promise.allSettled([
+    loadNoteBucket("upcoming"),
+    loadNoteBucket("later"),
+    loadNoteBucket("recurring_rule"),
+    loadNoteBucket("closed"),
+  ]);
+  const warnings: string[] = [];
+  const upcoming = upcomingResult.status === "fulfilled"
+    ? upcomingResult.value.items
+    : (warnings.push(formatDashboardHomeLoadWarning("便签近期要做", upcomingResult.reason)), []);
+  const later = laterResult.status === "fulfilled"
+    ? laterResult.value.items
+    : (warnings.push(formatDashboardHomeLoadWarning("便签后续安排", laterResult.reason)), []);
+  const recurring = recurringResult.status === "fulfilled"
+    ? recurringResult.value.items
+    : (warnings.push(formatDashboardHomeLoadWarning("便签重复事项", recurringResult.reason)), []);
+  const closed = closedResult.status === "fulfilled"
+    ? closedResult.value.items
+    : (warnings.push(formatDashboardHomeLoadWarning("便签已结束", closedResult.reason)), []);
+  const primaryItem = upcoming[0] ?? later[0] ?? recurring[0] ?? closed[0] ?? null;
+
+  return {
+    closed,
+    later,
+    primaryItem,
+    recurring,
+    summary: buildNoteSummary({ recurring_rule: recurring, upcoming }),
+    upcoming,
+    warnings,
+  };
+}
+
 function isCrossDomainGovernanceHighlight(text: string) {
   return /恢复点|审计|授权|回显|风险|generate_text|openai_responses|tool_call|workspace/i.test(text);
 }
@@ -415,6 +461,26 @@ function getNotesStateKey(notesModule: AgentDashboardModuleGetResult, recommenda
   }
 
   return "notes_scheduled";
+}
+
+function getNotesStateKeyFromBuckets(noteBuckets: DashboardHomeNoteBuckets | null) {
+  if (!noteBuckets) {
+    return null;
+  }
+
+  if (noteBuckets.primaryItem?.item.bucket === "recurring_rule") {
+    return "notes_reminder" as const;
+  }
+
+  if (noteBuckets.primaryItem) {
+    return "notes_processing" as const;
+  }
+
+  if (noteBuckets.recurring.length > 0) {
+    return "notes_reminder" as const;
+  }
+
+  return "notes_scheduled" as const;
 }
 
 function getMemoryStateKey(memoryModule: AgentDashboardModuleGetResult) {
@@ -574,7 +640,32 @@ function buildNotesItems(recommendations: RecommendationItem[]): DashboardHomeNo
     }));
 }
 
-function buildNotesHeadline(noteItems: DashboardHomeNoteItem[]) {
+function mapHomeNotesFromBuckets(noteBuckets: DashboardHomeNoteBuckets) {
+  return [
+    ...noteBuckets.upcoming,
+    ...noteBuckets.later,
+    ...noteBuckets.recurring,
+    ...noteBuckets.closed,
+  ].slice(0, 3).map((item) => ({
+    id: item.item.item_id,
+    status: item.item.bucket === "closed"
+      ? "done"
+      : item.item.bucket === "recurring_rule"
+        ? "recurring"
+        : item.item.status === "normal"
+          ? "pending"
+          : "processing",
+    tag: item.experience.summaryLabel,
+    text: item.item.title,
+    time: item.experience.timeHint,
+  } satisfies DashboardHomeNoteItem));
+}
+
+function buildNotesHeadline(noteItems: DashboardHomeNoteItem[], noteBuckets: DashboardHomeNoteBuckets | null) {
+  if (noteBuckets?.primaryItem) {
+    return noteBuckets.primaryItem.item.title;
+  }
+
   if (noteItems.length > 0) {
     return `近期便签 ${noteItems.length} 条待整理`;
   }
@@ -594,7 +685,27 @@ function buildNotesSubline(noteItems: DashboardHomeNoteItem[], exceptions: numbe
   return `当前例外项 ${exceptions} 条，建议优先整理最接近执行窗口的事项。`;
 }
 
-function buildNotesContext(noteItems: DashboardHomeNoteItem[], highlights: string[]) {
+function buildNotesContext(noteItems: DashboardHomeNoteItem[], highlights: string[], noteBuckets: DashboardHomeNoteBuckets | null) {
+  if (noteBuckets?.primaryItem) {
+    return [
+      {
+        iconKey: "note",
+        text: `${noteBuckets.primaryItem.experience.summaryLabel} · ${describeNotePreview(noteBuckets.primaryItem.item, noteBuckets.primaryItem.experience)}`,
+        type: "active" as const,
+      },
+      {
+        iconKey: "calendar",
+        text: `今日待处理 ${noteBuckets.summary.dueToday} 条 · 已逾期 ${noteBuckets.summary.overdue} 条`,
+        type: "normal" as const,
+      },
+      {
+        iconKey: "repeat",
+        text: `今日重复 ${noteBuckets.summary.recurringToday} 条 · 适合转任务 ${noteBuckets.summary.readyForAgent} 条`,
+        type: "hint" as const,
+      },
+    ];
+  }
+
   if (noteItems.length > 0) {
     return [
       {
@@ -633,15 +744,16 @@ function buildNotesState(
   stateKey: DashboardHomeEventStateKey,
   notesModule: AgentDashboardModuleGetResult,
   recommendations: RecommendationItem[],
+  noteBuckets: DashboardHomeNoteBuckets | null,
 ) {
   const state = cloneStateData(dashboardHomeStates[stateKey]);
   const highlights = getNotesHighlights(notesModule);
-  const noteItems = buildNotesItems(recommendations);
+  const noteItems = noteBuckets ? mapHomeNotesFromBuckets(noteBuckets) : buildNotesItems(recommendations);
   const exceptions = getModuleSummaryNumber(notesModule, "exceptions");
 
-  state.headline = buildNotesHeadline(noteItems);
+  state.headline = buildNotesHeadline(noteItems, noteBuckets);
   state.subline = buildNotesSubline(noteItems, exceptions);
-  state.context = buildNotesContext(noteItems, highlights);
+  state.context = buildNotesContext(noteItems, highlights, noteBuckets);
   state.notes = noteItems.length > 0 ? noteItems : state.notes;
   state.navigationTarget = buildModuleNavigationTarget("notes");
 
@@ -998,7 +1110,7 @@ function buildModuleSummarySummons(
   stateKeys: Record<DashboardHomeModuleKey, DashboardHomeEventStateKey>,
   stateMap: Record<DashboardHomeEventStateKey, DashboardHomeStateData>,
 ): Array<Omit<DashboardHomeSummonEvent, "id">> {
-  const modules: DashboardHomeModuleKey[] = ["notes", "memory", "safety", "tasks"];
+  const modules: DashboardHomeModuleKey[] = ["notes", "memory"];
 
   return dedupeSummonTemplates(
     modules.flatMap((module) => {
@@ -1008,6 +1120,10 @@ function buildModuleSummarySummons(
       }
 
       if (module === "notes" && state.headline === "这里还没有可协作的事项") {
+        return [];
+      }
+
+      if (module === "memory" && state.headline === "最近协作镜像" && state.subline === "镜子会持续整理近期协作节奏和重复出现的模式。") {
         return [];
       }
 
@@ -1109,14 +1225,20 @@ function buildDashboardHomeData(input: {
   loadWarnings: string[];
   moduleResults: Record<DashboardHomeModuleKey, AgentDashboardModuleGetResult>;
   mirrorOverview: AgentMirrorOverviewGetResult | null;
+  noteBuckets: DashboardHomeNoteBuckets | null;
   overview: AgentDashboardOverviewGetResult;
   recommendations: AgentRecommendationGetResult;
 }): DashboardHomeData {
   const stateMap = createBaseStateMap();
-  const stateKeys = getModuleStateKeyMap(input.overview, input.moduleResults, input.recommendations.items);
+  const noteBucketsStateKey = getNotesStateKeyFromBuckets(input.noteBuckets);
+  const inferredStateKeys = getModuleStateKeyMap(input.overview, input.moduleResults, input.recommendations.items);
+  const stateKeys = {
+    ...inferredStateKeys,
+    notes: noteBucketsStateKey ?? inferredStateKeys.notes,
+  };
 
   stateMap[stateKeys.tasks] = buildTaskState(stateKeys.tasks, input.overview, input.moduleResults.tasks);
-  stateMap[stateKeys.notes] = buildNotesState(stateKeys.notes, input.moduleResults.notes, input.recommendations.items);
+  stateMap[stateKeys.notes] = buildNotesState(stateKeys.notes, input.moduleResults.notes, input.recommendations.items, input.noteBuckets);
   stateMap[stateKeys.memory] = buildMemoryState(stateKeys.memory, input.moduleResults.memory, input.mirrorOverview);
   stateMap[stateKeys.safety] = buildSafetyState(stateKeys.safety, input.overview, input.moduleResults.safety);
 
@@ -1157,7 +1279,7 @@ function formatDashboardHomeLoadWarning(label: string, error: unknown) {
 }
 
 export async function loadDashboardHomeData(): Promise<DashboardHomeData> {
-  const [overviewResult, tasksResult, notesResult, memoryResult, safetyResult, recommendationsResult, mirrorOverviewResult] = await Promise.allSettled([
+  const [overviewResult, tasksResult, notesResult, memoryResult, safetyResult, recommendationsResult, mirrorOverviewResult, noteBucketsResult] = await Promise.allSettled([
     getDashboardOverview({
       focus_mode: false,
       include: ["focus_summary", "trust_summary", "quick_actions", "high_value_signal"],
@@ -1196,6 +1318,7 @@ export async function loadDashboardHomeData(): Promise<DashboardHomeData> {
       include: ["profile", "history_summary", "daily_summary", "memory_references"],
       request_meta: createRequestMeta("dashboard_home_mirror_overview"),
     }),
+    loadDashboardHomeNoteBuckets(),
   ]);
 
   if (overviewResult.status === "rejected") {
@@ -1221,6 +1344,15 @@ export async function loadDashboardHomeData(): Promise<DashboardHomeData> {
   const mirrorOverview = mirrorOverviewResult.status === "fulfilled"
     ? mirrorOverviewResult.value
     : null;
+  const noteBuckets = noteBucketsResult.status === "fulfilled"
+    ? noteBucketsResult.value
+    : null;
+
+  if (noteBuckets) {
+    loadWarnings.push(...noteBuckets.warnings);
+  } else if (noteBucketsResult.status === "rejected") {
+    loadWarnings.push(formatDashboardHomeLoadWarning("便签详情", noteBucketsResult.reason));
+  }
 
   return buildDashboardHomeData({
     loadWarnings,
@@ -1231,6 +1363,7 @@ export async function loadDashboardHomeData(): Promise<DashboardHomeData> {
       tasks: tasksModule,
     },
     mirrorOverview,
+    noteBuckets,
     overview: overviewResult.value,
     recommendations,
   });

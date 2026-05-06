@@ -6544,6 +6544,15 @@ test("dashboard home keeps module and recommendation failures local instead of b
       getRecommendations: async () => {
         throw new Error("recommendations unavailable");
       },
+      listNotepad: async () => ({
+        items: [],
+        page: {
+          has_more: false,
+          limit: 12,
+          offset: 0,
+          total: 0,
+        },
+      }),
     },
   );
 });
@@ -6627,6 +6636,15 @@ test("dashboard home prioritizes live overview summons and task-detail targets o
         cooldown_hit: false,
         items: [],
       }),
+      listNotepad: async () => ({
+        items: [],
+        page: {
+          has_more: false,
+          limit: 12,
+          offset: 0,
+          total: 0,
+        },
+      }),
     },
   );
 });
@@ -6648,7 +6666,6 @@ test("dashboard home prioritizes overview and module signals before recommendati
 
       assert.ok(data.summonTemplates.length >= 3);
       assert.deepEqual(data.summonTemplates.slice(0, 3).map((item) => item.module), ["safety", "tasks", "memory"]);
-      assert.equal(data.summonTemplates.some((item) => item.module === "notes"), false);
       assert.equal(data.summonTemplates[0]?.message, "刚生成了新的摘要草稿。");
       assert.equal(data.summonTemplates[1]?.nextStep, "打开任务详情");
       assert.equal(data.stateMap.task_working?.navigationTarget?.kind, "task_detail");
@@ -6747,6 +6764,46 @@ test("dashboard home prioritizes overview and module signals before recommendati
           },
         ],
       }),
+      getMirrorOverview: async () => ({
+        daily_summary: null,
+        history_summary: ["本周复盘已经形成初稿", "最近三次协作都提到了同一风险边界"],
+        memory_references: [],
+        profile: null,
+      }),
+      listNotepad: async (params: unknown) => {
+        const group = (params as { group?: string }).group;
+        if (group === "upcoming") {
+          return {
+            items: [
+              {
+                agent_suggestion: "先处理这个事项。",
+                bucket: "upcoming",
+                due_at: "2026-04-07T18:00:00+08:00",
+                item_id: "todo_home_001",
+                status: "due_today",
+                title: "重要客户邮件回复",
+                type: "note",
+              },
+            ],
+            page: {
+              has_more: false,
+              limit: 12,
+              offset: 0,
+              total: 1,
+            },
+          };
+        }
+
+        return {
+          items: [],
+          page: {
+            has_more: false,
+            limit: group === "closed" ? 24 : 12,
+            offset: 0,
+            total: 0,
+          },
+        };
+      },
     },
   );
 });
@@ -6828,6 +6885,15 @@ test("dashboard home reuses formal mirror profile fields for memory copy", async
           work_style: "偏好即时结果回显",
         },
       }),
+      listNotepad: async () => ({
+        items: [],
+        page: {
+          has_more: false,
+          limit: 12,
+          offset: 0,
+          total: 0,
+        },
+      }),
     },
   );
 });
@@ -6897,6 +6963,15 @@ test("dashboard home keeps notes copy module-native and skips fake empty-note su
         history_summary: [],
         memory_references: [],
         profile: null,
+      }),
+      listNotepad: async () => ({
+        items: [],
+        page: {
+          has_more: false,
+          limit: 12,
+          offset: 0,
+          total: 0,
+        },
       }),
     },
   );
