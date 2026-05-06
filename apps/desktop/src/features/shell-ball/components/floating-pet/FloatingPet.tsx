@@ -36,9 +36,6 @@ const LISTEN_EFFECT_TIMES = [0, 10 / 120, 0.5, 1] as const;
 const ROOT_BODY_UPDOWN_Y = [248.94, 242.5, 249];
 const ROOT_BODY_BASE_X = floatingPetInitialLayout.rootBody.position.x;
 const ROOT_BODY_BASE_Y = floatingPetInitialLayout.rootBody.position.y;
-const LEFT_WING_DEBUG_SWING_DEG = 20;
-const LEFT_WING_DEBUG_SWING_PERIOD_MS = 2_000;
-
 const MODE_TO_EFFECT: Partial<Record<FloatingPetMode, FloatingPetEffectName>> = {
   alert: "bubbleAlert",
   happy: "sparkle",
@@ -207,20 +204,20 @@ function resolveRootBodyMotion(mode: FloatingPetMode, listenLocked: boolean) {
 function resolveWingMotion(mode: FloatingPetMode, listenLocked: boolean) {
   if (mode === "happy") {
     return {
-      left: { rotate: [104.149, 113.022, 104.149, 115.787, 104.149], repeat: 0 },
+      left: { rotate: [0, 8.873, 0, 11.638, 0], repeat: 0 },
       right: { rotate: [63.113, 48.691, 58.465, 48.212, 63.113], repeat: 0 },
     };
   }
 
   if (mode === "alert" || mode === "safe" || (mode === "listen" && !listenLocked)) {
     return {
-      left: { rotate: [104.149, 113.022, 104.149, 115.787, 104.149], repeat: Number.POSITIVE_INFINITY },
+      left: { rotate: [0, 8.873, 0, 11.638, 0], repeat: Number.POSITIVE_INFINITY },
       right: { rotate: [63.113, 48.691, 58.465, 48.212, 63.113], repeat: Number.POSITIVE_INFINITY },
     };
   }
 
   return {
-    left: { rotate: [104.149, 106.587, 104.149], repeat: Number.POSITIVE_INFINITY },
+    left: { rotate: [0, 2.438, 0], repeat: Number.POSITIVE_INFINITY },
     right: { rotate: [63.113, 60.62, 63.113], repeat: Number.POSITIVE_INFINITY },
   };
 }
@@ -265,6 +262,35 @@ function resolveLocalPivot(centerPosition: FloatingPetLayerTransform["position"]
     x: bonePosition.x - centerPosition.x,
     y: bonePosition.y - centerPosition.y,
   };
+}
+
+function interpolateKeyframeValue(values: number[], times: number[], progress: number) {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  if (values.length === 1 || times.length <= 1) {
+    return values[0] ?? 0;
+  }
+
+  if (progress <= times[0]) {
+    return values[0] ?? 0;
+  }
+
+  for (let index = 1; index < times.length; index += 1) {
+    const endTime = times[index] ?? 1;
+
+    if (progress <= endTime) {
+      const startTime = times[index - 1] ?? 0;
+      const startValue = values[index - 1] ?? 0;
+      const endValue = values[index] ?? startValue;
+      const segmentProgress = endTime === startTime ? 0 : (progress - startTime) / (endTime - startTime);
+
+      return startValue + (endValue - startValue) * segmentProgress;
+    }
+  }
+
+  return values[values.length - 1] ?? 0;
 }
 
 type BoneRotatedLayerProps = {
@@ -391,12 +417,22 @@ export function FloatingPet({ className, size = "100%", mode = "idle", listenLoc
   }, []);
 
   useEffect(() => {
+    const rotateValues = wingMotion.left.rotate;
+    const rotateTimes = rotateValues.length === 5 ? [...QUICK_CLAP_TIMES] : [0, 0.5, 1];
+    const durationMs = FLOATING_PET_LOOP_DURATION_S * 1000;
+    const looping = wingMotion.left.repeat !== 0;
     let frame = 0;
+    const startTime = performance.now();
 
     const tick = (time: number) => {
-      const phase = (time % LEFT_WING_DEBUG_SWING_PERIOD_MS) / LEFT_WING_DEBUG_SWING_PERIOD_MS;
-      setLeftWingDebugAngle(Math.sin(phase * Math.PI * 2) * LEFT_WING_DEBUG_SWING_DEG);
-      frame = window.requestAnimationFrame(tick);
+      const elapsed = time - startTime;
+      const progress = looping ? (elapsed % durationMs) / durationMs : Math.min(elapsed / durationMs, 1);
+
+      setLeftWingDebugAngle(interpolateKeyframeValue(rotateValues, rotateTimes, progress));
+
+      if (looping || progress < 1) {
+        frame = window.requestAnimationFrame(tick);
+      }
     };
 
     frame = window.requestAnimationFrame(tick);
@@ -404,7 +440,7 @@ export function FloatingPet({ className, size = "100%", mode = "idle", listenLoc
     return () => {
       window.cancelAnimationFrame(frame);
     };
-  }, []);
+  }, [wingMotion.left.repeat, wingMotion.left.rotate]);
 
   return (
     <div className={cn(styles.root, className)} style={rootStyle}>
@@ -429,7 +465,8 @@ export function FloatingPet({ className, size = "100%", mode = "idle", listenLoc
             {renderCenteredImage(
               "leftWing",
               floatingPetInitialLayout.rootBody.leftWing,
-              floatingPetInitialLayout.rootBody.leftBone.rotation + floatingPetInitialLayout.rootBody.leftWing.rotation,
+              //floatingPetInitialLayout.rootBody.leftBone.rotation + floatingPetInitialLayout.rootBody.leftWing.rotation
+              0
             )}
           </g>
 
@@ -487,14 +524,6 @@ export function FloatingPet({ className, size = "100%", mode = "idle", listenLoc
               </motion.g>
             </g>
           </g>
-          <circle
-            cx={floatingPetInitialLayout.rootBody.leftBone.position.x}
-            cy={floatingPetInitialLayout.rootBody.leftBone.position.y}
-            fill="red"
-            r="6"
-            stroke="white"
-            strokeWidth="2"
-          />
         </motion.g>
       </motion.svg>
     </div>
