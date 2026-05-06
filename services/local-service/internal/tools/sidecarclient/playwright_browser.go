@@ -372,11 +372,10 @@ func attachConfigFromInput(input map[string]any) (tools.BrowserAttachConfig, err
 		return tools.BrowserAttachConfig{}, fmt.Errorf("attach.mode must be 'cdp'")
 	}
 	browserKind := strings.ToLower(strings.TrimSpace(stringValueMap(attachInput, "browser_kind")))
-	if browserKind == "" {
-		return tools.BrowserAttachConfig{}, fmt.Errorf("attach.browser_kind must be a non-empty string")
-	}
-	if _, ok := supportedAttachedBrowserKinds[browserKind]; !ok {
-		return tools.BrowserAttachConfig{}, fmt.Errorf("attach.browser_kind must be one of chrome or edge")
+	if browserKind != "" {
+		if _, ok := supportedAttachedBrowserKinds[browserKind]; !ok {
+			return tools.BrowserAttachConfig{}, fmt.Errorf("attach.browser_kind must be one of chrome or edge")
+		}
 	}
 	targetInput, ok := attachInput["target"].(map[string]any)
 	if !ok {
