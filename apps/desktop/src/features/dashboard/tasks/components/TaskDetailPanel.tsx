@@ -43,8 +43,13 @@ type TaskDetailPanelProps = {
   onRetryDetail: (() => void) | null;
   onSteerTask: (message: string) => void;
   steeringPending: boolean;
+  steeringSuccessVersion: number;
 };
 
+/**
+ * Shows the full task detail panel, including progress, evidence, and the
+ * dedicated jump into the formal delivery page.
+ */
 export function TaskDetailPanel({
   artifactActionPendingId,
   artifactErrorMessage,
@@ -73,6 +78,7 @@ export function TaskDetailPanel({
   onRetryDetail,
   onSteerTask,
   steeringPending,
+  steeringSuccessVersion,
 }: TaskDetailPanelProps) {
   const detail = detailData?.detail ?? null;
   const experience = detailData?.experience ?? previewExperience;
@@ -121,16 +127,14 @@ export function TaskDetailPanel({
   const isScreenTask = task?.source_type === "screen_capture" || detail?.task.intent?.name === "screen_analyze";
 
   useEffect(() => {
-    if (steeringPending) {
+    if (steeringPending || steeringSuccessVersion === 0) {
       return;
     }
 
-    if (!feedback || !/已记录新的补充要求/.test(feedback)) {
-      return;
-    }
-
+    // Clear the local follow-up draft only after the parent mutation confirms a
+    // successful steer, so backend wording changes cannot leave stale input behind.
     setSteeringMessage("");
-  }, [feedback, steeringPending]);
+  }, [steeringPending, steeringSuccessVersion]);
 
   useEffect(() => {
     // Keep runtime event filters as local draft state so typing does not trigger
@@ -367,7 +371,7 @@ export function TaskDetailPanel({
           </div>
           <button className="task-detail-card__action" disabled={deliveryActionPending} onClick={onOpenLatestDelivery} type="button">
             <ArrowUpRight className="h-4 w-4" />
-            {deliveryActionPending ? "打开中..." : "打开交付"}
+            {deliveryActionPending ? "打开中..." : "查看结果页"}
           </button>
         </div>
         <p className="task-detail-card__hint">该区域只消费正式 `delivery_result`，用于回看模型结论与最终交付出口。</p>
@@ -691,7 +695,7 @@ export function TaskDetailPanel({
                   </div>
                   <button className="task-detail-card__action" disabled={deliveryActionPending} onClick={onOpenLatestDelivery} type="button">
                     <ArrowUpRight className="h-4 w-4" />
-                    {deliveryActionPending ? "打开中..." : "打开最新结果"}
+                    {deliveryActionPending ? "打开中..." : "查看结果页"}
                   </button>
                 </div>
                 <div className="task-detail-output-list">
@@ -809,7 +813,7 @@ export function TaskDetailPanel({
                   </div>
                   <button className="task-detail-card__action" disabled={deliveryActionPending} onClick={onOpenLatestDelivery} type="button">
                     <ArrowUpRight className="h-4 w-4" />
-                    {deliveryActionPending ? "打开中..." : "打开结果"}
+                    {deliveryActionPending ? "打开中..." : "查看结果页"}
                   </button>
                 </div>
                 <p className="task-detail-ended-copy">{experience?.endedSummary ?? stateVoice.body}</p>
@@ -824,7 +828,7 @@ export function TaskDetailPanel({
                   </div>
                   <button className="task-detail-card__action" disabled={deliveryActionPending} onClick={onOpenLatestDelivery} type="button">
                     <ArrowUpRight className="h-4 w-4" />
-                    {deliveryActionPending ? "打开中..." : "打开结果"}
+                    {deliveryActionPending ? "打开中..." : "查看结果页"}
                   </button>
                 </div>
                 <div className="task-detail-output-list">
