@@ -5,20 +5,26 @@ on:
     paths:
       - ".github/workflows/desktop-test.yml"
       - "apps/desktop/**"
+      - "services/local-service/**"
       - "packages/config/**"
       - "packages/protocol/**"
       - "packages/ui/**"
       - "package.json"
+      - "go.mod"
+      - "go.sum"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
   pull_request:
     paths:
       - ".github/workflows/desktop-test.yml"
       - "apps/desktop/**"
+      - "services/local-service/**"
       - "packages/config/**"
       - "packages/protocol/**"
       - "packages/ui/**"
       - "package.json"
+      - "go.mod"
+      - "go.sum"
       - "pnpm-lock.yaml"
       - "pnpm-workspace.yaml"
 
@@ -29,6 +35,7 @@ concurrency:
 jobs:
   desktop-windows-build:
     runs-on: windows-latest
+    timeout-minutes: 60
 
     steps:
       - name: Check out code
@@ -42,15 +49,31 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.0"
+          cache-dependency-path: go.sum
+
       - name: Install workspace dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Run stable desktop checks
+        run: |
+          pnpm --dir apps/desktop lint
+          pnpm --dir apps/desktop typecheck
+          pnpm --dir apps/desktop test:dashboard
+          pnpm --dir apps/desktop test:memory
+
+      - name: Build Windows Go sidecar
+        run: pnpm build:service
 
       - name: Build Windows Tauri app
         working-directory: apps/desktop
