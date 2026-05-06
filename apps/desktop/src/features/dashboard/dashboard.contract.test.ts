@@ -1047,6 +1047,7 @@ type DashboardContractRpcMethodOverrides = {
   convertNotepadToTask?: (params: AgentNotepadConvertToTaskParams) => Promise<AgentNotepadConvertToTaskResult>;
   getDashboardModule?: (params: unknown) => Promise<unknown>;
   getDashboardOverview?: (params: unknown) => Promise<unknown>;
+  getMirrorOverview?: (params: unknown) => Promise<unknown>;
   getRecommendations?: (params: unknown) => Promise<unknown>;
   getMirrorOverviewDetailed?: (params: unknown) => Promise<unknown>;
   getSecuritySummary?: (params: unknown) => Promise<unknown>;
@@ -1190,6 +1191,9 @@ function withDesktopAliasRuntime<T>(
         getDashboardOverview:
           rpcMethods?.getDashboardOverview ??
           (() => Promise.reject(new Error("getDashboardOverview should not run in dashboard contract tests"))),
+        getMirrorOverview:
+          rpcMethods?.getMirrorOverview ??
+          (() => Promise.reject(new Error("getMirrorOverview should not run in dashboard contract tests"))),
         getRecommendations:
           rpcMethods?.getRecommendations ??
           (() => Promise.reject(new Error("getRecommendations should not run in dashboard contract tests"))),
@@ -6744,6 +6748,87 @@ test("dashboard home prioritizes overview and module signals before recommendati
             text: "继续推进当前任务。",
           },
         ],
+      }),
+    },
+  );
+});
+
+test("dashboard home reuses formal mirror profile fields for memory copy", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<{
+          stateMap: Record<string, { headline: string; subline: string; context?: Array<{ text: string }> }>;
+        }>;
+      };
+
+      const data = await service.loadDashboardHomeData();
+
+      assert.equal(data.stateMap.memory_summary?.headline, "用户画像");
+      assert.equal(data.stateMap.memory_summary?.subline, "工作风格：偏好即时结果回显");
+      assert.equal(data.stateMap.memory_summary?.context?.[0]?.text, "后端画像字段 3 项");
+    },
+    {
+      getDashboardModule: async (params: unknown) => {
+        const moduleName = (params as { module?: string }).module ?? "unknown";
+
+        if (moduleName === "notes") {
+          return {
+            highlights: ["最近恢复点 rp_1777961976151255500 已可用于安全回显。", "最近审计动作：generate_text -> openai_responses:deepseek-v4-flas..."],
+            module: moduleName,
+            summary: {
+              completed_tasks: 2,
+              exceptions: 1,
+            },
+            tab: "queue",
+          };
+        }
+
+        if (moduleName === "memory") {
+          return {
+            highlights: ["最近恢复点 rp_1777961976151255500 已可用于安全回显。", "最近审计动作：generate_text -> openai_responses:deepseek-v4-flas..."],
+            module: moduleName,
+            summary: {},
+            tab: "overview",
+          };
+        }
+
+        return {
+          highlights: [],
+          module: moduleName,
+          summary: {},
+          tab: moduleName === "tasks" ? "focus" : "overview",
+        };
+      },
+      getDashboardOverview: async () => ({
+        overview: {
+          focus_summary: null,
+          high_value_signal: [],
+          quick_actions: [],
+          trust_summary: {
+            has_restore_point: true,
+            pending_authorizations: 0,
+            risk_level: "green",
+            workspace_path: "workspace",
+          },
+        },
+      }),
+      getRecommendations: async () => ({
+        cooldown_hit: false,
+        items: [],
+      }),
+      getMirrorOverview: async () => ({
+        daily_summary: null,
+        history_summary: ["这里是历史概要，不该覆盖用户画像文案。"],
+        memory_references: [],
+        profile: {
+          active_hours: "16-21h",
+          preferred_output: "bubble",
+          work_style: "偏好即时结果回显",
+        },
       }),
     },
   );

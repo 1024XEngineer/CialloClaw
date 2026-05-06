@@ -1,6 +1,7 @@
 import type {
   AgentDashboardModuleGetResult,
   AgentDashboardOverviewGetResult,
+  AgentMirrorOverviewGetResult,
   AgentRecommendationGetResult,
   RecommendationFeedback,
   RecommendationItem,
@@ -11,6 +12,7 @@ import type {
 import {
   getDashboardModule,
   getDashboardOverview,
+  getMirrorOverview,
   getRecommendations,
   submitRecommendationFeedback,
 } from "@/rpc/methods";
@@ -274,6 +276,14 @@ function dedupeSummonTemplates(templates: Array<Omit<DashboardHomeSummonEvent, "
 
 function getModuleHighlights(result: AgentDashboardModuleGetResult | null | undefined) {
   return Array.isArray(result?.highlights) ? result.highlights.filter(Boolean) : [];
+}
+
+function isCrossDomainGovernanceHighlight(text: string) {
+  return /恢复点|审计|授权|回显|风险|generate_text|openai_responses|tool_call|workspace/i.test(text);
+}
+
+function getMemoryHighlights(result: AgentDashboardModuleGetResult | null | undefined) {
+  return getModuleHighlights(result).filter((item) => !isCrossDomainGovernanceHighlight(item));
 }
 
 function getModuleSummaryNumber(result: AgentDashboardModuleGetResult | null | undefined, key: string) {
@@ -601,7 +611,7 @@ function buildNotesState(
 
 function buildMemoryInsights(memoryModule: AgentDashboardModuleGetResult): DashboardHomeInsightItem[] {
   const icons = ["brain", "time", "repeat", "chat"] as const;
-  const highlights = getModuleHighlights(memoryModule);
+  const highlights = getMemoryHighlights(memoryModule);
 
   if (highlights.length === 0) {
     return cloneStateData(dashboardHomeStates.memory_summary).insights ?? [];
@@ -614,12 +624,159 @@ function buildMemoryInsights(memoryModule: AgentDashboardModuleGetResult): Dashb
   }));
 }
 
-function buildMemoryState(stateKey: DashboardHomeEventStateKey, memoryModule: AgentDashboardModuleGetResult) {
-  const state = cloneStateData(dashboardHomeStates[stateKey]);
-  const highlights = getModuleHighlights(memoryModule);
+function buildFormalMirrorInsights(overview: AgentMirrorOverviewGetResult): DashboardHomeInsightItem[] {
+  const items: DashboardHomeInsightItem[] = [];
 
-  state.headline = highlights[0] ?? state.headline;
-  state.subline = highlights[1] ?? highlights[0] ?? state.subline;
+  if (overview.profile) {
+    items.push(
+      {
+        emphasis: true,
+        iconKey: "brain",
+        text: `工作风格：${overview.profile.work_style}`,
+      },
+      {
+        iconKey: "chat",
+        text: `偏好交付：${overview.profile.preferred_output}`,
+      },
+      {
+        iconKey: "time",
+        text: `活跃时段：${overview.profile.active_hours}`,
+      },
+    );
+  }
+
+  if (items.length > 0) {
+    return items;
+  }
+
+  const latestReference = overview.memory_references[0] ?? null;
+  if (latestReference) {
+    return [
+      {
+        emphasis: true,
+        iconKey: "brain",
+        text: latestReference.memory_id,
+      },
+      {
+        iconKey: "time",
+        text: latestReference.summary || latestReference.reason,
+      },
+    ];
+  }
+
+  if (overview.history_summary[0]) {
+    return [
+      {
+        emphasis: true,
+        iconKey: "repeat",
+        text: overview.history_summary[0],
+      },
+    ];
+  }
+
+  return [];
+}
+
+function buildMemoryHeadline(highlights: string[]) {
+  if (highlights.length >= 2) {
+    return "本周镜子观察";
+  }
+
+  return "最近协作镜像";
+}
+
+function buildMemorySubline(highlights: string[]) {
+  return highlights[0] ?? "镜子会持续整理近期协作节奏和重复出现的模式。";
+}
+
+function buildFormalMirrorState(overview: AgentMirrorOverviewGetResult) {
+  const profile = overview.profile;
+  if (profile) {
+    return {
+      context: [
+        {
+          iconKey: "brain",
+          text: "后端画像字段 3 项",
+          type: "active" as const,
+        },
+        {
+          iconKey: "chat",
+          text: `偏好交付：${profile.preferred_output}`,
+          type: "normal" as const,
+        },
+        {
+          iconKey: "time",
+          text: `活跃时段：${profile.active_hours}`,
+          type: "hint" as const,
+        },
+      ],
+      headline: "用户画像",
+      insights: buildFormalMirrorInsights(overview),
+      subline: `工作风格：${profile.work_style}`,
+    };
+  }
+
+  const latestReference = overview.memory_references[0] ?? null;
+  if (latestReference) {
+    return {
+      context: [
+        {
+          iconKey: "brain",
+          text: `最近记忆引用：${latestReference.memory_id}`,
+          type: "active" as const,
+        },
+        {
+          iconKey: "repeat",
+          text: latestReference.summary || latestReference.reason,
+          type: "hint" as const,
+        },
+      ],
+      headline: "近期被调用记忆",
+      insights: buildFormalMirrorInsights(overview),
+      subline: latestReference.summary || latestReference.reason,
+    };
+  }
+
+  if (overview.history_summary[0]) {
+    return {
+      context: [
+        {
+          iconKey: "repeat",
+          text: overview.history_summary[0],
+          type: "active" as const,
+        },
+      ],
+      headline: "历史概要",
+      insights: buildFormalMirrorInsights(overview),
+      subline: overview.history_summary[1] ?? overview.history_summary[0],
+    };
+  }
+
+  return null;
+}
+
+function buildMemoryState(
+  stateKey: DashboardHomeEventStateKey,
+  memoryModule: AgentDashboardModuleGetResult,
+  mirrorOverview: AgentMirrorOverviewGetResult | null,
+) {
+  const state = cloneStateData(dashboardHomeStates[stateKey]);
+  if (mirrorOverview) {
+    const formalMirrorState = buildFormalMirrorState(mirrorOverview);
+    if (formalMirrorState) {
+      state.headline = formalMirrorState.headline;
+      state.subline = formalMirrorState.subline;
+      state.insights = formalMirrorState.insights;
+      state.context = formalMirrorState.context;
+      state.navigationTarget = buildModuleNavigationTarget("memory");
+      return state;
+    }
+  }
+
+  const highlights = getMemoryHighlights(memoryModule);
+
+  state.headline = buildMemoryHeadline(highlights);
+  state.subline = buildMemorySubline(highlights);
   state.insights = buildMemoryInsights(memoryModule);
   state.context = highlights.slice(0, 3).map((item, index) => ({
     iconKey: index === 0 ? "brain" : index === 1 ? "repeat" : "time",
@@ -908,6 +1065,7 @@ function buildFocusLine(
 function buildDashboardHomeData(input: {
   loadWarnings: string[];
   moduleResults: Record<DashboardHomeModuleKey, AgentDashboardModuleGetResult>;
+  mirrorOverview: AgentMirrorOverviewGetResult | null;
   overview: AgentDashboardOverviewGetResult;
   recommendations: AgentRecommendationGetResult;
 }): DashboardHomeData {
@@ -916,7 +1074,7 @@ function buildDashboardHomeData(input: {
 
   stateMap[stateKeys.tasks] = buildTaskState(stateKeys.tasks, input.overview, input.moduleResults.tasks);
   stateMap[stateKeys.notes] = buildNotesState(stateKeys.notes, input.moduleResults.notes, input.recommendations.items);
-  stateMap[stateKeys.memory] = buildMemoryState(stateKeys.memory, input.moduleResults.memory);
+  stateMap[stateKeys.memory] = buildMemoryState(stateKeys.memory, input.moduleResults.memory, input.mirrorOverview);
   stateMap[stateKeys.safety] = buildSafetyState(stateKeys.safety, input.overview, input.moduleResults.safety);
 
   const overviewSummons = buildOverviewSummons(input.overview, stateKeys, stateMap);
@@ -956,7 +1114,7 @@ function formatDashboardHomeLoadWarning(label: string, error: unknown) {
 }
 
 export async function loadDashboardHomeData(): Promise<DashboardHomeData> {
-  const [overviewResult, tasksResult, notesResult, memoryResult, safetyResult, recommendationsResult] = await Promise.allSettled([
+  const [overviewResult, tasksResult, notesResult, memoryResult, safetyResult, recommendationsResult, mirrorOverviewResult] = await Promise.allSettled([
     getDashboardOverview({
       focus_mode: false,
       include: ["focus_summary", "trust_summary", "quick_actions", "high_value_signal"],
@@ -991,6 +1149,10 @@ export async function loadDashboardHomeData(): Promise<DashboardHomeData> {
       scene: "idle",
       source: "dashboard",
     }),
+    getMirrorOverview({
+      include: ["profile", "history_summary", "daily_summary", "memory_references"],
+      request_meta: createRequestMeta("dashboard_home_mirror_overview"),
+    }),
   ]);
 
   if (overviewResult.status === "rejected") {
@@ -1013,6 +1175,9 @@ export async function loadDashboardHomeData(): Promise<DashboardHomeData> {
   const recommendations = recommendationsResult.status === "fulfilled"
     ? recommendationsResult.value
     : (loadWarnings.push(formatDashboardHomeLoadWarning("建议流", recommendationsResult.reason)), createEmptyRecommendationResult());
+  const mirrorOverview = mirrorOverviewResult.status === "fulfilled"
+    ? mirrorOverviewResult.value
+    : null;
 
   return buildDashboardHomeData({
     loadWarnings,
@@ -1022,6 +1187,7 @@ export async function loadDashboardHomeData(): Promise<DashboardHomeData> {
       safety: safetyModule,
       tasks: tasksModule,
     },
+    mirrorOverview,
     overview: overviewResult.value,
     recommendations,
   });
