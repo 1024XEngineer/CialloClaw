@@ -589,7 +589,6 @@ func TestPlaywrightSidecarRuntimeClientSupportsAttachWithoutBrowserKind(t *testi
 		t.Fatalf("expected empty browser kind to pass through unchanged, got %q", got)
 	}
 }
-
 func TestResolveRelativePathFromRootsFindsWorkerEntry(t *testing.T) {
 	root := t.TempDir()
 	entryPath := filepath.Join(root, "workers", "playwright-worker", "src", "index.js")
