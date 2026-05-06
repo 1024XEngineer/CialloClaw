@@ -6966,6 +6966,83 @@ test("dashboard home keeps a low-priority safety summon available when the forma
   );
 });
 
+test("dashboard home only uses quick actions for task summons that can truly deep-link to task detail", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<{
+          summonTemplates: Array<{ module: string; nextStep?: string; stateKey: string }>;
+        }>;
+      };
+
+      const data = await service.loadDashboardHomeData();
+
+      const taskSummon = data.summonTemplates.find((item) => item.stateKey === "task_working");
+      assert.equal(taskSummon?.module, "tasks");
+      assert.equal(taskSummon?.nextStep, "打开任务页");
+    },
+    {
+      getDashboardModule: async (params: unknown) => {
+        const moduleName = (params as { module?: string }).module ?? "unknown";
+        if (moduleName === "tasks") {
+          return {
+            highlights: ["继续推进当前摘要任务"],
+            module: moduleName,
+            summary: {
+              blocked_tasks: 0,
+              processing_tasks: 0,
+              waiting_auth_tasks: 0,
+            },
+            tab: "focus",
+          };
+        }
+
+        return {
+          highlights: [],
+          module: moduleName,
+          summary: {},
+          tab: "overview",
+        };
+      },
+      getDashboardOverview: async () => ({
+        overview: {
+          focus_summary: null,
+          high_value_signal: ["当前任务轨道已有新的系统摘要。"],
+          quick_actions: ["打开任务详情"],
+          trust_summary: {
+            has_restore_point: false,
+            pending_authorizations: 0,
+            risk_level: "green",
+            workspace_path: "workspace",
+          },
+        },
+      }),
+      getRecommendations: async () => ({
+        cooldown_hit: false,
+        items: [],
+      }),
+      getMirrorOverview: async () => ({
+        daily_summary: null,
+        history_summary: [],
+        memory_references: [],
+        profile: null,
+      }),
+      listNotepad: async () => ({
+        items: [],
+        page: {
+          has_more: false,
+          limit: 12,
+          offset: 0,
+          total: 0,
+        },
+      }),
+    },
+  );
+});
+
 test("dashboard home prefers formal mirror references over profile copy when both exist", async () => {
   await withDesktopAliasRuntime(
     async (requireFn) => {

@@ -270,7 +270,7 @@ function getOverviewQuickActions(overview: AgentDashboardOverviewGetResult) {
 }
 
 function getSummonNextStep(state: DashboardHomeStateData, quickActions?: string[]) {
-  if (state.module === "tasks" && quickActions?.[0]) {
+  if (state.module === "tasks" && state.navigationTarget?.kind === "task_detail" && quickActions?.[0]) {
     return quickActions[0];
   }
 
