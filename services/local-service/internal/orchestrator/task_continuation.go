@@ -15,6 +15,8 @@ import (
 
 const implicitSessionReuseWindow = 15 * time.Minute
 
+var taskContinuationModelTimeout = 3 * time.Second
+
 type taskContinuationDecision struct {
 	Decision string `json:"decision"`
 	TaskID   string `json:"task_id"`
@@ -35,6 +37,9 @@ type taskContinuationOptions struct {
 	// confirmation is not enough to prove implicit plain-text ownership or block
 	// already-confirmed pending evidence from resuming.
 	ForceConfirmRequired bool
+	// AllowAsyncBubble keeps the desktop bubble continuation hotfix limited to
+	// submit flows that already opted into immediate async delivery.
+	AllowAsyncBubble bool
 }
 
 func (s *Service) maybeContinueExistingTask(params map[string]any, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, options taskContinuationOptions) (map[string]any, bool, string, error) {
@@ -180,7 +185,12 @@ func (s *Service) modelTaskContinuationDecision(snapshot contextsvc.TaskContextS
 	if s == nil || modelService == nil {
 		return taskContinuationDecision{}, false
 	}
-	response, err := modelService.GenerateText(context.Background(), model.GenerateTextRequest{
+	// Continuation classification is a best-effort refinement on top of the local
+	// deterministic heuristics. It must stay bounded so shell-ball submits do not
+	// wait indefinitely for a remote model decision.
+	ctx, cancel := context.WithTimeout(context.Background(), taskContinuationModelTimeout)
+	defer cancel()
+	response, err := modelService.GenerateText(ctx, model.GenerateTextRequest{
 		TaskID: "task_continuation_classifier",
 		RunID:  "run_continuation_classifier",
 		Input:  buildTaskContinuationPrompt(snapshot, explicitIntent, continuationContext, options),
@@ -748,6 +758,17 @@ func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot contex
 	}
 	if handled {
 		return governedResponse, nil
+	}
+	if options.AllowAsyncBubble && shouldRunAsyncBubbleDelivery(governedTask) {
+		asyncTask, asyncBubble, asyncErr := s.beginAsyncTaskExecution(governedTask, mergedSnapshot, suggestion.Intent)
+		if asyncErr != nil {
+			return nil, asyncErr
+		}
+		return map[string]any{
+			"task":            taskMap(asyncTask),
+			"bubble_message":  asyncBubble,
+			"delivery_result": nil,
+		}, nil
 	}
 	executedTask, resultBubble, deliveryResult, _, execErr := s.executeTask(governedTask, mergedSnapshot, suggestion.Intent)
 	if execErr != nil {
