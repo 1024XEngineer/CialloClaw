@@ -11,6 +11,7 @@ func TestInMemoryArtifactStoreReplacesDuplicateArtifactIDs(t *testing.T) {
 	err := store.SaveArtifacts(context.Background(), []ArtifactRecord{{
 		ArtifactID:          "art_001",
 		TaskID:              "task_001",
+		RunID:               "run_001",
 		ArtifactType:        "generated_doc",
 		Title:               "first.md",
 		Path:                "workspace/first.md",
@@ -25,6 +26,7 @@ func TestInMemoryArtifactStoreReplacesDuplicateArtifactIDs(t *testing.T) {
 	err = store.SaveArtifacts(context.Background(), []ArtifactRecord{{
 		ArtifactID:          "art_001",
 		TaskID:              "task_001",
+		RunID:               "run_001",
 		ArtifactType:        "generated_doc",
 		Title:               "updated.md",
 		Path:                "workspace/updated.md",
@@ -36,7 +38,7 @@ func TestInMemoryArtifactStoreReplacesDuplicateArtifactIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("replacement save failed: %v", err)
 	}
-	items, total, err := store.ListArtifacts(context.Background(), "task_001", 20, 0)
+	items, total, err := store.ListArtifacts(context.Background(), "task_001", "", 20, 0)
 	if err != nil {
 		t.Fatalf("list artifacts failed: %v", err)
 	}
@@ -45,6 +47,9 @@ func TestInMemoryArtifactStoreReplacesDuplicateArtifactIDs(t *testing.T) {
 	}
 	if items[0].Title != "updated.md" || items[0].Path != "workspace/updated.md" {
 		t.Fatalf("expected replacement artifact payload, got %+v", items[0])
+	}
+	if items[0].RunID != "run_001" {
+		t.Fatalf("expected artifact run_id to round-trip, got %+v", items[0])
 	}
 }
 
@@ -122,7 +127,7 @@ func TestInMemoryArtifactStoreListArtifactsAppliesPaging(t *testing.T) {
 	if err != nil {
 		t.Fatalf("save artifacts failed: %v", err)
 	}
-	items, total, err := store.ListArtifacts(context.Background(), "task_001", 1, 1)
+	items, total, err := store.ListArtifacts(context.Background(), "task_001", "", 1, 1)
 	if err != nil {
 		t.Fatalf("list artifacts failed: %v", err)
 	}
@@ -132,7 +137,7 @@ func TestInMemoryArtifactStoreListArtifactsAppliesPaging(t *testing.T) {
 	if items[0].ArtifactID != "art_001" {
 		t.Fatalf("expected second newest artifact for task_001, got %+v", items[0])
 	}
-	items, total, err = store.ListArtifacts(context.Background(), "", -1, -5)
+	items, total, err = store.ListArtifacts(context.Background(), "", "", -1, -5)
 	if err != nil {
 		t.Fatalf("list all artifacts failed: %v", err)
 	}
@@ -151,6 +156,7 @@ func TestSQLiteArtifactStorePersistsReplacesAndPages(t *testing.T) {
 		{
 			ArtifactID:          "art_sql_001",
 			TaskID:              "task_sql",
+			RunID:               "run_sql",
 			ArtifactType:        "generated_doc",
 			Title:               "one.md",
 			Path:                "workspace/one.md",
@@ -177,6 +183,7 @@ func TestSQLiteArtifactStorePersistsReplacesAndPages(t *testing.T) {
 	if err := store.SaveArtifacts(context.Background(), []ArtifactRecord{{
 		ArtifactID:          "art_sql_001",
 		TaskID:              "task_sql",
+		RunID:               "run_sql",
 		ArtifactType:        "generated_doc",
 		Title:               "one-updated.md",
 		Path:                "workspace/one-updated.md",
@@ -187,22 +194,29 @@ func TestSQLiteArtifactStorePersistsReplacesAndPages(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("replace sqlite artifact failed: %v", err)
 	}
-	items, total, err := store.ListArtifacts(context.Background(), "task_sql", 1, 0)
+	items, total, err := store.ListArtifacts(context.Background(), "task_sql", "", 1, 0)
 	if err != nil {
 		t.Fatalf("list sqlite artifacts failed: %v", err)
 	}
 	if total != 2 || len(items) != 1 {
 		t.Fatalf("expected paged sqlite artifacts, got total=%d items=%+v", total, items)
 	}
-	if items[0].ArtifactID != "art_sql_001" || items[0].Title != "one-updated.md" || items[0].DeliveryType != "open_file" {
+	if items[0].ArtifactID != "art_sql_001" || items[0].RunID != "run_sql" || items[0].Title != "one-updated.md" || items[0].DeliveryType != "open_file" {
 		t.Fatalf("expected replacement artifact to sort first, got %+v", items[0])
 	}
-	items, total, err = store.ListArtifacts(context.Background(), "task_sql", 0, 0)
+	items, total, err = store.ListArtifacts(context.Background(), "task_sql", "", 0, 0)
 	if err != nil {
 		t.Fatalf("list all sqlite artifacts failed: %v", err)
 	}
 	if total != 2 || len(items) != 2 {
 		t.Fatalf("expected full sqlite artifact list, got total=%d items=%+v", total, items)
+	}
+	items, total, err = store.ListArtifacts(context.Background(), "task_sql", "run_sql", 0, 0)
+	if err != nil {
+		t.Fatalf("list sqlite artifacts by run_id failed: %v", err)
+	}
+	if total != 1 || len(items) != 1 || items[0].ArtifactID != "art_sql_001" {
+		t.Fatalf("expected run-scoped sqlite artifacts, got total=%d items=%+v", total, items)
 	}
 }
 

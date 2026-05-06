@@ -1,4 +1,5 @@
 use super::types::{SelectionPageContextPayload, SelectionSnapshotPayload};
+use crate::internal_windows::{INTERNAL_PINNED_WINDOW_PREFIX, INTERNAL_WINDOW_LABELS};
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
 use std::thread;
@@ -28,15 +29,11 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 const WINDOWS_UIA_SELECTION_SOURCE: &str = "windows_uia";
 const WINDOWS_UIA_SELECTION_URL: &str = "native://windows-uia-selection";
+const BROWSER_KIND_CHROME: &str = "chrome";
+const BROWSER_KIND_EDGE: &str = "edge";
+const BROWSER_KIND_OTHER_BROWSER: &str = "other_browser";
+const BROWSER_KIND_NON_BROWSER: &str = "non_browser";
 const SHELL_BALL_SELECTION_SNAPSHOT_EVENT: &str = "desktop-shell-ball:selection-snapshot";
-const SHELL_BALL_WINDOW_LABELS: [&str; 5] = [
-    "shell-ball",
-    "shell-ball-bubble",
-    "shell-ball-input",
-    "shell-ball-voice",
-    "onboarding",
-];
-const SHELL_BALL_PINNED_WINDOW_PREFIX: &str = "shell-ball-bubble-pinned-";
 const SHELL_BALL_SELECTION_MOUSE_DELAY_MS: u64 = 100;
 const SHELL_BALL_SELECTION_KEYBOARD_DELAY_MS: u64 = 80;
 
@@ -156,13 +153,22 @@ pub fn read_selection_snapshot(
         return Ok(None);
     }
 
+    let process_id = get_window_process_id(foreground_window);
+    let process_path = process_id.and_then(get_window_process_path);
+    let app_name = process_path
+        .as_deref()
+        .and_then(extract_process_stem)
+        .unwrap_or_else(|| WINDOWS_UIA_SELECTION_SOURCE.to_string());
+
     Ok(Some(SelectionSnapshotPayload::new(
         normalized_text,
         SelectionPageContextPayload {
             title: get_window_title(foreground_window),
             url: WINDOWS_UIA_SELECTION_URL.to_string(),
-            app_name: get_window_app_name(foreground_window)
-                .unwrap_or_else(|| WINDOWS_UIA_SELECTION_SOURCE.to_string()),
+            app_name: app_name.clone(),
+            browser_kind: classify_browser_kind(&app_name).to_string(),
+            process_path,
+            process_id,
         },
         WINDOWS_UIA_SELECTION_SOURCE,
     )))
@@ -294,13 +300,29 @@ fn reset_probe_pending() {
 fn selection_snapshot_fingerprint(snapshot: Option<&SelectionSnapshotPayload>) -> Option<String> {
     snapshot.map(|value| {
         format!(
-            "{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}",
             value.text,
             value.page_context.title,
             value.page_context.url,
-            value.page_context.app_name
+            value.page_context.app_name,
+            value.page_context.browser_kind,
+            value.page_context.process_path.clone().unwrap_or_default(),
+            value
+                .page_context
+                .process_id
+                .map(|value| value.to_string())
+                .unwrap_or_default()
         )
     })
+}
+
+fn classify_browser_kind(app_name: &str) -> &'static str {
+    match app_name.to_ascii_lowercase().as_str() {
+        "chrome" => BROWSER_KIND_CHROME,
+        "msedge" => BROWSER_KIND_EDGE,
+        "firefox" | "opera" | "brave" | "vivaldi" => BROWSER_KIND_OTHER_BROWSER,
+        _ => BROWSER_KIND_NON_BROWSER,
+    }
 }
 
 fn read_selection_target_element(
@@ -349,7 +371,7 @@ fn read_text_selection(element: &IUIAutomationElement) -> Result<String, String>
 fn is_shell_ball_cluster_window(app: &AppHandle, hwnd: HWND) -> bool {
     let root_window = get_root_window(hwnd);
 
-    for label in SHELL_BALL_WINDOW_LABELS {
+    for label in INTERNAL_WINDOW_LABELS {
         let Some(window) = app.get_webview_window(label) else {
             continue;
         };
@@ -364,7 +386,7 @@ fn is_shell_ball_cluster_window(app: &AppHandle, hwnd: HWND) -> bool {
     }
 
     for window in app.webview_windows().values() {
-        if !window.label().starts_with(SHELL_BALL_PINNED_WINDOW_PREFIX) {
+        if !window.label().starts_with(INTERNAL_PINNED_WINDOW_PREFIX) {
             continue;
         }
 
@@ -406,7 +428,7 @@ fn get_window_title(hwnd: HWND) -> String {
     String::from_utf16_lossy(&buffer[..written as usize])
 }
 
-fn get_window_app_name(hwnd: HWND) -> Option<String> {
+fn get_window_process_id(hwnd: HWND) -> Option<u32> {
     let process_id = unsafe {
         let mut process_id = 0u32;
         windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId(
@@ -420,6 +442,10 @@ fn get_window_app_name(hwnd: HWND) -> Option<String> {
         return None;
     }
 
+    Some(process_id)
+}
+
+fn get_window_process_path(process_id: u32) -> Option<String> {
     let process =
         unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id).ok()? };
 
@@ -442,9 +468,68 @@ fn get_window_app_name(hwnd: HWND) -> Option<String> {
         return None;
     }
 
-    let full_path = String::from_utf16_lossy(&buffer[..size as usize]);
-    std::path::Path::new(&full_path)
+    Some(String::from_utf16_lossy(&buffer[..size as usize]))
+}
+
+fn extract_process_stem(path: &str) -> Option<String> {
+    std::path::Path::new(path)
         .file_stem()
         .and_then(|stem| stem.to_str())
         .map(ToString::to_string)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        classify_browser_kind, selection_snapshot_fingerprint, SelectionPageContextPayload,
+        SelectionSnapshotPayload, BROWSER_KIND_CHROME, BROWSER_KIND_EDGE, BROWSER_KIND_NON_BROWSER,
+        BROWSER_KIND_OTHER_BROWSER,
+    };
+
+    fn build_snapshot(
+        browser_kind: &str,
+        process_path: Option<&str>,
+        process_id: Option<u32>,
+    ) -> SelectionSnapshotPayload {
+        SelectionSnapshotPayload::new(
+            "selected text".to_string(),
+            SelectionPageContextPayload {
+                title: "Release Notes".to_string(),
+                url: "native://windows-uia-selection".to_string(),
+                app_name: "chrome".to_string(),
+                browser_kind: browser_kind.to_string(),
+                process_path: process_path.map(ToString::to_string),
+                process_id,
+            },
+            "windows_uia",
+        )
+    }
+
+    #[test]
+    fn classify_browser_kind_matches_supported_takeover_boundary() {
+        assert_eq!(classify_browser_kind("chrome"), BROWSER_KIND_CHROME);
+        assert_eq!(classify_browser_kind("msedge"), BROWSER_KIND_EDGE);
+        assert_eq!(classify_browser_kind("firefox"), BROWSER_KIND_OTHER_BROWSER);
+        assert_eq!(classify_browser_kind("brave"), BROWSER_KIND_OTHER_BROWSER);
+        assert_eq!(classify_browser_kind("notepad"), BROWSER_KIND_NON_BROWSER);
+    }
+
+    #[test]
+    fn selection_snapshot_fingerprint_changes_when_attach_hints_change() {
+        let base = build_snapshot(
+            BROWSER_KIND_CHROME,
+            Some("C:/Program Files/Google/Chrome/Application/chrome.exe"),
+            Some(4412),
+        );
+        let changed = build_snapshot(
+            BROWSER_KIND_EDGE,
+            Some("C:/Program Files/Microsoft/Edge/Application/msedge.exe"),
+            Some(5521),
+        );
+
+        assert_ne!(
+            selection_snapshot_fingerprint(Some(&base)),
+            selection_snapshot_fingerprint(Some(&changed))
+        );
+    }
 }

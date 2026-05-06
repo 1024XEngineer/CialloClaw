@@ -1,8 +1,26 @@
 /* Shared desktop tokens keep the mascot, dashboard modules, and settings pages visually aligned without changing formal task data. */
 :root {
-  --cc-font-ui: "Nunito", "LXGW WenKai TC", "Segoe UI Variable Text", sans-serif;
-  --cc-font-display: "LXGW WenKai TC", "Nunito", "Iowan Old Style", Georgia, serif;
-  --cc-font-mono: "IBM Plex Mono", Consolas, monospace;
+  --cc-font-ui:
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Microsoft YaHei",
+    "Segoe UI Variable Text",
+    "Segoe UI",
+    "Noto Sans CJK SC",
+    "Source Han Sans SC",
+    "WenQuanYi Micro Hei",
+    sans-serif;
+  --cc-font-display:
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Microsoft YaHei",
+    "Segoe UI Variable Text",
+    "Segoe UI",
+    "Noto Sans CJK SC",
+    "Source Han Sans SC",
+    "WenQuanYi Micro Hei",
+    sans-serif;
+  --cc-font-mono: "Cascadia Mono", "SFMono-Regular", "Segoe UI Mono", Consolas, Menlo, "Liberation Mono", monospace;
 
   --cc-cream-0: #fffaf6;
   --cc-cream-1: #fcf5ed;

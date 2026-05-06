@@ -3,6 +3,7 @@ module github.com/cialloclaw/cialloclaw
 go 1.26
 
 require github.com/Microsoft/go-winio v0.6.2
+require github.com/rivo/uniseg v0.4.7
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect

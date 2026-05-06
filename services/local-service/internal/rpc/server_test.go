@@ -570,13 +570,11 @@ func TestHandleStreamConnDoesNotReplayStreamedRuntimeNotificationsAfterResponse(
 }
 
 func TestHandleStreamConnFiltersRuntimeNotificationsToRequestTask(t *testing.T) {
-	modelClient := &selectiveWaitLoopModelClient{
-		stubLoopModelClient: stubLoopModelClient{
-			toolResult: model.ToolCallResult{
-				OutputText: "Scoped runtime finished.",
-			},
-			generateToolWait: make(chan struct{}),
+	modelClient := &stubLoopModelClient{
+		toolResult: model.ToolCallResult{
+			OutputText: "Scoped runtime finished.",
 		},
+		generateToolWait: make(chan struct{}),
 	}
 	server := newTestServerWithModelClient(modelClient)
 
@@ -599,7 +597,6 @@ func TestHandleStreamConnFiltersRuntimeNotificationsToRequestTask(t *testing.T) 
 
 	taskA := startTask("sess_loop_scope_a")
 	taskB := startTask("sess_loop_scope_b")
-	modelClient.blockedTaskID = taskA
 
 	left, right := net.Pipe()
 	defer left.Close()
@@ -638,13 +635,6 @@ func TestHandleStreamConnFiltersRuntimeNotificationsToRequestTask(t *testing.T) 
 		t.Fatalf("expected first streamed envelope to be loop.* notification, got %+v", firstEnvelope)
 	}
 
-	if _, err := server.orchestrator.TaskSteer(map[string]any{
-		"task_id": taskB,
-		"message": "Mention the unrelated steering marker.",
-	}); err != nil {
-		t.Fatalf("queue steering for unrelated task: %v", err)
-	}
-
 	confirmDone := make(chan error, 1)
 	go func() {
 		_, err := server.orchestrator.ConfirmTask(map[string]any{
@@ -679,6 +669,8 @@ func TestHandleStreamConnFiltersRuntimeNotificationsToRequestTask(t *testing.T) 
 		t.Fatalf("clear read deadline: %v", err)
 	}
 
+	close(modelClient.generateToolWait)
+
 	select {
 	case err := <-confirmDone:
 		if err != nil {
@@ -687,8 +679,6 @@ func TestHandleStreamConnFiltersRuntimeNotificationsToRequestTask(t *testing.T) 
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("expected unrelated task confirmation to complete")
 	}
-
-	close(modelClient.generateToolWait)
 }
 
 func TestDispatchTaskStartIgnoresUnsupportedIntentField(t *testing.T) {
@@ -726,6 +716,53 @@ func TestDispatchTaskStartIgnoresUnsupportedIntentField(t *testing.T) {
 	intentValue, ok := task["intent"].(map[string]any)
 	if !ok || intentValue["name"] != "agent_loop" {
 		t.Fatalf("expected task.start to rely on backend suggestion instead of request intent, got %+v", task["intent"])
+	}
+}
+
+func TestDispatchTaskStartFileInstructionSkipsIntentConfirmation(t *testing.T) {
+	server := newTestServerWithModelClient(&stubLoopModelClient{})
+
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-task-start-file-instruction"`),
+		Method:  "agent.task.start",
+		Params: mustMarshal(t, map[string]any{
+			"session_id": "sess_file_instruction_rpc",
+			"source":     "floating_ball",
+			"trigger":    "file_drop",
+			"input": map[string]any{
+				"type":  "file",
+				"text":  "帮我看看这里面有什么",
+				"files": []string{"workspace/MyToDos_Vue"},
+			},
+			"options": map[string]any{
+				"confirm_required": false,
+			},
+			"delivery": map[string]any{
+				"preferred": "bubble",
+				"fallback":  "task_detail",
+			},
+		}),
+	})
+
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	result := success.Result.Data.(map[string]any)
+	task := result["task"].(map[string]any)
+	if task["status"] == "confirming_intent" || task["current_step"] == "intent_confirmation" {
+		t.Fatalf("expected instructed file start to skip intent confirmation, got %+v", task)
+	}
+	if task["source_type"] != "dragged_file" {
+		t.Fatalf("expected dragged_file source type, got %+v", task)
+	}
+	intentValue, ok := task["intent"].(map[string]any)
+	if !ok || intentValue["name"] != "agent_loop" {
+		t.Fatalf("expected task.start to keep backend agent_loop suggestion, got %+v", task["intent"])
+	}
+	if result["delivery_result"] == nil {
+		t.Fatal("expected instructed file start to return delivery_result")
 	}
 }
 

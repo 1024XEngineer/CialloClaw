@@ -16,7 +16,7 @@ import { ShellBallVoiceHints } from "./components/ShellBallVoiceHints";
 import type { ShellBallSelectionSnapshot } from "./selection/selection.types";
 import { useShellBallInteraction } from "./useShellBallInteraction";
 import { getShellBallMotionConfig } from "./shellBall.motion";
-import type { ShellBallVisualState } from "./shellBall.types";
+import type { ShellBallInputBarMode, ShellBallVisualState } from "./shellBall.types";
 import { useShellBallCoordinator } from "./useShellBallCoordinator";
 import { useShellBallWindowMetrics } from "./useShellBallWindowMetrics";
 import {
@@ -184,6 +184,21 @@ export function isShellBallClipboardPromptActive(
   return prompt !== null && prompt.expiresAt > now;
 }
 
+export function resolveShellBallInlineInputMode(input: {
+  shouldRenderInlineInput: boolean;
+  snapshotInputBarMode: ShellBallInputBarMode;
+}): ShellBallInputBarMode {
+  if (!input.shouldRenderInlineInput) {
+    return "hidden";
+  }
+
+  if (input.snapshotInputBarMode === "readonly") {
+    return "readonly";
+  }
+
+  return "interactive";
+}
+
 function easeShellBallDashboardTransition(progress: number) {
   return 1 - Math.pow(1 - progress, 3);
 }
@@ -301,7 +316,6 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handleInputFocusRequest,
     setInputValue,
     acknowledgeFinalizedSpeechPayload,
-    getCurrentConversationSessionId,
   } = useShellBallInteraction();
   const motionConfig = getShellBallMotionConfig(visualState);
   const [dashboardTransitionPhase, setDashboardTransitionPhase] = useState<ShellBallDashboardTransitionPhase>("idle");
@@ -332,6 +346,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   }>({
     handleDroppedFiles: () => undefined,
   });
+  const inputFocusRequestRef = useRef<() => void>(() => undefined);
   const shellBallWindowTarget = typeof window === "undefined" ? undefined : window;
   const {
     handleClipboardPrompt: handleCoordinatorClipboardPrompt,
@@ -366,12 +381,14 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     onInputFocusChange: handleInputFocusChange,
     onSubmitText: handleSubmitText,
     onSubmitVoiceText: handleSubmitVoiceText,
-    getCurrentConversationSessionId,
     onAttachFile: handleAttachFile,
     onPrimaryClick: handlePrimaryClick,
   });
-  const shouldRenderInlineInput = snapshot.visibility.input || visualState === "idle";
-  const inlineInputMode = snapshot.inputBarMode === "hidden" ? "interactive" : snapshot.inputBarMode;
+  const shouldRenderInlineInput = snapshot.visibility.input;
+  const inlineInputMode = resolveShellBallInlineInputMode({
+    shouldRenderInlineInput,
+    snapshotInputBarMode: snapshot.inputBarMode,
+  });
   const visibleBubbleItems = getShellBallVisibleBubbleItems(snapshot.bubbleItems);
   const selectionIndicatorVisible = shouldShowShellBallSelectionIndicator({
     selection: selectionPrompt,
@@ -397,6 +414,8 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     };
   }, []);
   const {
+    ballDockSettling,
+    ballDragActive,
     beginBallWindowPointerDrag,
     edgeDockState,
     endBallWindowPointerDrag,
@@ -470,6 +489,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
 
     setInputFocusToken((current) => current + 1);
   }, [handleInputFocusRequest]);
+  inputFocusRequestRef.current = () => focusInlineInputField(false);
 
   const handleInlineAttachFile = useCallback(() => {
     void (async () => {
@@ -704,14 +724,23 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
         case "leave":
           setFileDropActive(false);
           return;
-        case "drop":
+        case "drop": {
           setFileDropActive(false);
           if (event.payload.paths.length === 0) {
             return;
           }
 
-          void dragDropHandlersRef.current.handleDroppedFiles(event.payload.paths);
+          const droppedPaths = event.payload.paths;
+          void (async () => {
+            try {
+              await dragDropHandlersRef.current.handleDroppedFiles(droppedPaths);
+              inputFocusRequestRef.current();
+            } catch (error) {
+              console.warn("shell-ball file drop handling failed", error);
+            }
+          })();
           return;
+        }
       }
     }).then((unlisten) => {
       if (disposed) {
@@ -1061,6 +1090,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     <ShellBallSurface
       containerRef={rootRef}
       dashboardTransitionPhase={dashboardTransitionPhase}
+      dockTarget={edgeDockState.side}
       edgeDockRevealed={edgeDockState.revealed}
       edgeDockSide={edgeDockState.side}
       mascotRef={mascotRef}
@@ -1071,6 +1101,8 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       fileDropActive={shouldShowShellBallFileDropOverlay({
         fileDropActive,
       })}
+      isDragging={ballDragActive}
+      isSettling={ballDockSettling}
       topContent={isEdgeDocked ? null : (
         <div className="shell-ball-surface__bubble-reserve" data-visible={snapshot.visibility.bubble && visibleBubbleItems.length > 0 ? "true" : "false"}>
           <div className="shell-ball-surface__bubble-reserve-content">

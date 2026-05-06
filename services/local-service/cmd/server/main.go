@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os/signal"
 	"syscall"
@@ -10,15 +11,20 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 )
 
-// main 处理当前模块的相关逻辑。
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	cfg := config.Load()
+	if err := run(ctx, config.Load()); err != nil {
+		log.Fatalf("local service: %v", err)
+	}
+}
+
+// run owns startup wiring so main remains the only process-exit boundary.
+func run(ctx context.Context, cfg config.Config) error {
 	app, err := bootstrap.New(cfg)
 	if err != nil {
-		log.Fatalf("bootstrap local service: %v", err)
+		return fmt.Errorf("bootstrap local service: %w", err)
 	}
 
 	log.Printf(
@@ -28,6 +34,7 @@ func main() {
 		cfg.RPC.DebugHTTPAddress,
 	)
 	if err := app.Start(ctx); err != nil {
-		log.Fatalf("run local service: %v", err)
+		return fmt.Errorf("run local service: %w", err)
 	}
+	return nil
 }

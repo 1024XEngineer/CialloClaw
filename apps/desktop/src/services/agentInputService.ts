@@ -11,12 +11,18 @@ import {
   recordMirrorConversationStart,
   recordMirrorConversationSuccess,
 } from "./mirrorMemoryService";
-import { getCurrentConversationSessionId, rememberConversationSessionFromTask } from "./conversationSessionService";
+import {
+  compactPageContext,
+  mapDesktopWindowSnapshotToPageContext,
+  sanitizePageContextUrl,
+  type DesktopWindowPageContextSnapshot,
+} from "./pageContext";
+import {
+  rememberConversationPageContextFromTask,
+  rememberConversationSessionFromTask,
+} from "./conversationSessionService";
 
-type DesktopWindowContextSnapshot = {
-  app_name: string;
-  title: string | null;
-  url: string | null;
+type DesktopWindowContextSnapshot = DesktopWindowPageContextSnapshot & {
   window_switch_count?: number | null;
   page_switch_count?: number | null;
 };
@@ -25,11 +31,21 @@ type DesktopMouseActivitySnapshot = {
   updated_at: string;
 };
 
+export type SubmitTextInputClientContext = {
+  detectedPage?: {
+    appName?: string;
+    title?: string;
+    url: string;
+  };
+};
+
 export type SubmitTextInputParams = {
   text: string;
   source: AgentInputSubmitParams["source"];
   trigger: AgentInputSubmitParams["trigger"];
   inputMode: AgentInputSubmitParams["input"]["input_mode"];
+  includeForegroundBrowserPageContext?: boolean;
+  includeForegroundWindowContext?: boolean;
   context?: InputContext;
   pageContext?: PageContext;
   sessionId?: string;
@@ -86,7 +102,9 @@ function mergeContextRecord<T extends object>(primary: T | undefined, fallback: 
 }
 
 function createBaseInputContext(input: SubmitTextInputParams): InputContext {
-  const mergedPageContext = mergeContextRecord<PageContext>(input.pageContext, input.context?.page);
+  const mergedPageContext = compactPageContext(
+    mergeContextRecord<PageContext>(input.pageContext, input.context?.page),
+  );
 
   return {
     ...(input.context ?? {}),
@@ -96,18 +114,7 @@ function createBaseInputContext(input: SubmitTextInputParams): InputContext {
 }
 
 function mapDesktopWindowPageContext(snapshot: DesktopWindowContextSnapshot | null): PageContext | undefined {
-  if (!snapshot) {
-    return undefined;
-  }
-
-  const sanitizedUrl = sanitizeDesktopContextUrl(snapshot.url);
-
-  return compactContextRecord<PageContext>({
-    app_name: snapshot.app_name,
-    title: snapshot.title ?? undefined,
-    url: sanitizedUrl,
-    window_title: snapshot.title ?? undefined,
-  });
+  return mapDesktopWindowSnapshotToPageContext(snapshot);
 }
 
 function mapDesktopWindowScreenContext(snapshot: DesktopWindowContextSnapshot | null): ScreenContext | undefined {
@@ -167,7 +174,7 @@ function createDesktopScreenSummary(snapshot: DesktopWindowContextSnapshot | nul
 
   const appName = snapshot.app_name.trim();
   const title = snapshot.title?.trim() ?? "";
-  const url = sanitizeDesktopContextUrl(snapshot.url) ?? "";
+  const url = sanitizePageContextUrl(snapshot.url) ?? "";
 
   if (title !== "" && url !== "") {
     return `Foreground ${appName || "desktop"} page "${title}" is active at ${url}.`;
@@ -188,27 +195,26 @@ function createDesktopScreenSummary(snapshot: DesktopWindowContextSnapshot | nul
   return undefined;
 }
 
-function sanitizeDesktopContextUrl(rawUrl: string | null | undefined): string | undefined {
-  const normalizedUrl = rawUrl?.trim() ?? "";
-
-  if (normalizedUrl === "") {
-    return undefined;
-  }
-
-  try {
-    const parsedUrl = new URL(normalizedUrl);
-    parsedUrl.username = "";
-    parsedUrl.password = "";
-    parsedUrl.search = "";
-    parsedUrl.hash = "";
-    return parsedUrl.toString();
-  } catch {
-    return normalizedUrl.split(/[?#]/u, 1)[0]?.trim() || undefined;
-  }
+function shouldEnrichVisualContext(
+  params: AgentInputSubmitParams,
+  options: {
+    includeForegroundBrowserPageContext?: boolean;
+    includeForegroundWindowContext?: boolean;
+  } = {},
+): boolean {
+  return options.includeForegroundWindowContext
+    || options.includeForegroundBrowserPageContext
+    || compactContextRecord(params.context.page) !== undefined
+    || compactContextRecord(params.context.screen) !== undefined;
 }
 
-function shouldEnrichVisualContext(params: AgentInputSubmitParams): boolean {
-  return compactContextRecord(params.context.page) !== undefined || compactContextRecord(params.context.screen) !== undefined;
+function shouldUseForegroundBrowserPageContext(snapshot: DesktopWindowContextSnapshot | null): boolean {
+  if (!snapshot) {
+    return false;
+  }
+
+  const browserKind = snapshot.browser_kind ?? "non_browser";
+  return browserKind !== "non_browser" && sanitizePageContextUrl(snapshot.url) !== undefined;
 }
 
 async function readDesktopWindowContext(): Promise<DesktopWindowContextSnapshot | null> {
@@ -238,7 +244,9 @@ async function readDesktopMouseActivitySnapshot(): Promise<DesktopMouseActivityS
  */
 export function createTextInputSubmitParams(input: SubmitTextInputParams): AgentInputSubmitParams | null {
   const normalizedText = input.text.trim();
-  const normalizedSessionId = input.sessionId?.trim() || getCurrentConversationSessionId();
+  // Desktop free-form input only reuses a backend session when the caller
+  // explicitly passes one for a known continuation flow.
+  const normalizedSessionId = input.sessionId?.trim() || undefined;
 
   if (normalizedText === "") {
     return null;
@@ -259,37 +267,86 @@ export function createTextInputSubmitParams(input: SubmitTextInputParams): Agent
   };
 }
 
-export type SubmitTextInputResult = AgentInputSubmitResult;
+export type SubmitTextInputResult = AgentInputSubmitResult & {
+  clientContext?: SubmitTextInputClientContext;
+};
 
-async function enrichTextInputSubmitParams(params: AgentInputSubmitParams): Promise<AgentInputSubmitParams> {
-  const enrichVisualContext = shouldEnrichVisualContext(params);
+async function enrichTextInputSubmitParams(
+  params: AgentInputSubmitParams,
+  options: {
+    includeForegroundBrowserPageContext?: boolean;
+    includeForegroundWindowContext?: boolean;
+  } = {},
+): Promise<{
+  clientContext?: SubmitTextInputClientContext;
+  params: AgentInputSubmitParams;
+}> {
+  const enrichVisualContext = shouldEnrichVisualContext(params, options);
+  const shouldReadForegroundWindowContext = enrichVisualContext;
   const [windowContext, mouseActivitySnapshot] = await Promise.all([
-    // Fetch the foreground window snapshot only for explicit visual requests.
-    // Ordinary text submits should not pay the host-side URL lookup cost.
-    enrichVisualContext ? readDesktopWindowContext() : Promise.resolve(null),
+    // Explicit visual requests still need both page and screen fallbacks, while
+    // shell-ball near-field text/voice submits should also inherit the current
+    // foreground page attach hints for real-browser takeover planning.
+    shouldReadForegroundWindowContext ? readDesktopWindowContext() : Promise.resolve(null),
     readDesktopMouseActivitySnapshot(),
   ]);
-  const fallbackPageContext = enrichVisualContext ? mapDesktopWindowPageContext(windowContext) : undefined;
-  const fallbackScreenContext = enrichVisualContext ? mapDesktopWindowScreenContext(windowContext) : undefined;
+  // Shell-ball free-form submits should only attach ambient page context when
+  // the last external foreground window was a browser page with a resolved URL.
+  const ambientWindowContext = options.includeForegroundBrowserPageContext
+    ? (shouldUseForegroundBrowserPageContext(windowContext) ? windowContext : null)
+    : windowContext;
+  const fallbackPageContext = enrichVisualContext ? mapDesktopWindowPageContext(ambientWindowContext) : undefined;
+  const fallbackScreenContext = enrichVisualContext ? mapDesktopWindowScreenContext(ambientWindowContext) : undefined;
+  // Browser-only visual gating should not erase switch counters for ordinary
+  // desktop submits when the foreground window is not a browser page.
   const fallbackBehaviorContext = createFallbackBehaviorContext(params.trigger, mouseActivitySnapshot, windowContext);
-  const mergedPageContext = mergeContextRecord<PageContext>(params.context.page, fallbackPageContext);
+  const mergedPageContext = compactPageContext(
+    mergeContextRecord<PageContext>(params.context.page, fallbackPageContext),
+  );
   const mergedScreenContext = mergeContextRecord<ScreenContext>(params.context.screen, fallbackScreenContext);
   const mergedBehaviorContext = mergeContextRecord<BehaviorContext>(params.context.behavior, fallbackBehaviorContext);
+  const clientContext = options.includeForegroundBrowserPageContext
+    ? createSubmitTextInputClientContext(ambientWindowContext)
+    : undefined;
 
   return {
-    ...params,
-    context: {
-      ...params.context,
-      files: params.context.files ?? [],
-      ...(mergedPageContext ? {
-        page: mergedPageContext,
-      } : {}),
-      ...(mergedScreenContext ? {
-        screen: mergedScreenContext,
-      } : {}),
-      ...(mergedBehaviorContext ? {
-        behavior: mergedBehaviorContext,
-      } : {}),
+    clientContext,
+    params: {
+      ...params,
+      context: {
+        ...params.context,
+        files: params.context.files ?? [],
+        ...(mergedPageContext ? {
+          page: mergedPageContext,
+        } : {}),
+        ...(mergedScreenContext ? {
+          screen: mergedScreenContext,
+        } : {}),
+        ...(mergedBehaviorContext ? {
+          behavior: mergedBehaviorContext,
+        } : {}),
+      },
+    },
+  };
+}
+
+function createSubmitTextInputClientContext(
+  windowContext: DesktopWindowContextSnapshot | null,
+): SubmitTextInputClientContext | undefined {
+  if (windowContext === null || !shouldUseForegroundBrowserPageContext(windowContext)) {
+    return undefined;
+  }
+
+  const sanitizedUrl = sanitizePageContextUrl(windowContext.url);
+  if (!sanitizedUrl) {
+    return undefined;
+  }
+
+  return {
+    detectedPage: {
+      appName: windowContext.app_name.trim() || undefined,
+      title: windowContext.title?.trim() || undefined,
+      url: sanitizedUrl,
     },
   };
 }
@@ -309,15 +366,22 @@ export async function submitTextInput(input: SubmitTextInputParams) {
     return null;
   }
 
-  const enrichedParams = await enrichTextInputSubmitParams(params);
+  const enriched = await enrichTextInputSubmitParams(params, {
+    includeForegroundBrowserPageContext: input.includeForegroundBrowserPageContext,
+    includeForegroundWindowContext: input.includeForegroundWindowContext,
+  });
+  const enrichedParams = enriched.params;
   recordMirrorConversationStart(enrichedParams);
   const rpcMethods = await import("@/rpc/methods");
 
   try {
     const result = await rpcMethods.submitInput(enrichedParams);
-    rememberConversationSessionFromTask(result.task);
+    if (result.task) {
+      rememberConversationSessionFromTask(result.task);
+      rememberConversationPageContextFromTask(result.task, enrichedParams.context.page);
+    }
     recordMirrorConversationSuccess(enrichedParams, result);
-    return result;
+    return enriched.clientContext ? { ...result, clientContext: enriched.clientContext } : result;
   } catch (error) {
     recordMirrorConversationFailure(enrichedParams, error);
     throw error;

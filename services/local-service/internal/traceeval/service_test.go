@@ -241,7 +241,7 @@ func TestTraceEvalHelperBranches(t *testing.T) {
 	if !isNoProgressFailure(tools.ToolCallRecord{Status: tools.ToolCallStatusTimeout}) {
 		t.Fatal("expected timeout to count as no-progress failure")
 	}
-	if got := truncateText("  hello world  ", 5); got != "hello..." {
+	if got := truncateText("  hello world  ", 5); got != "he..." {
 		t.Fatalf("unexpected truncateText output: %q", got)
 	}
 	if got := truncateText("  hi  ", 5); got != "hi" {
@@ -295,7 +295,7 @@ func TestTraceEvalAdditionalHelperBranches(t *testing.T) {
 	if mapValue(nil, "missing") == nil || stringValue(nil, "missing") != "" || intValue(map[string]any{"count": int64(3)}, "count") != 3 || int64Value(map[string]any{"count": int(3)}, "count") != 3 {
 		t.Fatal("expected primitive helpers to tolerate nil maps and mixed numeric types")
 	}
-	if truncateText("  hello world  ", 5) != "hello..." || truncateText(" hi ", 5) != "hi" {
+	if truncateText("  hello world  ", 5) != "he..." || truncateText(" hi ", 5) != "hi" {
 		t.Fatal("expected truncateText to trim and truncate appropriately")
 	}
 }

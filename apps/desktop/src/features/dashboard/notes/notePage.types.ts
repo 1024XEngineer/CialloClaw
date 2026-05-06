@@ -1,6 +1,6 @@
 import type { AgentNotepadConvertToTaskResult, AgentNotepadUpdateResult, TodoItem } from "@cialloclaw/protocol";
 
-export type NoteDataSource = "rpc" | "mock";
+export type NoteDataSource = "rpc";
 export type NotePreviewGroupKey = "upcoming" | "later" | "recurring_rule" | "closed";
 export type NoteDetailAction =
   | "complete"
