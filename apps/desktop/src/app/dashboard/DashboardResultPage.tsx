@@ -5,9 +5,13 @@ import { DashboardBackHomeLink } from "@/features/dashboard/shared/DashboardBack
 import { navigateToDashboardTaskDetail } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { readDashboardResultPageLocation } from "@/features/dashboard/shared/dashboardResultPageNavigation";
 
-function isLoopbackHost(hostname: string) {
-  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
-}
+const trustedDashboardResultPageHosts = new Set([
+  "desktop.local",
+  "localhost",
+  "127.0.0.1",
+  "::1",
+  "[::1]",
+]);
 
 function isAllowedDashboardResultPageUrl(url: string) {
   try {
@@ -32,21 +36,21 @@ function isEmbeddableDashboardResultPageUrl(url: string) {
 }
 
 function isTrustedDashboardResultPageOrigin(url: URL) {
-  const trustedOrigins = new Set<string>();
-
   if (typeof window !== "undefined") {
     try {
-      const currentOrigin = new URL(window.location.href).origin;
-      const currentOriginUrl = new URL(currentOrigin);
-      if ((currentOriginUrl.protocol === "http:" || currentOriginUrl.protocol === "https:") && isLoopbackHost(currentOriginUrl.hostname)) {
-        trustedOrigins.add(currentOriginUrl.origin);
+      const currentOriginUrl = new URL(window.location.href);
+      if (
+        (currentOriginUrl.protocol === "http:" || currentOriginUrl.protocol === "https:")
+        && trustedDashboardResultPageHosts.has(currentOriginUrl.hostname)
+      ) {
+        return url.origin === currentOriginUrl.origin;
       }
     } catch {
       // Ignore invalid desktop shell origins and fall back to browser handoff.
     }
   }
 
-  return trustedOrigins.has(url.origin);
+  return false;
 }
 
 /**

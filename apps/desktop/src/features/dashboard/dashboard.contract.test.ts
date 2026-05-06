@@ -2067,8 +2067,10 @@ test("dashboard result page only embeds trusted loopback shell origins and auto-
   const resultPageSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/DashboardResultPage.tsx"), "utf8");
 
   assert.match(resultPageSource, /function isTrustedDashboardResultPageOrigin/);
-  assert.match(resultPageSource, /trustedOrigins\.add\(currentOriginUrl\.origin\)/);
-  assert.match(resultPageSource, /return trustedOrigins\.has\(url\.origin\)/);
+  assert.match(resultPageSource, /const trustedDashboardResultPageHosts = new Set\(/);
+  assert.match(resultPageSource, /"desktop\.local"/);
+  assert.match(resultPageSource, /trustedDashboardResultPageHosts\.has\(currentOriginUrl\.hostname\)/);
+  assert.match(resultPageSource, /return url\.origin === currentOriginUrl\.origin/);
   assert.match(resultPageSource, /window\.open\(resultUrl, "_blank", "noopener,noreferrer"\)/);
   assert.match(resultPageSource, /browserFallbackOpenedRef/);
   assert.match(resultPageSource, /不在站内可信嵌入白名单内，已切换为浏览器承接模式/);
