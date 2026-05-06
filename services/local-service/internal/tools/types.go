@@ -526,12 +526,17 @@ type ScreenCleanupResult struct {
 	SkippedCount    int
 }
 
-// PlaywrightSidecarClient 是 Playwright sidecar 的最小客户端边界。
+// PlaywrightSidecarClient defines the minimal browser-facing boundary exposed
+// by the Playwright sidecar runtime.
 type PlaywrightSidecarClient interface {
 	ReadPage(ctx context.Context, url string) (BrowserPageReadResult, error)
+	ReadPageAttached(ctx context.Context, url string, attach BrowserAttachConfig) (BrowserPageReadResult, error)
 	SearchPage(ctx context.Context, url, query string, limit int) (BrowserPageSearchResult, error)
+	SearchPageAttached(ctx context.Context, url, query string, limit int, attach BrowserAttachConfig) (BrowserPageSearchResult, error)
 	InteractPage(ctx context.Context, url string, actions []map[string]any) (BrowserPageInteractResult, error)
+	InteractPageAttached(ctx context.Context, url string, actions []map[string]any, attach BrowserAttachConfig) (BrowserPageInteractResult, error)
 	StructuredDOM(ctx context.Context, url string) (BrowserStructuredDOMResult, error)
+	StructuredDOMAttached(ctx context.Context, url string, attach BrowserAttachConfig) (BrowserStructuredDOMResult, error)
 	AttachCurrentPage(ctx context.Context, attach BrowserAttachConfig) (BrowserAttachedPageResult, error)
 	SnapshotBrowser(ctx context.Context, attach BrowserAttachConfig) (BrowserSnapshotResult, error)
 	NavigateBrowser(ctx context.Context, request BrowserNavigateRequest) (BrowserNavigationResult, error)

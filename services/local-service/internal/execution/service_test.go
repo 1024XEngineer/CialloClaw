@@ -3232,6 +3232,10 @@ func (s stubPlaywrightClient) ReadPage(_ context.Context, url string) (tools.Bro
 	return result, nil
 }
 
+func (s stubPlaywrightClient) ReadPageAttached(ctx context.Context, url string, _ tools.BrowserAttachConfig) (tools.BrowserPageReadResult, error) {
+	return s.ReadPage(ctx, url)
+}
+
 func (s stubPlaywrightClient) SearchPage(_ context.Context, url, query string, limit int) (tools.BrowserPageSearchResult, error) {
 	if s.err != nil {
 		return tools.BrowserPageSearchResult{}, s.err
@@ -3250,6 +3254,10 @@ func (s stubPlaywrightClient) SearchPage(_ context.Context, url, query string, l
 	return result, nil
 }
 
+func (s stubPlaywrightClient) SearchPageAttached(ctx context.Context, url, query string, limit int, _ tools.BrowserAttachConfig) (tools.BrowserPageSearchResult, error) {
+	return s.SearchPage(ctx, url, query, limit)
+}
+
 func (s stubPlaywrightClient) InteractPage(_ context.Context, url string, _ []map[string]any) (tools.BrowserPageInteractResult, error) {
 	if s.err != nil {
 		return tools.BrowserPageInteractResult{}, s.err
@@ -3261,6 +3269,10 @@ func (s stubPlaywrightClient) InteractPage(_ context.Context, url string, _ []ma
 	return result, nil
 }
 
+func (s stubPlaywrightClient) InteractPageAttached(ctx context.Context, url string, actions []map[string]any, _ tools.BrowserAttachConfig) (tools.BrowserPageInteractResult, error) {
+	return s.InteractPage(ctx, url, actions)
+}
+
 func (s stubPlaywrightClient) StructuredDOM(_ context.Context, url string) (tools.BrowserStructuredDOMResult, error) {
 	if s.err != nil {
 		return tools.BrowserStructuredDOMResult{}, s.err
@@ -3270,6 +3282,10 @@ func (s stubPlaywrightClient) StructuredDOM(_ context.Context, url string) (tool
 		result.URL = url
 	}
 	return result, nil
+}
+
+func (s stubPlaywrightClient) StructuredDOMAttached(ctx context.Context, url string, _ tools.BrowserAttachConfig) (tools.BrowserStructuredDOMResult, error) {
+	return s.StructuredDOM(ctx, url)
 }
 
 func (s stubPlaywrightClient) AttachCurrentPage(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserAttachedPageResult, error) {

@@ -170,8 +170,39 @@ func (c runtimePlaywrightClient) ReadPage(ctx context.Context, url string) (tool
 	}, nil
 }
 
+func (c runtimePlaywrightClient) ReadPageAttached(ctx context.Context, url string, attach tools.BrowserAttachConfig) (tools.BrowserPageReadResult, error) {
+	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{Action: "page_read", URL: url, Attach: cloneAttachConfigPtr(&attach)})
+	if err != nil {
+		return tools.BrowserPageReadResult{}, err
+	}
+	return tools.BrowserPageReadResult{
+		BrowserExecutionMetadata: browserExecutionMetadata(response.Result),
+		URL:                      stringValue(response.Result, "url"),
+		Title:                    stringValue(response.Result, "title"),
+		TextContent:              stringValue(response.Result, "text_content"),
+		MIMEType:                 stringValue(response.Result, "mime_type"),
+		TextType:                 stringValue(response.Result, "text_type"),
+		Source:                   firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
+	}, nil
+}
+
 func (c runtimePlaywrightClient) SearchPage(ctx context.Context, url, query string, limit int) (tools.BrowserPageSearchResult, error) {
 	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{Action: "page_search", URL: url, Query: query, Limit: limit})
+	if err != nil {
+		return tools.BrowserPageSearchResult{}, err
+	}
+	return tools.BrowserPageSearchResult{
+		BrowserExecutionMetadata: browserExecutionMetadata(response.Result),
+		URL:                      stringValue(response.Result, "url"),
+		Query:                    stringValue(response.Result, "query"),
+		MatchCount:               intValue(response.Result, "match_count"),
+		Matches:                  stringSliceValue(response.Result, "matches"),
+		Source:                   firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
+	}, nil
+}
+
+func (c runtimePlaywrightClient) SearchPageAttached(ctx context.Context, url, query string, limit int, attach tools.BrowserAttachConfig) (tools.BrowserPageSearchResult, error) {
+	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{Action: "page_search", URL: url, Query: query, Limit: limit, Attach: cloneAttachConfigPtr(&attach)})
 	if err != nil {
 		return tools.BrowserPageSearchResult{}, err
 	}
@@ -200,8 +231,40 @@ func (c runtimePlaywrightClient) InteractPage(ctx context.Context, url string, a
 	}, nil
 }
 
+func (c runtimePlaywrightClient) InteractPageAttached(ctx context.Context, url string, actions []map[string]any, attach tools.BrowserAttachConfig) (tools.BrowserPageInteractResult, error) {
+	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{Action: "page_interact", URL: url, Actions: cloneActionSlice(actions), Attach: cloneAttachConfigPtr(&attach)})
+	if err != nil {
+		return tools.BrowserPageInteractResult{}, err
+	}
+	return tools.BrowserPageInteractResult{
+		BrowserExecutionMetadata: browserExecutionMetadata(response.Result),
+		URL:                      stringValue(response.Result, "url"),
+		Title:                    stringValue(response.Result, "title"),
+		TextContent:              stringValue(response.Result, "text_content"),
+		ActionsApplied:           intValue(response.Result, "actions_applied"),
+		Source:                   firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
+	}, nil
+}
+
 func (c runtimePlaywrightClient) StructuredDOM(ctx context.Context, url string) (tools.BrowserStructuredDOMResult, error) {
 	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{Action: "structured_dom", URL: url})
+	if err != nil {
+		return tools.BrowserStructuredDOMResult{}, err
+	}
+	return tools.BrowserStructuredDOMResult{
+		BrowserExecutionMetadata: browserExecutionMetadata(response.Result),
+		URL:                      stringValue(response.Result, "url"),
+		Title:                    stringValue(response.Result, "title"),
+		Headings:                 stringSliceValue(response.Result, "headings"),
+		Links:                    stringSliceValue(response.Result, "links"),
+		Buttons:                  stringSliceValue(response.Result, "buttons"),
+		Inputs:                   stringSliceValue(response.Result, "inputs"),
+		Source:                   firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
+	}, nil
+}
+
+func (c runtimePlaywrightClient) StructuredDOMAttached(ctx context.Context, url string, attach tools.BrowserAttachConfig) (tools.BrowserStructuredDOMResult, error) {
+	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{Action: "structured_dom", URL: url, Attach: cloneAttachConfigPtr(&attach)})
 	if err != nil {
 		return tools.BrowserStructuredDOMResult{}, err
 	}
@@ -313,13 +376,11 @@ func (c runtimePlaywrightClient) InteractBrowser(ctx context.Context, request to
 	}, nil
 }
 
-// PlaywrightSidecarRuntime 是当前阶段的最小运行时骨架。
+// PlaywrightSidecarRuntime is the minimum viable runtime skeleton for the
+// Playwright sidecar.
 //
-// 它负责表达：
-// - 当前 sidecar 名称
-// - 当前 plugin 声明中是否存在该 sidecar
-// - 当前最小 transport 规格
-// - 当前 sidecar 是否已进入 ready 状态
+// It keeps track of the declared sidecar identity, transport availability, and
+// whether the current process has passed its readiness checks.
 type PlaywrightSidecarRuntime struct {
 	mu        sync.Mutex
 	plugins   *plugin.Service
@@ -331,7 +392,8 @@ type PlaywrightSidecarRuntime struct {
 	client    runtimePlaywrightClient
 }
 
-// NewPlaywrightSidecarRuntime 创建并返回最小运行时骨架。
+// NewPlaywrightSidecarRuntime constructs the minimum runtime skeleton used by
+// the local service to invoke the Playwright sidecar.
 func NewPlaywrightSidecarRuntime(pluginService *plugin.Service, osCapability platform.OSCapabilityAdapter) (*PlaywrightSidecarRuntime, error) {
 	spec, ok := pluginService.SidecarSpec("playwright_sidecar")
 	if !ok {
@@ -371,17 +433,17 @@ func NewUnavailablePlaywrightSidecarRuntime(pluginService *plugin.Service, osCap
 	return runtime
 }
 
-// Name 返回当前 sidecar 名称。
+// Name returns the declared sidecar runtime name.
 func (r *PlaywrightSidecarRuntime) Name() string {
 	return r.spec.Name
 }
 
-// PipeName 返回当前最小传输骨架使用的命名管道名。
+// PipeName returns the named pipe identifier used by the minimal transport.
 func (r *PlaywrightSidecarRuntime) PipeName() string {
 	return sidecarPipeName(r.spec.Name)
 }
 
-// Ready 返回当前 sidecar 是否已进入 ready 状态。
+// Ready reports whether the sidecar has passed readiness checks.
 func (r *PlaywrightSidecarRuntime) Ready() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -395,7 +457,7 @@ func (r *PlaywrightSidecarRuntime) Available() bool {
 	return r.available
 }
 
-// Start 进入当前阶段的最小 ready 状态。
+// Start moves the sidecar into its minimum ready state.
 func (r *PlaywrightSidecarRuntime) Start() error {
 	if !r.Available() {
 		markPluginRuntimeUnavailable(r.plugins, plugin.RuntimeKindSidecar, r.spec.Name, "playwright sidecar unavailable")
@@ -423,7 +485,7 @@ func (r *PlaywrightSidecarRuntime) Start() error {
 	return nil
 }
 
-// Stop 退出 ready 状态并关闭最小传输骨架。
+// Stop leaves the ready state and closes the minimal transport.
 func (r *PlaywrightSidecarRuntime) Stop() error {
 	if !r.Available() {
 		return nil
@@ -441,7 +503,7 @@ func (r *PlaywrightSidecarRuntime) Stop() error {
 	return nil
 }
 
-// Client 返回当前运行时关联的最小 client。
+// Client returns the runtime-bound Playwright sidecar client.
 func (r *PlaywrightSidecarRuntime) Client() tools.PlaywrightSidecarClient {
 	return r.client
 }
