@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { cn } from "@/utils/cn";
@@ -28,7 +28,8 @@ type FloatingPetProps = {
 
 type FloatingPetEffectName = "sparkle" | "bubbleAlert" | "bubbleSafe" | "bubbleThinking" | "bubbleListening";
 
-const HAPPY_FACE_TIMES = [0, 10 / 120, 15 / 120, 45 / 120, 50 / 120, 1] as const;
+const HAPPY_FACE_TIMES = [0, 10 / 120, 15 / 120, 105 / 120, 110 / 120, 1] as const;
+const HAPPY_FACE_CLOSED_EYE_ROTATE = [180, 180, 180, 180, 180, 180] as const;
 const BREATH_EYE_TIMES = [0, 30 / 300, 40 / 300, 50 / 300, 1] as const;
 const QUICK_CLAP_TIMES = [0, 0.25, 0.5, 0.75, 1] as const;
 const EFFECT_LOOP_TIMES = [0, 10 / 120, 0.5, 1] as const;
@@ -78,6 +79,42 @@ function renderCenteredImage(assetName: FloatingPetAssetName, layout: FloatingPe
       x={centerX - size.width / 2}
       y={centerY - size.height / 2}
     />
+  );
+}
+
+function renderAnimatedCenteredImage(
+  assetName: FloatingPetAssetName,
+  layout: FloatingPetLayerTransform,
+  animate: {
+    opacity?: number | number[];
+    rotate?: number | number[];
+    scaleY?: number | number[];
+  },
+  transition: {
+    duration: number;
+    ease: "linear" | "easeInOut";
+    repeat?: number;
+    times?: readonly number[];
+  },
+) {
+  const size = resolveAssetSize(assetName, layout.scale);
+  const transform = layout.rotation === 0 ? undefined : `rotate(${layout.rotation} 0 0)`;
+
+  return (
+    <g transform={`translate(${layout.position.x} ${layout.position.y})`}>
+      <motion.g animate={animate} initial={false} transition={transition}>
+        <image
+          className={styles.svgAsset}
+          height={size.height}
+          href={floatingPetAssets[assetName]}
+          preserveAspectRatio="xMidYMid meet"
+          transform={transform}
+          width={size.width}
+          x={-size.width / 2}
+          y={-size.height / 2}
+        />
+      </motion.g>
+    </g>
   );
 }
 
@@ -180,7 +217,14 @@ function FloatingPetEffectLayer({ effectName, phase }: { effectName: FloatingPet
   );
 }
 
-function resolveRootBodyMotion(mode: FloatingPetMode, listenLocked: boolean) {
+function resolveRootBodyMotion(mode: FloatingPetMode, listenLocked: boolean, playListenTiltEnd: boolean) {
+  if (playListenTiltEnd) {
+    return {
+      animate: { rotate: [-4.295, 0], x: ROOT_BODY_BASE_X, y: ROOT_BODY_BASE_Y },
+      transition: { duration: 1, ease: "easeInOut", times: [0, 1] },
+    };
+  }
+
   if (mode === "happy") {
     return {
       animate: { rotate: [0, -4.295, 0], x: ROOT_BODY_BASE_X, y: ROOT_BODY_BASE_Y },
@@ -188,9 +232,9 @@ function resolveRootBodyMotion(mode: FloatingPetMode, listenLocked: boolean) {
     };
   }
 
-  if (mode === "listen") {
+  if (mode === "listen" && !listenLocked) {
     return {
-      animate: { rotate: listenLocked ? 0 : -4.295, x: ROOT_BODY_BASE_X, y: ROOT_BODY_BASE_Y },
+      animate: { rotate: -4.295, x: ROOT_BODY_BASE_X, y: ROOT_BODY_BASE_Y },
       transition: { duration: 0.45, ease: "easeInOut" },
     };
   }
@@ -315,18 +359,47 @@ function resolveBeakAnimation(mode: FloatingPetMode) {
 export function FloatingPet({ className, size = "100%", mode = "idle", listenLocked = false, eyesClosed = false }: FloatingPetProps) {
   const rootStyle: CSSProperties = { height: size, width: size };
   const previousModeRef = useRef<FloatingPetMode>(mode);
+  const previousBodyModeRef = useRef<FloatingPetMode>(mode);
+  const previousBodyListenLockedRef = useRef(listenLocked);
   const exitTimeoutRef = useRef<number | null>(null);
+  const bodyExitTimeoutRef = useRef<number | null>(null);
   const [exitEffect, setExitEffect] = useState<FloatingPetEffectName | null>(null);
+  const [playListenTiltEnd, setPlayListenTiltEnd] = useState(false);
   const [leftWingDebugAngle, setLeftWingDebugAngle] = useState(0);
   const [rightWingDebugAngle, setRightWingDebugAngle] = useState(0);
   const [tailDebugAngle, setTailDebugAngle] = useState(0);
   const activeEffect = MODE_TO_EFFECT[mode] ?? null;
-  const rootBodyMotion = useMemo(() => resolveRootBodyMotion(mode, listenLocked), [listenLocked, mode]);
+  const rootBodyMotion = useMemo(() => resolveRootBodyMotion(mode, listenLocked, playListenTiltEnd), [listenLocked, mode, playListenTiltEnd]);
   const wingMotion = useMemo(() => resolveWingMotion(mode, listenLocked), [listenLocked, mode]);
   const tailMotion = useMemo(() => resolveTailMotion(mode, listenLocked), [listenLocked, mode]);
   const openEyeAnimation = useMemo(() => resolveOpenEyeAnimation(eyesClosed, mode), [eyesClosed, mode]);
   const closedEyeAnimation = useMemo(() => resolveClosedEyeAnimation(eyesClosed, mode), [eyesClosed, mode]);
   const beakAnimation = useMemo(() => resolveBeakAnimation(mode), [mode]);
+
+  useLayoutEffect(() => {
+    const previousMode = previousBodyModeRef.current;
+    const previousListenLocked = previousBodyListenLockedRef.current;
+
+    previousBodyModeRef.current = mode;
+    previousBodyListenLockedRef.current = listenLocked;
+
+    if (bodyExitTimeoutRef.current !== null) {
+      window.clearTimeout(bodyExitTimeoutRef.current);
+      bodyExitTimeoutRef.current = null;
+    }
+
+    setPlayListenTiltEnd(false);
+
+    // Leaving the unlocked listen pose should play one tilt_end before the
+    // idle or locked-listen updown motion takes over.
+    if (previousMode === "listen" && previousListenLocked === false && (mode === "idle" || (mode === "listen" && listenLocked))) {
+      setPlayListenTiltEnd(true);
+      bodyExitTimeoutRef.current = window.setTimeout(() => {
+        setPlayListenTiltEnd(false);
+        bodyExitTimeoutRef.current = null;
+      }, 1_000);
+    }
+  }, [listenLocked, mode]);
 
   useEffect(() => {
     const previousMode = previousModeRef.current;
@@ -354,6 +427,10 @@ export function FloatingPet({ className, size = "100%", mode = "idle", listenLoc
   useEffect(() => () => {
     if (exitTimeoutRef.current !== null) {
       window.clearTimeout(exitTimeoutRef.current);
+    }
+
+    if (bodyExitTimeoutRef.current !== null) {
+      window.clearTimeout(bodyExitTimeoutRef.current);
     }
   }, []);
 
@@ -443,7 +520,7 @@ export function FloatingPet({ className, size = "100%", mode = "idle", listenLoc
           {exitEffect && exitEffect !== activeEffect ? <FloatingPetEffectLayer effectName={exitEffect} key={`exit-${exitEffect}`} phase="exit" /> : null}
         </AnimatePresence>
 
-        <motion.g animate={rootBodyMotion.animate} initial={false} transition={rootBodyMotion.transition}>
+        <motion.g animate={rootBodyMotion.animate} initial={{ rotate: 0, x: ROOT_BODY_BASE_X, y: ROOT_BODY_UPDOWN_Y[0] }} transition={rootBodyMotion.transition}>
           <g transform={`rotate(${tailDebugAngle} ${floatingPetInitialLayout.rootBody.tailBone.position.x} ${floatingPetInitialLayout.rootBody.tailBone.position.y})`}>
             {renderCenteredImage(
               "tail",
@@ -496,23 +573,73 @@ export function FloatingPet({ className, size = "100%", mode = "idle", listenLoc
             </g>
 
             <g transform={`translate(${floatingPetInitialLayout.rootBody.eyes.position.x} ${floatingPetInitialLayout.rootBody.eyes.position.y})`}>
-              <motion.g animate={{ opacity: openEyeAnimation.opacity, scaleY: openEyeAnimation.scaleY }} initial={false} transition={{ duration: openEyeAnimation.duration, ease: "easeInOut", repeat: openEyeAnimation.repeat, times: openEyeAnimation.times }}>
-                {renderCenteredImage("eyeOpen", floatingPetInitialLayout.rootBody.eyes.eyeOpenLeft)}
-                {renderCenteredImage("eyeOpen", floatingPetInitialLayout.rootBody.eyes.eyeOpenRight)}
-              </motion.g>
-              <motion.g animate={{ opacity: closedEyeAnimation.opacity, rotate: closedEyeAnimation.rotate }} initial={false} transition={{ duration: closedEyeAnimation.duration, ease: "easeInOut", repeat: closedEyeAnimation.repeat, times: closedEyeAnimation.times }}>
-                {renderCenteredImage("eyeClosed", floatingPetInitialLayout.rootBody.eyes.eyeClosedLeft)}
-                {renderCenteredImage("eyeClosed", floatingPetInitialLayout.rootBody.eyes.eyeClosedRight)}
-              </motion.g>
+              {mode === "happy" ? (
+                <>
+                  {renderAnimatedCenteredImage(
+                    "eyeOpen",
+                    floatingPetInitialLayout.rootBody.eyes.eyeOpenLeft,
+                    { opacity: openEyeAnimation.opacity, scaleY: openEyeAnimation.scaleY },
+                    { duration: openEyeAnimation.duration, ease: "linear", repeat: openEyeAnimation.repeat, times: openEyeAnimation.times },
+                  )}
+                  {renderAnimatedCenteredImage(
+                    "eyeOpen",
+                    floatingPetInitialLayout.rootBody.eyes.eyeOpenRight,
+                    { opacity: openEyeAnimation.opacity, scaleY: openEyeAnimation.scaleY },
+                    { duration: openEyeAnimation.duration, ease: "linear", repeat: openEyeAnimation.repeat, times: openEyeAnimation.times },
+                  )}
+                  {renderAnimatedCenteredImage(
+                    "eyeClosed",
+                    floatingPetInitialLayout.rootBody.eyes.eyeClosedLeft,
+                    { opacity: closedEyeAnimation.opacity, rotate: [...HAPPY_FACE_CLOSED_EYE_ROTATE] },
+                    { duration: closedEyeAnimation.duration, ease: "linear", repeat: closedEyeAnimation.repeat, times: closedEyeAnimation.times },
+                  )}
+                  {renderAnimatedCenteredImage(
+                    "eyeClosed",
+                    floatingPetInitialLayout.rootBody.eyes.eyeClosedRight,
+                    { opacity: closedEyeAnimation.opacity, rotate: [...HAPPY_FACE_CLOSED_EYE_ROTATE] },
+                    { duration: closedEyeAnimation.duration, ease: "linear", repeat: closedEyeAnimation.repeat, times: closedEyeAnimation.times },
+                  )}
+                </>
+              ) : (
+                <>
+                  <motion.g animate={{ opacity: openEyeAnimation.opacity, scaleY: openEyeAnimation.scaleY }} initial={false} transition={{ duration: openEyeAnimation.duration, ease: "easeInOut", repeat: openEyeAnimation.repeat, times: openEyeAnimation.times }}>
+                    {renderCenteredImage("eyeOpen", floatingPetInitialLayout.rootBody.eyes.eyeOpenLeft)}
+                    {renderCenteredImage("eyeOpen", floatingPetInitialLayout.rootBody.eyes.eyeOpenRight)}
+                  </motion.g>
+                  <motion.g animate={{ opacity: closedEyeAnimation.opacity, rotate: closedEyeAnimation.rotate }} initial={false} transition={{ duration: closedEyeAnimation.duration, ease: "easeInOut", repeat: closedEyeAnimation.repeat, times: closedEyeAnimation.times }}>
+                    {renderCenteredImage("eyeClosed", floatingPetInitialLayout.rootBody.eyes.eyeClosedLeft)}
+                    {renderCenteredImage("eyeClosed", floatingPetInitialLayout.rootBody.eyes.eyeClosedRight)}
+                  </motion.g>
+                </>
+              )}
             </g>
 
             <g transform={`translate(${floatingPetInitialLayout.rootBody.beak.position.x} ${floatingPetInitialLayout.rootBody.beak.position.y})`}>
-              <motion.g animate={{ opacity: beakAnimation.closed.opacity }} initial={false} transition={{ duration: beakAnimation.closed.duration, ease: "easeInOut", times: beakAnimation.closed.times }}>
-                {renderCenteredImage("beakClosed", floatingPetInitialLayout.rootBody.beak.beakClosed)}
-              </motion.g>
-              <motion.g animate={{ opacity: beakAnimation.open.opacity }} initial={false} transition={{ duration: beakAnimation.open.duration, ease: "easeInOut", times: beakAnimation.open.times }}>
-                {renderCenteredImage("beakOpen", floatingPetInitialLayout.rootBody.beak.beakOpen)}
-              </motion.g>
+              {mode === "happy" ? (
+                <>
+                  {renderAnimatedCenteredImage(
+                    "beakClosed",
+                    floatingPetInitialLayout.rootBody.beak.beakClosed,
+                    { opacity: beakAnimation.closed.opacity },
+                    { duration: beakAnimation.closed.duration, ease: "linear", times: beakAnimation.closed.times },
+                  )}
+                  {renderAnimatedCenteredImage(
+                    "beakOpen",
+                    floatingPetInitialLayout.rootBody.beak.beakOpen,
+                    { opacity: beakAnimation.open.opacity },
+                    { duration: beakAnimation.open.duration, ease: "linear", times: beakAnimation.open.times },
+                  )}
+                </>
+              ) : (
+                <>
+                  <motion.g animate={{ opacity: beakAnimation.closed.opacity }} initial={false} transition={{ duration: beakAnimation.closed.duration, ease: "easeInOut", times: beakAnimation.closed.times }}>
+                    {renderCenteredImage("beakClosed", floatingPetInitialLayout.rootBody.beak.beakClosed)}
+                  </motion.g>
+                  <motion.g animate={{ opacity: beakAnimation.open.opacity }} initial={false} transition={{ duration: beakAnimation.open.duration, ease: "easeInOut", times: beakAnimation.open.times }}>
+                    {renderCenteredImage("beakOpen", floatingPetInitialLayout.rootBody.beak.beakOpen)}
+                  </motion.g>
+                </>
+              )}
             </g>
           </g>
         </motion.g>
