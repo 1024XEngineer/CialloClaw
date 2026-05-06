@@ -6910,7 +6910,7 @@ test("dashboard home keeps a low-priority safety summon available when the forma
 
       const service = requireFn(modulePath) as {
         loadDashboardHomeData: () => Promise<{
-          summonTemplates: Array<{ message: string; module: string; priority: string }>;
+          summonTemplates: Array<{ message: string; module: string; nextStep?: string; priority: string }>;
         }>;
       };
 
@@ -6918,6 +6918,7 @@ test("dashboard home keeps a low-priority safety summon available when the forma
 
       assert.equal(data.summonTemplates[0]?.module, "safety");
       assert.equal(data.summonTemplates[0]?.message, "最近恢复点可用");
+      assert.equal(data.summonTemplates[0]?.nextStep, "查看安全详情");
       assert.equal(data.summonTemplates[0]?.priority, "low");
     },
     {
@@ -6931,7 +6932,7 @@ test("dashboard home keeps a low-priority safety summon available when the forma
         overview: {
           focus_summary: null,
           high_value_signal: [],
-          quick_actions: [],
+          quick_actions: ["打开任务详情"],
           trust_summary: {
             has_restore_point: true,
             pending_authorizations: 0,

@@ -269,8 +269,12 @@ function getOverviewQuickActions(overview: AgentDashboardOverviewGetResult) {
     : [];
 }
 
-function getSummonNextStep(quickActions: string[], state: DashboardHomeStateData) {
-  return quickActions[0] ?? state.navigationTarget?.label ?? dashboardModuleNextSteps[state.module];
+function getSummonNextStep(state: DashboardHomeStateData, quickActions?: string[]) {
+  if (state.module === "tasks" && quickActions?.[0]) {
+    return quickActions[0];
+  }
+
+  return state.navigationTarget?.label ?? dashboardModuleNextSteps[state.module];
 }
 
 function dedupeSummonTemplates(templates: Array<Omit<DashboardHomeSummonEvent, "id">>) {
@@ -776,10 +780,23 @@ function buildMemoryInsights(memoryModule: AgentDashboardModuleGetResult): Dashb
 }
 
 function buildFormalMirrorInsights(overview: AgentMirrorOverviewGetResult): DashboardHomeInsightItem[] {
-  const items: DashboardHomeInsightItem[] = [];
+  const latestReference = overview.memory_references[0] ?? null;
+  if (latestReference) {
+    return [
+      {
+        emphasis: true,
+        iconKey: "brain",
+        text: latestReference.memory_id,
+      },
+      {
+        iconKey: "time",
+        text: latestReference.summary || latestReference.reason,
+      },
+    ];
+  }
 
   if (overview.profile) {
-    items.push(
+    return [
       {
         emphasis: true,
         iconKey: "brain",
@@ -792,25 +809,6 @@ function buildFormalMirrorInsights(overview: AgentMirrorOverviewGetResult): Dash
       {
         iconKey: "time",
         text: `活跃时段：${overview.profile.active_hours}`,
-      },
-    );
-  }
-
-  if (items.length > 0) {
-    return items;
-  }
-
-  const latestReference = overview.memory_references[0] ?? null;
-  if (latestReference) {
-    return [
-      {
-        emphasis: true,
-        iconKey: "brain",
-        text: latestReference.memory_id,
-      },
-      {
-        iconKey: "time",
-        text: latestReference.summary || latestReference.reason,
       },
     ];
   }
@@ -1069,7 +1067,7 @@ function buildOverviewSummons(
       duration: 6_200,
       message: highValueSignals[0] ?? safetyState.headline,
       module: "safety",
-      nextStep: getSummonNextStep(quickActions, safetyState),
+      nextStep: getSummonNextStep(safetyState),
       priority: "urgent",
       reason: safetyState.subline,
       stateKey: stateKeys.safety,
@@ -1082,19 +1080,19 @@ function buildOverviewSummons(
       duration: 6_000,
       message: focusSummary.title,
       module: "tasks",
-      nextStep: getSummonNextStep(quickActions, taskState),
+      nextStep: getSummonNextStep(taskState, quickActions),
       priority: getSummonPriority("tasks", stateKeys.tasks),
       reason: [focusSummary.current_step, focusSummary.next_action, overflowSignal].filter(Boolean).join(" · "),
       stateKey: stateKeys.tasks,
     });
   }
 
-  if (!hasUrgentSafetySignal && (trustSummary.has_restore_point || safetyState.subline.trim() !== "")) {
+  if (!hasUrgentSafetySignal && trustSummary.has_restore_point) {
     templates.push({
       duration: 5_600,
-      message: trustSummary.has_restore_point ? "最近恢复点可用" : safetyState.headline,
+      message: "最近恢复点可用",
       module: "safety",
-      nextStep: getSummonNextStep(quickActions, safetyState),
+      nextStep: getSummonNextStep(safetyState),
       priority: "low",
       reason: safetyState.subline,
       stateKey: stateKeys.safety,
@@ -1110,7 +1108,7 @@ function buildOverviewSummons(
       duration: 5_800,
       message: highValueSignals[0],
       module: targetState.module,
-      nextStep: getSummonNextStep(quickActions, targetState),
+      nextStep: getSummonNextStep(targetState, quickActions),
       priority: targetState.module === "safety" ? "urgent" : getSummonPriority(targetState.module, targetState.key),
       reason: targetState.subline,
       stateKey: targetState.key,
