@@ -3636,8 +3636,9 @@ test("dashboard settings mutation persists rpc-effective settings into the local
 test("control panel workspace section opens the trusted runtime directory instead of editing draft paths", () => {
   const controlPanelAppSource = readFileSync(resolve(desktopRoot, "src/features/control-panel/ControlPanelApp.tsx"), "utf8");
   assert.match(controlPanelAppSource, /loadDesktopRuntimeDefaultsSnapshot/);
-  assert.match(controlPanelAppSource, /openDesktopLocalPath/);
+  assert.match(controlPanelAppSource, /openDesktopRuntimeWorkspaceDirectory/);
   assert.match(controlPanelAppSource, /const handleOpenCurrentWorkspaceDirectory = async \(\) =>/);
+  assert.match(controlPanelAppSource, /await openDesktopRuntimeWorkspaceDirectory\(\);/);
   assert.match(controlPanelAppSource, /runtimeWorkspacePathLabel/);
   assert.match(controlPanelAppSource, /打开当前目录/);
   assert.doesNotMatch(controlPanelAppSource, /value=\{draft\.settings\.general\.download\.workspace_path\}/);

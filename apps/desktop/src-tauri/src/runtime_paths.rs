@@ -1,10 +1,12 @@
 use std::env;
+use std::fs;
 #[cfg(test)]
 use std::path::Path;
 use std::path::PathBuf;
 
 const DEFAULT_RUNTIME_DIRECTORY_NAME: &str = "CialloClaw";
 const DEFAULT_WORKSPACE_DIRECTORY_NAME: &str = "workspace";
+const DEFAULT_TASK_SOURCE_DIRECTORY_NAME: &str = "todos";
 
 /// DesktopRuntimePaths keeps the trusted runtime directories shared by the
 /// packaged desktop host and the local-service defaults.
@@ -58,6 +60,11 @@ impl DesktopRuntimePaths {
         &self.workspace_root
     }
 
+    /// Returns the primary task-source root used by the desktop note bridge.
+    pub fn task_source_root(&self) -> PathBuf {
+        self.workspace_root.join(DEFAULT_TASK_SOURCE_DIRECTORY_NAME)
+    }
+
     /// Returns the runtime temp directory used for transient desktop captures.
     pub fn temp_dir(&self) -> PathBuf {
         self.runtime_root.join("temp")
@@ -72,6 +79,27 @@ impl DesktopRuntimePaths {
     /// expose to the renderer for transient runtime-managed files.
     pub fn local_open_runtime_root(&self) -> PathBuf {
         self.temp_dir()
+    }
+
+    /// Ensures the desktop-host runtime directories exist before renderer flows
+    /// attempt to open them or persist source-note files into them.
+    pub fn ensure_runtime_directories(&self) -> Result<(), String> {
+        for target in [
+            self.runtime_root.clone(),
+            self.data_dir(),
+            self.temp_dir(),
+            self.workspace_root.clone(),
+            self.task_source_root(),
+        ] {
+            fs::create_dir_all(&target).map_err(|error| {
+                format!(
+                    "failed to create desktop runtime directory {}: {error}",
+                    target.display()
+                )
+            })?;
+        }
+
+        Ok(())
     }
 
     /// Resolves a persisted workspace_path setting against the canonical runtime
@@ -164,7 +192,17 @@ fn is_safe_runtime_relative_path(configured_root: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::DesktopRuntimePaths;
+    use std::fs;
     use std::path::Path;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn unique_temp_path(label: &str) -> std::path::PathBuf {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("cialloclaw-{label}-{timestamp}"))
+    }
 
     #[test]
     fn resolve_workspace_setting_promotes_legacy_workspace_placeholder() {
@@ -243,5 +281,23 @@ mod tests {
             runtime_paths.data_dir(),
             Path::new("C:/Users/test/AppData/Local/CialloClaw/data")
         );
+    }
+
+    #[test]
+    fn ensure_runtime_directories_creates_workspace_and_task_source_roots() {
+        let runtime_root = unique_temp_path("desktop-runtime-directories");
+        let runtime_paths = DesktopRuntimePaths::from_runtime_root(runtime_root.clone());
+
+        runtime_paths
+            .ensure_runtime_directories()
+            .expect("create desktop runtime directories");
+
+        assert!(runtime_root.is_dir());
+        assert!(runtime_paths.data_dir().is_dir());
+        assert!(runtime_paths.temp_dir().is_dir());
+        assert!(runtime_paths.workspace_root().is_dir());
+        assert!(runtime_paths.task_source_root().is_dir());
+
+        fs::remove_dir_all(runtime_root).expect("remove temporary runtime root");
     }
 }
