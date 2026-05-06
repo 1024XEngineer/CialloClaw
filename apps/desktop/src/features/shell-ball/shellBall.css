@@ -1031,14 +1031,6 @@ body[data-app-window="shell-ball"],
   animation-play-state: paused;
 }
 
-.shell-ball-mascot[data-shell-ball-dragging="true"] .shell-ball-mascot__body,
-.shell-ball-mascot[data-shell-ball-settling="true"] .shell-ball-mascot__body {
-  box-shadow:
-    0 0 0 1px rgba(255, 255, 255, 0.72),
-    0 26px 42px -22px rgba(88, 123, 175, 0.28),
-    0 1px 0 rgba(255, 255, 255, 0.76) inset;
-}
-
 .shell-ball-mascot__hotspot {
   appearance: none;
   background: transparent;
@@ -1062,7 +1054,6 @@ body[data-app-window="shell-ball"],
 }
 
 .shell-ball-mascot__orbital,
-.shell-ball-mascot__rings,
 .shell-ball-mascot__shadow,
 .shell-ball-mascot__hold-ring {
   position: absolute;

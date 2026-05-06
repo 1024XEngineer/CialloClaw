@@ -4292,8 +4292,8 @@ test("shell-ball mascot supports passive rendering outside the floating ball hos
 
   assert.match(markup, /shell-ball-mascot/);
   assert.match(markup, /data-state="processing"/);
-  assert.match(markup, /shell-ball-mascot__crest-anchor/);
-  assert.match(markup, /shell-ball-mascot__face-anchor/);
+  assert.match(markup, /shell-ball-mascot__pet-shell/);
+  assert.match(markup, /shell-ball-mascot__pet/);
 });
 
 test("shell-ball mascot surfaces a microphone marker while voice capture is active", () => {
@@ -4426,18 +4426,16 @@ test("shell-ball mascot exposes edge and corner posture states", () => {
   assert.match(bottomRightDraggingMarkup, /data-shell-ball-dragging="true"/);
   assert.match(topRevealedMarkup, /data-edge-dock-revealed="true"/);
   assert.match(bottomRevealedMarkup, /data-edge-dock-revealed="true"/);
-  assert.match(mascotSource, /function getShellBallAmbientLoopProfile\(input:/);
-  assert.match(mascotSource, /const ambientLoopEnabled = !prefersReducedMotion && !isDragging && !isSettling;/);
-  assert.match(mascotSource, /shell-ball-mascot__crest-anchor/);
-  assert.match(mascotSource, /shell-ball-mascot__face-anchor/);
-  assert.match(mascotSource, /if \(input\.edgeDockSide === "top_left"\) \{/);
-  assert.match(mascotSource, /if \(input\.edgeDockSide === "top_right"\) \{/);
-  assert.match(mascotSource, /if \(input\.edgeDockSide === "bottom_left"\) \{/);
-  assert.match(mascotSource, /if \(input\.edgeDockSide === "bottom_right"\) \{/);
-  assert.match(mascotSource, /shiftY: input\.edgeDockRevealed \? 0 : -8,/);
-  assert.match(mascotSource, /shiftY: input\.edgeDockRevealed \? 0 : 4,/);
-  assert.match(shellBallStyles, /\.shell-ball-mascot__crest-anchor \{/);
-  assert.match(shellBallStyles, /\.shell-ball-mascot__face-anchor \{/);
+  assert.match(mascotSource, /import \{ FloatingPet \} from "\.\/floating-pet\/FloatingPet";/);
+  assert.match(mascotSource, /function resolveShellBallDockStyle\(input:/);
+  assert.match(mascotSource, /case "top_left":/);
+  assert.match(mascotSource, /case "top_right":/);
+  assert.match(mascotSource, /case "bottom_left":/);
+  assert.match(mascotSource, /case "bottom_right":/);
+  assert.match(mascotSource, /<div className="shell-ball-mascot__pet-shell">/);
+  assert.match(shellBallStyles, /\.shell-ball-mascot__visual \{/);
+  assert.match(shellBallStyles, /\.shell-ball-mascot__pet-shell \{/);
+  assert.match(shellBallStyles, /\.shell-ball-mascot__pet \{/);
 });
 
 test("shell-ball release preview recomputes from the final pointer position", () => {
