@@ -561,7 +561,7 @@
 
 .note-source-studio__editor--single {
   gap: 1rem;
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
 }
 
 .note-source-studio__field-grid {

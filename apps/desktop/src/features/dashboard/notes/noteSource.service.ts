@@ -14,9 +14,14 @@ import {
   type DesktopSourceNoteIndexSnapshot,
   type DesktopSourceNoteSnapshot,
 } from "@/platform/desktopSourceNotes";
+import { syncDesktopSettingsSnapshot } from "@/platform/desktopSettingsSnapshot";
 import { isRpcChannelUnavailable } from "@/rpc/fallback";
 import { getTaskInspectorConfig, runTaskInspector } from "@/rpc/methods";
-import { hydrateDesktopRuntimeDefaults, loadSettings } from "@/services/settingsService";
+import {
+  hydrateDesktopRuntimeDefaults,
+  loadSettings,
+  toProtocolSettingsSnapshot,
+} from "@/services/settingsService";
 import type {
   SourceNoteDocument,
   SourceNoteIndexEntry,
@@ -25,6 +30,7 @@ import type {
 } from "./notePage.types";
 
 const NOTE_SOURCE_TIMEOUT_MS = 10_000;
+const LEGACY_TASK_SOURCE_PLACEHOLDERS = new Set(["workspace/todos"]);
 
 function createRequestMeta(scope: string): RequestMeta {
   return {
@@ -79,30 +85,69 @@ function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
   ]);
 }
 
-function loadCachedTaskSources() {
-  return loadSettings().settings.task_automation.task_sources
-    .map((source) => source.trim())
-    .filter(Boolean);
+function normalizeSourceEntry(source: string) {
+  return source.trim().replaceAll("\\", "/").toLowerCase();
 }
 
-function isAbsoluteHostPath(value: string) {
-  const trimmed = value.trim();
-  return /^[a-zA-Z]:[\\/]/.test(trimmed) || /^\\\\/.test(trimmed) || trimmed.startsWith("/");
+function isAbsoluteLocalTaskSource(source: string) {
+  const trimmed = source.trim();
+  return /^(?:[a-z]:[\\/]|\\\\|\/)/i.test(trimmed);
 }
 
-function shouldPreferCachedTaskSources(remoteTaskSources: string[], cachedTaskSources: string[]) {
-  if (cachedTaskSources.length === 0) {
+function isMissingTaskSourceConfigError(error: unknown) {
+  if (!(error instanceof Error)) {
     return false;
   }
 
-  if (remoteTaskSources.length === 0) {
-    return true;
+  const normalizedMessage = error.message.trim().toLowerCase();
+  return normalizedMessage.includes("task inspection source not found")
+    || normalizedMessage.includes("inspection_source_not_found");
+}
+
+function buildCachedTaskInspectorConfig(): AgentTaskInspectorConfigGetResult {
+  const taskAutomation = loadSettings().settings.task_automation;
+  return {
+    task_sources: taskAutomation.task_sources,
+    inspection_interval: taskAutomation.inspection_interval,
+    inspect_on_file_change: taskAutomation.inspect_on_file_change,
+    inspect_on_startup: taskAutomation.inspect_on_startup,
+    remind_before_deadline: taskAutomation.remind_before_deadline,
+    remind_when_stale: taskAutomation.remind_when_stale,
+  };
+}
+
+function resolvePreferredTaskSources(remoteTaskSources: string[]) {
+  const cachedTaskSources = loadSettings().settings.task_automation.task_sources
+    .map((source) => source.trim())
+    .filter((source) => source.length > 0);
+
+  if (cachedTaskSources.length === 0 || !cachedTaskSources.every(isAbsoluteLocalTaskSource)) {
+    return remoteTaskSources;
   }
 
-  const remoteRequiresWorkspaceRoot = remoteTaskSources.every((source) => /^workspace(?:[\\/]|$)/i.test(source.trim()));
-  const cachedUsesAbsolutePaths = cachedTaskSources.some((source) => isAbsoluteHostPath(source));
+  if (remoteTaskSources.length === 0) {
+    return cachedTaskSources;
+  }
 
-  return remoteRequiresWorkspaceRoot && cachedUsesAbsolutePaths;
+  const usesLegacyPlaceholderOnly = remoteTaskSources.every((source) =>
+    LEGACY_TASK_SOURCE_PLACEHOLDERS.has(normalizeSourceEntry(source)),
+  );
+
+  return usesLegacyPlaceholderOnly ? cachedTaskSources : remoteTaskSources;
+}
+
+async function syncSourceNoteSettingsSnapshot(taskSources: string[]) {
+  const currentSettings = loadSettings();
+
+  await syncDesktopSettingsSnapshot(
+    toProtocolSettingsSnapshot({
+      ...currentSettings.settings,
+      task_automation: {
+        ...currentSettings.settings.task_automation,
+        task_sources: taskSources,
+      },
+    }),
+  );
 }
 
 /**
@@ -118,26 +163,30 @@ export function areDesktopSourceNotesAvailable() {
 export async function loadNoteSourceConfig(): Promise<AgentTaskInspectorConfigGetResult> {
   await hydrateDesktopRuntimeDefaults();
   try {
-    const remoteConfig = await withTimeout(
+    const config = await withTimeout(
       getTaskInspectorConfig({ request_meta: createRequestMeta("note_source_config") }),
       "任务来源配置加载",
     );
-    const cachedTaskSources = loadCachedTaskSources();
+    const resolvedTaskSources = resolvePreferredTaskSources(config.task_sources);
+    await syncSourceNoteSettingsSnapshot(resolvedTaskSources);
 
-    // The notes page should honor the persisted task-source list shown in the
-    // desktop settings snapshot when the backend still replays a legacy
-    // workspace-relative source list from older snapshots.
-    if (shouldPreferCachedTaskSources(remoteConfig.task_sources, cachedTaskSources)) {
-      return {
-        ...remoteConfig,
-        task_sources: cachedTaskSources,
-      };
-    }
-
-    return remoteConfig;
+    return {
+      ...config,
+      task_sources: resolvedTaskSources,
+    };
   } catch (error) {
     if (isRpcChannelUnavailable(error)) {
       throw new Error("当前无法读取任务来源配置，请稍后重试。");
+    }
+
+    if (isMissingTaskSourceConfigError(error)) {
+      const cachedConfig = buildCachedTaskInspectorConfig();
+      const resolvedTaskSources = resolvePreferredTaskSources(cachedConfig.task_sources);
+      await syncSourceNoteSettingsSnapshot(resolvedTaskSources);
+      return {
+        ...cachedConfig,
+        task_sources: resolvedTaskSources,
+      };
     }
 
     throw error;

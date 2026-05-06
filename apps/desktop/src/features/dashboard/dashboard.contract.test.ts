@@ -497,10 +497,12 @@ function loadNoteSourceServiceModule(
     (requireFn) => {
       const modulePath = resolve(desktopRoot, "src/features/dashboard/notes/noteSource.service.ts");
       const settingsModulePath = resolve(desktopRoot, ".cache/dashboard-tests/services/settingsService.js");
+      const settingsSnapshotModulePath = resolve(desktopRoot, ".cache/dashboard-tests/platform/desktopSettingsSnapshot.js");
       const runtimeDefaultsModulePath = resolve(desktopRoot, ".cache/dashboard-tests/platform/desktopRuntimeDefaults.js");
       const sourceNotesModulePath = resolve(desktopRoot, "src/platform/desktopSourceNotes.ts");
       delete requireFn.cache[modulePath];
       delete requireFn.cache[settingsModulePath];
+      delete requireFn.cache[settingsSnapshotModulePath];
       delete requireFn.cache[runtimeDefaultsModulePath];
       delete requireFn.cache[sourceNotesModulePath];
 
@@ -2652,6 +2654,7 @@ test("note source config prefers hydrated unix task sources over legacy workspac
   });
 
   try {
+    const syncedTaskSources: string[][] = [];
     const { loadNoteSourceConfig } = loadNoteSourceServiceModule(
       {
         getTaskInspectorConfig: async () => ({
@@ -2659,18 +2662,28 @@ test("note source config prefers hydrated unix task sources over legacy workspac
         }),
       },
       {
-        invoke: async (command) => {
-          assert.equal(command, "desktop_get_runtime_defaults");
-          return {
-            workspace_path: "/Users/runtime/CialloClaw/workspace",
-            task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
-          };
+        invoke: async (command, args) => {
+          if (command === "desktop_get_runtime_defaults") {
+            return {
+              workspace_path: "/Users/runtime/CialloClaw/workspace",
+              task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+            };
+          }
+
+          if (command === "desktop_sync_settings_snapshot") {
+            const settings = args?.settings as { task_automation?: { task_sources?: string[] } } | undefined;
+            syncedTaskSources.push(settings?.task_automation?.task_sources ?? []);
+            return undefined;
+          }
+
+          throw new Error(`unexpected desktop command: ${command}`);
         },
       },
     );
 
     const config = await loadNoteSourceConfig();
     assert.deepEqual(config.task_sources, ["/Users/runtime/CialloClaw/workspace/todos"]);
+    assert.deepEqual(syncedTaskSources, [["/Users/runtime/CialloClaw/workspace/todos"]]);
   } finally {
     if (originalWindow === undefined) {
       Reflect.deleteProperty(globalThis, "window");
@@ -2778,6 +2791,68 @@ test("note source config keeps remote task sources when cached settings are expl
   }
 });
 
+test("note source config syncs resolved task sources into the desktop host cache", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+  const syncedTaskSources: string[][] = [];
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    const { loadNoteSourceConfig } = loadNoteSourceServiceModule(
+      {
+        getTaskInspectorConfig: async () => ({
+          task_sources: ["workspace/review"],
+        }),
+      },
+      {
+        invoke: async (command, args) => {
+          if (command === "desktop_get_runtime_defaults") {
+            return {
+              workspace_path: "/Users/runtime/CialloClaw/workspace",
+              task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+            };
+          }
+
+          if (command === "desktop_sync_settings_snapshot") {
+            const settings = args?.settings as { task_automation?: { task_sources?: string[] } } | undefined;
+            syncedTaskSources.push(settings?.task_automation?.task_sources ?? []);
+            return undefined;
+          }
+
+          throw new Error(`unexpected desktop command: ${command}`);
+        },
+      },
+    );
+
+    const config = await loadNoteSourceConfig();
+    assert.deepEqual(config.task_sources, ["workspace/review"]);
+    assert.deepEqual(syncedTaskSources, [["workspace/review"]]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
 test("note source config surfaces rpc transport failures with the localized retry copy", async () => {
   const originalWindow = globalThis.window;
   const storage = new Map<string, string>();
@@ -2816,6 +2891,68 @@ test("note source config surfaces rpc transport failures with the localized retr
   }
 });
 
+test("note source config falls back to cached task sources when the backend rejects a missing default source", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    const syncedTaskSources: string[][] = [];
+    const { loadNoteSourceConfig } = loadNoteSourceServiceModule(
+      {
+        getTaskInspectorConfig: async () => {
+          throw new Error("task inspection source not found: /Users/runtime/CialloClaw/workspace/todos");
+        },
+      },
+      {
+        invoke: async (command, args) => {
+          if (command === "desktop_get_runtime_defaults") {
+            return {
+              workspace_path: "/Users/runtime/CialloClaw/workspace",
+              task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+            };
+          }
+
+          if (command === "desktop_sync_settings_snapshot") {
+            const settings = args?.settings as { task_automation?: { task_sources?: string[] } } | undefined;
+            syncedTaskSources.push(settings?.task_automation?.task_sources ?? []);
+            return undefined;
+          }
+
+          throw new Error(`unexpected desktop command: ${command}`);
+        },
+      },
+    );
+
+    const config = await loadNoteSourceConfig();
+    assert.deepEqual(config.task_sources, ["/Users/runtime/CialloClaw/workspace/todos"]);
+    assert.deepEqual(syncedTaskSources, [["/Users/runtime/CialloClaw/workspace/todos"]]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
 test("note source config prefers cached task sources when the backend returns an empty list", async () => {
   const originalWindow = globalThis.window;
   const storage = new Map<string, string>();
@@ -2839,6 +2976,7 @@ test("note source config prefers cached task sources when the backend returns an
   });
 
   try {
+    const syncedTaskSources: string[][] = [];
     const { loadNoteSourceConfig } = loadNoteSourceServiceModule(
       {
         getTaskInspectorConfig: async () => ({
@@ -2846,15 +2984,28 @@ test("note source config prefers cached task sources when the backend returns an
         }),
       },
       {
-        invoke: async () => ({
-          workspace_path: "/Users/runtime/CialloClaw/workspace",
-          task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
-        }),
+        invoke: async (command, args) => {
+          if (command === "desktop_get_runtime_defaults") {
+            return {
+              workspace_path: "/Users/runtime/CialloClaw/workspace",
+              task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+            };
+          }
+
+          if (command === "desktop_sync_settings_snapshot") {
+            const settings = args?.settings as { task_automation?: { task_sources?: string[] } } | undefined;
+            syncedTaskSources.push(settings?.task_automation?.task_sources ?? []);
+            return undefined;
+          }
+
+          throw new Error(`unexpected desktop command: ${command}`);
+        },
       },
     );
 
     const config = await loadNoteSourceConfig();
     assert.deepEqual(config.task_sources, ["/Users/runtime/CialloClaw/workspace/todos"]);
+    assert.deepEqual(syncedTaskSources, [["/Users/runtime/CialloClaw/workspace/todos"]]);
   } finally {
     if (originalWindow === undefined) {
       Reflect.deleteProperty(globalThis, "window");
