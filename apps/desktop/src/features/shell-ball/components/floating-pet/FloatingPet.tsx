@@ -36,6 +36,8 @@ const LISTEN_EFFECT_TIMES = [0, 10 / 120, 0.5, 1] as const;
 const ROOT_BODY_UPDOWN_Y = [248.94, 242.5, 249];
 const ROOT_BODY_BASE_X = floatingPetInitialLayout.rootBody.position.x;
 const ROOT_BODY_BASE_Y = floatingPetInitialLayout.rootBody.position.y;
+const LEFT_WING_DEBUG_SWING_DEG = 20;
+const LEFT_WING_DEBUG_SWING_PERIOD_MS = 2_000;
 
 const MODE_TO_EFFECT: Partial<Record<FloatingPetMode, FloatingPetEffectName>> = {
   alert: "bubbleAlert",
@@ -258,6 +260,13 @@ function renderCenteredImageAtOrigin(assetName: FloatingPetAssetName, scale: Flo
   );
 }
 
+function resolveLocalPivot(centerPosition: FloatingPetLayerTransform["position"], bonePosition: FloatingPetLayerTransform["position"]) {
+  return {
+    x: bonePosition.x - centerPosition.x,
+    y: bonePosition.y - centerPosition.y,
+  };
+}
+
 type BoneRotatedLayerProps = {
   animatedRotate: number | number[];
   assetName: FloatingPetAssetName;
@@ -277,15 +286,21 @@ function BoneRotatedLayer({
   times,
   transitionDuration,
 }: BoneRotatedLayerProps) {
+  const localPivot = resolveLocalPivot(layer.position, bonePosition);
+
   return (
-    <g transform={`translate(${bonePosition.x} ${bonePosition.y})`}>
-      <motion.g
-        animate={{ rotate: animatedRotate }}
-        initial={false}
-        transition={{ duration: transitionDuration, ease: "easeInOut", repeat, times }}
-      >
-        {renderCenteredImage(assetName, layer, layer.rotation)}
-      </motion.g>
+    <g transform={`translate(${layer.position.x} ${layer.position.y})`}>
+      <g transform={`translate(${localPivot.x} ${localPivot.y})`}>
+        <motion.g
+          animate={{ rotate: animatedRotate }}
+          initial={false}
+          transition={{ duration: transitionDuration, ease: "easeInOut", repeat, times }}
+        >
+          <g transform={`translate(${-localPivot.x} ${-localPivot.y})`}>
+            {renderCenteredImageAtOrigin(assetName, layer.scale, layer.rotation)}
+          </g>
+        </motion.g>
+      </g>
     </g>
   );
 }
@@ -337,6 +352,7 @@ export function FloatingPet({ className, size = "100%", mode = "idle", listenLoc
   const previousModeRef = useRef<FloatingPetMode>(mode);
   const exitTimeoutRef = useRef<number | null>(null);
   const [exitEffect, setExitEffect] = useState<FloatingPetEffectName | null>(null);
+  const [leftWingDebugAngle, setLeftWingDebugAngle] = useState(0);
   const activeEffect = MODE_TO_EFFECT[mode] ?? null;
   const rootBodyMotion = useMemo(() => resolveRootBodyMotion(mode, listenLocked), [listenLocked, mode]);
   const wingMotion = useMemo(() => resolveWingMotion(mode, listenLocked), [listenLocked, mode]);
@@ -374,6 +390,22 @@ export function FloatingPet({ className, size = "100%", mode = "idle", listenLoc
     }
   }, []);
 
+  useEffect(() => {
+    let frame = 0;
+
+    const tick = (time: number) => {
+      const phase = (time % LEFT_WING_DEBUG_SWING_PERIOD_MS) / LEFT_WING_DEBUG_SWING_PERIOD_MS;
+      setLeftWingDebugAngle(Math.sin(phase * Math.PI * 2) * LEFT_WING_DEBUG_SWING_DEG);
+      frame = window.requestAnimationFrame(tick);
+    };
+
+    frame = window.requestAnimationFrame(tick);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, []);
+
   return (
     <div className={cn(styles.root, className)} style={rootStyle}>
       <motion.svg className={styles.svgStage} initial={false} viewBox={`0 0 ${FLOATING_PET_STAGE_SIZE} ${FLOATING_PET_STAGE_SIZE}`} xmlns="http://www.w3.org/2000/svg">
@@ -393,15 +425,13 @@ export function FloatingPet({ className, size = "100%", mode = "idle", listenLoc
             transitionDuration={tailMotion.duration}
           />
 
-          <BoneRotatedLayer
-            animatedRotate={wingMotion.left.rotate}
-            assetName="leftWing"
-            bonePosition={floatingPetInitialLayout.rootBody.leftBone.position}
-            layer={floatingPetInitialLayout.rootBody.leftWing}
-            repeat={wingMotion.left.repeat}
-            times={wingMotion.left.rotate.length === 5 ? [...QUICK_CLAP_TIMES] : [0, 0.5, 1]}
-            transitionDuration={FLOATING_PET_LOOP_DURATION_S}
-          />
+          <g transform={`rotate(${leftWingDebugAngle} ${floatingPetInitialLayout.rootBody.leftBone.position.x} ${floatingPetInitialLayout.rootBody.leftBone.position.y})`}>
+            {renderCenteredImage(
+              "leftWing",
+              floatingPetInitialLayout.rootBody.leftWing,
+              floatingPetInitialLayout.rootBody.leftBone.rotation + floatingPetInitialLayout.rootBody.leftWing.rotation,
+            )}
+          </g>
 
           {renderCenteredImage("body", floatingPetInitialLayout.rootBody.body)}
 
@@ -457,6 +487,14 @@ export function FloatingPet({ className, size = "100%", mode = "idle", listenLoc
               </motion.g>
             </g>
           </g>
+          <circle
+            cx={floatingPetInitialLayout.rootBody.leftBone.position.x}
+            cy={floatingPetInitialLayout.rootBody.leftBone.position.y}
+            fill="red"
+            r="6"
+            stroke="white"
+            strokeWidth="2"
+          />
         </motion.g>
       </motion.svg>
     </div>
