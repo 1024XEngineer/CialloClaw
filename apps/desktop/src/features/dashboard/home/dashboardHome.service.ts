@@ -311,7 +311,7 @@ async function loadDashboardHomeNoteBuckets(): Promise<DashboardHomeNoteBuckets>
   const closed = closedResult.status === "fulfilled"
     ? closedResult.value.items
     : (warnings.push(formatDashboardHomeLoadWarning("便签已结束", closedResult.reason)), []);
-  const primaryItem = upcoming[0] ?? later[0] ?? recurring[0] ?? closed[0] ?? null;
+  const primaryItem = upcoming[0] ?? later[0] ?? recurring[0] ?? null;
 
   return {
     closed,

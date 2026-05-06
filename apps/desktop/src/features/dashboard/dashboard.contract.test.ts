@@ -7113,6 +7113,92 @@ test("dashboard home keeps notes copy module-native and skips fake empty-note su
   );
 });
 
+test("dashboard home does not promote closed-only notes into the active note summon path", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<{
+          stateMap: Record<string, { headline: string; subline: string }>;
+          summonTemplates: Array<{ module: string; message: string }>;
+        }>;
+      };
+
+      const data = await service.loadDashboardHomeData();
+
+      assert.equal(data.stateMap.notes_scheduled?.headline, "这里还没有可协作的事项");
+      assert.equal(data.summonTemplates.some((item) => item.module === "notes"), false);
+    },
+    {
+      getDashboardModule: async (params: unknown) => ({
+        highlights: [],
+        module: (params as { module?: string }).module ?? "unknown",
+        summary: {},
+        tab: "overview",
+      }),
+      getDashboardOverview: async () => ({
+        overview: {
+          focus_summary: null,
+          high_value_signal: [],
+          quick_actions: [],
+          trust_summary: {
+            has_restore_point: false,
+            pending_authorizations: 0,
+            risk_level: "green",
+            workspace_path: "workspace",
+          },
+        },
+      }),
+      getRecommendations: async () => ({
+        cooldown_hit: false,
+        items: [],
+      }),
+      getMirrorOverview: async () => ({
+        daily_summary: null,
+        history_summary: [],
+        memory_references: [],
+        profile: null,
+      }),
+      listNotepad: async (params: unknown) => {
+        const group = (params as { group?: string }).group;
+        if (group === "closed") {
+          return {
+            items: [
+              {
+                agent_suggestion: null,
+                bucket: "closed",
+                due_at: null,
+                item_id: "todo_closed_001",
+                status: "completed",
+                title: "历史已结束事项",
+                type: "archive",
+              },
+            ],
+            page: {
+              has_more: false,
+              limit: 24,
+              offset: 0,
+              total: 1,
+            },
+          };
+        }
+
+        return {
+          items: [],
+          page: {
+            has_more: false,
+            limit: group === "closed" ? 24 : 12,
+            offset: 0,
+            total: 0,
+          },
+        };
+      },
+    },
+  );
+});
+
 test("security service no longer imports governance mocks into product runtime", () => {
   const securityServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/securityService.ts"), "utf8");
 
