@@ -1787,6 +1787,8 @@ test("dashboard home randomizes summons while preferring a different module when
   const dashboardHomeSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/DashboardHome.tsx"), "utf8");
 
   assert.match(dashboardHomeSource, /function pickNextSummonIndex\(/);
+  assert.match(dashboardHomeSource, /if \(previousIndex < 0 \|\| previousModule === null\) \{/);
+  assert.match(dashboardHomeSource, /return 0;/);
   assert.match(dashboardHomeSource, /candidate\.module !== previousModule/);
   assert.match(dashboardHomeSource, /const pool = candidateIndexes\.length > 0 \? candidateIndexes : fallbackIndexes/);
   assert.match(dashboardHomeSource, /Math\.floor\(Math\.random\(\) \* pool\.length\)/);

@@ -59,6 +59,12 @@ function pickNextSummonIndex(
     return 0;
   }
 
+  // Keep the very first visible orb aligned with the service-side priority
+  // ordering so urgent overview signals are not randomized behind softer copy.
+  if (previousIndex < 0 || previousModule === null) {
+    return 0;
+  }
+
   const candidateIndexes = templates
     .map((template, index) => ({ index, module: template.module }))
     .filter((candidate) => candidate.index !== previousIndex && candidate.module !== previousModule)
