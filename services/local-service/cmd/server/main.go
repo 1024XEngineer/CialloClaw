@@ -15,14 +15,13 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	if err := run(ctx); err != nil {
+	if err := run(ctx, config.Load()); err != nil {
 		log.Fatalf("local service: %v", err)
 	}
 }
 
 // run owns startup wiring so main remains the only process-exit boundary.
-func run(ctx context.Context) error {
-	cfg := config.Load()
+func run(ctx context.Context, cfg config.Config) error {
 	app, err := bootstrap.New(cfg)
 	if err != nil {
 		return fmt.Errorf("bootstrap local service: %w", err)
