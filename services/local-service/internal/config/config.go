@@ -15,7 +15,8 @@ const (
 	defaultDatabaseFileName     = "cialloclaw.db"
 )
 
-// ModelConfig describes the runtime model configuration.
+// ModelConfig contains the provider defaults and execution budgets used before
+// the settings store applies user overrides.
 type ModelConfig struct {
 	Provider             string
 	ModelID              string
@@ -30,14 +31,18 @@ type ModelConfig struct {
 	ContextKeepRecent    int
 }
 
-// RPCConfig describes the JSON-RPC transport configuration.
+// RPCConfig contains the local JSON-RPC transport defaults. The named-pipe
+// value is used by the desktop bridge, while the debug HTTP address remains an
+// opt-in bootstrap surface.
 type RPCConfig struct {
 	Transport        string
 	NamedPipeName    string
 	DebugHTTPAddress string
 }
 
-// Config contains the assembled local-service runtime configuration.
+// Config is the immutable bootstrap snapshot consumed by the local service.
+// Runtime paths are resolved before construction so downstream packages do not
+// need to read process environment variables.
 type Config struct {
 	RPC           RPCConfig
 	WorkspaceRoot string
@@ -59,8 +64,9 @@ func DefaultRuntimeRoot() string {
 	)
 }
 
-// DefaultWorkspaceRoot resolves the canonical workspace root used by the local
-// service runtime.
+// DefaultWorkspaceRoot resolves the workspace root used for controlled file
+// tools and artifacts. CIALLOCLAW_WORKSPACE_ROOT takes precedence over the
+// profile-scoped runtime directory.
 func DefaultWorkspaceRoot() string {
 	if value := cleanPathEnv("CIALLOCLAW_WORKSPACE_ROOT"); value != "" {
 		return value
@@ -68,8 +74,9 @@ func DefaultWorkspaceRoot() string {
 	return filepath.Join(DefaultRuntimeRoot(), defaultWorkspaceDirName)
 }
 
-// DefaultDatabasePath resolves the canonical SQLite database path used by the
-// local service runtime.
+// DefaultDatabasePath resolves the SQLite database path used by storage
+// bootstrap. CIALLOCLAW_DATABASE_PATH overrides the default data directory but
+// does not create or validate the file.
 func DefaultDatabasePath() string {
 	if value := cleanPathEnv("CIALLOCLAW_DATABASE_PATH"); value != "" {
 		return value
@@ -104,7 +111,10 @@ func defaultRuntimeRootFromValues(goos, runtimeOverride, localAppData, homeDir, 
 	return filepath.Join(defaultRuntimeDirectoryName)
 }
 
-// Load returns the assembled local-service configuration.
+// Load returns the built-in local-service configuration used during bootstrap.
+// It reads only path-related environment overrides through the default
+// resolvers and leaves validation, directory creation, and user settings
+// overlay to later startup phases.
 func Load() Config {
 	return Config{
 		RPC: RPCConfig{
