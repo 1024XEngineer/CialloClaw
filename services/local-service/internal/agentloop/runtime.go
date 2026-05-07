@@ -2,7 +2,6 @@ package agentloop
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -642,17 +641,6 @@ func stringValue(input map[string]any, key, fallback string) string {
 		return fallback
 	}
 	return strings.TrimSpace(value)
-}
-
-func marshalJSON(input map[string]any) string {
-	if len(input) == 0 {
-		return "{}"
-	}
-	payload, err := json.Marshal(input)
-	if err != nil {
-		return "{}"
-	}
-	return string(payload)
 }
 
 // shouldRetryPlannerError keeps planner retries narrow and deterministic so

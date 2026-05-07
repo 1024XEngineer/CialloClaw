@@ -364,10 +364,7 @@ func cloneMetricSnapshots(items []MetricSnapshot) []MetricSnapshot {
 	if len(items) == 0 {
 		return nil
 	}
-	result := make([]MetricSnapshot, 0, len(items))
-	for _, item := range items {
-		result = append(result, item)
-	}
+	result := append([]MetricSnapshot(nil), items...)
 	return result
 }
 

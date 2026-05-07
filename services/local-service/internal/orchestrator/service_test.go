@@ -792,51 +792,6 @@ func newTestServiceWithExecutionWorkersAndScreen(t *testing.T, modelOutput strin
 	return service, workspaceRoot
 }
 
-func newTestServiceWithModelService(t *testing.T, modelService *model.Service) (*Service, string, *storage.Service) {
-	t.Helper()
-
-	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
-	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
-	if err != nil {
-		t.Fatalf("new local path policy: %v", err)
-	}
-	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "service.db")))
-	t.Cleanup(func() { _ = storageService.Close() })
-	auditService := audit.NewService(storageService.AuditWriter())
-	deliveryService := delivery.NewService()
-	toolRegistry := tools.NewRegistry()
-	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
-		t.Fatalf("register builtin tools: %v", err)
-	}
-	if err := sidecarclient.RegisterPlaywrightTools(toolRegistry); err != nil {
-		t.Fatalf("register playwright tools: %v", err)
-	}
-	if err := sidecarclient.RegisterOCRTools(toolRegistry); err != nil {
-		t.Fatalf("register ocr tools: %v", err)
-	}
-	if err := sidecarclient.RegisterMediaTools(toolRegistry); err != nil {
-		t.Fatalf("register media tools: %v", err)
-	}
-	toolExecutor := tools.NewToolExecutor(toolRegistry, tools.WithToolCallRecorder(tools.NewToolCallRecorder(storageService.ToolCallSink())))
-	pluginService := plugin.NewService()
-	seedTestExtensionAssets(t, storageService, pluginService)
-	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
-	executor := execution.NewService(fileSystem, platform.LocalExecutionBackend{}, sidecarclient.NewNoopPlaywrightSidecarClient(), sidecarclient.NewNoopOCRWorkerClient(), sidecarclient.NewNoopMediaWorkerClient(), sidecarclient.NewLocalScreenCaptureClient(fileSystem), modelService, auditService, checkpoint.NewService(storageService.RecoveryPointWriter()), deliveryService, toolRegistry, toolExecutor, pluginService).WithArtifactStore(storageService.ArtifactStore()).WithExtensionAssetCatalog(storageService)
-
-	service := NewService(
-		contextsvc.NewService(),
-		intent.NewService(),
-		mustNewStoredEngine(t, storageService.TaskRunStore()),
-		deliveryService,
-		memory.NewServiceFromStorage(storageService.MemoryStore(), storageService.Capabilities().MemoryRetrievalBackend),
-		risk.NewService(),
-		modelService,
-		toolRegistry,
-		pluginService,
-	).WithAudit(auditService).WithStorage(storageService).WithExecutor(executor).WithTaskInspector(taskinspector.NewService(fileSystem)).WithTraceEval(traceeval.NewService(storageService.TraceStore(), storageService.EvalStore()))
-
-	return service, workspaceRoot, storageService
-}
 func seedTestExtensionAssets(t *testing.T, storageService *storage.Service, pluginService *plugin.Service) {
 	t.Helper()
 	if err := storageService.EnsureBuiltinExecutionAssets(context.Background()); err != nil {
@@ -887,21 +842,6 @@ func mustNewStoredEngine(t *testing.T, taskStore storage.TaskRunStore) *runengin
 		t.Fatalf("new stored engine: %v", err)
 	}
 	return engine
-}
-
-type storageTestAdapter struct {
-	databasePath string
-}
-
-func (s storageTestAdapter) DatabasePath() string {
-	return s.databasePath
-}
-
-func (s storageTestAdapter) SecretStorePath() string {
-	if s.databasePath == "" {
-		return ""
-	}
-	return s.databasePath + ".stronghold"
 }
 
 func newTestService() *Service {
@@ -15242,18 +15182,18 @@ func TestServiceStartTaskWithExecutorWritesWorkspaceDocument(t *testing.T) {
 	output, ok := record.LatestToolCall["output"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected latest tool call output map, got %+v", record.LatestToolCall)
-		if output["summary_output"] == nil {
-			t.Fatalf("expected write_file tool output to include summary_output, got %+v", output)
-		}
-		if output["model_invocation"] == nil {
-			t.Fatalf("expected latest tool call to include model invocation, got %+v", output)
-		}
-		if output["audit_record"] == nil {
-			t.Fatalf("expected latest tool call to include audit record, got %+v", output)
-		}
-		if output["recovery_point"] != nil {
-			t.Fatalf("expected no recovery_point for create flow, got %+v", output)
-		}
+	}
+	if strings.TrimSpace(stringValue(output, "path", "")) == "" {
+		t.Fatalf("expected write_file tool output to include path, got %+v", output)
+	}
+	if intValueFromAny(output["bytes_written"]) <= 0 {
+		t.Fatalf("expected write_file tool output to include bytes_written, got %+v", output)
+	}
+	if output["created"] != true {
+		t.Fatalf("expected write_file tool output to mark a created file, got %+v", output)
+	}
+	if output["recovery_point"] != nil {
+		t.Fatalf("expected no recovery_point for create flow, got %+v", output)
 	}
 }
 

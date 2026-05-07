@@ -554,7 +554,7 @@ func taskStartHasExplicitGoal(snapshot contextsvc.TaskContextSnapshot) bool {
 }
 
 func (s *Service) handleScreenAnalyzeStart(params map[string]any, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any) (map[string]any, bool, error) {
-	if stringValue(explicitIntent, "name", "") != "screen_analyze" || s.executor == nil || s.executor.ScreenCapabilitySnapshot().Available == false {
+	if stringValue(explicitIntent, "name", "") != "screen_analyze" || s.executor == nil || !s.executor.ScreenCapabilitySnapshot().Available {
 		return nil, false, nil
 	}
 	resolvedIntent := s.resolveScreenAnalyzeIntent(snapshot, explicitIntent)
@@ -2185,10 +2185,10 @@ func (s *Service) DashboardOverviewGet(params map[string]any) (map[string]any, e
 	queryViews := newTaskQueryViews(s)
 	unfinishedTasks := queryViews.tasks("unfinished", "updated_at", "desc")
 	finishedTasks := queryViews.tasks("finished", "finished_at", "desc")
-	pendingApprovals, runtimePendingTotal := s.runEngine.PendingApprovalRequests(20, 0)
+	_, runtimePendingTotal := s.runEngine.PendingApprovalRequests(20, 0)
 	needStorageFallback := !queryViews.hasRuntimeState()
 
-	pendingApprovals = pendingApprovalsFromTasks(unfinishedTasks)
+	pendingApprovals := pendingApprovalsFromTasks(unfinishedTasks)
 	pendingTotal := mergedPendingApprovalTotal(unfinishedTasks, runtimePendingTotal)
 	focusMode := boolValue(params, "focus_mode", false)
 	requestedIncludes := stringSliceValue(params["include"])
@@ -2945,13 +2945,6 @@ func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error)
 		}, nil
 	}
 
-	resultTitle := stringValue(pendingExecution, "result_title", "处理结果")
-	resultPreview := stringValue(pendingExecution, "preview_text", "已为你写入文档并打开")
-	resultBubbleText := stringValue(pendingExecution, "result_bubble_text", "结果已经生成，可直接查看。")
-	deliveryType := stringValue(pendingExecution, "delivery_type", deliveryTypeFromIntent(task.Intent))
-	deliveryType = resolveTaskDeliveryType(task, task.Intent)
-	resultPreview = previewTextForDeliveryType(deliveryType)
-	_, _, _, _ = resultTitle, resultPreview, resultBubbleText, deliveryType
 	updatedTask, resultBubble, deliveryResult, _, err := s.executeTask(processingTask, snapshotFromTask(processingTask), processingTask.Intent)
 	if err != nil {
 		return nil, err
@@ -3009,10 +3002,11 @@ func (s *Service) SettingsGet(params map[string]any) (map[string]any, error) {
 // settings patch plus apply-mode metadata.
 func (s *Service) SettingsUpdate(params map[string]any) (map[string]any, error) {
 	normalizedParams := normalizeSettingsUpdateParams(params)
-	previewSettings, updatedKeys, applyMode, needRestart, err := s.previewSettingsUpdate(normalizedParams)
+	previewSettings, previewUpdatedKeys, _, _, err := s.previewSettingsUpdate(normalizedParams)
 	if err != nil {
 		return nil, err
 	}
+	modelSettingsChanged := modelSettingsTouched(previewUpdatedKeys)
 	modelSecretTouched := false
 	secretUpdatedKeys := make([]string, 0, 2)
 	rollbacks := make([]modelSecretRollback, 0, 2)
@@ -3049,9 +3043,7 @@ func (s *Service) SettingsUpdate(params map[string]any) (map[string]any, error) 
 			secretUpdatedKeys = append(secretUpdatedKeys, "models.api_key")
 		}
 	}
-	if modelSettingsTouched(updatedKeys) {
-		applyMode = "next_task_effective"
-		needRestart = false
+	if modelSettingsChanged {
 		if err := s.reloadRuntimeModelForSettings(previewSettings); err != nil {
 			s.rollbackModelSecretMutations(rollbacks)
 			return nil, err
@@ -3062,6 +3054,10 @@ func (s *Service) SettingsUpdate(params map[string]any) (map[string]any, error) 
 		s.ReplaceModel(previousModel)
 		s.rollbackModelSecretMutations(rollbacks)
 		return nil, err
+	}
+	if modelSettingsChanged {
+		applyMode = "next_task_effective"
+		needRestart = false
 	}
 	if modelSecretTouched {
 		if _, ok := effectiveSettings["models"]; !ok {
@@ -3291,7 +3287,7 @@ func (s *Service) queueTaskIfSessionBusy(task runengine.TaskRecord) (runengine.T
 		fmt.Sprintf("当前会话已有任务 %s 正在执行，本任务已排队等待。", truncateText(activeTask.Title, 24)),
 		task.UpdatedAt.Format(dateTimeLayout),
 	)
-	queuedTask := runengine.TaskRecord{}
+	var queuedTask runengine.TaskRecord
 	changed := false
 	if s.isPreparedRestartAttempt(task) {
 		queuedTask, changed = s.runEngine.QueuePreparedTaskForSession(task, activeTask.TaskID, bubble)
@@ -3392,42 +3388,8 @@ func pageMap(limit, offset, total int) map[string]any {
 	}
 }
 
-func (s *Service) listTasksFromStorage(group, sortBy, sortOrder string, limit, offset int) ([]runengine.TaskRecord, int, bool) {
-	if s.storage == nil {
-		return nil, 0, false
-	}
-	if s.storage.TaskStore() != nil {
-		tasks, total, ok := s.listTasksFromStructuredStorage(group, sortBy, sortOrder, limit, offset)
-		if ok {
-			return tasks, total, true
-		}
-	}
-	records, err := s.storage.TaskRunStore().LoadLegacyTaskRuns(context.Background(), nil)
-	if err != nil || len(records) == 0 {
-		return nil, 0, false
-	}
-	tasks := make([]runengine.TaskRecord, 0, len(records))
-	for _, record := range records {
-		task := taskRecordFromStorage(record)
-		if !matchesTaskGroup(task, group) {
-			continue
-		}
-		tasks = append(tasks, task)
-	}
-	runengineSortTaskRecords(tasks, sortBy, sortOrder)
-	total := len(tasks)
-	if offset >= total {
-		return []runengine.TaskRecord{}, total, true
-	}
-	end := offset + limit
-	if limit <= 0 || end > total {
-		end = total
-	}
-	return tasks[offset:end], total, true
-}
-
 func (s *Service) listTasksFromStructuredStorage(group, sortBy, sortOrder string, limit, offset int) ([]runengine.TaskRecord, int, bool) {
-	records, total, err := s.storage.TaskStore().ListTasks(context.Background(), 0, 0)
+	records, _, err := s.storage.TaskStore().ListTasks(context.Background(), 0, 0)
 	if err != nil || len(records) == 0 {
 		return nil, 0, false
 	}
@@ -3446,7 +3408,7 @@ func (s *Service) listTasksFromStructuredStorage(group, sortBy, sortOrder string
 		return nil, 0, false
 	}
 	runengineSortTaskRecords(tasks, sortBy, sortOrder)
-	total = len(tasks)
+	total := len(tasks)
 	if offset >= total {
 		return []runengine.TaskRecord{}, total, true
 	}
@@ -4932,10 +4894,7 @@ func isScreenTaskDetail(task runengine.TaskRecord) bool {
 			return true
 		}
 	}
-	if strings.TrimSpace(stringValue(task.ApprovalRequest, "operation_name", "")) == "screen_capture" {
-		return true
-	}
-	return false
+	return strings.TrimSpace(stringValue(task.ApprovalRequest, "operation_name", "")) == "screen_capture"
 }
 
 func preferNewerTaskDetailRecord(left map[string]any, right map[string]any, timeKey string) map[string]any {
@@ -5269,16 +5228,6 @@ func notepadSnapshot(item map[string]any) contextsvc.TaskContextSnapshot {
 		Text:      stringValue(item, "title", ""),
 		PageTitle: "notepad",
 		AppName:   "dashboard",
-	}
-}
-
-// defaultMirrorReference creates the sample memory reference returned by the
-// mirror module.
-func defaultMirrorReference() map[string]any {
-	return map[string]any{
-		"memory_id": "pref_001",
-		"reason":    "当前任务命中了用户的输出偏好",
-		"summary":   "偏好简洁三点式摘要",
 	}
 }
 
@@ -5619,21 +5568,6 @@ func (s *Service) latestAuditRecordFromStorage(taskID string) map[string]any {
 		return nil
 	}
 	return normalizeTaskDetailAuditRecord(taskID, items[0].Map())
-}
-
-func (s *Service) loadAuditRecordsFromStorage(taskID string, limit, offset int) []map[string]any {
-	if s == nil || s.storage == nil || s.storage.AuditStore() == nil || strings.TrimSpace(taskID) == "" {
-		return nil
-	}
-	items, _, err := s.storage.AuditStore().ListAuditRecords(context.Background(), taskID, "", limit, offset)
-	if err != nil {
-		return nil
-	}
-	result := make([]map[string]any, 0, len(items))
-	for _, item := range items {
-		result = append(result, item.Map())
-	}
-	return result
 }
 
 func (s *Service) loadAttemptAuditRecordsFromStorage(task runengine.TaskRecord, limit, offset int) []map[string]any {
@@ -6021,15 +5955,6 @@ func normalizeTaskDetailAuthorizationDecision(decision string) string {
 	}
 }
 
-func latestFormalTaskAuditRecord(taskID string, auditRecords []map[string]any) map[string]any {
-	for index := len(auditRecords) - 1; index >= 0; index-- {
-		if normalized := normalizeTaskDetailAuditRecord(taskID, auditRecords[index]); normalized != nil {
-			return normalized
-		}
-	}
-	return nil
-}
-
 func normalizeTaskDetailAuditRecord(taskID string, auditRecord map[string]any) map[string]any {
 	if len(auditRecord) == 0 {
 		return nil
@@ -6057,29 +5982,6 @@ func normalizeTaskDetailAuditRecord(taskID string, auditRecord map[string]any) m
 		"result":     result,
 		"created_at": createdAt,
 	}
-}
-
-func taskNotificationsFromStorage(values []storage.NotificationSnapshot) []runengine.NotificationRecord {
-	if len(values) == 0 {
-		return nil
-	}
-	result := make([]runengine.NotificationRecord, len(values))
-	for index, value := range values {
-		result[index] = runengine.NotificationRecord{
-			Method:    value.Method,
-			Params:    cloneMap(value.Params),
-			CreatedAt: value.CreatedAt,
-		}
-	}
-	return result
-}
-
-func cloneStorageTimePointer(value *time.Time) *time.Time {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
 }
 
 func latestOutputPathFromTasks(tasks []runengine.TaskRecord) string {
@@ -6914,21 +6816,6 @@ func (s *Service) citationsForTask(task runengine.TaskRecord, runtimeCitations [
 	return mergeCitationsWithStored(s.loadAttemptTaskCitationsFromStorage(task), runtimeCitations)
 }
 
-func (s *Service) loadArtifactsFromStorage(taskID string, limit, offset int) []map[string]any {
-	if s.storage == nil || s.storage.ArtifactStore() == nil || strings.TrimSpace(taskID) == "" {
-		return nil
-	}
-	records, _, err := s.storage.ArtifactStore().ListArtifacts(context.Background(), taskID, "", limit, offset)
-	if err != nil {
-		return nil
-	}
-	items := make([]map[string]any, 0, len(records))
-	for _, record := range records {
-		items = append(items, artifactMapFromStorage(record))
-	}
-	return items
-}
-
 func (s *Service) loadAttemptArtifactsFromStorage(task runengine.TaskRecord, limit, offset int) []map[string]any {
 	if s.storage == nil || s.storage.ArtifactStore() == nil || strings.TrimSpace(task.TaskID) == "" {
 		return nil
@@ -7411,18 +7298,6 @@ func firstMapOrNil(items []map[string]any) map[string]any {
 	return cloneMap(items[0])
 }
 
-// latestRestorePointFromApprovals extracts the newest restore point carried by
-// approval-derived task data.
-func latestRestorePointFromApprovals(items []map[string]any) any {
-	if len(items) == 0 {
-		return nil
-	}
-	return map[string]any{
-		"recovery_point_id": fmt.Sprintf("rp_%s", stringValue(items[0], "task_id", "latest")),
-		"created_at":        time.Now().Format(dateTimeLayout),
-	}
-}
-
 // cloneMap recursively copies a map[string]any payload.
 func cloneMap(values map[string]any) map[string]any {
 	if len(values) == 0 {
@@ -7567,7 +7442,7 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 // the new run must execute, but the executor still needs the old run_id to mark
 // the segment as restart instead of initial.
 func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, []map[string]any, error) {
-	processingTask := runengine.TaskRecord{}
+	var processingTask runengine.TaskRecord
 	ok := false
 	if s.isPreparedRestartAttempt(task) {
 		processingTask, ok = s.runEngine.BeginPreparedExecution(task, s.activeExecutionStepName(taskIntent), "开始生成正式结果")

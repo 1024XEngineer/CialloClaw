@@ -177,10 +177,7 @@ func (s *Service) rankCandidates(candidates []candidate, state fingerprintState)
 		return nil
 	}
 
-	filtered := make([]candidate, 0, len(candidates))
-	for _, item := range candidates {
-		filtered = append(filtered, item)
-	}
+	filtered := append([]candidate(nil), candidates...)
 
 	sort.SliceStable(filtered, func(i, j int) bool {
 		leftScore := state.IntentScores[filtered[i].IntentName]

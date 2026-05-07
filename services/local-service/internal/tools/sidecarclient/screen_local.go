@@ -204,7 +204,6 @@ func (c *localScreenCaptureClient) CleanupExpiredScreenTemps(_ context.Context, 
 			if len(remaining) == 0 {
 				if sessionDir := screenSessionTempDir(sessionID); strings.TrimSpace(sessionDir) != "" {
 					if err := c.fileSystem.Remove(sessionDir); err == nil {
-						sessionDeleted = append(sessionDeleted, sessionDir)
 						deleted = append(deleted, sessionDir)
 					}
 				}
