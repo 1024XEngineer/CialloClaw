@@ -13,6 +13,7 @@ import (
 const defaultTransportShutdownTimeout = 5 * time.Second
 
 var errTransportShutdownIncomplete = errors.New("rpc transport shutdown incomplete")
+var errServerAlreadyRunning = errors.New("rpc server already running")
 
 // Start serves configured transports until one fails or ctx is canceled.
 // Shutdown always runs before Start returns; if a transport misses the shutdown
@@ -161,6 +162,12 @@ func (s *Server) beginServeRun(parent context.Context) (context.Context, error) 
 	if s.terminalErr != nil {
 		runCancel()
 		return nil, s.terminalErr
+	}
+	// The serve-run cancel handles are instance-scoped, so a second Start must
+	// fail fast instead of replacing the active run's shutdown ownership.
+	if s.runCancel != nil || s.shuttingDown {
+		runCancel()
+		return nil, errServerAlreadyRunning
 	}
 
 	s.runCancel = runCancel
