@@ -9,8 +9,8 @@ const outputPath = path.join(
   "apps",
   "desktop",
   "src-tauri",
-  "bin",
-  "cialloclaw-service-x86_64-pc-windows-msvc.exe",
+  "binaries",
+  "local-service-x86_64-pc-windows-msvc.exe",
 );
 
 mkdirSync(path.dirname(outputPath), { recursive: true });

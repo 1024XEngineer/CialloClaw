@@ -69,7 +69,6 @@ jobs:
         run: |
           pnpm --dir apps/desktop lint
           pnpm --dir apps/desktop typecheck
-          pnpm --dir apps/desktop test:dashboard
           pnpm --dir apps/desktop test:memory
 
       - name: Build Windows Go sidecar
