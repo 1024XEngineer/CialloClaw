@@ -1573,6 +1573,190 @@ func TestExecuteDirectBuiltinReadFileUsesToolExecutor(t *testing.T) {
 	}
 }
 
+func TestExecuteDirectBrowserBuiltinsUseToolExecutor(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", stubPlaywrightClient{
+		attachResult: tools.BrowserAttachedPageResult{
+			BrowserExecutionMetadata: tools.BrowserExecutionMetadata{Attached: true, BrowserKind: "chrome", BrowserTransport: "cdp", EndpointURL: "http://127.0.0.1:9222"},
+			PageIndex:                1,
+			Title:                    "Current Tab",
+			URL:                      "https://example.com/current",
+			Source:                   "playwright_worker_cdp",
+		},
+		snapshotResult: tools.BrowserSnapshotResult{
+			BrowserAttachedPageResult: tools.BrowserAttachedPageResult{
+				BrowserExecutionMetadata: tools.BrowserExecutionMetadata{Attached: true, BrowserKind: "chrome", BrowserTransport: "cdp", EndpointURL: "http://127.0.0.1:9222"},
+				PageIndex:                1,
+				Title:                    "Current Tab",
+				URL:                      "https://example.com/current",
+				Source:                   "playwright_worker_cdp",
+			},
+			TextContent: "snapshot content from sidecar",
+			Headings:    []string{"Overview"},
+			Links:       []string{"https://example.com/docs"},
+			Buttons:     []string{"Continue"},
+			Inputs:      []string{"search"},
+		},
+		navigateResult: tools.BrowserNavigationResult{
+			BrowserAttachedPageResult: tools.BrowserAttachedPageResult{
+				BrowserExecutionMetadata: tools.BrowserExecutionMetadata{Attached: true, BrowserKind: "chrome", BrowserTransport: "cdp", EndpointURL: "http://127.0.0.1:9222"},
+				PageIndex:                1,
+				Title:                    "Next Page",
+				URL:                      "https://example.com/next",
+				Source:                   "playwright_worker_cdp",
+			},
+			TextContent: "navigated content from sidecar",
+			MIMEType:    "text/html",
+			TextType:    "text/html",
+		},
+		tabsResult: tools.BrowserTabsListResult{
+			BrowserExecutionMetadata: tools.BrowserExecutionMetadata{Attached: true, BrowserKind: "chrome", BrowserTransport: "cdp", EndpointURL: "http://127.0.0.1:9222"},
+			TabCount:                 2,
+			Tabs: []tools.BrowserTabInfo{
+				{PageIndex: 1, Title: "Current Tab", URL: "https://example.com/current"},
+				{PageIndex: 2, Title: "Docs", URL: "https://example.com/docs"},
+			},
+			Source: "playwright_worker_cdp",
+		},
+		interactResult: tools.BrowserPageInteractResult{
+			BrowserExecutionMetadata: tools.BrowserExecutionMetadata{Attached: true, BrowserKind: "chrome", BrowserTransport: "cdp", EndpointURL: "http://127.0.0.1:9222"},
+			URL:                      "https://example.com/form",
+			Title:                    "Form",
+			TextContent:              "after click sidecar content",
+			ActionsApplied:           1,
+			Source:                   "playwright_worker_cdp",
+		},
+	})
+	service.modelMu.Lock()
+	service.model = model.NewService(serviceconfig.ModelConfig{}, &stubModelClient{err: errors.New("model should not be called")})
+	service.modelMu.Unlock()
+
+	tests := []struct {
+		name       string
+		request    Request
+		wantTool   string
+		wantRawKey string
+		wantBubble string
+	}{
+		{
+			name: "browser_attach_current",
+			request: Request{
+				TaskID:       "task_browser_attach",
+				RunID:        "run_browser_attach",
+				DeliveryType: "bubble",
+				ResultTitle:  "浏览器附着结果",
+				Intent:       map[string]any{"name": "browser_attach_current", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "browser_kind": "chrome", "target": map[string]any{"url": "https://example.com/current"}}}},
+			},
+			wantTool:   "browser_attach_current",
+			wantRawKey: "page_index",
+			wantBubble: "browser_attach_current 执行完成。",
+		},
+		{
+			name: "browser_snapshot",
+			request: Request{
+				TaskID:       "task_browser_snapshot",
+				RunID:        "run_browser_snapshot",
+				DeliveryType: "bubble",
+				ResultTitle:  "浏览器快照结果",
+				Intent:       map[string]any{"name": "browser_snapshot", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "target": map[string]any{"url": "https://example.com/current"}}}},
+			},
+			wantTool:   "browser_snapshot",
+			wantRawKey: "text_content",
+			wantBubble: "snapshot content from sidecar",
+		},
+		{
+			name: "browser_navigate",
+			request: Request{
+				TaskID:       "task_browser_navigate",
+				RunID:        "run_browser_navigate",
+				DeliveryType: "bubble",
+				ResultTitle:  "浏览器导航结果",
+				Intent:       map[string]any{"name": "browser_navigate", "arguments": map[string]any{"url": "https://example.com/next", "attach": map[string]any{"mode": "cdp", "browser_kind": "chrome"}}},
+			},
+			wantTool:   "browser_navigate",
+			wantRawKey: "mime_type",
+			wantBubble: "navigated content from sidecar",
+		},
+		{
+			name: "browser_tabs_list",
+			request: Request{
+				TaskID:       "task_browser_tabs",
+				RunID:        "run_browser_tabs",
+				DeliveryType: "bubble",
+				ResultTitle:  "浏览器标签页结果",
+				Intent:       map[string]any{"name": "browser_tabs_list", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "browser_kind": "chrome", "target": map[string]any{"url": "https://example.com/current"}}}},
+			},
+			wantTool:   "browser_tabs_list",
+			wantRawKey: "tab_count",
+			wantBubble: "browser_tabs_list 执行完成。",
+		},
+		{
+			name: "browser_tab_focus",
+			request: Request{
+				TaskID:       "task_browser_focus",
+				RunID:        "run_browser_focus",
+				DeliveryType: "bubble",
+				ResultTitle:  "浏览器聚焦结果",
+				Intent:       map[string]any{"name": "browser_tab_focus", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "target": map[string]any{"page_index": 1, "title_contains": "Current Tab"}}}},
+			},
+			wantTool:   "browser_tab_focus",
+			wantRawKey: "page_index",
+			wantBubble: "browser_tab_focus 执行完成。",
+		},
+		{
+			name: "browser_interact",
+			request: Request{
+				TaskID:       "task_browser_interact",
+				RunID:        "run_browser_interact",
+				DeliveryType: "bubble",
+				ResultTitle:  "浏览器交互结果",
+				Intent: map[string]any{"name": "browser_interact", "arguments": map[string]any{
+					"actions": []any{map[string]any{"type": "click", "selector": "button.submit"}},
+					"attach":  map[string]any{"mode": "cdp", "target": map[string]any{"url": "https://example.com/form"}},
+				}},
+			},
+			wantTool:   "browser_interact",
+			wantRawKey: "actions_applied",
+			wantBubble: "after click sidecar content",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := test.request
+			request.ApprovalGranted = true
+			request.ApprovedOperation = test.wantTool
+			request.ApprovedTargetObject = approvedTargetObject(request.Intent, service.workspace)
+
+			result, err := service.Execute(context.Background(), request)
+			if err != nil {
+				t.Fatalf("execute failed: %v", err)
+			}
+			if result.ToolName != test.wantTool {
+				t.Fatalf("expected %s tool, got %s", test.wantTool, result.ToolName)
+			}
+			if len(result.ToolCalls) != 1 || result.ToolCalls[0].ToolName != test.wantTool {
+				t.Fatalf("expected one direct tool call for %s, got %+v", test.wantTool, result.ToolCalls)
+			}
+			attachInput, ok := result.ToolInput["attach"].(map[string]any)
+			if !ok || len(attachInput) == 0 {
+				t.Fatalf("expected %s tool input to preserve attach hints, got %+v", test.wantTool, result.ToolInput)
+			}
+			if result.ToolOutput["summary_output"] == nil {
+				t.Fatalf("expected %s direct execution to include summary_output, got %+v", test.wantTool, result.ToolOutput)
+			}
+			if result.ToolOutput[test.wantRawKey] == nil {
+				t.Fatalf("expected %s direct execution to include raw output key %s, got %+v", test.wantTool, test.wantRawKey, result.ToolOutput)
+			}
+			if result.BubbleText != test.wantBubble {
+				t.Fatalf("expected %s bubble text %q, got %q", test.wantTool, test.wantBubble, result.BubbleText)
+			}
+			if deliveryType, ok := result.DeliveryResult["type"].(string); !ok || deliveryType != "bubble" {
+				t.Fatalf("expected bubble delivery result, got %+v", result.DeliveryResult)
+			}
+		})
+	}
+}
+
 func TestExecuteDirectSidecarPageReadUsesToolExecutor(t *testing.T) {
 	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", stubPlaywrightClient{attachedReadResult: tools.BrowserPageReadResult{
 		BrowserExecutionMetadata: tools.BrowserExecutionMetadata{Attached: true, BrowserKind: "chrome", BrowserTransport: "cdp", EndpointURL: "http://127.0.0.1:9222"},

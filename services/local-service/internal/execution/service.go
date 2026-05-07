@@ -980,7 +980,12 @@ func (s *Service) executeDirectBuiltinTool(ctx context.Context, request Request)
 		return Result{}, false, nil
 	}
 	args := mapValue(request.Intent, "arguments")
-	toolInput, ok := resolveDirectToolInput(intentName, args, request.Snapshot)
+	// Browser intents must stay on the direct execution path so attach-only
+	// requests do not fall back to model generation before the tool runs.
+	toolInput, ok := resolveBrowserToolInput(intentName, args)
+	if !ok {
+		toolInput, ok = resolveDirectToolInput(intentName, args, request.Snapshot)
+	}
 	if !ok {
 		return Result{}, false, nil
 	}
