@@ -1,4 +1,5 @@
-// 该文件负责恢复点层的最小骨架。
+// Package checkpoint builds and applies recovery points for workspace-scoped
+// changes before risky actions commit.
 package checkpoint
 
 import (
@@ -34,12 +35,14 @@ type snapshotPayload struct {
 	Content []byte `json:"content,omitempty"`
 }
 
-// Service 提供当前模块的服务能力。
+// Service owns recovery-point construction and persistence without depending
+// on a concrete storage backend.
 type Service struct {
 	writer Writer
 }
 
-// NewService 创建并返回Service。
+// NewService creates a checkpoint service. When no writer is supplied, the
+// service can still build recovery-point payloads for dry-run and tests.
 func NewService(writers ...Writer) *Service {
 	writer := Writer(noopWriter{})
 	if len(writers) > 0 && writers[0] != nil {
@@ -48,12 +51,14 @@ func NewService(writers ...Writer) *Service {
 	return &Service{writer: writer}
 }
 
-// Status 处理当前模块的相关逻辑。
+// Status returns the module readiness string consumed by service health
+// snapshots.
 func (s *Service) Status() string {
 	return "ready"
 }
 
-// BuildRecoveryPoint 把 CreateInput 归一化为最小恢复点结构。
+// BuildRecoveryPoint normalizes validated input into the recovery_point shape
+// used by the governance chain.
 func (s *Service) BuildRecoveryPoint(input CreateInput) (RecoveryPoint, error) {
 	if err := validateCreateInput(input); err != nil {
 		return RecoveryPoint{}, err
@@ -76,10 +81,11 @@ func (s *Service) BuildRecoveryPoint(input CreateInput) (RecoveryPoint, error) {
 	}, nil
 }
 
-// BuildCreateInputFromCandidate 将上游 checkpoint candidate 转换为最小 checkpoint 输入。
+// BuildCreateInputFromCandidate adapts a tool checkpoint_candidate payload into
+// the internal CreateInput contract.
 //
-// shouldCreate 表示当前 candidate 是否要求真正创建恢复点；
-// 当前主要用于消费 tools 模块中的 checkpoint_candidate。
+// shouldCreate is true only when the candidate explicitly requires a persisted
+// recovery point, which keeps optional tool hints from creating audit noise.
 func BuildCreateInputFromCandidate(taskID string, candidate map[string]any) (input CreateInput, shouldCreate bool, err error) {
 	if strings.TrimSpace(taskID) == "" {
 		return CreateInput{}, false, ErrTaskIDRequired
@@ -115,7 +121,8 @@ func BuildCreateInputFromCandidate(taskID string, candidate map[string]any) (inp
 	}, true, nil
 }
 
-// Create 归一化并输出一条恢复点记录。
+// Create validates input, persists one recovery point, and returns the
+// normalized record used by authorization and audit flows.
 func (s *Service) Create(ctx context.Context, input CreateInput) (RecoveryPoint, error) {
 	point, err := s.BuildRecoveryPoint(input)
 	if err != nil {
@@ -127,7 +134,9 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (RecoveryPoint,
 	return point, nil
 }
 
-// CreateWithSnapshots 会在持久化 recovery_point 前先把目标对象快照落到工作区恢复目录。
+// CreateWithSnapshots writes object snapshots before persisting the
+// recovery_point so an approved action has a rollback target if execution
+// later fails.
 func (s *Service) CreateWithSnapshots(ctx context.Context, fileSystem SnapshotFileSystem, input CreateInput) (RecoveryPoint, error) {
 	if fileSystem == nil {
 		return RecoveryPoint{}, ErrSnapshotFSNil
@@ -169,7 +178,8 @@ func (s *Service) CreateWithSnapshots(ctx context.Context, fileSystem SnapshotFi
 	return point, nil
 }
 
-// Apply 按 recovery_point 的对象清单恢复工作区快照。
+// Apply restores all objects recorded by a recovery point and rolls back
+// partial restore writes if any object restore fails.
 func (s *Service) Apply(ctx context.Context, fileSystem SnapshotFileSystem, point RecoveryPoint) (ApplyResult, error) {
 	_ = ctx
 	if fileSystem == nil {
@@ -260,9 +270,7 @@ func normalizeSnapshotObjectPath(objectPath string) string {
 	if normalized == "" {
 		return ""
 	}
-	if strings.HasPrefix(normalized, "workspace/") {
-		normalized = strings.TrimPrefix(normalized, "workspace/")
-	}
+	normalized = strings.TrimPrefix(normalized, "workspace/")
 	normalized = strings.TrimPrefix(normalized, "./")
 	normalized = strings.TrimPrefix(normalized, "/")
 	if len(normalized) >= 2 && normalized[1] == ':' {

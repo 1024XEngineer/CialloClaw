@@ -45,7 +45,16 @@
 
 - `page_read`
 - `page_search`
+- `page_interact`
+- `structured_dom`
+- `browser_attach_current`
+- `browser_snapshot`
+- `browser_navigate`
+- `browser_tabs_list`
+- `browser_tab_focus`
+- `browser_interact`
 - `PlaywrightSidecarClient` 接口
+- `page_*` attach-aware request plumbing
 - `PlaywrightSidecarRuntime` 最小运行时骨架
 - bootstrap 中的最小 sidecar 注入路径
 - execution / orchestrator 中的最小运行时执行链路

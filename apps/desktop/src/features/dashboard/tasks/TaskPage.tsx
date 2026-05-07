@@ -13,7 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
-import { subscribeDeliveryReady, subscribeTask, subscribeTaskRuntime } from "@/rpc/subscriptions";
+import { subscribeDeliveryReady, subscribeTaskRuntime, subscribeTaskUpdated } from "@/rpc/subscriptions";
 import { readDashboardTaskDetailRouteState } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { buildDashboardSafetyNavigationState } from "@/features/dashboard/shared/dashboardSafetyNavigation";
 import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
@@ -37,6 +37,7 @@ import {
   buildDashboardTaskBucketQueryKey,
   buildDashboardTaskDetailQueryKey,
   buildDashboardTaskEventQueryKey,
+  dashboardTaskEventQueryPrefix,
   getDashboardTaskSecurityRefreshPlan,
   resolveDashboardTaskSafetyOpenPlan,
   shouldEnableDashboardTaskDetailQuery,
@@ -54,10 +55,10 @@ import {
   describeTaskOpenResultForCurrentTask,
   loadTaskArtifactPage,
   openTaskArtifactForTask,
-  openTaskDeliveryForTask,
   performTaskOpenExecution,
   resolveTaskOpenExecutionPlan,
 } from "./taskOutput.service";
+import { resolveDashboardTaskDeliveryRoutePath } from "./taskDeliveryNavigation";
 import { TaskDetailPanel } from "./components/TaskDetailPanel";
 import { TaskPreviewCard } from "./components/TaskPreviewCard";
 import type { TaskEventFilters, TaskListItem, TaskPrimaryAction } from "./taskPage.types";
@@ -79,6 +80,7 @@ const INITIAL_UNFINISHED_LIMIT = 12;
 const INITIAL_FINISHED_LIMIT = 24;
 const LOAD_MORE_UNFINISHED_STEP = 12;
 const LOAD_MORE_FINISHED_STEP = 24;
+const TASK_BUCKET_REFRESH_DEBOUNCE_MS = 300;
 
 const clusterIcons = {
   archive: Archive,
@@ -104,6 +106,7 @@ export function TaskPage() {
   const [showMoreFinished, setShowMoreFinished] = useState(false);
   const [expandedClusterKey, setExpandedClusterKey] = useState<TaskClusterKey | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
+  const [steeringSuccessVersion, setSteeringSuccessVersion] = useState(0);
   const dataMode: TaskPageDataMode = "rpc";
   const [unfinishedLimit, setUnfinishedLimit] = useState(INITIAL_UNFINISHED_LIMIT);
   const [finishedLimit, setFinishedLimit] = useState(INITIAL_FINISHED_LIMIT);
@@ -291,10 +294,14 @@ export function TaskPage() {
   const selectedProgress = selectedTaskPreview ? getTaskProgress(detailData?.detail.timeline ?? []) : null;
   const selectedStateVoice = selectedTaskPreview ? getTaskStateVoice(selectedTaskPreview.task, selectedTaskPreview.experience, detailData?.detail.timeline ?? []) : null;
   const selectedTaskEnded = selectedTaskPreview ? isTaskEnded(selectedTaskPreview.task) : false;
+  const selectedWaitingInputGuidance =
+    selectedTaskPreview?.task.status === "waiting_input"
+      ? "如需修改或补充当前任务，请直接使用当前任务详情里的“补充新的执行要求”输入框。"
+      : null;
   const selectedStageDescription = selectedTaskPreview
     ? selectedTaskEnded
       ? selectedTaskPreview.experience.endedSummary ?? selectedStateVoice?.body ?? describeCurrentStep(selectedTaskPreview.task, selectedTaskPreview.experience)
-      : `${describeCurrentStep(selectedTaskPreview.task, selectedTaskPreview.experience)} 下一步：${selectedTaskPreview.experience.nextAction}`
+      : selectedWaitingInputGuidance ?? `${describeCurrentStep(selectedTaskPreview.task, selectedTaskPreview.experience)} 下一步：${selectedTaskPreview.experience.nextAction}`
     : null;
   const selectedUpdateLabel = selectedTaskPreview ? new Date(selectedTaskPreview.task.updated_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) : "--";
   const fallbackDetailActions: TaskPrimaryAction[] | null = !selectedTaskPreview && selectedTaskControlTargetId
@@ -344,43 +351,76 @@ export function TaskPage() {
   }, [allTasks, requestedTaskId, routeFocusTaskId, selectedDetailTaskId, selectedTaskId]);
 
   useEffect(() => {
-    function invalidateSelectedTaskDetail(taskId: string) {
+    let bucketQueryRefreshTimeoutId: number | null = null;
+
+    function invalidateTaskDetailQueries(taskId: string) {
       void queryClient.invalidateQueries({ queryKey: buildDashboardTaskDetailQueryKey(dataMode, taskId) });
       void queryClient.invalidateQueries({ queryKey: buildDashboardTaskArtifactQueryKey(dataMode, taskId) });
-      void queryClient.invalidateQueries({ queryKey: buildDashboardTaskEventQueryKey(dataMode, taskId, taskEventFilters) });
     }
 
-    function invalidateTaskQueries(deliveryTaskId?: string) {
-      for (const queryKey of securityRefreshPlan.invalidatePrefixes) {
-        void queryClient.invalidateQueries({ queryKey });
+    function invalidateTaskRuntimeQueries(taskId: string) {
+      invalidateTaskDetailQueries(taskId);
+      void queryClient.invalidateQueries({ queryKey: [...dashboardTaskEventQueryPrefix, dataMode, taskId] });
+    }
+
+    function invalidateTaskQueriesForNotification(taskId: string) {
+      // Plain task.updated or delivery.ready notifications can advance runtime
+      // state without a matching loop.* event, so the focused task needs both
+      // detail and event queries to stay in sync.
+      if (taskId === selectedTaskId) {
+        invalidateTaskRuntimeQueries(taskId);
+        return;
       }
-      if (selectedTaskId && (!deliveryTaskId || deliveryTaskId === selectedTaskId)) {
-        invalidateSelectedTaskDetail(selectedTaskId);
+
+      invalidateTaskDetailQueries(taskId);
+    }
+
+    function flushBucketQueryRefresh() {
+      bucketQueryRefreshTimeoutId = null;
+      void queryClient.invalidateQueries({ queryKey: buildDashboardTaskBucketQueryKey(dataMode, "unfinished", unfinishedLimit) });
+      void queryClient.invalidateQueries({ queryKey: buildDashboardTaskBucketQueryKey(dataMode, "finished", finishedLimit) });
+    }
+
+    /**
+     * Batch list refreshes in local dashboard view state so high-frequency
+     * backend task.updated notifications do not refetch the full workspace on
+     * every progress tick.
+     */
+    function scheduleBucketQueryRefresh() {
+      if (bucketQueryRefreshTimeoutId !== null) {
+        return;
       }
+
+      bucketQueryRefreshTimeoutId = window.setTimeout(() => {
+        flushBucketQueryRefresh();
+      }, TASK_BUCKET_REFRESH_DEBOUNCE_MS);
     }
 
     const clearDeliverySubscription = subscribeDeliveryReady((payload) => {
-      invalidateTaskQueries(payload.task_id);
+      invalidateTaskQueriesForNotification(payload.task_id);
+      scheduleBucketQueryRefresh();
     });
 
-    const clearTaskSubscription = selectedTaskId
-      ? subscribeTask(selectedTaskId, () => {
-          invalidateTaskQueries(selectedTaskId);
-        })
-      : () => {};
+    const clearTaskUpdatedSubscription = subscribeTaskUpdated((payload) => {
+      invalidateTaskQueriesForNotification(payload.task_id);
+      scheduleBucketQueryRefresh();
+    });
 
     const clearRuntimeSubscription = selectedTaskId
       ? subscribeTaskRuntime(selectedTaskId, () => {
-          invalidateSelectedTaskDetail(selectedTaskId);
+          invalidateTaskRuntimeQueries(selectedTaskId);
         })
       : () => {};
 
     return () => {
+      if (bucketQueryRefreshTimeoutId !== null) {
+        window.clearTimeout(bucketQueryRefreshTimeoutId);
+      }
       clearDeliverySubscription();
-      clearTaskSubscription();
+      clearTaskUpdatedSubscription();
       clearRuntimeSubscription();
     };
-  }, [dataMode, queryClient, securityRefreshPlan, selectedTaskId, taskEventFilters]);
+  }, [dataMode, finishedLimit, queryClient, selectedTaskId, unfinishedLimit]);
 
   useEffect(() => {
     return () => {
@@ -452,7 +492,7 @@ export function TaskPage() {
     },
   });
 
-  async function handleResolvedOpen(result: Awaited<ReturnType<typeof openTaskArtifactForTask>> | Awaited<ReturnType<typeof openTaskDeliveryForTask>>) {
+  async function handleResolvedOpen(result: Awaited<ReturnType<typeof openTaskArtifactForTask>>) {
     const plan = resolveTaskOpenExecutionPlan(result);
     const sameTaskMessage = describeTaskOpenResultForCurrentTask(plan, selectedTaskId);
     if (sameTaskMessage) {
@@ -479,19 +519,10 @@ export function TaskPage() {
     },
   });
 
-  const deliveryOpenMutation = useMutation({
-    mutationFn: ({ artifactId, taskId }: { artifactId?: string; taskId: string }) => openTaskDeliveryForTask(taskId, artifactId, dataMode),
-    onSuccess: async (result) => {
-      await handleResolvedOpen(result);
-    },
-    onError: (error) => {
-      showFeedback(error instanceof Error ? `打开结果失败：${error.message}` : "打开结果失败，请稍后再试。");
-    },
-  });
-
   const taskSteerMutation = useMutation({
     mutationFn: ({ message, taskId }: { message: string; taskId: string }) => steerTaskByMessage(taskId, message, dataMode),
     onSuccess: (result, variables) => {
+      setSteeringSuccessVersion((current) => current + 1);
       showFeedback(result.bubble_message?.text ?? "已记录新的补充要求。");
       for (const queryKey of securityRefreshPlan.invalidatePrefixes) {
         void queryClient.invalidateQueries({ queryKey });
@@ -568,7 +599,7 @@ export function TaskPage() {
       return;
     }
 
-    deliveryOpenMutation.mutate({ taskId: selectedTaskControlTargetId });
+    navigate(resolveDashboardTaskDeliveryRoutePath(selectedTaskControlTargetId));
   }
 
   function handleSteerTask(message: string) {
@@ -841,7 +872,7 @@ export function TaskPage() {
                   eventItems={taskEventsQuery.data?.items ?? []}
                   eventLoading={taskEventsQuery.isPending}
                   detailState={detailState}
-                  deliveryActionPending={deliveryOpenMutation.isPending}
+                  deliveryActionPending={false}
                   feedback={feedback}
                   fallbackActions={fallbackDetailActions}
                   onAction={handlePrimaryAction}
@@ -855,6 +886,7 @@ export function TaskPage() {
                   onRetryDetail={taskDetailQuery.isError ? () => void taskDetailQuery.refetch() : null}
                   onSteerTask={handleSteerTask}
                   steeringPending={taskSteerMutation.isPending}
+                  steeringSuccessVersion={steeringSuccessVersion}
                 />
               </motion.div>
             </div>

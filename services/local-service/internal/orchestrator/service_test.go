@@ -101,6 +101,10 @@ type stubPlaywrightClient struct {
 	searchResult     tools.BrowserPageSearchResult
 	interactResult   tools.BrowserPageInteractResult
 	structuredResult tools.BrowserStructuredDOMResult
+	attachResult     tools.BrowserAttachedPageResult
+	snapshotResult   tools.BrowserSnapshotResult
+	navigateResult   tools.BrowserNavigationResult
+	tabsResult       tools.BrowserTabsListResult
 	err              error
 }
 
@@ -150,6 +154,10 @@ func (s stubPlaywrightClient) ReadPage(_ context.Context, url string) (tools.Bro
 	return result, nil
 }
 
+func (s stubPlaywrightClient) ReadPageAttached(ctx context.Context, url string, _ tools.BrowserAttachConfig) (tools.BrowserPageReadResult, error) {
+	return s.ReadPage(ctx, url)
+}
+
 func (localHTTPPlaywrightClient) ReadPage(_ context.Context, url string) (tools.BrowserPageReadResult, error) {
 	response, err := http.Get(url)
 	if err != nil {
@@ -178,16 +186,68 @@ func (localHTTPPlaywrightClient) ReadPage(_ context.Context, url string) (tools.
 	}, nil
 }
 
+func (c localHTTPPlaywrightClient) ReadPageAttached(ctx context.Context, url string, _ tools.BrowserAttachConfig) (tools.BrowserPageReadResult, error) {
+	return c.ReadPage(ctx, url)
+}
+
 func (localHTTPPlaywrightClient) SearchPage(_ context.Context, url, query string, _ int) (tools.BrowserPageSearchResult, error) {
 	return tools.BrowserPageSearchResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (localHTTPPlaywrightClient) SearchPageAttached(_ context.Context, _, _ string, _ int, _ tools.BrowserAttachConfig) (tools.BrowserPageSearchResult, error) {
+	return tools.BrowserPageSearchResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (s stubPlaywrightClient) SearchPageAttached(ctx context.Context, url, query string, limit int, _ tools.BrowserAttachConfig) (tools.BrowserPageSearchResult, error) {
+	return s.SearchPage(ctx, url, query, limit)
 }
 
 func (localHTTPPlaywrightClient) InteractPage(_ context.Context, _ string, _ []map[string]any) (tools.BrowserPageInteractResult, error) {
 	return tools.BrowserPageInteractResult{}, tools.ErrPlaywrightSidecarFailed
 }
 
+func (localHTTPPlaywrightClient) InteractPageAttached(_ context.Context, _ string, _ []map[string]any, _ tools.BrowserAttachConfig) (tools.BrowserPageInteractResult, error) {
+	return tools.BrowserPageInteractResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (s stubPlaywrightClient) InteractPageAttached(ctx context.Context, url string, actions []map[string]any, _ tools.BrowserAttachConfig) (tools.BrowserPageInteractResult, error) {
+	return s.InteractPage(ctx, url, actions)
+}
+
 func (localHTTPPlaywrightClient) StructuredDOM(_ context.Context, _ string) (tools.BrowserStructuredDOMResult, error) {
 	return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (localHTTPPlaywrightClient) StructuredDOMAttached(_ context.Context, _ string, _ tools.BrowserAttachConfig) (tools.BrowserStructuredDOMResult, error) {
+	return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (s stubPlaywrightClient) StructuredDOMAttached(ctx context.Context, url string, _ tools.BrowserAttachConfig) (tools.BrowserStructuredDOMResult, error) {
+	return s.StructuredDOM(ctx, url)
+}
+
+func (localHTTPPlaywrightClient) AttachCurrentPage(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserAttachedPageResult, error) {
+	return tools.BrowserAttachedPageResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (localHTTPPlaywrightClient) SnapshotBrowser(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserSnapshotResult, error) {
+	return tools.BrowserSnapshotResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (localHTTPPlaywrightClient) NavigateBrowser(_ context.Context, _ tools.BrowserNavigateRequest) (tools.BrowserNavigationResult, error) {
+	return tools.BrowserNavigationResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (localHTTPPlaywrightClient) ListBrowserTabs(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserTabsListResult, error) {
+	return tools.BrowserTabsListResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (localHTTPPlaywrightClient) FocusBrowserTab(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserAttachedPageResult, error) {
+	return tools.BrowserAttachedPageResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (localHTTPPlaywrightClient) InteractBrowser(_ context.Context, _ tools.BrowserInteractRequest) (tools.BrowserPageInteractResult, error) {
+	return tools.BrowserPageInteractResult{}, tools.ErrPlaywrightSidecarFailed
 }
 
 func (c *recordingScreenCaptureClient) StartSession(ctx context.Context, input tools.ScreenSessionStartInput) (tools.ScreenSessionState, error) {
@@ -268,6 +328,48 @@ func (s stubPlaywrightClient) StructuredDOM(_ context.Context, url string) (tool
 		result.URL = url
 	}
 	return result, nil
+}
+
+func (s stubPlaywrightClient) AttachCurrentPage(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserAttachedPageResult, error) {
+	if s.err != nil {
+		return tools.BrowserAttachedPageResult{}, s.err
+	}
+	return s.attachResult, nil
+}
+
+func (s stubPlaywrightClient) SnapshotBrowser(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserSnapshotResult, error) {
+	if s.err != nil {
+		return tools.BrowserSnapshotResult{}, s.err
+	}
+	return s.snapshotResult, nil
+}
+
+func (s stubPlaywrightClient) NavigateBrowser(_ context.Context, _ tools.BrowserNavigateRequest) (tools.BrowserNavigationResult, error) {
+	if s.err != nil {
+		return tools.BrowserNavigationResult{}, s.err
+	}
+	return s.navigateResult, nil
+}
+
+func (s stubPlaywrightClient) ListBrowserTabs(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserTabsListResult, error) {
+	if s.err != nil {
+		return tools.BrowserTabsListResult{}, s.err
+	}
+	return s.tabsResult, nil
+}
+
+func (s stubPlaywrightClient) FocusBrowserTab(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserAttachedPageResult, error) {
+	if s.err != nil {
+		return tools.BrowserAttachedPageResult{}, s.err
+	}
+	return s.attachResult, nil
+}
+
+func (s stubPlaywrightClient) InteractBrowser(_ context.Context, _ tools.BrowserInteractRequest) (tools.BrowserPageInteractResult, error) {
+	if s.err != nil {
+		return tools.BrowserPageInteractResult{}, s.err
+	}
+	return s.interactResult, nil
 }
 
 func (s stubOCRWorkerClient) ExtractText(_ context.Context, _ string) (tools.OCRTextResult, error) {
@@ -756,51 +858,6 @@ func newTestServiceWithExecutionWorkersAndScreen(t *testing.T, modelOutput strin
 	return service, workspaceRoot
 }
 
-func newTestServiceWithModelService(t *testing.T, modelService *model.Service) (*Service, string, *storage.Service) {
-	t.Helper()
-
-	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
-	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
-	if err != nil {
-		t.Fatalf("new local path policy: %v", err)
-	}
-	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "service.db")))
-	t.Cleanup(func() { _ = storageService.Close() })
-	auditService := audit.NewService(storageService.AuditWriter())
-	deliveryService := delivery.NewService()
-	toolRegistry := tools.NewRegistry()
-	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
-		t.Fatalf("register builtin tools: %v", err)
-	}
-	if err := sidecarclient.RegisterPlaywrightTools(toolRegistry); err != nil {
-		t.Fatalf("register playwright tools: %v", err)
-	}
-	if err := sidecarclient.RegisterOCRTools(toolRegistry); err != nil {
-		t.Fatalf("register ocr tools: %v", err)
-	}
-	if err := sidecarclient.RegisterMediaTools(toolRegistry); err != nil {
-		t.Fatalf("register media tools: %v", err)
-	}
-	toolExecutor := tools.NewToolExecutor(toolRegistry, tools.WithToolCallRecorder(tools.NewToolCallRecorder(storageService.ToolCallSink())))
-	pluginService := plugin.NewService()
-	seedTestExtensionAssets(t, storageService, pluginService)
-	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
-	executor := execution.NewService(fileSystem, platform.LocalExecutionBackend{}, sidecarclient.NewNoopPlaywrightSidecarClient(), sidecarclient.NewNoopOCRWorkerClient(), sidecarclient.NewNoopMediaWorkerClient(), sidecarclient.NewLocalScreenCaptureClient(fileSystem), modelService, auditService, checkpoint.NewService(storageService.RecoveryPointWriter()), deliveryService, toolRegistry, toolExecutor, pluginService).WithArtifactStore(storageService.ArtifactStore()).WithExtensionAssetCatalog(storageService)
-
-	service := NewService(
-		contextsvc.NewService(),
-		intent.NewService(),
-		mustNewStoredEngine(t, storageService.TaskRunStore()),
-		deliveryService,
-		memory.NewServiceFromStorage(storageService.MemoryStore(), storageService.Capabilities().MemoryRetrievalBackend),
-		risk.NewService(),
-		modelService,
-		toolRegistry,
-		pluginService,
-	).WithAudit(auditService).WithStorage(storageService).WithExecutor(executor).WithTaskInspector(taskinspector.NewService(fileSystem)).WithTraceEval(traceeval.NewService(storageService.TraceStore(), storageService.EvalStore()))
-
-	return service, workspaceRoot, storageService
-}
 func seedTestExtensionAssets(t *testing.T, storageService *storage.Service, pluginService *plugin.Service) {
 	t.Helper()
 	if err := storageService.EnsureBuiltinExecutionAssets(context.Background()); err != nil {
@@ -851,21 +908,6 @@ func mustNewStoredEngine(t *testing.T, taskStore storage.TaskRunStore) *runengin
 		t.Fatalf("new stored engine: %v", err)
 	}
 	return engine
-}
-
-type storageTestAdapter struct {
-	databasePath string
-}
-
-func (s storageTestAdapter) DatabasePath() string {
-	return s.databasePath
-}
-
-func (s storageTestAdapter) SecretStorePath() string {
-	if s.databasePath == "" {
-		return ""
-	}
-	return s.databasePath + ".stronghold"
 }
 
 func newTestService() *Service {
@@ -13183,6 +13225,47 @@ func TestServicePluginDetailGetFallsBackToStaticCatalogWhenPluginRuntimeServiceM
 	}
 }
 
+func TestServicePluginDetailGetIncludesBrowserToolMetadata(t *testing.T) {
+	service := newTestService()
+	result, err := service.PluginDetailGet(map[string]any{
+		"plugin_id":       "playwright",
+		"include_runtime": true,
+		"include_metrics": true,
+		"include_events":  true,
+	})
+	if err != nil {
+		t.Fatalf("plugin detail get failed: %v", err)
+	}
+	pluginValue := result["plugin"].(map[string]any)
+	if pluginValue["plugin_id"] != "playwright" {
+		t.Fatalf("expected playwright plugin detail header, got %+v", pluginValue)
+	}
+	tools := result["tools"].([]map[string]any)
+	if len(tools) != 10 {
+		t.Fatalf("expected playwright plugin detail to expose ten tools, got %+v", tools)
+	}
+	for _, toolName := range []string{"browser_attach_current", "browser_snapshot", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact"} {
+		item := pluginToolItemByName(tools, toolName)
+		if item == nil {
+			t.Fatalf("expected playwright plugin detail to include %q, got %+v", toolName, tools)
+		}
+		deliveryMapping := item["delivery_mapping"].(map[string]any)
+		citationSources := deliveryMapping["citation_source_types"].([]string)
+		if len(citationSources) != 1 || citationSources[0] != "web" {
+			t.Fatalf("expected browser tool %q to retain web citation mapping, got %+v", toolName, deliveryMapping)
+		}
+	}
+}
+
+func pluginToolItemByName(items []map[string]any, toolName string) map[string]any {
+	for _, item := range items {
+		if item["tool_name"] == toolName {
+			return item
+		}
+	}
+	return nil
+}
+
 func TestServiceSnapshotUsesStablePrimaryWorker(t *testing.T) {
 	service := newTestService()
 	snapshot := service.Snapshot()
@@ -14623,6 +14706,9 @@ func TestFresherTaskRecordRestoresRuntimeAnchorsWhenStorageProjectionIsNewer(t *
 		Snapshot: contextsvc.TaskContextSnapshot{
 			PageURL:     "https://example.com/build",
 			AppName:     "Chrome",
+			BrowserKind: "chrome",
+			ProcessPath: "C:/Program Files/Google/Chrome/Application/chrome.exe",
+			ProcessID:   4242,
 			WindowTitle: "Browser - Build Dashboard",
 		},
 	}
@@ -14650,6 +14736,9 @@ func TestFresherTaskRecordRestoresRuntimeAnchorsWhenStorageProjectionIsNewer(t *
 	}
 	if selected.Snapshot.PageURL != runtimeTask.Snapshot.PageURL ||
 		selected.Snapshot.AppName != runtimeTask.Snapshot.AppName ||
+		selected.Snapshot.BrowserKind != runtimeTask.Snapshot.BrowserKind ||
+		selected.Snapshot.ProcessPath != runtimeTask.Snapshot.ProcessPath ||
+		selected.Snapshot.ProcessID != runtimeTask.Snapshot.ProcessID ||
 		selected.Snapshot.WindowTitle != runtimeTask.Snapshot.WindowTitle {
 		t.Fatalf("expected runtime snapshot anchors to fill the newer partial storage snapshot, got %+v", selected.Snapshot)
 	}
@@ -14657,6 +14746,26 @@ func TestFresherTaskRecordRestoresRuntimeAnchorsWhenStorageProjectionIsNewer(t *
 		len(selected.Snapshot.Files) != 1 ||
 		selected.Snapshot.Files[0] != storageTask.Snapshot.Files[0] {
 		t.Fatalf("expected newer storage snapshot payload to stay selected, got %+v", selected.Snapshot)
+	}
+}
+
+func TestSnapshotFromTaskPreservesAttachOnlySnapshot(t *testing.T) {
+	attachOnlyTask := runengine.TaskRecord{
+		TaskID: "task_attach_only",
+		Title:  "Resume attached browser task",
+		Snapshot: contextsvc.TaskContextSnapshot{
+			BrowserKind: "edge",
+			ProcessPath: "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+			ProcessID:   5150,
+		},
+	}
+
+	snapshot := snapshotFromTask(attachOnlyTask)
+	if snapshot.BrowserKind != "edge" || snapshot.ProcessPath != attachOnlyTask.Snapshot.ProcessPath || snapshot.ProcessID != 5150 {
+		t.Fatalf("expected attach-only snapshot to survive resume reconstruction, got %+v", snapshot)
+	}
+	if snapshot.InputType != "" || snapshot.Text != "" {
+		t.Fatalf("expected attach-only snapshot to avoid synthetic text fallback, got %+v", snapshot)
 	}
 }
 
@@ -15328,18 +15437,18 @@ func TestServiceStartTaskWithExecutorWritesWorkspaceDocument(t *testing.T) {
 	output, ok := record.LatestToolCall["output"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected latest tool call output map, got %+v", record.LatestToolCall)
-		if output["summary_output"] == nil {
-			t.Fatalf("expected write_file tool output to include summary_output, got %+v", output)
-		}
-		if output["model_invocation"] == nil {
-			t.Fatalf("expected latest tool call to include model invocation, got %+v", output)
-		}
-		if output["audit_record"] == nil {
-			t.Fatalf("expected latest tool call to include audit record, got %+v", output)
-		}
-		if output["recovery_point"] != nil {
-			t.Fatalf("expected no recovery_point for create flow, got %+v", output)
-		}
+	}
+	if strings.TrimSpace(stringValue(output, "path", "")) == "" {
+		t.Fatalf("expected write_file tool output to include path, got %+v", output)
+	}
+	if intValueFromAny(output["bytes_written"]) <= 0 {
+		t.Fatalf("expected write_file tool output to include bytes_written, got %+v", output)
+	}
+	if output["created"] != true {
+		t.Fatalf("expected write_file tool output to mark a created file, got %+v", output)
+	}
+	if output["recovery_point"] != nil {
+		t.Fatalf("expected no recovery_point for create flow, got %+v", output)
 	}
 }
 

@@ -77,42 +77,6 @@ func (s *stubLoopModelClient) GenerateToolCalls(_ context.Context, request model
 	return result, nil
 }
 
-type selectiveWaitLoopModelClient struct {
-	stubLoopModelClient
-	blockedTaskID string
-}
-
-func (s *selectiveWaitLoopModelClient) GenerateText(ctx context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
-	return s.stubLoopModelClient.GenerateText(ctx, request)
-}
-
-func (s *selectiveWaitLoopModelClient) GenerateToolCalls(_ context.Context, request model.ToolCallRequest) (model.ToolCallResult, error) {
-	if s.generateToolSeen != nil && request.TaskID == s.blockedTaskID {
-		select {
-		case <-s.generateToolSeen:
-		default:
-			close(s.generateToolSeen)
-		}
-	}
-	if s.generateToolWait != nil && request.TaskID == s.blockedTaskID {
-		<-s.generateToolWait
-	}
-	result := s.toolResult
-	if strings.TrimSpace(result.OutputText) == "" && len(result.ToolCalls) == 0 {
-		result.OutputText = request.Input
-	}
-	if result.RequestID == "" {
-		result.RequestID = "req_loop_tools"
-	}
-	if result.Provider == "" {
-		result.Provider = "openai_responses"
-	}
-	if result.ModelID == "" {
-		result.ModelID = "gpt-5.4"
-	}
-	return result, nil
-}
-
 type testStorageAdapter struct {
 	databasePath string
 }

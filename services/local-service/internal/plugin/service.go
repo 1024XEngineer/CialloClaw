@@ -433,11 +433,3 @@ func cloneMap(payload map[string]any) map[string]any {
 	}
 	return result
 }
-
-func stringValue(payload map[string]any, key string) string {
-	if len(payload) == 0 {
-		return ""
-	}
-	value, _ := payload[key].(string)
-	return strings.TrimSpace(value)
-}
