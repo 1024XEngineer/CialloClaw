@@ -2439,6 +2439,11 @@ func mergeTaskSnapshot(base, update contextsvc.TaskContextSnapshot) contextsvc.T
 	merged.PageTitle = pickLastNonEmpty(base.PageTitle, update.PageTitle)
 	merged.PageURL = pickLastNonEmpty(base.PageURL, update.PageURL)
 	merged.AppName = pickLastNonEmpty(base.AppName, update.AppName)
+	merged.BrowserKind = pickLastNonEmpty(base.BrowserKind, update.BrowserKind)
+	merged.ProcessPath = pickLastNonEmpty(base.ProcessPath, update.ProcessPath)
+	if update.ProcessID > 0 {
+		merged.ProcessID = update.ProcessID
+	}
 	merged.WindowTitle = pickLastNonEmpty(base.WindowTitle, update.WindowTitle)
 	merged.VisibleText = mergeSnapshotText(base.VisibleText, update.VisibleText)
 	merged.ScreenSummary = mergeSnapshotText(base.ScreenSummary, update.ScreenSummary)
