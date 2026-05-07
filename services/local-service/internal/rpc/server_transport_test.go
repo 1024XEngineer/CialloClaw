@@ -425,6 +425,51 @@ func TestServerShutdownClosesActiveStreamHandlers(t *testing.T) {
 	}
 }
 
+func TestServerShutdownCancelsNamedPipeRunWithoutParentContextCancellation(t *testing.T) {
+	server := newTestServer()
+	server.transport = "named_pipe"
+	server.debugHTTPServer = nil
+
+	listenerStarted := make(chan struct{})
+	listenerStopped := make(chan struct{})
+	server.serveNamedPipe = func(ctx context.Context, pipeName string, handler func(net.Conn)) error {
+		close(listenerStarted)
+		<-ctx.Done()
+		close(listenerStopped)
+		return nil
+	}
+
+	startErr := make(chan error, 1)
+	go func() {
+		startErr <- server.Start(context.Background())
+	}()
+
+	select {
+	case <-listenerStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected named-pipe listener to start")
+	}
+
+	if err := server.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown named-pipe listener: %v", err)
+	}
+
+	select {
+	case <-listenerStopped:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected shutdown to cancel the named-pipe listener context")
+	}
+
+	select {
+	case err := <-startErr:
+		if err != nil {
+			t.Fatalf("expected Start to return cleanly after direct shutdown, got %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected Start to return after direct shutdown")
+	}
+}
+
 func TestHandleStreamConnRejectsNewHandlersDuringShutdown(t *testing.T) {
 	server := newTestServer()
 	server.shuttingDown = true

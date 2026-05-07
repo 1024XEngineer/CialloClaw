@@ -2,6 +2,7 @@
 package rpc
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"sync"
@@ -20,10 +21,13 @@ type Server struct {
 	debugHTTPServer *http.Server
 	handlers        map[string]methodHandler
 	orchestrator    *orchestrator.Service
+	serveNamedPipe  func(ctx context.Context, pipeName string, handler func(net.Conn)) error
 	now             func() time.Time
 	streamMu        sync.Mutex
 	streamConns     map[net.Conn]struct{}
 	streamWG        sync.WaitGroup
+	runCancel       context.CancelFunc
+	namedPipeCancel context.CancelFunc
 	shuttingDown    bool
 }
 
@@ -31,11 +35,12 @@ type Server struct {
 // starting network or named-pipe listeners.
 func NewServer(cfg serviceconfig.RPCConfig, orchestrator *orchestrator.Service) *Server {
 	server := &Server{
-		transport:     cfg.Transport,
-		namedPipeName: cfg.NamedPipeName,
-		orchestrator:  orchestrator,
-		now:           time.Now,
-		streamConns:   make(map[net.Conn]struct{}),
+		transport:      cfg.Transport,
+		namedPipeName:  cfg.NamedPipeName,
+		orchestrator:   orchestrator,
+		serveNamedPipe: serveNamedPipe,
+		now:            time.Now,
+		streamConns:    make(map[net.Conn]struct{}),
 	}
 
 	server.registerHandlers()

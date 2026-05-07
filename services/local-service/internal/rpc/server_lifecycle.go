@@ -13,7 +13,8 @@ import (
 // Shutdown always runs before Start returns, and the supervisor waits for
 // transport goroutines so callers do not inherit a partially stopped server.
 func (s *Server) Start(ctx context.Context) error {
-	supervisor := newTransportSupervisor(ctx, 2)
+	supervisor := newTransportSupervisor(s.beginServeRun(ctx), 2)
+	defer s.clearServeRun()
 
 	if s.debugHTTPServer != nil {
 		supervisor.Go(func(context.Context) error {
@@ -27,7 +28,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	if s.transport == "named_pipe" {
 		supervisor.Go(func(ctx context.Context) error {
-			err := serveNamedPipe(ctx, s.namedPipeName, s.handleStreamConn)
+			err := s.serveNamedPipeWithShutdown(ctx)
 			if errors.Is(err, errNamedPipeUnsupported) || ctx.Err() != nil {
 				return nil
 			}
@@ -52,7 +53,13 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		shutdownErr = err
 	}
 
-	conns := s.beginStreamShutdown()
+	runCancel, namedPipeCancel, conns := s.beginTransportShutdown()
+	if runCancel != nil {
+		runCancel()
+	}
+	if namedPipeCancel != nil {
+		namedPipeCancel()
+	}
 	for _, conn := range conns {
 		_ = conn.Close()
 	}
@@ -133,14 +140,53 @@ func (s *transportSupervisor) Wait(shutdown func() error) error {
 	return shutdownErr
 }
 
-func (s *Server) beginStreamShutdown() []net.Conn {
+func (s *Server) beginServeRun(parent context.Context) context.Context {
+	runCtx, runCancel := context.WithCancel(parent)
+
+	s.streamMu.Lock()
+	s.runCancel = runCancel
+	s.namedPipeCancel = nil
+	s.shuttingDown = false
+	s.streamMu.Unlock()
+
+	return runCtx
+}
+
+func (s *Server) clearServeRun() {
+	s.streamMu.Lock()
+	s.runCancel = nil
+	s.namedPipeCancel = nil
+	s.streamMu.Unlock()
+}
+
+func (s *Server) serveNamedPipeWithShutdown(parent context.Context) error {
+	listenerCtx, listenerCancel := context.WithCancel(parent)
+
+	s.streamMu.Lock()
+	s.namedPipeCancel = listenerCancel
+	s.streamMu.Unlock()
+
+	defer func() {
+		s.streamMu.Lock()
+		s.namedPipeCancel = nil
+		s.streamMu.Unlock()
+	}()
+
+	return s.serveNamedPipe(listenerCtx, s.namedPipeName, s.handleStreamConn)
+}
+
+func (s *Server) beginTransportShutdown() (context.CancelFunc, context.CancelFunc, []net.Conn) {
 	s.streamMu.Lock()
 	defer s.streamMu.Unlock()
 
 	s.shuttingDown = true
+	runCancel := s.runCancel
+	namedPipeCancel := s.namedPipeCancel
+	s.runCancel = nil
+	s.namedPipeCancel = nil
 	conns := make([]net.Conn, 0, len(s.streamConns))
 	for conn := range s.streamConns {
 		conns = append(conns, conn)
 	}
-	return conns
+	return runCancel, namedPipeCancel, conns
 }
