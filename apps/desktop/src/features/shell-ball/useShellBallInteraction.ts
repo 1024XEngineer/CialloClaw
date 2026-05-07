@@ -713,21 +713,6 @@ export function useShellBallInteraction() {
     }
   }
 
-  function syncHoverRetention() {
-    if (regionActiveRef.current) {
-      return;
-    }
-
-    if (controllerRef.current?.getState() !== "hover_input") {
-      return;
-    }
-
-    dispatch("pointer_leave_region", {
-      regionActive: false,
-      hoverRetained: getHoverRetained(),
-    });
-  }
-
   function handlePrimaryClick() {
     return;
   }
@@ -1085,7 +1070,7 @@ export function useShellBallInteraction() {
     return false;
   }
 
-  function handlePressCancel(event: PointerEvent<HTMLButtonElement>) {
+  function handlePressCancel(_event: PointerEvent<HTMLButtonElement>) {
     clearLongPressTimer();
 
     const cancelEvent = getShellBallPressCancelEvent(controllerRef.current?.getState() ?? visualState);

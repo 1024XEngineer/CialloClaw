@@ -180,8 +180,7 @@ body[data-app-window="shell-ball"],
   position: absolute;
 }
 
-.shell-ball-surface__core,
-.shell-ball-switcher {
+.shell-ball-surface__core {
   position: relative;
   z-index: 1;
 }
@@ -192,10 +191,6 @@ body[data-app-window="shell-ball"],
 .shell-ball-surface__stack,
 .shell-ball-surface__overlay {
   pointer-events: none;
-}
-
-.shell-ball-switcher {
-  pointer-events: auto;
 }
 
 .shell-ball-surface__core {
@@ -277,31 +272,6 @@ body[data-app-window="shell-ball"],
   top: var(--shell-ball-stage-anchor-y);
   transform: translate(-50%, -50%);
   width: var(--shell-ball-voice-frame-size);
-}
-
-.shell-ball-switcher__eyebrow,
-.shell-ball-switcher__button-state {
-  font-family: var(--font-mono);
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-}
-
-.shell-ball-switcher__eyebrow {
-  color: rgba(110, 123, 137, 0.82);
-  font-size: 0.68rem;
-  margin: 0;
-}
-
-.shell-ball-switcher__title {
-  color: var(--shell-ball-ink);
-  letter-spacing: -0.04em;
-  margin: 0;
-}
-
-.shell-ball-switcher__note {
-  color: var(--shell-ball-copy);
-  line-height: 1.72;
-  margin: 0;
 }
 
 .shell-ball-surface__stack {
@@ -912,102 +882,6 @@ body[data-app-window="shell-ball"],
 .shell-ball-attachment-tray__remove-icon {
   height: 0.5rem;
   width: 0.5rem;
-}
-
-.shell-ball-switcher {
-  background: transparent;
-  border: 0;
-  box-shadow: none;
-  display: grid;
-  gap: 0.85rem;
-  max-width: 960px;
-  opacity: 0;
-  padding: 0;
-  pointer-events: none;
-  width: 100%;
-}
-
-.shell-ball-switcher__header {
-  align-items: start;
-  display: flex;
-  gap: 0.9rem;
-  justify-content: space-between;
-}
-
-.shell-ball-switcher__title {
-  font-size: 1.05rem;
-  line-height: 1.1;
-}
-
-.shell-ball-switcher__note {
-  color: rgba(91, 103, 118, 0.78);
-  font-size: 0.76rem;
-  margin: 0;
-  max-width: 22rem;
-}
-
-.shell-ball-switcher__grid {
-  display: grid;
-  gap: 0.65rem;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
-}
-
-.shell-ball-switcher__button {
-  background: rgba(255, 255, 255, 0.48);
-  border: 1px solid rgba(132, 118, 99, 0.12);
-  border-radius: 18px;
-  color: var(--shell-ball-ink);
-  cursor: pointer;
-  display: grid;
-  gap: 0.28rem;
-  min-height: 6.7rem;
-  padding: 0.8rem;
-  text-align: left;
-  transition:
-    transform 180ms ease,
-    box-shadow 180ms ease,
-    border-color 180ms ease,
-    background 180ms ease;
-}
-
-.shell-ball-switcher__button:hover {
-  border-color: rgba(99, 132, 174, 0.22);
-  box-shadow: 0 16px 28px -22px rgba(77, 88, 101, 0.22);
-  transform: translateY(-1px);
-}
-
-.shell-ball-switcher__button:focus-visible {
-  border-color: rgba(98, 135, 183, 0.42);
-  box-shadow:
-    0 0 0 3px rgba(255, 251, 244, 0.92),
-    0 0 0 6px rgba(106, 145, 200, 0.22),
-    0 18px 32px -24px rgba(96, 129, 170, 0.2);
-  outline: 0;
-}
-
-.shell-ball-switcher__button--active {
-  background: rgba(248, 252, 255, 0.84);
-  border-color: rgba(101, 141, 191, 0.28);
-  box-shadow: 0 18px 32px -24px rgba(96, 129, 170, 0.24);
-}
-
-.shell-ball-switcher__button-badge {
-  color: rgba(91, 103, 118, 0.92);
-  font-size: 0.72rem;
-  font-weight: 600;
-}
-
-.shell-ball-switcher__button-title {
-  color: var(--shell-ball-ink);
-  font-size: 0.84rem;
-  font-weight: 600;
-  line-height: 1.4;
-}
-
-.shell-ball-switcher__button-state {
-  color: rgba(91, 103, 118, 0.7);
-  font-size: 0.58rem;
-  margin-top: auto;
 }
 
 .shell-ball-mascot {
@@ -1739,7 +1613,6 @@ body[data-app-window="shell-ball"],
   .shell-ball-mascot__body-shell,
   .shell-ball-mascot__tail,
   .shell-ball-mascot__wing,
-  .shell-ball-switcher__button,
   .shell-ball-input-bar,
   .shell-ball-input-bar__action,
   .shell-ball-bubble-zone__message-entry[data-freshness="fresh"][data-motion="settle"] {
@@ -1760,16 +1633,6 @@ body[data-app-window="shell-ball"],
   .shell-ball-mascot__wing[data-mode="lift"][data-side="right"],
   .shell-ball-mascot__wing[data-mode="flutter"][data-side="right"] {
     transform: translateX(var(--shell-ball-wing-spread)) rotate(14deg);
-  }
-}
-
-@media (max-width: 1080px) {
-  .shell-ball-switcher__header {
-    flex-direction: column;
-  }
-
-  .shell-ball-switcher__grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
 
@@ -1812,11 +1675,4 @@ body[data-app-window="shell-ball"],
     width: 1.91rem;
   }
 
-  .shell-ball-switcher__grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .shell-ball-switcher__button {
-    min-height: 6rem;
-  }
 }

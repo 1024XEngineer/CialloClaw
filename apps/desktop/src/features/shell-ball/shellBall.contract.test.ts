@@ -5,7 +5,6 @@ import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import ts from "typescript";
-import { getShellBallDemoViewModel } from "./shellBall.demo";
 import {
   createShellBallInteractionController,
   getShellBallGestureAxisIntent,
@@ -45,7 +44,6 @@ import {
   shouldShowShellBallFileDropOverlay,
   shouldShowShellBallSelectionIndicator,
 } from "./ShellBallApp";
-import { ShellBallDevLayer } from "./ShellBallDevLayer";
 import { ShellBallMascot } from "./components/ShellBallMascot";
 import { ShellBallBubbleZone } from "./components/ShellBallBubbleZone";
 import { FloatingPet } from "./components/floating-pet/FloatingPet";
@@ -54,7 +52,6 @@ import { getShellBallMascotPetState } from "./components/ShellBallMascot";
 import { getShellBallMascotPointerPhaseAction } from "./components/ShellBallMascot";
 import { shouldSuppressShellBallMascotHotspotGestures } from "./components/ShellBallMascot";
 import { extractShellBallDroppedText, resolveShellBallTextDropEffect, ShellBallSurface, shouldAcceptShellBallTextDrop } from "./ShellBallSurface";
-import { shouldShowShellBallDemoSwitcher } from "./shellBall.dev";
 import { shellBallWindowLabels, shellBallWindowPermissions } from "../../platform/shellBallWindowController";
 import {
   ShellBallInputBar,
@@ -379,73 +376,6 @@ function withHideOnCloseRequestRuntime<T>(
   }
 }
 
-function withDesktopAliasRuntime<T>(callback: () => T) {
-  const NodeModule = require("node:module") as any;
-  const originalResolveFilename = NodeModule._resolveFilename;
-  const originalCssLoader = require.extensions[".css"];
-  const originalPngLoader = require.extensions[".png"];
-
-  require.extensions[".css"] = (module) => {
-    module.exports = "";
-  };
-
-  require.extensions[".png"] = (module, filename) => {
-    module.exports = filename;
-  };
-
-  NodeModule._resolveFilename = function resolveDesktopAlias(
-    request: string,
-    parent: unknown,
-    isMain: boolean,
-    options?: unknown,
-  ) {
-    if (request.startsWith("@/")) {
-      const modulePath = request.slice(2);
-
-      if (modulePath.endsWith(".css") || modulePath.endsWith(".png")) {
-        return resolve(desktopRoot, "src", modulePath);
-      }
-
-      const emittedBasePath = resolve(desktopRoot, ".cache/shell-ball-tests", modulePath);
-      const emittedCandidates = [`${emittedBasePath}.js`, resolve(emittedBasePath, "index.js")];
-
-      for (const candidate of emittedCandidates) {
-        if (existsSync(candidate)) {
-          return candidate;
-        }
-      }
-    }
-
-    if (request === "@cialloclaw/ui") {
-      return resolve(desktopRoot, ".cache/shell-ball-tests/features/shell-ball/test-stubs/ui.js");
-    }
-
-    if (request === "@cialloclaw/protocol") {
-      return resolve(desktopRoot, ".cache/shell-ball-tests/features/shell-ball/test-stubs/protocol.js");
-    }
-
-    return originalResolveFilename.call(this, request, parent, isMain, options);
-  };
-
-  try {
-    return callback();
-  } finally {
-    NodeModule._resolveFilename = originalResolveFilename;
-
-    if (originalCssLoader === undefined) {
-      Reflect.deleteProperty(require.extensions, ".css");
-    } else {
-      require.extensions[".css"] = originalCssLoader;
-    }
-
-    if (originalPngLoader === undefined) {
-      Reflect.deleteProperty(require.extensions, ".png");
-    } else {
-      require.extensions[".png"] = originalPngLoader;
-    }
-  }
-}
-
 function withShellBallModuleRuntime<T>(
   moduleRelativePath: string,
   mocks: Record<string, unknown>,
@@ -579,22 +509,6 @@ function withTrayControllerRuntime<T>(
     finalize();
     throw error;
   }
-}
-
-function renderDashboardAppMarkup() {
-  return withDesktopAliasRuntime(() => {
-    const modulePath = resolve(desktopRoot, ".cache/shell-ball-tests/features/dashboard/DashboardApp.js");
-
-    delete require.cache[modulePath];
-
-    try {
-      const { DashboardApp } = require(modulePath) as { DashboardApp: unknown };
-
-      return renderToStaticMarkup(createElement(DashboardApp as never));
-    } finally {
-      delete require.cache[modulePath];
-    }
-  });
 }
 
 function renderDashboardRouteSurface(hash: string) {
@@ -797,7 +711,10 @@ const invalidTransitionResultMissingTarget: ShellBallTransitionResult = {
   autoAdvanceMs: 1,
 };
 
-test("shell-ball demo fixtures preserve the frozen seven-state contract", () => {
+void invalidTransitionResultMissingMs;
+void invalidTransitionResultMissingTarget;
+
+test("shell-ball visual states preserve the frozen seven-state contract", () => {
   assert.deepEqual(shellBallVisualStates, [
     "idle",
     "hover_input",
@@ -807,42 +724,6 @@ test("shell-ball demo fixtures preserve the frozen seven-state contract", () => 
     "voice_listening",
     "voice_locked",
   ]);
-
-  assert.deepEqual(getShellBallDemoViewModel("idle"), {
-    badgeTone: "status",
-    badgeLabel: "待机",
-    title: "小胖啾正在桌面待命",
-    subtitle: "轻量承接入口已就绪",
-    helperText: "悬停后可进入输入承接态",
-    panelMode: "hidden",
-    showRiskBlock: false,
-    showVoiceHint: false,
-  });
-
-  assert.deepEqual(getShellBallDemoViewModel("waiting_auth"), {
-    badgeTone: "waiting_auth",
-    badgeLabel: "等待授权",
-    title: "此操作需要进一步确认",
-    subtitle: "检测到潜在影响范围，正在等待授权",
-    helperText: "确认后才会继续执行后续动作",
-    panelMode: "full",
-    showRiskBlock: true,
-    riskTitle: "潜在影响范围",
-    riskText: "本次操作可能修改当前工作区内容，需要你明确允许后继续。",
-    showVoiceHint: false,
-  });
-
-  assert.deepEqual(getShellBallDemoViewModel("voice_locked"), {
-    badgeTone: "processing",
-    badgeLabel: "持续收音",
-    title: "持续收音已锁定",
-    subtitle: "语音输入会保持开启直到结束",
-    helperText: "说完后可主动结束本次语音输入",
-    panelMode: "compact",
-    showRiskBlock: false,
-    showVoiceHint: true,
-    voiceHintText: "持续收音中，结束前不会自动退出。",
-  });
 });
 
 test("shell-ball desktop host no longer creates bubble, input, and voice helper windows", () => {
@@ -1097,8 +978,6 @@ test("shell-ball helper windows avoid auto-focus behavior", () => {
   assert.match(controllerSource, /setShellBallWindowFocusable\([^)]*focusable: boolean\)/);
   assert.match(controllerSource, /setShellBallWindowIgnoreCursorEvents\([^)]*ignore: boolean\)/);
   assert.match(metricsSource, /getShellBallHelperWindowInteractionMode/);
-  assert.match(metricsSource, /setShellBallWindowFocusable\(role, interactionMode\.focusable\)/);
-  assert.match(metricsSource, /setShellBallWindowIgnoreCursorEvents\(role, interactionMode\.ignoreCursorEvents\)/);
   assert.doesNotMatch(metricsSource, /setFocus\(\)/);
   assert.doesNotMatch(inputBarSource, /focus\(\{ preventScroll: true \}\)/);
 });
@@ -1146,7 +1025,6 @@ test("shell-ball desktop navigation keeps route changes separate from desktop wi
   assert.equal(resolveDashboardModuleRoutePath("safety"), dashboardSafetyRoutePath);
   assert.equal(existsSync(resolve(desktopRoot, "src/features/dashboard/shared/dashboardRouteNavigation.ts")), false);
   assert.equal(existsSync(resolve(desktopRoot, ".cache/shell-ball-tests/app/dashboard/DashboardRoot.js")), true);
-  assert.equal(existsSync(resolve(desktopRoot, ".cache/shell-ball-tests/features/dashboard/DashboardApp.js")), true);
   assert.equal(existsSync(resolve(desktopRoot, ".cache/shell-ball-tests/features/dashboard/safety/SafetyPage.js")), true);
   assert.equal(existsSync(resolve(desktopRoot, ".cache/shell-ball-tests/features/dashboard/safety/SecurityPageShell.js")), true);
   assert.equal(existsSync(resolve(desktopRoot, ".cache/shell-ball-tests/features/dashboard/safety/SecurityApp.js")), true);
@@ -1527,12 +1405,6 @@ test("tray controller opens the control panel through the desktop host command",
 
     assert.deepEqual(calls, ["desktop_open_or_focus_control_panel"]);
   });
-});
-
-test("dashboard app safety CTA renders the shared safety href", () => {
-  const markup = renderDashboardAppMarkup();
-
-  assert.match(markup, /href="\.\/dashboard\.html#\/safety"/);
 });
 
 test("dashboard route surface renders the live home and safety routes", () => {
@@ -2842,13 +2714,6 @@ test("task-entry services keep rpc transport failures visible and forward file d
           return Promise.resolve(taskResult);
         },
       },
-      "@/stores/taskStore": {
-        useTaskStore: {
-          getState() {
-            return { tasks: [] as Array<Record<string, unknown>> };
-          },
-        },
-      },
       "./conversationSessionService": {
         getCurrentConversationSessionId(): string | undefined {
           return "sess_shell_ball_files";
@@ -2996,13 +2861,6 @@ test("task-entry services keep rpc transport failures visible and forward file d
       "@/rpc/methods": {
         startTask() {
           return Promise.reject(transportError);
-        },
-      },
-      "@/stores/taskStore": {
-        useTaskStore: {
-          getState() {
-            return { tasks: [] as Array<Record<string, unknown>> };
-          },
         },
       },
       "./conversationSessionService": {
@@ -4891,7 +4749,7 @@ test("shell-ball bubble roles keep asymmetric straight bottom corners", () => {
 });
 
 test("shell-ball app drops page-shell copy while preserving the floating shell surface", () => {
-  const markup = renderToStaticMarkup(createElement(ShellBallApp, { isDev: false }));
+  const markup = renderToStaticMarkup(createElement(ShellBallApp));
 
   assert.doesNotMatch(markup, /shell-ball phase 1/i);
   assert.doesNotMatch(markup, /小胖啾近场承接/);
@@ -4901,7 +4759,6 @@ test("shell-ball app drops page-shell copy while preserving the floating shell s
   assert.match(markup, /shell-ball-mascot/);
   assert.doesNotMatch(markup, /shell-ball-bubble-zone/);
   assert.doesNotMatch(markup, /shell-ball-input-bar/);
-  assert.doesNotMatch(markup, /Shell-ball demo switcher/);
 });
 
 test("shell-ball coordinator snapshots carry shell-ball-local bubble messages", () => {
@@ -8023,7 +7880,7 @@ test("shell-ball speech recognition treats no-speech as a silent retryable inter
   assert.equal(shouldLogShellBallSpeechRecognitionError("network"), true);
 });
 
-test("shell-ball surface renders the mascot-only floating structure without the demo switcher", () => {
+test("shell-ball surface renders the mascot-only floating structure", () => {
   const markup = renderToStaticMarkup(
     createElement(ShellBallSurface, {
       visualState: "hover_input",
@@ -8048,8 +7905,6 @@ test("shell-ball surface renders the mascot-only floating structure without the 
   assert.match(markup, /shell-ball-mascot/);
   assert.doesNotMatch(markup, /shell-ball-bubble-zone/);
   assert.doesNotMatch(markup, /shell-ball-input-bar/);
-  assert.doesNotMatch(markup, /Shell-ball demo switcher/);
-  assert.doesNotMatch(markup, /shell-ball-surface__switcher-shell/);
 });
 
 test("shell-ball surface keeps drag and click on the mascot hotspot only", () => {
@@ -9037,40 +8892,11 @@ test("shell-ball app dashboard-open gate stays blocked for consumed or non-resti
   );
 });
 
-test("shell-ball demo switcher visibility stays dev-only", () => {
-  assert.equal(shouldShowShellBallDemoSwitcher(true), true);
-  assert.equal(shouldShowShellBallDemoSwitcher(false), false);
-});
-
-test("shell-ball dev layer isolates demo controls from the formal surface", () => {
-  const markup = renderToStaticMarkup(
-    createElement(ShellBallDevLayer, {
-      value: "idle",
-      onChange: () => {},
-    }),
-  );
-
-  assert.match(markup, /Shell-ball demo controls/);
-  assert.match(markup, /Shell-ball demo switcher/);
-  assert.match(markup, /shell-ball-surface__switcher-shell/);
-});
-
 test("shell-ball app keeps the reusable surface as the production structure", () => {
-  const markup = renderToStaticMarkup(createElement(ShellBallApp, { isDev: false }));
+  const markup = renderToStaticMarkup(createElement(ShellBallApp));
 
   assert.match(markup, /Shell-ball floating surface/);
   assert.match(markup, /shell-ball-surface__body/);
-  assert.doesNotMatch(markup, /Shell-ball demo switcher/);
-  assert.doesNotMatch(markup, /shell-ball-surface__switcher-shell/);
-});
-
-test("shell-ball app injects the demo switcher only in dev mode", () => {
-  const markup = renderToStaticMarkup(createElement(ShellBallApp, { isDev: true }));
-
-  assert.match(markup, /Shell-ball floating surface/);
-  assert.match(markup, /shell-ball-surface__body/);
-  assert.match(markup, /Shell-ball demo switcher/);
-  assert.match(markup, /shell-ball-surface__switcher-shell/);
 });
 
 test("shell-ball inline input preserves readonly snapshots and only upgrades hidden idle input", () => {

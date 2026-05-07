@@ -52,10 +52,6 @@ import { useDesktopOnboardingActions } from "@/features/onboarding/useDesktopOnb
 import { useDesktopOnboardingLoading } from "@/features/onboarding/useDesktopOnboardingLoading";
 import { useDesktopOnboardingSession } from "@/features/onboarding/useDesktopOnboardingSession";
 
-type ShellBallAppProps = {
-  isDev?: boolean;
-};
-
 type ShellBallDashboardTransitionPhase = "idle" | "opening" | "hidden" | "closing";
 
 type ShellBallWindowAnchor = {
@@ -283,8 +279,7 @@ async function animateShellBallDashboardWindow(input: {
   }
 }
 
-export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
-  void isDev;
+export function ShellBallApp() {
   const onboardingSession = useDesktopOnboardingSession();
   const onboardingLoading = useDesktopOnboardingLoading("shell-ball");
   const {
