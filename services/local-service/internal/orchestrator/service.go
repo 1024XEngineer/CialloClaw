@@ -7624,7 +7624,7 @@ func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, sn
 
 	approvedOperation, approvedTargetObject := approvedExecutionFromTask(processingTask)
 	executionCtx := context.Background()
-	if shouldBoundTaskExecution(processingTask, snapshot, taskIntent) {
+	if shouldBoundTaskExecution(processingTask, snapshot, taskIntent, deliveryType) {
 		executionTimeout := s.executionTimeout
 		if executionTimeout <= 0 {
 			executionTimeout = defaultTaskExecutionTimeout
@@ -7711,10 +7711,14 @@ func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, sn
 }
 
 // shouldBoundTaskExecution limits the outer orchestrator timeout to synchronous
-// shell-ball text submits. Longer structured flows already carry their own
-// internal timeouts and should not inherit the short bubble-facing deadline.
-func shouldBoundTaskExecution(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) bool {
+// shell-ball submits that still resolve to bubble delivery. Longer structured
+// flows already carry their own internal timeouts and should not inherit the
+// short near-field deadline.
+func shouldBoundTaskExecution(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, deliveryType string) bool {
 	if strings.TrimSpace(stringValue(taskIntent, "name", "")) == "screen_analyze_candidate" {
+		return false
+	}
+	if strings.TrimSpace(deliveryType) != "bubble" {
 		return false
 	}
 	if strings.TrimSpace(snapshot.Trigger) == "hover_text_input" {

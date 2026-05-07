@@ -79,6 +79,11 @@ type blockingModelClient struct {
 	released chan struct{}
 }
 
+type delayedModelClient struct {
+	delay  time.Duration
+	output string
+}
+
 type failingExecutionBackend struct {
 	err error
 }
@@ -581,6 +586,28 @@ func (s *blockingModelClient) GenerateToolCalls(ctx context.Context, request mod
 		}
 	}
 	return model.ToolCallResult{}, ctx.Err()
+}
+
+func (s delayedModelClient) GenerateText(ctx context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	select {
+	case <-ctx.Done():
+		return model.GenerateTextResponse{}, ctx.Err()
+	case <-time.After(s.delay):
+	}
+	return model.GenerateTextResponse{
+		TaskID:     request.TaskID,
+		RunID:      request.RunID,
+		RequestID:  "req_delayed",
+		Provider:   "openai_responses",
+		ModelID:    "gpt-5.4",
+		OutputText: s.output,
+		Usage: model.TokenUsage{
+			InputTokens:  12,
+			OutputTokens: 24,
+			TotalTokens:  36,
+		},
+		LatencyMS: int64(s.delay / time.Millisecond),
+	}, nil
 }
 
 func timePointer(value time.Time) *time.Time {
@@ -1305,6 +1332,7 @@ func TestShouldBoundTaskExecutionOnlyForSynchronousBubbleSubmits(t *testing.T) {
 		runengine.TaskRecord{SourceType: "hover_input"},
 		contextsvc.TaskContextSnapshot{Trigger: "hover_text_input"},
 		map[string]any{"name": "rewrite"},
+		"bubble",
 	) {
 		t.Fatal("expected hover text submits to use the bounded execution timeout")
 	}
@@ -1312,15 +1340,63 @@ func TestShouldBoundTaskExecutionOnlyForSynchronousBubbleSubmits(t *testing.T) {
 		runengine.TaskRecord{SourceType: "hover_input"},
 		contextsvc.TaskContextSnapshot{Trigger: "hover_text_input"},
 		map[string]any{"name": "screen_analyze_candidate"},
+		"bubble",
 	) {
 		t.Fatal("expected internal screen analysis to skip the short bubble timeout")
+	}
+	if shouldBoundTaskExecution(
+		runengine.TaskRecord{SourceType: "hover_input"},
+		contextsvc.TaskContextSnapshot{Trigger: "hover_text_input"},
+		map[string]any{"name": "rewrite"},
+		"workspace_document",
+	) {
+		t.Fatal("expected workspace_document delivery to skip the short bubble timeout")
 	}
 	if shouldBoundTaskExecution(
 		runengine.TaskRecord{SourceType: "file"},
 		contextsvc.TaskContextSnapshot{Trigger: "file_drop"},
 		map[string]any{"name": "write_file"},
+		"bubble",
 	) {
 		t.Fatal("expected non-bubble task sources to keep their existing execution timing")
+	}
+}
+
+func TestServiceSubmitInputWorkspaceDeliverySkipsShortBubbleTimeout(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithModelClient(t, delayedModelClient{
+		delay:  40 * time.Millisecond,
+		output: "Long-form result body.",
+	})
+	service.executionTimeout = 20 * time.Millisecond
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_long_command_timeout",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Please review the following document notes and prepare a detailed deliverable:\nLine one explains the rollout plan.\nLine two adds implementation details.\nLine three adds follow-up tasks.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] != "completed" {
+		t.Fatalf("expected long workspace delivery to complete despite the short bubble timeout, got %+v", task)
+	}
+	deliveryResult, ok := result["delivery_result"].(map[string]any)
+	if !ok {
+		t.Fatal("expected long workspace delivery to return delivery_result")
+	}
+	if deliveryResult["type"] != "workspace_document" {
+		t.Fatalf("expected long workspace delivery to preserve workspace_document output, got %v", deliveryResult["type"])
+	}
+	payload := deliveryResult["payload"].(map[string]any)
+	outputPath := payload["path"].(string)
+	if _, err := os.Stat(filepath.Join(workspaceRoot, strings.TrimPrefix(outputPath, "workspace/"))); err != nil {
+		t.Fatalf("expected workspace delivery file to exist, got %v", err)
 	}
 }
 
