@@ -11,9 +11,9 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/orchestrator"
 )
 
-// Server is the transport entrypoint for local-service.
-// It accepts debug HTTP, named-pipe streams, and dispatches stable JSON-RPC
-// methods into the orchestrator.
+// Server owns the local-service RPC transports and stable JSON-RPC router.
+// Protocol envelopes, handler behavior, and notification routing live in
+// dedicated files so transport lifecycle stays easy to audit.
 type Server struct {
 	transport       string
 	namedPipeName   string
@@ -23,7 +23,8 @@ type Server struct {
 	now             func() time.Time
 }
 
-// NewServer constructs the RPC server and registers debug endpoints.
+// NewServer wires configured transports to registered handlers without
+// starting network or named-pipe listeners.
 func NewServer(cfg serviceconfig.RPCConfig, orchestrator *orchestrator.Service) *Server {
 	server := &Server{
 		transport:     cfg.Transport,
@@ -49,9 +50,9 @@ func NewServer(cfg serviceconfig.RPCConfig, orchestrator *orchestrator.Service) 
 	return server
 }
 
-// Start serves every transport enabled by the current config.
-// During P0 it intentionally keeps both debug HTTP and named pipe available for
-// local integration work.
+// Start serves every configured transport until one fails or ctx is canceled.
+// Cancelation triggers a bounded debug HTTP shutdown; the named-pipe listener
+// is governed by the same context passed into serveNamedPipe.
 func (s *Server) Start(ctx context.Context) error {
 	errCh := make(chan error, 2)
 
@@ -83,7 +84,7 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 }
 
-// Shutdown closes the debug HTTP server when it was started.
+// Shutdown gracefully closes the debug HTTP server when it was configured.
 func (s *Server) Shutdown(ctx context.Context) error {
 	if s.debugHTTPServer == nil {
 		return nil
@@ -94,44 +95,4 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-// dispatch is the single RPC dispatch path that validates protocol shape,
-// resolves handlers, decodes params, and rewraps orchestrator output.
-func (s *Server) dispatch(request requestEnvelope) any {
-	if request.JSONRPC != "2.0" {
-		return newErrorEnvelope(request.ID, &rpcError{
-			Code:    errInvalidParams,
-			Message: "INVALID_PARAMS",
-			Detail:  "jsonrpc version must be 2.0",
-			TraceID: "trace_rpc_version",
-		})
-	}
-
-	handler, ok := s.handlers[request.Method]
-	if !ok {
-		return newErrorEnvelope(request.ID, &rpcError{
-			Code:    errMethodNotFound,
-			Message: "JSON_RPC_METHOD_NOT_FOUND",
-			Detail:  "method is not registered in the stable stub router",
-			TraceID: traceIDFromRequest(request.Params),
-		})
-	}
-
-	params, rpcErr := decodeParams(request.Params)
-	if rpcErr != nil {
-		return newErrorEnvelope(request.ID, rpcErr)
-	}
-
-	data, handlerErr := handler(params)
-	if handlerErr != nil {
-		return newErrorEnvelope(request.ID, handlerErr)
-	}
-
-	return newSuccessEnvelope(request.ID, data, s.nowRFC3339())
-}
-
-// nowRFC3339 returns the unified response timestamp format.
-func (s *Server) nowRFC3339() string {
-	return s.now().Format(time.RFC3339)
 }
