@@ -176,6 +176,7 @@ export function DashboardVoiceField({ isOpen, onClose, onRecommendationConfirm, 
         source: "dashboard",
         trigger: "voice_commit",
         inputMode: "voice",
+        includeForegroundBrowserPageContext: true,
       });
 
       if (result === null) {

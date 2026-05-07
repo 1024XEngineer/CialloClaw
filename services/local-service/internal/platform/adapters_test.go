@@ -1,17 +1,18 @@
-// 该测试文件验证平台抽象层行为。
+// This test file validates platform abstraction behavior.
 package platform
 
 import (
 	"context"
 	"errors"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"testing"
 )
 
 var _ FileSystemAdapter = (*LocalFileSystemAdapter)(nil)
 
-// TestEnsureWithinWorkspace 验证EnsureWithinWorkspace。
+// TestEnsureWithinWorkspace validates workspace path containment.
 func TestEnsureWithinWorkspace(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	policy, err := NewLocalPathPolicy(workspaceRoot)
@@ -95,6 +96,63 @@ func TestLocalFileSystemAdapterImplementsIOFS(t *testing.T) {
 
 	if _, err := fs.ReadFile(adapter, "notes/extra.md"); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("expected moved source file to be absent, got %v", err)
+	}
+}
+
+func TestLocalFileSystemAdapterRejectsSymlinkWorkspaceEscapes(t *testing.T) {
+	workspaceRoot := t.TempDir()
+	outsideRoot := t.TempDir()
+	policy, err := NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("create policy: %v", err)
+	}
+	adapter := NewLocalFileSystemAdapter(policy)
+
+	outsideFile := filepath.Join(outsideRoot, "outside.md")
+	if err := os.WriteFile(outsideFile, []byte("outside"), 0o644); err != nil {
+		t.Fatalf("write outside file: %v", err)
+	}
+	outsideDir := filepath.Join(outsideRoot, "outside-dir")
+	if err := os.MkdirAll(outsideDir, 0o755); err != nil {
+		t.Fatalf("create outside dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(outsideDir, "nested.md"), []byte("nested"), 0o644); err != nil {
+		t.Fatalf("write outside nested file: %v", err)
+	}
+
+	if err := os.Symlink(outsideFile, filepath.Join(workspaceRoot, "file-link.md")); err != nil {
+		t.Skipf("symlink creation is not available in this environment: %v", err)
+	}
+	if err := os.Symlink(outsideDir, filepath.Join(workspaceRoot, "dir-link")); err != nil {
+		t.Skipf("symlink creation is not available in this environment: %v", err)
+	}
+	if err := adapter.WriteFile("inside.md", []byte("inside")); err != nil {
+		t.Fatalf("write inside file: %v", err)
+	}
+
+	if _, err := adapter.ReadFile("file-link.md"); !errors.Is(err, ErrPathOutsideWorkspace) {
+		t.Fatalf("expected read boundary error, got %v", err)
+	}
+	if _, err := adapter.ReadDir("dir-link"); !errors.Is(err, ErrPathOutsideWorkspace) {
+		t.Fatalf("expected readdir boundary error, got %v", err)
+	}
+	if _, err := adapter.Stat("file-link.md"); !errors.Is(err, ErrPathOutsideWorkspace) {
+		t.Fatalf("expected stat boundary error, got %v", err)
+	}
+	if err := adapter.WriteFile(filepath.Join("dir-link", "created.md"), []byte("blocked")); !errors.Is(err, ErrPathOutsideWorkspace) {
+		t.Fatalf("expected write boundary error, got %v", err)
+	}
+	if err := adapter.Move("file-link.md", "moved-link.md"); !errors.Is(err, ErrPathOutsideWorkspace) {
+		t.Fatalf("expected source move boundary error, got %v", err)
+	}
+	if err := adapter.Move("inside.md", filepath.Join("dir-link", "moved.md")); !errors.Is(err, ErrPathOutsideWorkspace) {
+		t.Fatalf("expected destination move boundary error, got %v", err)
+	}
+	if err := adapter.Remove("file-link.md"); !errors.Is(err, ErrPathOutsideWorkspace) {
+		t.Fatalf("expected remove boundary error, got %v", err)
+	}
+	if err := adapter.MkdirAll(filepath.Join("dir-link", "nested")); !errors.Is(err, ErrPathOutsideWorkspace) {
+		t.Fatalf("expected mkdir boundary error, got %v", err)
 	}
 }
 

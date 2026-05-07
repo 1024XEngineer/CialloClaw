@@ -3,6 +3,8 @@ package sidecarclient
 import (
 	"context"
 	"fmt"
+	"net"
+	"net/url"
 	"strings"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
@@ -370,11 +372,10 @@ func attachConfigFromInput(input map[string]any) (tools.BrowserAttachConfig, err
 		return tools.BrowserAttachConfig{}, fmt.Errorf("attach.mode must be 'cdp'")
 	}
 	browserKind := strings.ToLower(strings.TrimSpace(stringValueMap(attachInput, "browser_kind")))
-	if browserKind == "" {
-		return tools.BrowserAttachConfig{}, fmt.Errorf("attach.browser_kind must be a non-empty string")
-	}
-	if _, ok := supportedAttachedBrowserKinds[browserKind]; !ok {
-		return tools.BrowserAttachConfig{}, fmt.Errorf("attach.browser_kind must be one of chrome or edge")
+	if browserKind != "" {
+		if _, ok := supportedAttachedBrowserKinds[browserKind]; !ok {
+			return tools.BrowserAttachConfig{}, fmt.Errorf("attach.browser_kind must be one of chrome or edge")
+		}
 	}
 	targetInput, ok := attachInput["target"].(map[string]any)
 	if !ok {
@@ -388,12 +389,44 @@ func attachConfigFromInput(input map[string]any) (tools.BrowserAttachConfig, err
 	if _, exists := targetInput["page_index"]; exists && target.PageIndex == nil {
 		return tools.BrowserAttachConfig{}, fmt.Errorf("attach.target.page_index must be a non-negative integer")
 	}
+	endpointURL := strings.TrimSpace(stringValueMap(attachInput, "endpoint_url"))
+	if err := validateLoopbackEndpointURL(endpointURL); err != nil {
+		return tools.BrowserAttachConfig{}, err
+	}
 	return tools.BrowserAttachConfig{
 		Mode:        mode,
 		BrowserKind: browserKind,
-		EndpointURL: strings.TrimSpace(stringValueMap(attachInput, "endpoint_url")),
+		EndpointURL: endpointURL,
 		Target:      target,
 	}, nil
+}
+
+func validateLoopbackEndpointURL(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("attach.endpoint_url must be a valid URL")
+	}
+	scheme := strings.TrimSpace(strings.ToLower(parsed.Scheme))
+	switch scheme {
+	case "http", "https", "ws", "wss":
+	default:
+		return fmt.Errorf("attach.endpoint_url must use http, https, ws, or wss")
+	}
+	hostname := strings.TrimSpace(strings.ToLower(parsed.Hostname()))
+	if hostname == "" {
+		return fmt.Errorf("attach.endpoint_url must include a host")
+	}
+	if hostname == "localhost" {
+		return nil
+	}
+	ip := net.ParseIP(hostname)
+	if ip != nil && ip.IsLoopback() {
+		return nil
+	}
+	return fmt.Errorf("attach.endpoint_url must target a loopback host")
 }
 
 func intPointerValue(values map[string]any, key string) *int {

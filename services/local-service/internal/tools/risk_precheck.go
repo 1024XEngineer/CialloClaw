@@ -148,9 +148,7 @@ func buildAssessmentInput(input RiskPrecheckInput) risksvc.AssessmentInput {
 		outOfWorkspace = !*input.Workspace.Within
 	}
 
-	impactScope := risksvc.ImpactScope{
-		OutOfWorkspace: outOfWorkspace,
-	}
+	impactScope := risksvc.ImpactScope{OutOfWorkspace: outOfWorkspace}
 	targetObject := input.Workspace.TargetPath
 	if isWebpageTool(input.ToolName) {
 		impactScope.Webpages = webpagesFromTarget(input.Workspace.TargetPath)
@@ -189,12 +187,12 @@ func extractTargetPath(toolName string, input map[string]any) (string, bool) {
 			return strings.TrimSpace(value), true
 		}
 	}
-	if isBrowserTool(toolName) {
+	if isAttachedBrowserTool(toolName) {
 		if value := browserAttachTarget(input); value != "" {
 			return value, true
 		}
 	}
-	if isWebpageTool(toolName) {
+	if isLegacyWebpageTool(toolName) {
 		if value, ok := input["url"].(string); ok && strings.TrimSpace(value) != "" {
 			return value, true
 		}
@@ -275,28 +273,7 @@ func webpagesFromTarget(target string) []string {
 	if trimmed == "" {
 		return nil
 	}
-	if !strings.HasPrefix(trimmed, "http://") && !strings.HasPrefix(trimmed, "https://") {
-		return nil
-	}
 	return []string{trimmed}
-}
-
-func isWebpageTool(toolName string) bool {
-	switch toolName {
-	case "page_read", "page_search", "page_interact", "structured_dom", "browser_attach_current", "browser_snapshot", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact":
-		return true
-	default:
-		return false
-	}
-}
-
-func isBrowserTool(toolName string) bool {
-	switch toolName {
-	case "browser_attach_current", "browser_snapshot", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact":
-		return true
-	default:
-		return false
-	}
 }
 
 func browserAttachTarget(input map[string]any) string {
@@ -341,6 +318,28 @@ func browserAttachPageIndexValue(rawValue any) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+func isWebpageTool(toolName string) bool {
+	return isLegacyWebpageTool(toolName) || isAttachedBrowserTool(toolName)
+}
+
+func isLegacyWebpageTool(toolName string) bool {
+	switch strings.TrimSpace(toolName) {
+	case "page_read", "page_search", "page_interact", "structured_dom":
+		return true
+	default:
+		return false
+	}
+}
+
+func isAttachedBrowserTool(toolName string) bool {
+	switch strings.TrimSpace(toolName) {
+	case "browser_attach_current", "browser_snapshot", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact":
+		return true
+	default:
+		return false
+	}
 }
 
 func withinWorkspacePath(workspacePath, targetPath string) *bool {

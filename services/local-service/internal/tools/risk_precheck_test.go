@@ -263,6 +263,40 @@ func TestBuildRiskPrecheckInputBrowserNavigateUsesDestinationURL(t *testing.T) {
 	}
 }
 
+func TestBuildRiskPrecheckInputBrowserInteractUsesAttachTarget(t *testing.T) {
+	execCtx := &ToolExecuteContext{
+		WorkspacePath: "/workspace",
+		Platform:      riskPlatformStub{workspacePath: "/workspace"},
+	}
+	input := BuildRiskPrecheckInput(
+		ToolMetadata{Name: "browser_interact", DisplayName: "Browser Interact", Source: ToolSourceSidecar},
+		"browser_interact",
+		execCtx,
+		map[string]any{
+			"attach":  map[string]any{"target": map[string]any{"title_contains": "Example Docs"}},
+			"actions": []any{map[string]any{"type": "click", "selector": "#continue"}},
+		},
+	)
+	if input.Workspace.TargetPath != "Example Docs" {
+		t.Fatalf("expected browser interact target to use attach title, got %+v", input.Workspace)
+	}
+	if input.Workspace.Within != nil {
+		t.Fatalf("expected browser interact to skip workspace boundary checks, got %+v", input.Workspace)
+	}
+
+	result, err := DefaultRiskPrechecker{}.Precheck(context.Background(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	webpages := result.ImpactScope["webpages"].([]string)
+	if len(webpages) != 1 || webpages[0] != "Example Docs" {
+		t.Fatalf("expected browser interact impact scope to include attach target, got %+v", result.ImpactScope)
+	}
+	if result.RiskLevel != RiskLevelYellow || !result.ApprovalRequired {
+		t.Fatalf("expected browser interact to require approval, got %+v", result)
+	}
+}
+
 func TestBuildRiskPrecheckInputUsesMediaOutputTarget(t *testing.T) {
 	execCtx := &ToolExecuteContext{
 		WorkspacePath: "/workspace",
