@@ -10,6 +10,9 @@ type ShellBallBubbleZoneProps = {
   onPinBubble?: (bubbleId: string) => void;
   onAllowApprovalBubble?: (bubbleId: string) => void;
   onDenyApprovalBubble?: (bubbleId: string) => void;
+  onConfirmIntentBubble?: (taskId: string) => void;
+  onAcceptRecommendationBubble?: (bubbleId: string) => void;
+  onIgnoreRecommendationBubble?: (bubbleId: string) => void;
 };
 
 export function ShellBallBubbleZone({
@@ -19,6 +22,9 @@ export function ShellBallBubbleZone({
   onPinBubble,
   onAllowApprovalBubble,
   onDenyApprovalBubble,
+  onConfirmIntentBubble,
+  onAcceptRecommendationBubble,
+  onIgnoreRecommendationBubble,
 }: ShellBallBubbleZoneProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
@@ -92,6 +98,9 @@ export function ShellBallBubbleZone({
               onPin={onPinBubble}
               onAllowApproval={onAllowApprovalBubble}
               onDenyApproval={onDenyApprovalBubble}
+              onConfirmIntent={onConfirmIntentBubble}
+              onAcceptRecommendation={onAcceptRecommendationBubble}
+              onIgnoreRecommendation={onIgnoreRecommendationBubble}
             />
           </div>
         ))}

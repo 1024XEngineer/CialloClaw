@@ -2,10 +2,12 @@ import type {
   AgentInputSubmitParams,
   AgentInputSubmitResult,
   BehaviorContext,
+  ErrorContext,
   InputContext,
   PageContext,
   ScreenContext,
 } from "@cialloclaw/protocol";
+import { normalizeDesktopErrorSignalText } from "@/platform/desktopErrorSignal";
 import {
   recordMirrorConversationFailure,
   recordMirrorConversationStart,
@@ -23,12 +25,19 @@ import {
 } from "./conversationSessionService";
 
 type DesktopWindowContextSnapshot = DesktopWindowPageContextSnapshot & {
+  visible_text?: string | null;
+  hover_target?: string | null;
+  error_text?: string | null;
   window_switch_count?: number | null;
   page_switch_count?: number | null;
 };
 
 type DesktopMouseActivitySnapshot = {
   updated_at: string;
+};
+
+type DesktopClipboardActivitySnapshot = {
+  copy_count: number;
 };
 
 export type SubmitTextInputClientContext = {
@@ -49,6 +58,8 @@ export type SubmitTextInputParams = {
   context?: InputContext;
   pageContext?: PageContext;
   sessionId?: string;
+  disableSessionFallback?: boolean;
+  disableForegroundContextEnrichment?: boolean;
   options?: {
     confirm_required?: boolean;
     preferred_delivery?: "bubble" | "workspace_document" | "result_page" | "open_file" | "reveal_in_folder" | "task_detail";
@@ -127,7 +138,20 @@ function mapDesktopWindowScreenContext(snapshot: DesktopWindowContextSnapshot | 
   return compactContextRecord<ScreenContext>({
     summary,
     screen_summary: summary,
+    visible_text: snapshot.visible_text ?? undefined,
     window_title: snapshot.title ?? undefined,
+    hover_target: snapshot.hover_target ?? undefined,
+  });
+}
+
+function mapDesktopWindowErrorContext(snapshot: DesktopWindowContextSnapshot | null): ErrorContext | undefined {
+  if (!snapshot) {
+    return undefined;
+  }
+
+  const errorText = normalizeDesktopErrorSignalText(snapshot.error_text);
+  return compactContextRecord<ErrorContext>({
+    message: errorText,
   });
 }
 
@@ -148,12 +172,14 @@ function createFallbackBehaviorContext(
   trigger: AgentInputSubmitParams["trigger"],
   mouseSnapshot: DesktopMouseActivitySnapshot | null,
   windowSnapshot: DesktopWindowContextSnapshot | null,
+  clipboardActivitySnapshot: DesktopClipboardActivitySnapshot | null,
 ): BehaviorContext | undefined {
   const dwellMillis = resolveDesktopDwellMillis(mouseSnapshot?.updated_at);
 
   return compactContextRecord<BehaviorContext>({
     last_action: trigger,
     dwell_millis: dwellMillis,
+    copy_count: clipboardActivitySnapshot?.copy_count,
     window_switch_count: normalizeSwitchCount(windowSnapshot?.window_switch_count),
     page_switch_count: normalizeSwitchCount(windowSnapshot?.page_switch_count),
   });
@@ -200,12 +226,18 @@ function shouldEnrichVisualContext(
   options: {
     includeForegroundBrowserPageContext?: boolean;
     includeForegroundWindowContext?: boolean;
+    disableForegroundContextEnrichment?: boolean;
   } = {},
 ): boolean {
+  if (options.disableForegroundContextEnrichment) {
+    return false;
+  }
+
   return options.includeForegroundWindowContext
     || options.includeForegroundBrowserPageContext
     || compactContextRecord(params.context.page) !== undefined
-    || compactContextRecord(params.context.screen) !== undefined;
+    || compactContextRecord(params.context.screen) !== undefined
+    || compactContextRecord(params.context.error) !== undefined;
 }
 
 function shouldUseForegroundBrowserPageContext(snapshot: DesktopWindowContextSnapshot | null): boolean {
@@ -230,6 +262,15 @@ async function readDesktopMouseActivitySnapshot(): Promise<DesktopMouseActivityS
   try {
     const desktopActivityModule = await import("@/platform/desktopActivity");
     return await desktopActivityModule.getDesktopMouseActivitySnapshot();
+  } catch {
+    return null;
+  }
+}
+
+async function readDesktopClipboardActivitySnapshot(): Promise<DesktopClipboardActivitySnapshot | null> {
+  try {
+    const clipboardActivityModule = await import("@/platform/desktopClipboardActivity");
+    return await clipboardActivityModule.getDesktopClipboardActivitySnapshot();
   } catch {
     return null;
   }
@@ -276,6 +317,7 @@ async function enrichTextInputSubmitParams(
   options: {
     includeForegroundBrowserPageContext?: boolean;
     includeForegroundWindowContext?: boolean;
+    disableForegroundContextEnrichment?: boolean;
   } = {},
 ): Promise<{
   clientContext?: SubmitTextInputClientContext;
@@ -283,12 +325,10 @@ async function enrichTextInputSubmitParams(
 }> {
   const enrichVisualContext = shouldEnrichVisualContext(params, options);
   const shouldReadForegroundWindowContext = enrichVisualContext;
-  const [windowContext, mouseActivitySnapshot] = await Promise.all([
-    // Explicit visual requests still need both page and screen fallbacks, while
-    // shell-ball near-field text/voice submits should also inherit the current
-    // foreground page attach hints for real-browser takeover planning.
+  const [windowContext, mouseActivitySnapshot, clipboardActivitySnapshot] = await Promise.all([
     shouldReadForegroundWindowContext ? readDesktopWindowContext() : Promise.resolve(null),
     readDesktopMouseActivitySnapshot(),
+    readDesktopClipboardActivitySnapshot(),
   ]);
   // Shell-ball free-form submits should only attach ambient page context when
   // the last external foreground window was a browser page with a resolved URL.
@@ -297,15 +337,22 @@ async function enrichTextInputSubmitParams(
     : windowContext;
   const fallbackPageContext = enrichVisualContext ? mapDesktopWindowPageContext(ambientWindowContext) : undefined;
   const fallbackScreenContext = enrichVisualContext ? mapDesktopWindowScreenContext(ambientWindowContext) : undefined;
+  const fallbackErrorContext = enrichVisualContext ? mapDesktopWindowErrorContext(ambientWindowContext) : undefined;
   // Browser-only visual gating should not erase switch counters for ordinary
   // desktop submits when the foreground window is not a browser page.
-  const fallbackBehaviorContext = createFallbackBehaviorContext(params.trigger, mouseActivitySnapshot, windowContext);
+  const fallbackBehaviorContext = createFallbackBehaviorContext(
+    params.trigger,
+    mouseActivitySnapshot,
+    windowContext,
+    clipboardActivitySnapshot,
+  );
   const mergedPageContext = compactPageContext(
     mergeContextRecord<PageContext>(params.context.page, fallbackPageContext),
   );
   const mergedScreenContext = mergeContextRecord<ScreenContext>(params.context.screen, fallbackScreenContext);
   const mergedBehaviorContext = mergeContextRecord<BehaviorContext>(params.context.behavior, fallbackBehaviorContext);
-  const clientContext = options.includeForegroundBrowserPageContext
+  const mergedErrorContext = mergeContextRecord<ErrorContext>(params.context.error, fallbackErrorContext);
+  const clientContext = options.includeForegroundBrowserPageContext && !options.disableForegroundContextEnrichment
     ? createSubmitTextInputClientContext(ambientWindowContext)
     : undefined;
 
@@ -324,6 +371,10 @@ async function enrichTextInputSubmitParams(
         } : {}),
         ...(mergedBehaviorContext ? {
           behavior: mergedBehaviorContext,
+        } : {}),
+        ...(mergedErrorContext ? {
+          error: mergedErrorContext,
+          error_text: mergedErrorContext.message,
         } : {}),
       },
     },
@@ -369,6 +420,7 @@ export async function submitTextInput(input: SubmitTextInputParams) {
   const enriched = await enrichTextInputSubmitParams(params, {
     includeForegroundBrowserPageContext: input.includeForegroundBrowserPageContext,
     includeForegroundWindowContext: input.includeForegroundWindowContext,
+    disableForegroundContextEnrichment: input.disableForegroundContextEnrichment,
   });
   const enrichedParams = enriched.params;
   recordMirrorConversationStart(enrichedParams);
