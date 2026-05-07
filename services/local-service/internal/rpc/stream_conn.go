@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"net"
-	"strings"
 	"sync"
 )
 
@@ -34,62 +33,32 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 			return
 		}
 
-		streamedRuntimeCounts := map[string]int{}
-		requestTaskIDs, requestSessionID, requestTraceID := requestRoutingHints(request)
-		var requestTaskMu sync.RWMutex
-		addRequestTaskID := func(taskID string) {
-			trimmed := strings.TrimSpace(taskID)
-			if trimmed == "" {
-				return
-			}
-			requestTaskMu.Lock()
-			if requestTaskIDs == nil {
-				requestTaskIDs = map[string]bool{}
-			}
-			requestTaskIDs[trimmed] = true
-			requestTaskMu.Unlock()
-		}
-		hasRequestTaskID := func(taskID string) bool {
-			requestTaskMu.RLock()
-			defer requestTaskMu.RUnlock()
-			return requestTaskIDs != nil && requestTaskIDs[taskID]
-		}
-		matchesTaskStart := func(sessionID, traceID string) bool {
-			switch {
-			case requestTraceID != "":
-				return requestTraceID == traceID
-			case requestSessionID != "":
-				return requestSessionID == sessionID
-			default:
-				return false
-			}
-		}
-
+		tracker := newStreamRequestTracker(request)
 		unsubscribeRuntime := func() {}
-		if requestTaskIDs != nil || shouldTrackStartedTask(request.Method) {
+		if tracker.shouldSubscribeRuntime() {
 			unsubscribeRuntime = s.orchestrator.SubscribeRuntimeNotifications(func(taskID string, method string, params map[string]any) {
 				if !isLiveRuntimeMethod(method) {
 					return
 				}
 				notificationTaskID := runtimeNotificationTaskID(taskID, params)
-				if notificationTaskID == "" || !hasRequestTaskID(notificationTaskID) {
+				if notificationTaskID == "" || !tracker.hasTaskID(notificationTaskID) {
 					return
 				}
 				writeMu.Lock()
 				defer writeMu.Unlock()
 				if err := encoder.Encode(newNotificationEnvelope(method, params)); err == nil {
-					streamedRuntimeCounts[notificationKey(method, notificationTaskID, params)]++
+					tracker.recordStreamedRuntime(method, notificationTaskID, params)
 				}
 			})
 		}
 
 		unsubscribeTaskStart := func() {}
-		if shouldTrackStartedTask(request.Method) {
+		if tracker.shouldSubscribeTaskStart() {
 			unsubscribeTaskStart = s.orchestrator.SubscribeTaskStarts(func(taskID, sessionID, traceID string) {
-				if !matchesTaskStart(sessionID, traceID) {
+				if !tracker.matchesTaskStart(sessionID, traceID) {
 					return
 				}
-				addRequestTaskID(taskID)
+				tracker.addTaskID(taskID)
 			})
 		}
 
@@ -113,9 +82,7 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 			for _, notification := range notifications {
 				method := stringValue(notification, "method", "task.updated")
 				params := mapValue(notification, "params")
-				key := notificationKey(method, taskID, params)
-				if isLiveRuntimeMethod(method) && streamedRuntimeCounts[key] > 0 {
-					streamedRuntimeCounts[key]--
+				if tracker.shouldSkipBufferedRuntime(method, taskID, params) {
 					continue
 				}
 				writeMu.Lock()

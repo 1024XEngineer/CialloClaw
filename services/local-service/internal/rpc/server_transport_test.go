@@ -3,6 +3,8 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -42,6 +44,60 @@ type flushRecorder struct {
 func (r *flushRecorder) Flush() {
 	if r.onFlush != nil {
 		r.onFlush()
+	}
+}
+
+func TestHandleStreamConnServesJSONRPCSuccess(t *testing.T) {
+	server := newTestServer()
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+
+	go server.handleStreamConn(left)
+
+	request := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-stream-success"`),
+		Method:  "agent.settings.get",
+		Params:  mustMarshal(t, map[string]any{"scope": "all"}),
+	}
+	if err := json.NewEncoder(right).Encode(request); err != nil {
+		t.Fatalf("encode stream request: %v", err)
+	}
+
+	var response successEnvelope
+	if err := json.NewDecoder(right).Decode(&response); err != nil {
+		t.Fatalf("decode stream response: %v", err)
+	}
+	if string(response.ID) != `"req-stream-success"` || response.Result.Meta.ServerTime == "" {
+		t.Fatalf("expected stream success envelope with request id and server time, got %+v", response)
+	}
+	if response.Result.Data == nil {
+		t.Fatalf("expected settings payload in stream response, got %+v", response)
+	}
+}
+
+func TestHandleStreamConnReturnsDecodeErrorForMalformedPayload(t *testing.T) {
+	server := newTestServer()
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+
+	go server.handleStreamConn(left)
+
+	if _, err := right.Write([]byte("{bad json\n")); err != nil {
+		t.Fatalf("write malformed stream payload: %v", err)
+	}
+
+	var response errorEnvelope
+	if err := json.NewDecoder(right).Decode(&response); err != nil {
+		t.Fatalf("decode stream error response: %v", err)
+	}
+	if response.Error.Code != errInvalidParams || response.Error.Message != "INVALID_PARAMS" {
+		t.Fatalf("expected invalid params error envelope, got %+v", response)
+	}
+	if response.Error.Data.TraceID != "trace_rpc_decode" {
+		t.Fatalf("expected decode trace id, got %+v", response.Error.Data)
 	}
 }
 
@@ -244,6 +300,38 @@ func TestServerStartHandlesShutdownAndImmediateListenErrors(t *testing.T) {
 	defer errorCancel()
 	if err := errorServer.Start(errorCtx); err == nil {
 		t.Fatal("expected invalid listen address to surface start error")
+	}
+}
+
+func TestTransportSupervisorCancelsShutdownAndJoinsWorkers(t *testing.T) {
+	transportErr := errors.New("listen failed")
+	supervisor := newTransportSupervisor(context.Background(), 2)
+	workerExited := make(chan struct{})
+
+	supervisor.Go(func(ctx context.Context) error {
+		<-ctx.Done()
+		close(workerExited)
+		return nil
+	})
+	supervisor.Go(func(context.Context) error {
+		return transportErr
+	})
+
+	shutdownCalled := false
+	err := supervisor.Wait(func() error {
+		shutdownCalled = true
+		return nil
+	})
+	if !errors.Is(err, transportErr) {
+		t.Fatalf("expected transport error to win, got %v", err)
+	}
+	if !shutdownCalled {
+		t.Fatal("expected shutdown to run before Wait returns")
+	}
+	select {
+	case <-workerExited:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected sibling worker to exit before Wait returns")
 	}
 }
 

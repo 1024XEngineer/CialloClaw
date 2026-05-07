@@ -2,8 +2,6 @@
 package rpc
 
 import (
-	"context"
-	"errors"
 	"net/http"
 	"time"
 
@@ -48,51 +46,4 @@ func NewServer(cfg serviceconfig.RPCConfig, orchestrator *orchestrator.Service) 
 	}
 
 	return server
-}
-
-// Start serves every configured transport until one fails or ctx is canceled.
-// Cancelation triggers a bounded debug HTTP shutdown; the named-pipe listener
-// is governed by the same context passed into serveNamedPipe.
-func (s *Server) Start(ctx context.Context) error {
-	errCh := make(chan error, 2)
-
-	if s.debugHTTPServer != nil {
-		go func() {
-			err := s.debugHTTPServer.ListenAndServe()
-			if err != nil && !errors.Is(err, http.ErrServerClosed) {
-				errCh <- err
-			}
-		}()
-	}
-
-	if s.transport == "named_pipe" {
-		go func() {
-			err := serveNamedPipe(ctx, s.namedPipeName, s.handleStreamConn)
-			if err != nil && !errors.Is(err, errNamedPipeUnsupported) && ctx.Err() == nil {
-				errCh <- err
-			}
-		}()
-	}
-
-	select {
-	case err := <-errCh:
-		return err
-	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return s.Shutdown(shutdownCtx)
-	}
-}
-
-// Shutdown gracefully closes the debug HTTP server when it was configured.
-func (s *Server) Shutdown(ctx context.Context) error {
-	if s.debugHTTPServer == nil {
-		return nil
-	}
-
-	if err := s.debugHTTPServer.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
-	}
-
-	return nil
 }
