@@ -69,7 +69,7 @@ export function DashboardResultPage() {
     }),
     [location.state],
   );
-  const browserFallbackOpenedRef = useRef(false);
+  const lastBrowserFallbackUrlRef = useRef<string | null>(null);
   const resultUrl = routeState?.url ?? null;
   const canOpenExternally = resultUrl ? isAllowedDashboardResultPageUrl(resultUrl) : false;
   const canEmbed = resultUrl ? isEmbeddableDashboardResultPageUrl(resultUrl) : false;
@@ -87,11 +87,15 @@ export function DashboardResultPage() {
   const showBrowserOnlyFallback = canOpenExternally && !canEmbed;
 
   useEffect(() => {
-    if (!showBrowserOnlyFallback || !resultUrl || browserFallbackOpenedRef.current) {
+    if (!showBrowserOnlyFallback || !resultUrl) {
       return;
     }
 
-    browserFallbackOpenedRef.current = true;
+    if (lastBrowserFallbackUrlRef.current === resultUrl) {
+      return;
+    }
+
+    lastBrowserFallbackUrlRef.current = resultUrl;
     window.open(resultUrl, "_blank", "noopener,noreferrer");
   }, [resultUrl, showBrowserOnlyFallback]);
 

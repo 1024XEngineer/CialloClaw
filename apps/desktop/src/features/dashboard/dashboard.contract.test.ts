@@ -2072,7 +2072,8 @@ test("dashboard result page only embeds trusted loopback shell origins and auto-
   assert.match(resultPageSource, /trustedDashboardResultPageHosts\.has\(currentOriginUrl\.hostname\)/);
   assert.match(resultPageSource, /return url\.origin === currentOriginUrl\.origin/);
   assert.match(resultPageSource, /window\.open\(resultUrl, "_blank", "noopener,noreferrer"\)/);
-  assert.match(resultPageSource, /browserFallbackOpenedRef/);
+  assert.match(resultPageSource, /lastBrowserFallbackUrlRef/);
+  assert.match(resultPageSource, /if \(lastBrowserFallbackUrlRef\.current === resultUrl\) \{/);
   assert.match(resultPageSource, /不在站内可信嵌入白名单内，已切换为浏览器承接模式/);
 });
 
