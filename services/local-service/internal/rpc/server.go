@@ -27,6 +27,7 @@ type Server struct {
 	streamMu                 sync.Mutex
 	streamConns              map[net.Conn]struct{}
 	streamWG                 sync.WaitGroup
+	serveRunning             bool
 	runCancel                context.CancelFunc
 	namedPipeCancel          context.CancelFunc
 	shuttingDown             bool

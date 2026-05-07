@@ -88,6 +88,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if shutdownErr != nil {
 		return s.markTransportTerminal(shutdownErr)
 	}
+	s.finishTransportShutdown()
 	return nil
 }
 
@@ -165,11 +166,12 @@ func (s *Server) beginServeRun(parent context.Context) (context.Context, error) 
 	}
 	// The serve-run cancel handles are instance-scoped, so a second Start must
 	// fail fast instead of replacing the active run's shutdown ownership.
-	if s.runCancel != nil || s.shuttingDown {
+	if s.serveRunning || s.shuttingDown {
 		runCancel()
 		return nil, errServerAlreadyRunning
 	}
 
+	s.serveRunning = true
 	s.runCancel = runCancel
 	s.namedPipeCancel = nil
 	s.shuttingDown = false
@@ -178,8 +180,12 @@ func (s *Server) beginServeRun(parent context.Context) (context.Context, error) 
 
 func (s *Server) clearServeRun() {
 	s.streamMu.Lock()
+	s.serveRunning = false
 	s.runCancel = nil
 	s.namedPipeCancel = nil
+	if s.terminalErr == nil {
+		s.shuttingDown = false
+	}
 	s.streamMu.Unlock()
 }
 
@@ -213,6 +219,14 @@ func (s *Server) beginTransportShutdown() (context.CancelFunc, context.CancelFun
 		conns = append(conns, conn)
 	}
 	return runCancel, namedPipeCancel, conns
+}
+
+func (s *Server) finishTransportShutdown() {
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	if s.terminalErr == nil {
+		s.shuttingDown = false
+	}
 }
 
 func (s *Server) shutdownTimeout() time.Duration {
