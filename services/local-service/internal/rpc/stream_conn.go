@@ -8,8 +8,9 @@ import (
 	"sync"
 )
 
-// handleStreamConn serves one long-lived JSON-RPC stream and replays task
-// notifications on the same connection after the response envelope.
+// handleStreamConn serves one long-lived JSON-RPC stream. Live runtime
+// notifications can be emitted before the matching response, while buffered
+// task notifications are replayed on the same connection after the response.
 func (s *Server) handleStreamConn(conn net.Conn) {
 	defer conn.Close()
 
