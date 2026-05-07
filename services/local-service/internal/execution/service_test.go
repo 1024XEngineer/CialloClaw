@@ -1882,6 +1882,33 @@ func TestResolvePageToolInputAllowsWorkerDetectedBrowserKind(t *testing.T) {
 	}
 }
 
+func TestResolvePageToolInputIgnoresFragmentsAndHostCase(t *testing.T) {
+	snapshot := contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://EXAMPLE.com/docs#install", PageTitle: "Docs"}
+	input, ok := resolvePageToolInput("page_read", map[string]any{"url": "https://example.com/docs#api"}, snapshot)
+	if !ok {
+		t.Fatal("expected page_read tool input to resolve for equivalent live page URLs")
+	}
+	attach, ok := input["attach"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected attach hints for equivalent URLs, got %+v", input)
+	}
+	target, ok := attach["target"].(map[string]any)
+	if !ok || target["url"] != "https://example.com/docs" {
+		t.Fatalf("expected normalized attach target URL without fragment and with lowercase host, got %+v", attach)
+	}
+}
+
+func TestResolvePageToolInputKeepsQueryDifferencesDistinct(t *testing.T) {
+	snapshot := contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com/docs?tab=install", PageTitle: "Docs"}
+	input, ok := resolvePageToolInput("page_read", map[string]any{"url": "https://example.com/docs?tab=api"}, snapshot)
+	if !ok {
+		t.Fatal("expected page_read tool input to resolve")
+	}
+	if _, exists := input["attach"]; exists {
+		t.Fatalf("expected query changes to remain distinct and skip attach, got %+v", input)
+	}
+}
+
 func TestExecuteFallsBackWhenModelFails(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
@@ -2993,6 +3020,12 @@ func TestResolveToolExecutionSupportsWorkerAndInteractiveIntents(t *testing.T) {
 		wantKey    string
 		wantAttach bool
 	}{
+		{name: "browser_attach_current", request: Request{Intent: map[string]any{"name": "browser_attach_current", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "browser_kind": "chrome"}}}}, wantTool: "browser_attach_current", wantKey: "attach", wantAttach: true},
+		{name: "browser_snapshot", request: Request{Intent: map[string]any{"name": "browser_snapshot", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "target": map[string]any{"url": "https://example.com"}}}}}, wantTool: "browser_snapshot", wantKey: "attach", wantAttach: true},
+		{name: "browser_navigate", request: Request{Intent: map[string]any{"name": "browser_navigate", "arguments": map[string]any{"url": "https://example.com/next", "attach": map[string]any{"mode": "cdp", "browser_kind": "edge"}}}}, wantTool: "browser_navigate", wantKey: "url", wantAttach: true},
+		{name: "browser_tabs_list", request: Request{Intent: map[string]any{"name": "browser_tabs_list", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "browser_kind": "chrome"}}}}, wantTool: "browser_tabs_list", wantKey: "attach", wantAttach: true},
+		{name: "browser_tab_focus", request: Request{Intent: map[string]any{"name": "browser_tab_focus", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "target": map[string]any{"page_index": 1.0}}}}}, wantTool: "browser_tab_focus", wantKey: "attach", wantAttach: true},
+		{name: "browser_interact", request: Request{Intent: map[string]any{"name": "browser_interact", "arguments": map[string]any{"actions": []any{map[string]any{"type": "click", "selector": "button"}}, "attach": map[string]any{"mode": "cdp", "target": map[string]any{"url": "https://example.com"}}}}}, wantTool: "browser_interact", wantKey: "actions", wantAttach: true},
 		{name: "page_interact", request: Request{Intent: map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com", "actions": []any{map[string]any{"type": "click", "selector": "button"}}}}, Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "page_interact", wantKey: "url", wantAttach: true},
 		{name: "structured_dom", request: Request{Intent: map[string]any{"name": "structured_dom", "arguments": map[string]any{"url": "https://example.com"}}, Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "structured_dom", wantKey: "url", wantAttach: true},
 		{name: "extract_text", request: Request{Intent: map[string]any{"name": "extract_text", "arguments": map[string]any{"path": "notes/demo.txt"}}}, wantTool: "extract_text", wantKey: "path"},
@@ -3024,6 +3057,9 @@ func TestResolveGovernanceToolExecutionSupportsWorkerAndInteractiveIntents(t *te
 		wantTool   string
 		wantAttach bool
 	}{
+		{name: "browser_attach_current", request: Request{TaskID: "task_browser_attach", RunID: "run_browser_attach", DeliveryType: "bubble", ResultTitle: "浏览器附着结果", Intent: map[string]any{"name": "browser_attach_current", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "browser_kind": "chrome"}}}}, wantTool: "browser_attach_current", wantAttach: true},
+		{name: "browser_navigate", request: Request{TaskID: "task_browser_nav", RunID: "run_browser_nav", DeliveryType: "bubble", ResultTitle: "浏览器导航结果", Intent: map[string]any{"name": "browser_navigate", "arguments": map[string]any{"url": "https://example.com/next", "attach": map[string]any{"mode": "cdp", "browser_kind": "edge"}}}}, wantTool: "browser_navigate", wantAttach: true},
+		{name: "browser_interact", request: Request{TaskID: "task_browser_interact", RunID: "run_browser_interact", DeliveryType: "bubble", ResultTitle: "浏览器交互结果", Intent: map[string]any{"name": "browser_interact", "arguments": map[string]any{"actions": []any{map[string]any{"type": "click", "selector": "button"}}, "attach": map[string]any{"mode": "cdp", "target": map[string]any{"url": "https://example.com"}}}}}, wantTool: "browser_interact", wantAttach: true},
 		{name: "page_interact", request: Request{TaskID: "task_001", RunID: "run_001", DeliveryType: "bubble", ResultTitle: "页面交互结果", Intent: map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com", "actions": []any{map[string]any{"type": "click", "selector": "button"}}}}, Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "page_interact", wantAttach: true},
 		{name: "structured_dom", request: Request{TaskID: "task_002", RunID: "run_002", DeliveryType: "bubble", ResultTitle: "结构化结果", Intent: map[string]any{"name": "structured_dom", "arguments": map[string]any{"url": "https://example.com"}}, Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "structured_dom", wantAttach: true},
 		{name: "ocr_pdf", request: Request{TaskID: "task_003", RunID: "run_003", DeliveryType: "bubble", ResultTitle: "OCR 结果", Intent: map[string]any{"name": "ocr_pdf", "arguments": map[string]any{"path": "docs/demo.pdf", "language": "eng"}}}, wantTool: "ocr_pdf"},
@@ -3254,6 +3290,12 @@ func TestToolBubbleTextAndGovernanceHelpersSupportNewWorkerFlows(t *testing.T) {
 	if governanceTargetObject("page_interact", map[string]any{"url": "https://example.com"}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "https://example.com" {
 		t.Fatalf("expected page_interact governance target url")
 	}
+	if governanceTargetObject("browser_navigate", map[string]any{"url": "https://example.com/next", "attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{"url": "https://example.com/current"}}}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "https://example.com/next" {
+		t.Fatalf("expected browser_navigate governance target to prefer destination url")
+	}
+	if governanceTargetObject("browser_tab_focus", map[string]any{"attach": map[string]any{"target": map[string]any{"page_index": 2}}}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "browser_tab:2" {
+		t.Fatalf("expected browser_tab_focus governance target to use page index")
+	}
 	if governanceTargetObject("extract_text", map[string]any{"path": "notes/demo.txt"}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "notes/demo.txt" {
 		t.Fatalf("expected file-based governance target path")
 	}
@@ -3265,6 +3307,9 @@ func TestToolBubbleTextAndGovernanceHelpersSupportNewWorkerFlows(t *testing.T) {
 	}
 	if approvedTargetObject(map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com"}}, "/workspace") != "https://example.com" {
 		t.Fatalf("expected webpage intent to preserve approved url target")
+	}
+	if approvedTargetObject(map[string]any{"name": "browser_tab_focus", "arguments": map[string]any{"attach": map[string]any{"target": map[string]any{"page_index": 3.0}}}}, "/workspace") != "browser_tab:3" {
+		t.Fatalf("expected browser_tab_focus approval target to use page index")
 	}
 	if approvedTargetObject(map[string]any{"name": "transcode_media", "arguments": map[string]any{"path": "clips/demo.mov", "output_path": "exports/demo.mp4"}}, "/workspace") != "/workspace/exports/demo.mp4" {
 		t.Fatalf("expected media intent approval target to follow output_path")
