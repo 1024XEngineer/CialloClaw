@@ -12,6 +12,10 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 )
 
+type mainTestContextKey string
+
+const mainTestContextValueKey mainTestContextKey = "main-test"
+
 type stubMainApp struct {
 	startErr error
 	started  bool
@@ -54,7 +58,7 @@ func TestRunMainPassesFlagsToBootstrapAndStartsApp(t *testing.T) {
 		loggedMessage = fmt.Sprintf(format, args...)
 	}
 
-	ctx := context.WithValue(context.Background(), struct{}{}, "main-run")
+	ctx := context.WithValue(context.Background(), mainTestContextValueKey, "main-run")
 	err := runMain(ctx, []string{
 		"--data-dir", dataDir,
 		"--named-pipe", pipeName,
@@ -151,7 +155,7 @@ func TestMainInvokesRunWithProcessArgs(t *testing.T) {
 
 	expectedArgs := []string{"--data-dir", t.TempDir(), "--debug-http", "127.0.0.1:0"}
 	os.Args = append([]string{"local-service"}, expectedArgs...)
-	ctxFromMain := context.WithValue(context.Background(), struct{}{}, "main")
+	ctxFromMain := context.WithValue(context.Background(), mainTestContextValueKey, "main")
 	stopCalled := false
 	runCalled := false
 
