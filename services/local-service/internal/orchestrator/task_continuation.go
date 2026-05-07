@@ -37,9 +37,6 @@ type taskContinuationOptions struct {
 	// confirmation is not enough to prove implicit plain-text ownership or block
 	// already-confirmed pending evidence from resuming.
 	ForceConfirmRequired bool
-	// AllowAsyncBubble keeps the desktop bubble continuation hotfix limited to
-	// submit flows that already opted into immediate async delivery.
-	AllowAsyncBubble bool
 }
 
 func (s *Service) maybeContinueExistingTask(params map[string]any, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, options taskContinuationOptions) (map[string]any, bool, string, error) {
@@ -758,17 +755,6 @@ func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot contex
 	}
 	if handled {
 		return governedResponse, nil
-	}
-	if options.AllowAsyncBubble && shouldRunAsyncBubbleDelivery(governedTask) {
-		asyncTask, asyncBubble, asyncErr := s.beginAsyncTaskExecution(governedTask, mergedSnapshot, suggestion.Intent)
-		if asyncErr != nil {
-			return nil, asyncErr
-		}
-		return map[string]any{
-			"task":            taskMap(asyncTask),
-			"bubble_message":  asyncBubble,
-			"delivery_result": nil,
-		}, nil
 	}
 	executedTask, resultBubble, deliveryResult, _, execErr := s.executeTask(governedTask, mergedSnapshot, suggestion.Intent)
 	if execErr != nil {

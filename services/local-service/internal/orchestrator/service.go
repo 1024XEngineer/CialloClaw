@@ -314,8 +314,6 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 	if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, nil, taskContinuationOptions{
 		ConfirmRequired:      confirmRequired,
 		ForceConfirmRequired: confirmRequired,
-		AllowAsyncBubble: strings.TrimSpace(stringValue(params, "source", "")) == "floating_ball" &&
-			strings.TrimSpace(stringValue(options, "preferred_delivery", "")) == "bubble",
 	}); err != nil {
 		return nil, err
 	} else if handled {
@@ -404,19 +402,10 @@ func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
 				return governedResponse, nil
 			}
 			task = governedTask
-			if shouldRunAsyncBubbleDelivery(task) && strings.TrimSpace(stringValue(options, "preferred_delivery", "")) == "bubble" {
-				asyncTask, asyncBubble, asyncErr := s.beginAsyncTaskExecution(task, snapshot, suggestion.Intent)
-				if asyncErr != nil {
-					return nil, asyncErr
-				}
-				task = asyncTask
-				bubble = asyncBubble
-			} else {
-				var execErr error
-				task, bubble, deliveryResult, _, execErr = s.executeTask(task, snapshot, suggestion.Intent)
-				if execErr != nil {
-					return nil, execErr
-				}
+			var execErr error
+			task, bubble, deliveryResult, _, execErr = s.executeTask(task, snapshot, suggestion.Intent)
+			if execErr != nil {
+				return nil, execErr
 			}
 		}
 	} else {
@@ -5152,37 +5141,6 @@ func bubbleTextForStart(suggestion intent.Suggestion) string {
 	}
 	return suggestion.ResultBubbleText
 }
-
-// shouldRunAsyncBubbleDelivery limits the asynchronous submit hotfix to
-// floating-ball requests that explicitly prefer short bubble delivery.
-func shouldRunAsyncBubbleDelivery(task runengine.TaskRecord) bool {
-	return strings.TrimSpace(task.RequestSource) == "floating_ball" && strings.TrimSpace(task.PreferredDelivery) == "bubble"
-}
-
-// beginAsyncTaskExecution persists an immediate processing bubble, then lets
-// formal execution continue in the background.
-func (s *Service) beginAsyncTaskExecution(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) (runengine.TaskRecord, map[string]any, error) {
-	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已收到，正在处理。", task.UpdatedAt.Format(dateTimeLayout))
-	updatedTask, ok := s.runEngine.SetPresentation(task.TaskID, bubble, nil, nil)
-	if !ok {
-		return runengine.TaskRecord{}, nil, ErrTaskNotFound
-	}
-
-	taskID := updatedTask.TaskID
-	clonedSnapshot := cloneTaskSnapshot(snapshot)
-	clonedIntent := cloneMap(taskIntent)
-
-	go func() {
-		runtimeTask, exists := s.runEngine.GetTask(taskID)
-		if !exists {
-			return
-		}
-		_, _, _, _, _ = s.executeTask(runtimeTask, clonedSnapshot, clonedIntent)
-	}()
-
-	return updatedTask, bubble, nil
-}
-
 func confirmIntentText(taskIntent map[string]any) string {
 	switch stringValue(taskIntent, "name", "") {
 	case "translate":
