@@ -76,4 +76,4 @@ jobs:
 
       - name: Build Windows Tauri app
         working-directory: apps/desktop
-        run: pnpm exec tauri build --debug --no-bundle
+        run: pnpm exec tauri build --debug
