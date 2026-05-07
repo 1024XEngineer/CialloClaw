@@ -27,11 +27,21 @@ var (
 	}
 	logPrintfForMain     = log.Printf
 	notifyContextForMain = signal.NotifyContext
-	runMainForProcess    = run
-	logFatalForMain      = log.Fatal
+	runMainForProcess    = runMain
+	logFatalForMain      = func(err error) { log.Fatalf("local service: %v", err) }
 )
 
-func run(ctx context.Context, args []string) error {
+func main() {
+	ctx, stop := notifyContextForMain(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	if err := runMainForProcess(ctx, os.Args[1:]); err != nil {
+		logFatalForMain(err)
+	}
+}
+
+// runMain parses process-level bootstrap overrides before delegating to run.
+func runMain(ctx context.Context, args []string) error {
 	flags := flag.NewFlagSet("local-service", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 
@@ -42,11 +52,16 @@ func run(ctx context.Context, args []string) error {
 		return err
 	}
 
-	cfg := loadConfigForMain(config.LoadOptions{
+	return run(ctx, loadConfigForMain(config.LoadOptions{
 		DataDir:          *dataDir,
 		NamedPipeName:    *namedPipe,
 		DebugHTTPAddress: *debugHTTP,
-	})
+	}))
+}
+
+// run owns startup wiring after config resolution so main remains the only
+// process-exit boundary.
+func run(ctx context.Context, cfg config.Config) error {
 	app, err := newBootstrapForMain(cfg)
 	if err != nil {
 		return fmt.Errorf("bootstrap local service: %w", err)
@@ -62,15 +77,5 @@ func run(ctx context.Context, args []string) error {
 	if err := app.Start(ctx); err != nil {
 		return fmt.Errorf("run local service: %w", err)
 	}
-
 	return nil
-}
-
-func main() {
-	ctx, stop := notifyContextForMain(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
-
-	if err := runMainForProcess(ctx, os.Args[1:]); err != nil {
-		logFatalForMain(err)
-	}
 }

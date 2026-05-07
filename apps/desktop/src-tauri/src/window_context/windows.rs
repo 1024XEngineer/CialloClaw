@@ -1,4 +1,5 @@
 use super::types::ActiveWindowContextPayload;
+use crate::internal_windows::{INTERNAL_PINNED_WINDOW_PREFIX, INTERNAL_WINDOW_LABELS};
 use once_cell::sync::Lazy;
 use std::path::Path;
 use std::sync::Mutex;
@@ -32,14 +33,7 @@ const BROWSER_KIND_EDGE: &str = "edge";
 const BROWSER_KIND_OTHER_BROWSER: &str = "other_browser";
 const BROWSER_KIND_NON_BROWSER: &str = "non_browser";
 const WINDOW_CONTEXT_URL_DEBOUNCE_MS: u64 = 320;
-const SHELL_BALL_WINDOW_LABELS: [&str; 5] = [
-    "shell-ball",
-    "shell-ball-bubble",
-    "shell-ball-input",
-    "shell-ball-voice",
-    "onboarding",
-];
-const SHELL_BALL_PINNED_WINDOW_PREFIX: &str = "shell-ball-bubble-pinned-";
+const INTERNAL_WINDOW_CONTEXT_REUSE_MAX_AGE_MS: u64 = 10_000;
 
 static WINDOW_CONTEXT_APP_HANDLE: Lazy<Mutex<Option<AppHandle>>> = Lazy::new(|| Mutex::new(None));
 static WINDOW_CONTEXT_FOREGROUND_HOOK: Lazy<Mutex<Option<isize>>> = Lazy::new(|| Mutex::new(None));
@@ -110,8 +104,8 @@ pub fn read_active_window_context() -> Result<Option<ActiveWindowContextPayload>
         return Ok(read_cached_window_context().map(with_window_context_activity_counts));
     }
 
-    if is_shell_ball_cluster_window(hwnd) {
-        return Ok(read_cached_window_context_for_shell_ball());
+    if is_internal_app_window(hwnd) {
+        return Ok(read_cached_window_context_for_internal_window());
     }
 
     let context = read_window_context_for_hwnd(hwnd);
@@ -166,7 +160,7 @@ pub fn install_window_context_listener(app: &AppHandle) -> Result<(), String> {
 
 fn read_current_external_window_context() -> Option<(HWND, ActiveWindowContextPayload)> {
     let hwnd = unsafe { GetForegroundWindow() };
-    if hwnd.0.is_null() || is_shell_ball_cluster_window(hwnd) {
+    if hwnd.0.is_null() || is_internal_app_window(hwnd) {
         return None;
     }
 
@@ -310,26 +304,36 @@ fn cache_window_context(hwnd: HWND, context: &ActiveWindowContextPayload) {
     }
 }
 
-fn read_cached_window_context() -> Option<ActiveWindowContextPayload> {
-    LAST_EXTERNAL_WINDOW_CONTEXT.lock().ok().and_then(|cached| {
-        cached
-            .as_ref()
-            .map(|value| with_window_context_activity_counts(value.context.clone()))
-    })
+// Internal desktop windows should only reuse the last external foreground
+// snapshot for a short time. Otherwise a dashboard or shell-ball submit can
+// incorrectly report a long-stale browser tab as the current webpage.
+fn read_fresh_cached_window_context() -> Option<CachedWindowContext> {
+    let mut cached_context = LAST_EXTERNAL_WINDOW_CONTEXT.lock().ok()?;
+    let cached = cached_context.clone()?;
+
+    if cached.observed_at.elapsed()
+        > Duration::from_millis(INTERNAL_WINDOW_CONTEXT_REUSE_MAX_AGE_MS)
+    {
+        *cached_context = None;
+        return None;
+    }
+
+    Some(cached)
 }
 
-fn read_cached_window_context_for_shell_ball() -> Option<ActiveWindowContextPayload> {
-    let cached = LAST_EXTERNAL_WINDOW_CONTEXT
-        .lock()
-        .ok()
-        .and_then(|cached| cached.clone())?;
+fn read_cached_window_context() -> Option<ActiveWindowContextPayload> {
+    read_fresh_cached_window_context()
+        .map(|cached| with_window_context_activity_counts(cached.context))
+}
+
+fn read_cached_window_context_for_internal_window() -> Option<ActiveWindowContextPayload> {
+    let cached = read_fresh_cached_window_context()?;
     let cached_context = with_window_context_activity_counts(cached.context.clone());
 
-    // Shell-ball activations can happen after in-window browser navigations
-    // that never emit a new foreground-window event. Re-read browser HWND
-    // context on demand so task input always sees the latest page URL and
-    // attach hints, but keep the cached snapshot as a fallback if the refresh
-    // path cannot resolve.
+    // Internal desktop activations can happen after the last external browser
+    // page kept navigating without another foreground-window event. Re-read the
+    // cached HWND on demand so task input sees the freshest page URL, but keep
+    // the cached snapshot as a fallback when the refresh path cannot resolve.
     if !should_refresh_cached_shell_ball_window_context(&cached.context) {
         return Some(cached_context);
     }
@@ -338,10 +342,7 @@ fn read_cached_window_context_for_shell_ball() -> Option<ActiveWindowContextPayl
 }
 
 fn read_cached_window_context_with_url() -> Option<ActiveWindowContextPayload> {
-    let cached = LAST_EXTERNAL_WINDOW_CONTEXT
-        .lock()
-        .ok()
-        .and_then(|cached| cached.clone())?;
+    let cached = read_fresh_cached_window_context()?;
 
     let hwnd = HWND(cached.hwnd as *mut core::ffi::c_void);
     if hwnd.0.is_null() {
@@ -354,7 +355,10 @@ fn read_cached_window_context_with_url() -> Option<ActiveWindowContextPayload> {
     Some(with_window_context_activity_counts(context))
 }
 
-fn is_shell_ball_cluster_window(hwnd: HWND) -> bool {
+// Desktop-owned windows should keep using the latest external foreground
+// context so dashboard and shell-ball submissions can still carry the browser
+// page URL that was active right before the desktop surface opened.
+fn is_internal_app_window(hwnd: HWND) -> bool {
     let Some(app) = WINDOW_CONTEXT_APP_HANDLE
         .lock()
         .ok()
@@ -365,7 +369,7 @@ fn is_shell_ball_cluster_window(hwnd: HWND) -> bool {
 
     let root_window = get_root_window(hwnd);
 
-    for label in SHELL_BALL_WINDOW_LABELS {
+    for label in INTERNAL_WINDOW_LABELS {
         let Some(window) = app.get_webview_window(label) else {
             continue;
         };
@@ -380,7 +384,7 @@ fn is_shell_ball_cluster_window(hwnd: HWND) -> bool {
     }
 
     for window in app.webview_windows().values() {
-        if !window.label().starts_with(SHELL_BALL_PINNED_WINDOW_PREFIX) {
+        if !window.label().starts_with(INTERNAL_PINNED_WINDOW_PREFIX) {
             continue;
         }
 
@@ -416,7 +420,7 @@ unsafe extern "system" fn window_context_foreground_hook(
     _thread_id: u32,
     _event_time: u32,
 ) {
-    if hwnd.0.is_null() || is_shell_ball_cluster_window(hwnd) {
+    if hwnd.0.is_null() || is_internal_app_window(hwnd) {
         return;
     }
 

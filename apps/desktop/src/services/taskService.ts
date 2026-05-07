@@ -4,15 +4,12 @@ import type {
   PageContext,
   RequestMeta,
   RequestSource,
-  Task,
 } from "@cialloclaw/protocol";
 import { getActiveWindowContext, type DesktopWindowContextPayload } from "@/platform/desktopWindowContext";
 import { startTask } from "@/rpc/methods";
-import { useTaskStore } from "@/stores/taskStore";
 import { submitTextInput } from "./agentInputService";
 import {
   getConversationPageContextForSession,
-  getCurrentConversationSessionId,
   rememberConversationPageContextFromTask,
   rememberConversationSessionFromTask,
 } from "./conversationSessionService";
@@ -123,7 +120,9 @@ async function resolveTaskPageContext(pageContext: PageContext | undefined, sess
 }
 
 function resolveTaskSessionId(sessionId: string | undefined) {
-  return sessionId?.trim() || getCurrentConversationSessionId();
+  // Task-entry helpers start fresh unless a caller deliberately pins a backend
+  // session for an explicit continuation flow.
+  return sessionId?.trim() || undefined;
 }
 
 export async function startTaskFromSelectedText(text: string, context: StartTaskContext = {}) {
@@ -240,8 +239,4 @@ export async function bootstrapTask(title: string) {
   }
 
   return taskResult.task;
-}
-
-export function listActiveTasks(): Task[] {
-  return useTaskStore.getState().tasks;
 }

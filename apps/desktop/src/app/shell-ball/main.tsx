@@ -1,4 +1,4 @@
-// 该入口负责挂载悬浮球窗口。
+// This entry mounts the shell-ball window.
 import ReactDOM from "react-dom/client";
 import { AppProviders } from "@/features/shared/AppProviders";
 import { ShellBallApp } from "@/features/shell-ball/ShellBallApp";
@@ -15,6 +15,6 @@ rootElement.setAttribute("data-app-window", "shell-ball");
 
 ReactDOM.createRoot(rootElement).render(
   <AppProviders>
-    <ShellBallApp isDev={import.meta.env.DEV} />
+    <ShellBallApp />
   </AppProviders>,
 );

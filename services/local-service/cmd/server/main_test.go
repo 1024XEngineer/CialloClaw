@@ -24,7 +24,7 @@ func (s *stubMainApp) Start(ctx context.Context) error {
 	return s.startErr
 }
 
-func TestRunPassesFlagsToBootstrapAndStartsApp(t *testing.T) {
+func TestRunMainPassesFlagsToBootstrapAndStartsApp(t *testing.T) {
 	originalLoadConfig := loadConfigForMain
 	originalNewBootstrap := newBootstrapForMain
 	originalLogPrintf := logPrintfForMain
@@ -55,13 +55,13 @@ func TestRunPassesFlagsToBootstrapAndStartsApp(t *testing.T) {
 	}
 
 	ctx := context.WithValue(context.Background(), struct{}{}, "main-run")
-	err := run(ctx, []string{
+	err := runMain(ctx, []string{
 		"--data-dir", dataDir,
 		"--named-pipe", pipeName,
 		"--debug-http", debugHTTP,
 	})
 	if err != nil {
-		t.Fatalf("run returned error: %v", err)
+		t.Fatalf("runMain returned error: %v", err)
 	}
 
 	if capturedOptions.DataDir != dataDir {
@@ -93,56 +93,45 @@ func TestRunPassesFlagsToBootstrapAndStartsApp(t *testing.T) {
 	}
 }
 
-func TestRunWrapsBootstrapError(t *testing.T) {
-	originalLoadConfig := loadConfigForMain
-	originalNewBootstrap := newBootstrapForMain
-	originalLogPrintf := logPrintfForMain
-	t.Cleanup(func() {
-		loadConfigForMain = originalLoadConfig
-		newBootstrapForMain = originalNewBootstrap
-		logPrintfForMain = originalLogPrintf
+func TestRunReturnsBootstrapErrorWithContext(t *testing.T) {
+	err := run(context.Background(), config.Config{
+		RPC:           config.RPCConfig{Transport: "named_pipe", NamedPipeName: `\\.\pipe\cialloclaw-rpc-test`, DebugHTTPAddress: ":0"},
+		DataDir:       t.TempDir(),
+		WorkspaceRoot: "invalid\x00workspace",
+		DatabasePath:  t.TempDir(),
 	})
-
-	loadConfigForMain = func(options config.LoadOptions) config.Config {
-		return config.Load(options)
+	if err == nil {
+		t.Fatal("expected bootstrap error")
 	}
-	newBootstrapForMain = func(config.Config) (appStarter, error) {
-		return nil, errors.New("bootstrap failed")
+	if !strings.Contains(err.Error(), "bootstrap local service:") {
+		t.Fatalf("expected bootstrap context, got %v", err)
 	}
-	logPrintfForMain = func(string, ...any) {}
-
-	err := run(context.Background(), nil)
-	if err == nil || !strings.Contains(err.Error(), "bootstrap local service: bootstrap failed") {
-		t.Fatalf("expected wrapped bootstrap error, got %v", err)
+	if !strings.Contains(err.Error(), "workspace root contains invalid null byte") {
+		t.Fatalf("expected workspace validation error, got %v", err)
 	}
 }
 
 func TestRunWrapsStartError(t *testing.T) {
-	originalLoadConfig := loadConfigForMain
 	originalNewBootstrap := newBootstrapForMain
 	originalLogPrintf := logPrintfForMain
 	t.Cleanup(func() {
-		loadConfigForMain = originalLoadConfig
 		newBootstrapForMain = originalNewBootstrap
 		logPrintfForMain = originalLogPrintf
 	})
 
-	loadConfigForMain = func(options config.LoadOptions) config.Config {
-		return config.Load(options)
-	}
 	newBootstrapForMain = func(config.Config) (appStarter, error) {
 		return &stubMainApp{startErr: errors.New("start failed")}, nil
 	}
 	logPrintfForMain = func(string, ...any) {}
 
-	err := run(context.Background(), nil)
+	err := run(context.Background(), config.Load())
 	if err == nil || !strings.Contains(err.Error(), "run local service: start failed") {
 		t.Fatalf("expected wrapped start error, got %v", err)
 	}
 }
 
-func TestRunReturnsFlagParseError(t *testing.T) {
-	err := run(context.Background(), []string{"--unknown-flag"})
+func TestRunMainReturnsFlagParseError(t *testing.T) {
+	err := runMain(context.Background(), []string{"--unknown-flag"})
 	if err == nil || !strings.Contains(err.Error(), "flag provided but not defined") {
 		t.Fatalf("expected flag parse error, got %v", err)
 	}
@@ -174,21 +163,21 @@ func TestMainInvokesRunWithProcessArgs(t *testing.T) {
 	runMainForProcess = func(ctx context.Context, args []string) error {
 		runCalled = true
 		if ctx != ctxFromMain {
-			t.Fatalf("expected main to pass the notified context into run, got %v", ctx)
+			t.Fatalf("expected main to pass the notified context into runMain, got %v", ctx)
 		}
 		if !reflect.DeepEqual(args, expectedArgs) {
 			t.Fatalf("expected main to forward process args %v, got %v", expectedArgs, args)
 		}
 		return nil
 	}
-	logFatalForMain = func(...any) {
-		t.Fatal("did not expect main to call log.Fatal on successful run")
+	logFatalForMain = func(error) {
+		t.Fatal("did not expect main to call logFatalForMain on successful run")
 	}
 
 	main()
 
 	if !runCalled {
-		t.Fatal("expected main to invoke run")
+		t.Fatal("expected main to invoke runMain")
 	}
 	if !stopCalled {
 		t.Fatal("expected main to call the signal cleanup function")
@@ -210,7 +199,7 @@ func TestMainLogsFatalWhenRunFails(t *testing.T) {
 	os.Args = []string{"local-service", "--named-pipe", `\\.\pipe\main-fatal-test`}
 	stopCalled := false
 	runErr := errors.New("run failed")
-	var fatalArgs []any
+	var fatalErr error
 
 	notifyContextForMain = func(context.Context, ...os.Signal) (context.Context, context.CancelFunc) {
 		return context.Background(), func() {
@@ -220,8 +209,8 @@ func TestMainLogsFatalWhenRunFails(t *testing.T) {
 	runMainForProcess = func(context.Context, []string) error {
 		return runErr
 	}
-	logFatalForMain = func(args ...any) {
-		fatalArgs = append([]any(nil), args...)
+	logFatalForMain = func(err error) {
+		fatalErr = err
 	}
 
 	main()
@@ -229,10 +218,7 @@ func TestMainLogsFatalWhenRunFails(t *testing.T) {
 	if !stopCalled {
 		t.Fatal("expected main to call the signal cleanup function after a run failure")
 	}
-	if len(fatalArgs) != 1 {
-		t.Fatalf("expected main to call log.Fatal with one argument, got %v", fatalArgs)
-	}
-	if fatalArgs[0] != runErr {
-		t.Fatalf("expected main to forward the run error to log.Fatal, got %v", fatalArgs[0])
+	if fatalErr != runErr {
+		t.Fatalf("expected main to forward the run error to logFatalForMain, got %v", fatalErr)
 	}
 }

@@ -142,14 +142,6 @@ function readMirrorRouteState(value: unknown) {
   };
 }
 
-function formatMirrorDate(value: string) {
-  return new Date(value).toLocaleDateString("zh-CN", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
-}
-
 function formatShortMirrorDate(value: string) {
   return new Date(value).toLocaleDateString("zh-CN", {
     month: "short",

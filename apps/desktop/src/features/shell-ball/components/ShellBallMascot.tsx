@@ -1,13 +1,23 @@
-import { useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, MouseEvent, PointerEvent } from "react";
-import { AudioLines, Mic, ShieldAlert } from "lucide-react";
+import { Mic, ShieldAlert } from "lucide-react";
 import { cn } from "../../../utils/cn";
 import { SHELL_BALL_PRESS_DRIFT_TOLERANCE_PX, type ShellBallVoicePreview } from "../shellBall.interaction";
 import type { ShellBallMotionConfig, ShellBallVisualState } from "../shellBall.types";
+import { FLOATING_PET_HAPPY_DURATION_MS, type FloatingPetMode } from "./floating-pet/petAssets";
+import { FloatingPet } from "./floating-pet/FloatingPet";
+import type { ShellBallEdgeDockSide } from "../useShellBallWindowMetrics";
 
 type ShellBallMascotProps = {
+  dockTarget?: ShellBallEdgeDockSide | null;
   edgeDockRevealed?: boolean;
-  edgeDockSide?: "left" | "right" | null;
+  edgeDockSide?: ShellBallEdgeDockSide | null;
+  floatingBallSize?: "small" | "medium" | "large";
+  hasAlertOpportunity?: boolean;
+  hasPendingAgentLoading?: boolean;
+  hasPendingApproval?: boolean;
+  isDragging?: boolean;
+  isSettling?: boolean;
   visualState: ShellBallVisualState;
   voicePreview?: ShellBallVoicePreview;
   showVoiceHints?: boolean;
@@ -16,8 +26,8 @@ type ShellBallMascotProps = {
   motionConfig: ShellBallMotionConfig;
   onPrimaryClick?: () => void;
   onDoubleClick?: () => void;
-  onHotspotEnter?: () => void;
-  onHotspotLeave?: () => void;
+  onHotspotEnter?: (event: PointerEvent<HTMLButtonElement>) => void;
+  onHotspotLeave?: (event: PointerEvent<HTMLButtonElement>) => void;
   onHotspotDragStart?: (event: PointerEvent<HTMLButtonElement>) => void;
   onHotspotDragMove?: (event: PointerEvent<HTMLButtonElement>) => void;
   onHotspotDragEnd?: (event: PointerEvent<HTMLButtonElement>) => void;
@@ -28,8 +38,6 @@ type ShellBallMascotProps = {
   onPressCancel?: (event: PointerEvent<HTMLButtonElement>) => void;
 };
 
-type MotionStyle = CSSProperties & Record<string, string>;
-
 type ShellBallMascotHotspotGesture = "single_click" | "double_click";
 
 type ShellBallMascotHotspotGestureAction = "noop" | "primary_click" | "double_click";
@@ -37,6 +45,17 @@ type ShellBallMascotHotspotGestureAction = "noop" | "primary_click" | "double_cl
 type ShellBallMascotPointerPhase = "pointer_down" | "pointer_up" | "pointer_cancel";
 
 type ShellBallMascotPointerPhaseAction = "noop" | "start_press" | "finish_press" | "suppress_gestures" | "cleanup_only";
+
+type ShellBallMascotPetState = {
+  listenLocked: boolean;
+  mode: FloatingPetMode;
+};
+
+type MascotCssVars = CSSProperties & Record<string, string | number | undefined>;
+
+function canTriggerShellBallMascotHappyPulse(visualState: ShellBallVisualState) {
+  return visualState === "idle" || visualState === "hover_input";
+}
 
 function canTriggerShellBallMascotSecondaryGestures(visualState: ShellBallVisualState) {
   return visualState !== "voice_listening" && visualState !== "voice_locked";
@@ -46,6 +65,7 @@ export function getShellBallMascotHotspotGestureAction(input: {
   visualState: ShellBallVisualState;
   gesture: ShellBallMascotHotspotGesture;
   suppressed: boolean;
+  alertOpportunityAvailable?: boolean;
   selectionIndicatorVisible?: boolean;
 }): ShellBallMascotHotspotGestureAction {
   if (input.suppressed) {
@@ -53,7 +73,7 @@ export function getShellBallMascotHotspotGestureAction(input: {
   }
 
   if (input.gesture === "single_click") {
-    return input.selectionIndicatorVisible ? "primary_click" : "noop";
+    return input.selectionIndicatorVisible || input.alertOpportunityAvailable ? "primary_click" : "noop";
   }
 
   if (canTriggerShellBallMascotSecondaryGestures(input.visualState)) {
@@ -99,9 +119,137 @@ export function shouldSuppressShellBallMascotHotspotGestures(input: {
   return Math.hypot(input.pointerX - input.startX, input.pointerY - input.startY) > SHELL_BALL_PRESS_DRIFT_TOLERANCE_PX;
 }
 
+export function getShellBallMascotPetState(input: {
+  hasAlertOpportunity?: boolean;
+  hasPendingAgentLoading?: boolean;
+  hasPendingApproval?: boolean;
+  happyActive: boolean;
+  selectionIndicatorVisible?: boolean;
+  visualState: ShellBallVisualState;
+}): ShellBallMascotPetState {
+  if (input.hasPendingAgentLoading || input.visualState === "processing") {
+    return {
+      listenLocked: false,
+      mode: "think",
+    };
+  }
+
+  if (input.visualState === "voice_locked") {
+    return {
+      listenLocked: true,
+      mode: "listen",
+    };
+  }
+
+  if (input.visualState === "voice_listening") {
+    return {
+      listenLocked: false,
+      mode: "listen",
+    };
+  }
+
+  if (input.visualState === "confirming_intent") {
+    return {
+      listenLocked: false,
+      mode: "alert",
+    };
+  }
+
+  if (input.hasPendingApproval || input.visualState === "waiting_auth") {
+    return {
+      listenLocked: false,
+      mode: "safe",
+    };
+  }
+
+  if (input.selectionIndicatorVisible || input.hasAlertOpportunity) {
+    return {
+      listenLocked: false,
+      mode: "alert",
+    };
+  }
+
+  if (input.happyActive) {
+    return {
+      listenLocked: false,
+      mode: "happy",
+    };
+  }
+
+  return {
+    listenLocked: false,
+    mode: "idle",
+  };
+}
+
+function resolveShellBallDockStyle(input: {
+  edgeDockSide: ShellBallEdgeDockSide | null;
+  edgeDockRevealed: boolean;
+}): CSSProperties | undefined {
+  if (input.edgeDockSide === null) {
+    return undefined;
+  }
+
+  let shiftX = 0;
+  let shiftY = 0;
+  let tiltDeg = 0;
+
+  switch (input.edgeDockSide) {
+    case "left":
+      shiftX = input.edgeDockRevealed ? 2 : 6;
+      tiltDeg = input.edgeDockRevealed ? 5 : 8;
+      break;
+    case "right":
+      shiftX = input.edgeDockRevealed ? -2 : -6;
+      tiltDeg = input.edgeDockRevealed ? -5 : -8;
+      break;
+    case "top":
+      shiftY = input.edgeDockRevealed ? 0 : -8;
+      break;
+    case "top_left":
+      shiftX = input.edgeDockRevealed ? 1 : 5;
+      shiftY = input.edgeDockRevealed ? 0 : -8;
+      tiltDeg = input.edgeDockRevealed ? 4 : 7;
+      break;
+    case "top_right":
+      shiftX = input.edgeDockRevealed ? -1 : -5;
+      shiftY = input.edgeDockRevealed ? 0 : -8;
+      tiltDeg = input.edgeDockRevealed ? -4 : -7;
+      break;
+    case "bottom_left":
+      shiftX = input.edgeDockRevealed ? 1 : 4;
+      shiftY = input.edgeDockRevealed ? 0 : 4;
+      tiltDeg = input.edgeDockRevealed ? 4 : 6;
+      break;
+    case "bottom_right":
+      shiftX = input.edgeDockRevealed ? -1 : -4;
+      shiftY = input.edgeDockRevealed ? 0 : 4;
+      tiltDeg = input.edgeDockRevealed ? -4 : -6;
+      break;
+    default:
+      shiftY = input.edgeDockRevealed ? 0 : 4;
+      break;
+  }
+
+  if (shiftX === 0 && shiftY === 0) {
+    return undefined;
+  }
+
+  return {
+    transform: `translate(${shiftX}px, ${shiftY}px) rotate(${tiltDeg}deg)`,
+  };
+}
+
 export function ShellBallMascot({
+  dockTarget = null,
   edgeDockRevealed = false,
   edgeDockSide = null,
+  floatingBallSize,
+  hasAlertOpportunity = false,
+  hasPendingAgentLoading = false,
+  hasPendingApproval = false,
+  isDragging = false,
+  isSettling = false,
   visualState,
   voicePreview = null,
   showVoiceHints = true,
@@ -126,42 +274,67 @@ export function ShellBallMascot({
   const pointerStartXRef = useRef<number | null>(null);
   const pointerStartYRef = useRef<number | null>(null);
   const suppressGestureRef = useRef(false);
+  const happyTimeoutRef = useRef<number | null>(null);
+  const [happyActive, setHappyActive] = useState(false);
 
-  const floatStyle: MotionStyle = {
-    "--shell-ball-float-distance": `${motionConfig.floatOffsetY}px`,
-    "--shell-ball-float-duration": `${motionConfig.floatDurationMs}ms`,
-  };
-  const bodyShellStyle: MotionStyle = {
-    "--shell-ball-breathe-scale": String(motionConfig.breatheScale),
-    "--shell-ball-breathe-duration": `${motionConfig.breatheDurationMs}ms`,
-  };
-  const dockTiltDeg = edgeDockSide === null ? 0 : edgeDockSide === "left" ? (edgeDockRevealed ? 4 : 12) : (edgeDockRevealed ? -4 : -12);
-  const dockShiftPx = edgeDockSide === null ? 0 : edgeDockSide === "left" ? (edgeDockRevealed ? 2 : 6) : (edgeDockRevealed ? -2 : -6);
-  const attitudeStyle: CSSProperties = {
-    transform: `translateX(${dockShiftPx}px) rotate(${motionConfig.bodyTiltDeg + dockTiltDeg}deg) scale(${motionConfig.bodyScale})`,
-  };
-  const wingStyle: MotionStyle = {
-    "--shell-ball-wing-lift": `${motionConfig.wingLiftDeg}deg`,
-    "--shell-ball-wing-duration": `${motionConfig.wingDurationMs}ms`,
-    "--shell-ball-wing-spread": `${motionConfig.wingSpreadPx}px`,
-  };
-  const tailStyle: MotionStyle = {
-    "--shell-ball-tail-swing": `${motionConfig.tailSwingDeg}deg`,
-    "--shell-ball-tail-duration": `${motionConfig.tailDurationMs}ms`,
-  };
-  const eyeStyle: CSSProperties = {
-    animationDelay: `${motionConfig.blinkDelayMs}ms`,
-  };
-  const crestStyle: CSSProperties = {
-    transform: `translateY(${-motionConfig.crestLiftPx}px)`,
-  };
   const holdRingCircumference = 2 * Math.PI * 84;
   const holdRingDashOffset = holdRingCircumference * (1 - voiceHoldProgress);
   const showVoiceHoldRing = voiceHoldProgress > 0 && visualState !== "voice_listening" && visualState !== "voice_locked";
   const shouldRenderVoiceHints = showVoiceHints && (visualState === "voice_listening" || visualState === "voice_locked");
   const showVoiceMarker = visualState === "voice_listening" || visualState === "voice_locked";
-  const showSelectionMarker = selectionIndicatorVisible && !showVoiceMarker;
   const shouldRouteHotspotDrag = visualState !== "voice_listening" && visualState !== "voice_locked";
+  const petState = getShellBallMascotPetState({
+    hasAlertOpportunity,
+    hasPendingAgentLoading,
+    hasPendingApproval,
+    happyActive,
+    selectionIndicatorVisible,
+    visualState,
+  });
+  const showAuthMarker = motionConfig.showAuthMarker || petState.mode === "safe";
+  const dockStyle = resolveShellBallDockStyle({ edgeDockRevealed, edgeDockSide });
+  const shadowStyle: MascotCssVars = {
+    "--shell-ball-shadow-offset-y": "0px",
+    "--shell-ball-shadow-scale-x": 1,
+    "--shell-ball-shadow-scale-y": 1,
+  };
+
+  useEffect(() => {
+    return () => {
+      if (happyTimeoutRef.current !== null) {
+        window.clearTimeout(happyTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (canTriggerShellBallMascotHappyPulse(visualState)) {
+      return;
+    }
+
+    if (happyTimeoutRef.current !== null) {
+      window.clearTimeout(happyTimeoutRef.current);
+      happyTimeoutRef.current = null;
+    }
+
+    setHappyActive(false);
+  }, [visualState]);
+
+  function triggerHappyPulse() {
+    if (!canTriggerShellBallMascotHappyPulse(visualState)) {
+      return;
+    }
+
+    if (happyTimeoutRef.current !== null) {
+      return;
+    }
+
+    setHappyActive(true);
+    happyTimeoutRef.current = window.setTimeout(() => {
+      happyTimeoutRef.current = null;
+      setHappyActive(false);
+    }, FLOATING_PET_HAPPY_DURATION_MS);
+  }
 
   function resetPointerSequence() {
     activeSequenceRef.current = false;
@@ -291,20 +464,23 @@ export function ShellBallMascot({
 
   function handleClick(event: MouseEvent<HTMLButtonElement>) {
     const action = getShellBallMascotHotspotGestureAction({
+      alertOpportunityAvailable: hasAlertOpportunity,
       visualState,
       gesture: "single_click",
       suppressed: suppressGestureRef.current,
       selectionIndicatorVisible,
     });
 
-    if (action !== "primary_click") {
-      return;
+    if (event.detail === 1 && !suppressGestureRef.current) {
+      triggerHappyPulse();
     }
 
-    onPrimaryClick();
+    if (action === "primary_click") {
+      onPrimaryClick();
+    }
   }
 
-  function handleDoubleClick(event: MouseEvent<HTMLButtonElement>) {
+  function handleDoubleClick(_event: MouseEvent<HTMLButtonElement>) {
     const action = getShellBallMascotHotspotGestureAction({
       visualState,
       gesture: "double_click",
@@ -321,15 +497,20 @@ export function ShellBallMascot({
   return (
     <div
       className={cn("shell-ball-mascot", voicePreview !== null && `shell-ball-mascot--preview-${voicePreview}`)}
+      data-shell-ball-pet-listen-locked={petState.listenLocked ? "true" : "false"}
+      data-shell-ball-pet-mode={petState.mode}
       data-state={visualState}
+      data-dock-target={dockTarget ?? "none"}
       data-edge-dock-revealed={edgeDockRevealed ? "true" : "false"}
       data-edge-dock-side={edgeDockSide ?? "none"}
+      data-floating-ball-size={floatingBallSize}
+      data-shell-ball-dragging={isDragging ? "true" : "false"}
+      data-shell-ball-settling={isSettling ? "true" : "false"}
       data-tone={motionConfig.accentTone}
       data-voice-hints={shouldRenderVoiceHints ? "true" : "false"}
       data-voice-preview={voicePreview ?? undefined}
     >
-      <div className="shell-ball-mascot__orbital shell-ball-mascot__orbital--back" />
-      <div className="shell-ball-mascot__shadow" />
+      <div className="shell-ball-mascot__shadow" style={shadowStyle} />
 
       {showVoiceHoldRing ? (
         <svg aria-hidden="true" className="shell-ball-mascot__hold-ring" viewBox="0 0 190 190">
@@ -349,56 +530,11 @@ export function ShellBallMascot({
         </svg>
       ) : null}
 
-      {motionConfig.ringMode === "hidden" ? null : (
-        <div className="shell-ball-mascot__rings" data-ring={motionConfig.ringMode}>
-          <span className="shell-ball-mascot__ring shell-ball-mascot__ring--outer" />
-          <span className="shell-ball-mascot__ring shell-ball-mascot__ring--inner" />
-          <span className="shell-ball-mascot__ring-core">
-            <AudioLines className="shell-ball-mascot__ring-icon" />
-          </span>
-        </div>
-      )}
-
-      <div className="shell-ball-mascot__float" style={floatStyle}>
-        <div className="shell-ball-mascot__attitude" style={attitudeStyle}>
-          <div className="shell-ball-mascot__tail-shell" style={tailStyle}>
-            <div className="shell-ball-mascot__tail" />
+      <div className="shell-ball-mascot__attitude" style={dockStyle}>
+        <div className="shell-ball-mascot__visual">
+          <div className="shell-ball-mascot__pet-shell">
+            <FloatingPet className="shell-ball-mascot__pet" listenLocked={petState.listenLocked} mode={petState.mode} />
           </div>
-
-          <div className="shell-ball-mascot__wing-shell shell-ball-mascot__wing-shell--left" style={wingStyle}>
-            <div className="shell-ball-mascot__wing" data-mode={motionConfig.wingMode} data-side="left" />
-          </div>
-          <div className="shell-ball-mascot__wing-shell shell-ball-mascot__wing-shell--right" style={wingStyle}>
-            <div className="shell-ball-mascot__wing" data-mode={motionConfig.wingMode} data-side="right" />
-          </div>
-
-          <div className="shell-ball-mascot__body-shell" style={bodyShellStyle}>
-            <div className="shell-ball-mascot__crest" style={crestStyle}>
-              <span className="shell-ball-mascot__crest-feather shell-ball-mascot__crest-feather--left" />
-              <span className="shell-ball-mascot__crest-feather shell-ball-mascot__crest-feather--center" />
-              <span className="shell-ball-mascot__crest-feather shell-ball-mascot__crest-feather--right" />
-            </div>
-
-            <div className="shell-ball-mascot__body">
-              <div className="shell-ball-mascot__belly" />
-              <div className="shell-ball-mascot__cheek shell-ball-mascot__cheek--left" />
-              <div className="shell-ball-mascot__cheek shell-ball-mascot__cheek--right" />
-
-              <div className="shell-ball-mascot__face">
-                <div className="shell-ball-mascot__eyes" data-eye={motionConfig.eyeMode} style={eyeStyle}>
-                  <span className="shell-ball-mascot__eye" />
-                  <span className="shell-ball-mascot__eye" />
-                </div>
-                <div className="shell-ball-mascot__beak" />
-              </div>
-            </div>
-          </div>
-
-          {showSelectionMarker ? (
-            <div className="shell-ball-mascot__selection-marker" aria-hidden="true">
-              <span className="shell-ball-mascot__selection-marker-glyph">!</span>
-            </div>
-          ) : null}
 
           {showVoiceMarker ? (
             <div className={cn("shell-ball-mascot__voice-marker", visualState === "voice_locked" && "is-locked")} aria-hidden="true">
@@ -406,7 +542,7 @@ export function ShellBallMascot({
             </div>
           ) : null}
 
-          {motionConfig.showAuthMarker ? (
+          {showAuthMarker ? (
             <div className="shell-ball-mascot__auth-marker" aria-hidden="true">
               <ShieldAlert className="shell-ball-mascot__auth-icon" />
             </div>
@@ -414,7 +550,6 @@ export function ShellBallMascot({
         </div>
       </div>
 
-      <div className="shell-ball-mascot__orbital shell-ball-mascot__orbital--front" />
       <button
         type="button"
         className="shell-ball-mascot__hotspot"

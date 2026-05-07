@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import type { DashboardHomeStateData, DashboardHomeSummonEvent } from "../dashboardHome.types";
-import { AlertCircle, BellDot, BrainCircuit, FileText, NotebookPen, ShieldAlert, Sparkles, X } from "lucide-react";
+import { BrainCircuit, FileText, NotebookPen, ShieldAlert, X } from "lucide-react";
 
 type DashboardEventOrbProps = {
   event: DashboardHomeSummonEvent;
@@ -19,12 +19,6 @@ const icons = {
   memory: BrainCircuit,
   safety: ShieldAlert,
   tasks: FileText,
-} as const;
-
-const priorityDots = {
-  low: Sparkles,
-  normal: BellDot,
-  urgent: AlertCircle,
 } as const;
 
 export function DashboardEventOrb({ event, stateMap, onDismiss, onExpand }: DashboardEventOrbProps) {
@@ -49,8 +43,6 @@ export function DashboardEventOrb({ event, stateMap, onDismiss, onExpand }: Dash
 
   const { duration = 5200 } = event;
   const Icon = icons[stateData.module];
-  const PriorityIcon = priorityDots[event.priority];
-
   useEffect(() => {
     const speed = 1.8;
     let last = 0;
