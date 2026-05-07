@@ -7118,6 +7118,86 @@ test("dashboard home prefers formal mirror references over profile copy when bot
   );
 });
 
+test("dashboard home rotates mirror summons across formal memory, profile, and history sections", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<{
+          summonTemplates: Array<{ module: string; message: string; nextStep?: string; expandedState?: { headline: string; navigationTarget?: { kind: string; activeDetailKey?: string } } }>;
+        }>;
+      };
+
+      const data = await service.loadDashboardHomeData();
+      const mirrorSummons = data.summonTemplates.filter((item) => item.module === "memory");
+
+      assert.deepEqual(
+        mirrorSummons.slice(0, 3).map((item) => item.expandedState?.headline),
+        ["近期被调用记忆", "用户画像", "历史概要"],
+      );
+      assert.deepEqual(
+        mirrorSummons.slice(0, 3).map((item) => item.expandedState?.navigationTarget?.activeDetailKey),
+        ["memory", "profile", "history"],
+      );
+      assert.equal(mirrorSummons[0]?.message, "近期被调用记忆");
+      assert.equal(mirrorSummons[1]?.message, "用户画像");
+      assert.equal(mirrorSummons[2]?.message, "历史概要");
+    },
+    {
+      getDashboardModule: async (params: unknown) => ({
+        highlights: [],
+        module: (params as { module?: string }).module ?? "unknown",
+        summary: {},
+        tab: "overview",
+      }),
+      getDashboardOverview: async () => ({
+        overview: {
+          focus_summary: null,
+          high_value_signal: [],
+          quick_actions: [],
+          trust_summary: {
+            has_restore_point: false,
+            pending_authorizations: 0,
+            risk_level: "green",
+            workspace_path: "workspace",
+          },
+        },
+      }),
+      getRecommendations: async () => ({
+        cooldown_hit: false,
+        items: [],
+      }),
+      getMirrorOverview: async () => ({
+        daily_summary: null,
+        history_summary: ["这里是最近一条历史概要。", "第二条历史概要。"],
+        memory_references: [
+          {
+            memory_id: "memory_strategy_weekly",
+            reason: "近期任务再次命中这段长期记忆。",
+            summary: "本周战略复盘已被近期任务再次引用。",
+          },
+        ],
+        profile: {
+          active_hours: "16-21h",
+          preferred_output: "bubble",
+          work_style: "偏好即时结果回显",
+        },
+      }),
+      listNotepad: async () => ({
+        items: [],
+        page: {
+          has_more: false,
+          limit: 12,
+          offset: 0,
+          total: 0,
+        },
+      }),
+    },
+  );
+});
+
 test("dashboard home keeps notes copy module-native and skips fake empty-note summons", async () => {
   await withDesktopAliasRuntime(
     async (requireFn) => {

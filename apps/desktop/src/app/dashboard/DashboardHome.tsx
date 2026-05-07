@@ -102,13 +102,14 @@ export function DashboardHome({
   const [orbDragOffset, setOrbDragOffset] = useState({ x: 0, y: 0 });
   const [hoveredEntranceKey, setHoveredEntranceKey] = useState<string | null>(null);
   const [activeStateKey, setActiveStateKey] = useState<DashboardHomeEventStateKey | null>(null);
+  const [activeExpandedState, setActiveExpandedState] = useState<DashboardHomeSummonEvent["expandedState"] | null>(null);
   const [summons, setSummons] = useState<DashboardHomeSummonEvent[]>([]);
   const summonIdRef = useRef(0);
   const lastSummonIndexRef = useRef(-1);
   const lastSummonModuleRef = useRef<DashboardHomeModuleKey | null>(null);
   const summonTimerRef = useRef<number | null>(null);
 
-  const activeState = activeStateKey ? data.stateMap[activeStateKey] : null;
+  const activeState = activeExpandedState ?? (activeStateKey ? data.stateMap[activeStateKey] : null);
   const activeModule = hoveredEntranceKey
     ? dashboardEntranceOrbs.find((config) => config.key === hoveredEntranceKey)?.module ?? activeState?.module ?? null
     : activeState?.module ?? null;
@@ -304,8 +305,9 @@ export function DashboardHome({
                     onRecommendationFeedback?.(event.recommendationId, "negative");
                   }
                 }}
-                onExpand={(stateKey) => {
-                  setActiveStateKey(stateKey);
+                onExpand={(expandedEvent) => {
+                  setActiveStateKey(expandedEvent.stateKey);
+                  setActiveExpandedState(expandedEvent.expandedState ?? null);
                   if (event.recommendationId) {
                     onRecommendationFeedback?.(event.recommendationId, "positive");
                   }
@@ -329,7 +331,19 @@ export function DashboardHome({
         </div>
       </div>
 
-      <DashboardEventPanel activeState={activeState} onClose={() => setActiveStateKey(null)} onStateChange={setActiveStateKey} stateGroups={data.stateGroups} stateMap={data.stateMap} />
+      <DashboardEventPanel
+        activeState={activeState}
+        onClose={() => {
+          setActiveExpandedState(null);
+          setActiveStateKey(null);
+        }}
+        onStateChange={(stateKey) => {
+          setActiveExpandedState(null);
+          setActiveStateKey(stateKey);
+        }}
+        stateGroups={data.stateGroups}
+        stateMap={data.stateMap}
+      />
     </ClickSpark>
   );
 }

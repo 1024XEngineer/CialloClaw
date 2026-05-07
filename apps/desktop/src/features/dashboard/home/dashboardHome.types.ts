@@ -129,6 +129,7 @@ export type DashboardHomeStateGroup = {
 
 export type DashboardHomeSummonEvent = {
   copyDuration?: number;
+  expandedState?: DashboardHomeStateData;
   id: string;
   hideCopy?: boolean;
   module: DashboardHomeModuleKey;
