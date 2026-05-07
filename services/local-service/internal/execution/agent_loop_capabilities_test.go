@@ -76,10 +76,10 @@ func TestAgentLoopToolDefinitionsAllowSparseBrowserContextForDiscoveryTools(t *t
 	for _, definition := range definitions {
 		names = append(names, definition.Name)
 	}
-	if !containsString(names, "browser_attach_current") || !containsString(names, "browser_tabs_list") {
+	if !containsString(names, "browser_tabs_list") {
 		t.Fatalf("expected sparse browser context to expose discovery-safe tools, got %+v", names)
 	}
-	if containsString(names, "browser_snapshot") || containsString(names, "browser_navigate") || containsString(names, "browser_tab_focus") {
+	if containsString(names, "browser_attach_current") || containsString(names, "browser_snapshot") || containsString(names, "browser_navigate") || containsString(names, "browser_tab_focus") {
 		t.Fatalf("expected sparse browser context to keep target-dependent browser tools hidden, got %+v", names)
 	}
 }
@@ -115,6 +115,9 @@ func TestAgentLoopToolAllowlistRequiresCatalogMembershipAndRegistryPresence(t *t
 	}
 	if !withPlaywright.isAllowedAgentLoopToolForSnapshot("browser_attach_current", contextsvc.TaskContextSnapshot{BrowserKind: "edge", PageURL: "https://example.com", WindowTitle: "Example"}) {
 		t.Fatal("expected browser_attach_current to be allowed when the snapshot exposes an attach-capable browser")
+	}
+	if withPlaywright.isAllowedAgentLoopToolForSnapshot("browser_attach_current", contextsvc.TaskContextSnapshot{BrowserKind: "chrome"}) {
+		t.Fatal("expected browser_attach_current to stay hidden for sparse browser context without target hints")
 	}
 	if !withPlaywright.isAllowedAgentLoopToolForSnapshot("browser_tabs_list", contextsvc.TaskContextSnapshot{BrowserKind: "chrome"}) {
 		t.Fatal("expected browser_tabs_list to stay allowed with sparse browser context")

@@ -1865,6 +1865,48 @@ func TestResolveBrowserToolInputAllowsSparseDiscoveryTargets(t *testing.T) {
 	}
 }
 
+func TestResolveBrowserToolInputRequiresTargetHintsForSnapshotAttachCurrent(t *testing.T) {
+	if input, ok := resolveBrowserToolInput("browser_attach_current", map[string]any{}, contextsvc.TaskContextSnapshot{BrowserKind: "chrome"}); ok {
+		t.Fatalf("expected sparse browser_attach_current snapshot path to stay unresolved, got %+v", input)
+	}
+}
+
+func TestResolveBrowserToolInputPrefersExplicitAttachOverSnapshotHints(t *testing.T) {
+	input, ok := resolveBrowserToolInput(
+		"browser_attach_current",
+		map[string]any{"attach": map[string]any{"mode": "cdp", "browser_kind": "edge", "target": map[string]any{"title_contains": "Pinned Tab"}}},
+		contextsvc.TaskContextSnapshot{},
+	)
+	if !ok {
+		t.Fatal("expected explicit browser attach block to resolve without desktop snapshot hints")
+	}
+	attach, ok := input["attach"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected attach block in resolved browser input, got %+v", input)
+	}
+	if attach["browser_kind"] != "edge" {
+		t.Fatalf("expected explicit attach browser kind to be preserved, got %+v", attach)
+	}
+	target, ok := attach["target"].(map[string]any)
+	if !ok || target["title_contains"] != "Pinned Tab" {
+		t.Fatalf("expected explicit attach target to be preserved, got %+v", attach)
+	}
+}
+
+func TestResolveBrowserToolInputKeepsExplicitNavigateContract(t *testing.T) {
+	input, ok := resolveBrowserToolInput(
+		"browser_navigate",
+		map[string]any{"url": "https://example.com/docs", "attach": map[string]any{"mode": "cdp", "browser_kind": "chrome"}},
+		contextsvc.TaskContextSnapshot{},
+	)
+	if !ok {
+		t.Fatal("expected explicit browser navigate attach block to resolve without desktop snapshot hints")
+	}
+	if input["url"] != "https://example.com/docs" {
+		t.Fatalf("expected browser_navigate to preserve destination URL, got %+v", input)
+	}
+}
+
 func TestExecuteFallsBackWhenModelFails(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)

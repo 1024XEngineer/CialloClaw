@@ -3309,6 +3309,10 @@ func approvedTargetKeys(intentName string) []string {
 }
 
 func resolveBrowserToolInput(intentName string, arguments map[string]any, snapshot contextsvc.TaskContextSnapshot) (map[string]any, bool) {
+	if explicitInput, ok := resolveExplicitBrowserToolInput(intentName, arguments); ok {
+		return explicitInput, true
+	}
+
 	browserKind := strings.ToLower(strings.TrimSpace(snapshot.BrowserKind))
 	if browserKind != "chrome" && browserKind != "edge" {
 		return nil, false
@@ -3316,7 +3320,7 @@ func resolveBrowserToolInput(intentName string, arguments map[string]any, snapsh
 
 	useSnapshotTarget := true
 	allowEmptyTarget := false
-	if intentName == "browser_attach_current" || intentName == "browser_tabs_list" {
+	if intentName == "browser_tabs_list" {
 		allowEmptyTarget = true
 	}
 	if intentName == "browser_tab_focus" {
@@ -3329,6 +3333,35 @@ func resolveBrowserToolInput(intentName string, arguments map[string]any, snapsh
 	}
 
 	input := map[string]any{"attach": attach}
+	switch strings.TrimSpace(intentName) {
+	case "browser_attach_current", "browser_snapshot", "browser_tabs_list", "browser_tab_focus":
+		return input, true
+	case "browser_navigate":
+		urlValue := strings.TrimSpace(stringValue(arguments, "url", ""))
+		if urlValue == "" {
+			return nil, false
+		}
+		input["url"] = urlValue
+		return input, true
+	case "browser_interact":
+		actions, ok := arguments["actions"]
+		if !ok {
+			return nil, false
+		}
+		input["actions"] = actions
+		return input, true
+	default:
+		return nil, false
+	}
+}
+
+func resolveExplicitBrowserToolInput(intentName string, arguments map[string]any) (map[string]any, bool) {
+	attach := mapValue(arguments, "attach")
+	if len(attach) == 0 {
+		return nil, false
+	}
+
+	input := map[string]any{"attach": cloneMap(attach)}
 	switch strings.TrimSpace(intentName) {
 	case "browser_attach_current", "browser_snapshot", "browser_tabs_list", "browser_tab_focus":
 		return input, true

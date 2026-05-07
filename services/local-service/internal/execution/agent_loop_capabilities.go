@@ -281,7 +281,7 @@ func (c agentLoopCapabilitySpec) allowedForSnapshot(snapshot contextsvc.TaskCont
 	if browserKind != "chrome" && browserKind != "edge" {
 		return false
 	}
-	if c.Name == "browser_attach_current" || c.Name == "browser_tabs_list" {
+	if c.Name == "browser_tabs_list" {
 		return true
 	}
 	if strings.TrimSpace(snapshot.PageURL) != "" {
