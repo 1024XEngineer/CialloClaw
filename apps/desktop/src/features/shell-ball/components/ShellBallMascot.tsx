@@ -293,7 +293,6 @@ export function ShellBallMascot({
   });
   const showAuthMarker = motionConfig.showAuthMarker || petState.mode === "safe";
   const dockStyle = resolveShellBallDockStyle({ edgeDockRevealed, edgeDockSide });
-  const orbitalStyle: MascotCssVars = { "--shell-ball-orbital-scale": 1 };
   const shadowStyle: MascotCssVars = {
     "--shell-ball-shadow-offset-y": "0px",
     "--shell-ball-shadow-scale-x": 1,
@@ -511,7 +510,6 @@ export function ShellBallMascot({
       data-voice-hints={shouldRenderVoiceHints ? "true" : "false"}
       data-voice-preview={voicePreview ?? undefined}
     >
-      <div className="shell-ball-mascot__orbital shell-ball-mascot__orbital--back" style={orbitalStyle} />
       <div className="shell-ball-mascot__shadow" style={shadowStyle} />
 
       {showVoiceHoldRing ? (
@@ -552,7 +550,6 @@ export function ShellBallMascot({
         </div>
       </div>
 
-      <div className="shell-ball-mascot__orbital shell-ball-mascot__orbital--front" style={orbitalStyle} />
       <button
         type="button"
         className="shell-ball-mascot__hotspot"
