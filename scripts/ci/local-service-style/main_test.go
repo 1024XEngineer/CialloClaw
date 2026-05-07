@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -19,7 +20,10 @@ index 1111111..2222222 100644
 +var _ = 1 /* 中文 block */
 `
 
-	violations, err := findCommentViolations(root, diff)
+	violations, err := findCommentViolations(root, []diffChunk{{
+		diff:     diff,
+		readFile: workingTreeFileReader,
+	}})
 	if err != nil {
 		t.Fatalf("findCommentViolations returned error: %v", err)
 	}
@@ -46,7 +50,10 @@ index 1111111..2222222 100644
 +const raw = ` + "`" + `中文 /* not a comment */` + "`" + `
 `
 
-	violations, err := findCommentViolations(root, diff)
+	violations, err := findCommentViolations(root, []diffChunk{{
+		diff:     diff,
+		readFile: workingTreeFileReader,
+	}})
 	if err != nil {
 		t.Fatalf("findCommentViolations returned error: %v", err)
 	}
@@ -69,7 +76,10 @@ index 1111111..2222222 100644
 +*/
 `
 
-	violations, err := findCommentViolations(root, diff)
+	violations, err := findCommentViolations(root, []diffChunk{{
+		diff:     diff,
+		readFile: workingTreeFileReader,
+	}})
 	if err != nil {
 		t.Fatalf("findCommentViolations returned error: %v", err)
 	}
@@ -91,7 +101,10 @@ index 1111111..2222222 100644
 +中文 line.
 `
 
-	violations, err := findCommentViolations(root, diff)
+	violations, err := findCommentViolations(root, []diffChunk{{
+		diff:     diff,
+		readFile: workingTreeFileReader,
+	}})
 	if err != nil {
 		t.Fatalf("findCommentViolations returned error: %v", err)
 	}
@@ -117,6 +130,51 @@ func TestFilterReportedPathsIgnoresDownloadNoise(t *testing.T) {
 	}
 }
 
+func TestFindCommentViolationsSeparatesIndexAndWorkingTreeSnapshots(t *testing.T) {
+	const path = "services/local-service/internal/demo/demo.go"
+
+	indexSource := []byte("package demo\n// 中文 staged comment.\nfunc Load() {}\n")
+	workingTreeSource := []byte("package demo\n\n// English working tree comment.\nfunc Load() {}\n// 中文 working tree comment.\n")
+
+	diffChunks := []diffChunk{
+		{
+			diff: `diff --git a/services/local-service/internal/demo/demo.go b/services/local-service/internal/demo/demo.go
+index 1111111..2222222 100644
+--- a/services/local-service/internal/demo/demo.go
++++ b/services/local-service/internal/demo/demo.go
+@@ -1,0 +2,2 @@
++// 中文 staged comment.
++func Load() {}
+`,
+			readFile: staticFileReader(path, indexSource),
+		},
+		{
+			diff: `diff --git a/services/local-service/internal/demo/demo.go b/services/local-service/internal/demo/demo.go
+index 2222222..3333333 100644
+--- a/services/local-service/internal/demo/demo.go
++++ b/services/local-service/internal/demo/demo.go
+@@ -4,0 +5 @@
++// 中文 working tree comment.
+`,
+			readFile: staticFileReader(path, workingTreeSource),
+		},
+	}
+
+	violations, err := findCommentViolations(t.TempDir(), diffChunks)
+	if err != nil {
+		t.Fatalf("findCommentViolations returned error: %v", err)
+	}
+	if len(violations) != 2 {
+		t.Fatalf("expected two violations, got %d: %#v", len(violations), violations)
+	}
+	if violations[0].line != 2 || violations[0].text != "// 中文 staged comment." {
+		t.Fatalf("unexpected staged violation: %#v", violations[0])
+	}
+	if violations[1].line != 5 || violations[1].text != "// 中文 working tree comment." {
+		t.Fatalf("unexpected working tree violation: %#v", violations[1])
+	}
+}
+
 func writeTestFile(t *testing.T, content string) string {
 	t.Helper()
 
@@ -129,4 +187,13 @@ func writeTestFile(t *testing.T, content string) string {
 		t.Fatalf("write test file: %v", err)
 	}
 	return root
+}
+
+func staticFileReader(expectedPath string, source []byte) fileReader {
+	return func(_ string, relativePath string) ([]byte, error) {
+		if relativePath != expectedPath {
+			return nil, fmt.Errorf("unexpected path %q", relativePath)
+		}
+		return source, nil
+	}
 }

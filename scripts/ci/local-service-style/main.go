@@ -36,6 +36,13 @@ type addedLine struct {
 	line int
 }
 
+type diffChunk struct {
+	diff     string
+	readFile fileReader
+}
+
+type fileReader func(root, relativePath string) ([]byte, error)
+
 func main() {
 	if err := run(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -130,12 +137,12 @@ func changedGoFiles(root, baseRef string) ([]string, error) {
 }
 
 func checkAddedComments(root, baseRef string) error {
-	diff, err := collectDiff(root, strings.TrimSpace(baseRef))
+	diffChunks, err := collectDiffChunks(root, strings.TrimSpace(baseRef))
 	if err != nil {
 		return err
 	}
 
-	violations, err := findCommentViolations(root, diff)
+	violations, err := findCommentViolations(root, diffChunks)
 	if err != nil {
 		return err
 	}
@@ -151,26 +158,51 @@ func checkAddedComments(root, baseRef string) error {
 	return errors.New(strings.TrimRight(builder.String(), "\n"))
 }
 
-func collectDiff(root, baseRef string) (string, error) {
+func collectDiffChunks(root, baseRef string) ([]diffChunk, error) {
 	if baseRef != "" && !isZeroRevision(baseRef) {
 		if diff, err := gitDiff(root, baseRef+"...HEAD"); err == nil {
-			return diff, nil
+			return []diffChunk{{
+				diff:     diff,
+				readFile: gitRevisionFileReader("HEAD:", "HEAD"),
+			}}, nil
 		}
-		return gitDiff(root, baseRef, "HEAD")
+		diff, err := gitDiff(root, baseRef, "HEAD")
+		if err != nil {
+			return nil, err
+		}
+		return []diffChunk{{
+			diff:     diff,
+			readFile: gitRevisionFileReader("HEAD:", "HEAD"),
+		}}, nil
 	}
 
-	var combined strings.Builder
-	for _, args := range [][]string{
-		{"diff", "--cached", "--unified=0", "--", localServicePath},
-		{"diff", "--unified=0", "--", localServicePath},
-	} {
-		output, err := commandOutput(root, "git", args...)
-		if err != nil {
-			return "", fmt.Errorf("collect local diff: %w\n%s", err, strings.TrimSpace(output))
-		}
-		combined.WriteString(output)
+	type localDiffConfig struct {
+		args     []string
+		readFile fileReader
 	}
-	return combined.String(), nil
+	configs := []localDiffConfig{
+		{
+			args:     []string{"diff", "--cached", "--unified=0", "--", localServicePath},
+			readFile: gitRevisionFileReader(":", "index"),
+		},
+		{
+			args:     []string{"diff", "--unified=0", "--", localServicePath},
+			readFile: workingTreeFileReader,
+		},
+	}
+
+	chunks := make([]diffChunk, 0, len(configs))
+	for _, config := range configs {
+		output, err := commandOutput(root, "git", config.args...)
+		if err != nil {
+			return nil, fmt.Errorf("collect local diff: %w\n%s", err, strings.TrimSpace(output))
+		}
+		chunks = append(chunks, diffChunk{
+			diff:     output,
+			readFile: config.readFile,
+		})
+	}
+	return chunks, nil
 }
 
 func collectNameOnlyDiff(root, baseRef string, paths ...string) (string, error) {
@@ -236,27 +268,29 @@ func isZeroRevision(revision string) bool {
 	return trimmed == ""
 }
 
-func findCommentViolations(root, diff string) ([]violation, error) {
-	addedLines := collectAddedLines(diff)
-	if len(addedLines) == 0 {
-		return nil, nil
-	}
-
-	commentLinesByFile := make(map[string]map[int][]string)
+func findCommentViolations(root string, diffChunks []diffChunk) ([]violation, error) {
 	var violations []violation
-	for _, item := range addedLines {
-		commentLines := commentLinesByFile[item.file]
-		if commentLines == nil {
-			var err error
-			commentLines, err = scanCommentLines(root, item.file)
-			if err != nil {
-				return nil, err
-			}
-			commentLinesByFile[item.file] = commentLines
+	for _, chunk := range diffChunks {
+		addedLines := collectAddedLines(chunk.diff)
+		if len(addedLines) == 0 {
+			continue
 		}
-		for _, comment := range commentLines[item.line] {
-			if containsHan(comment) {
-				violations = append(violations, violation{file: item.file, line: item.line, text: comment})
+
+		commentLinesByFile := make(map[string]map[int][]string)
+		for _, item := range addedLines {
+			commentLines := commentLinesByFile[item.file]
+			if commentLines == nil {
+				var err error
+				commentLines, err = scanCommentLines(root, item.file, chunk.readFile)
+				if err != nil {
+					return nil, err
+				}
+				commentLinesByFile[item.file] = commentLines
+			}
+			for _, comment := range commentLines[item.line] {
+				if containsHan(comment) {
+					violations = append(violations, violation{file: item.file, line: item.line, text: comment})
+				}
 			}
 		}
 	}
@@ -325,10 +359,10 @@ func parseNewLine(line string) int {
 	return value
 }
 
-func scanCommentLines(root, relativePath string) (map[int][]string, error) {
-	source, err := os.ReadFile(filepath.Join(root, relativePath))
+func scanCommentLines(root, relativePath string, readFile fileReader) (map[int][]string, error) {
+	source, err := readFile(root, relativePath)
 	if err != nil {
-		return nil, fmt.Errorf("read %s for comment scan: %w", relativePath, err)
+		return nil, err
 	}
 
 	fset := token.NewFileSet()
@@ -352,6 +386,24 @@ func scanCommentLines(root, relativePath string) (map[int][]string, error) {
 	}
 
 	return commentLines, nil
+}
+
+func workingTreeFileReader(root, relativePath string) ([]byte, error) {
+	source, err := os.ReadFile(filepath.Join(root, relativePath))
+	if err != nil {
+		return nil, fmt.Errorf("read %s from working tree for comment scan: %w", relativePath, err)
+	}
+	return source, nil
+}
+
+func gitRevisionFileReader(prefix, label string) fileReader {
+	return func(root, relativePath string) ([]byte, error) {
+		output, err := commandOutput(root, "git", "show", prefix+relativePath)
+		if err != nil {
+			return nil, fmt.Errorf("read %s from %s for comment scan: %w\n%s", relativePath, label, err, strings.TrimSpace(output))
+		}
+		return []byte(output), nil
+	}
 }
 
 func filterReportedPaths(output string, expected []string) []string {

@@ -18,7 +18,9 @@ go test ./services/local-service/...
 files under `services/local-service` and rejects newly added Chinese Go
 comments in local-service diffs. In pull requests, CI passes the base SHA so
 the guard checks only new changes instead of failing on historical debt that is
-outside the current change boundary.
+outside the current change boundary. In local mode, the comment guard evaluates
+staged hunks against the index snapshot and unstaged hunks against the working
+tree, so partial staging in the same file does not skew reported line numbers.
 
 The repository pins `goimports` and `staticcheck` through the root [`go.mod`](../go.mod),
 so local runs and CI stay on the same tool versions until the module is
