@@ -7385,6 +7385,22 @@ test("note page deduplicates source-note fallback cards and canvas cards by sour
   assert.match(notePageSource, /next\[replacementIndex\] = \{ \.\.\.next\[replacementIndex\], itemId \};/);
 });
 
+test("note page files overdue upcoming notes into the closed sidebar bucket without rewriting the formal bucket", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /function resolveRailBucketForItem\(/);
+  assert.match(notePageSource, /function resolveOverdueCanvasAutoReturnKeys\(/);
+  assert.match(notePageSource, /if \(displayedBucket === "upcoming" && item\.item\.status === "overdue"\) \{/);
+  assert.match(notePageSource, /return "closed";/);
+  assert.match(notePageSource, /nextGroups\[resolveRailBucketForItem\(item, displayedBucket\)\]\.push\(item\);/);
+  assert.match(notePageSource, /const activeOverdueKeys = new Set<string>\(\);/);
+  assert.match(notePageSource, /if \(railBucket !== displayedBucket\) \{\s*resolveOverdueCanvasAutoReturnKeys\(item, sourceNotesByPath, sourceNoteBlocksByPath\)\.forEach\(\(key\) => activeOverdueKeys\.add\(key\)\);/);
+  assert.match(notePageSource, /const autoReturnKeys = resolveOverdueCanvasAutoReturnKeys\(currentItem, sourceNotesByPath, sourceNoteBlocksByPath\);/);
+  assert.match(notePageSource, /if \(railBucket !== displayedBucket && autoReturnKeys\.some\(\(key\) => !overdueCanvasAutoReturnedKeysRef\.current\.has\(key\)\)\) \{/);
+  assert.match(notePageSource, /resolveOverdueCanvasAutoReturnKeys\(targetItem, sourceNotesByPath, sourceNoteBlocksByPath\)\.forEach\(\(key\) => \{\s*overdueCanvasAutoReturnedKeysRef\.current\.add\(key\);/);
+  assert.match(notePageSource, /if \(!removedForRailBucket && next\.length === 0 && current\.length > 0 && defaultBoardItemIds\.length > 0 && boardBounds\) \{/);
+});
+
 test("note preview stacks assign increasing sidebar z-order so later cards cover earlier cards", () => {
   const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
   const notePreviewSectionSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NotePreviewSection.tsx"), "utf8");

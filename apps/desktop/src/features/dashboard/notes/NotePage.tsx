@@ -576,6 +576,27 @@ function createEmptyBucketGroups(): Record<NotePreviewGroupKey, NoteListItem[]> 
   };
 }
 
+/**
+ * Overdue upcoming notes should leave the active planning rail and appear under
+ * the closed sidebar section without rewriting the formal bucket value.
+ */
+function resolveRailBucketForItem(item: NoteListItem, displayedBucket: NotePreviewGroupKey): NotePreviewGroupKey {
+  if (displayedBucket === "upcoming" && item.item.status === "overdue") {
+    return "closed";
+  }
+
+  return displayedBucket;
+}
+
+function resolveOverdueCanvasAutoReturnKeys(
+  item: NoteListItem,
+  sourceNotesByPath: SourceNotePathLookup,
+  sourceNoteBlocksByPath: Map<string, SourceNoteEditorBlock[]>,
+) {
+  const aliases = resolveSourceNoteBlockAliases(item, sourceNotesByPath, sourceNoteBlocksByPath);
+  return aliases.length > 0 ? aliases : [`item:${item.item.item_id}`];
+}
+
 function findFormalReplacementItemIdForSourceNoteEntry(
   itemId: string,
   noteItemsById: Map<string, NoteListItem>,
@@ -685,6 +706,7 @@ export function NotePage() {
   const [isRunningInspection, setIsRunningInspection] = useState(false);
   const feedbackTimeoutRef = useRef<number | null>(null);
   const rememberedFormalBucketByAliasRef = useRef(new Map<string, NotePreviewGroupKey>());
+  const overdueCanvasAutoReturnedKeysRef = useRef(new Set<string>());
   const sourceNoteIndexFingerprintRef = useRef<string | null>(null);
   const pendingCreatedSourceNoteRef = useRef<PendingCreatedSourceNote | null>(null);
   const noteSourceIdentityByItemIdRef = useRef(new Map<string, SourceNoteIdentity>());
@@ -818,6 +840,28 @@ export function NotePage() {
       );
     });
   }, [rawRpcItems, sourceNoteBlocksByPath, sourceNotesByPath]);
+  useEffect(() => {
+    const activeOverdueKeys = new Set<string>();
+
+    rawRpcItems.forEach((item) => {
+      const displayedBucket = resolveRememberedFormalBucket(
+        rememberedFormalBucketByAliasRef.current,
+        item,
+        sourceNotesByPath,
+        sourceNoteBlocksByPath,
+      ) ?? item.item.bucket;
+      const railBucket = resolveRailBucketForItem(item, displayedBucket);
+      if (railBucket !== displayedBucket) {
+        resolveOverdueCanvasAutoReturnKeys(item, sourceNotesByPath, sourceNoteBlocksByPath).forEach((key) => activeOverdueKeys.add(key));
+      }
+    });
+
+    overdueCanvasAutoReturnedKeysRef.current.forEach((key) => {
+      if (!activeOverdueKeys.has(key)) {
+        overdueCanvasAutoReturnedKeysRef.current.delete(key);
+      }
+    });
+  }, [rawRpcItems, sourceNoteBlocksByPath, sourceNotesByPath]);
   const displayRpcItems = useMemo(
     () => rawRpcItems.map((item) => applySourceNoteDisplayOverrides(item, sourceNotesByPath, sourceNoteBlocksByPath)),
     [rawRpcItems, sourceNoteBlocksByPath, sourceNotesByPath],
@@ -833,7 +877,7 @@ export function NotePage() {
           sourceNotesByPath,
           sourceNoteBlocksByPath,
         ) ?? item.item.bucket;
-        nextGroups[displayedBucket].push(item);
+        nextGroups[resolveRailBucketForItem(item, displayedBucket)].push(item);
       });
 
     nextGroups.upcoming = sortNotesByUrgency(nextGroups.upcoming);
@@ -1962,6 +2006,7 @@ export function NotePage() {
     const boardBounds = getBoardLayerBounds();
     setCanvasCards((current) => {
       let changed = false;
+      let removedForRailBucket = false;
       const seenItemIds = new Set<string>();
       const next: NoteCanvasCard[] = [];
 
@@ -1982,6 +2027,21 @@ export function NotePage() {
         }
 
         if (currentItem) {
+          const displayedBucket = resolveRememberedFormalBucket(
+            rememberedFormalBucketByAliasRef.current,
+            currentItem,
+            sourceNotesByPath,
+            sourceNoteBlocksByPath,
+          ) ?? currentItem.item.bucket;
+          const railBucket = resolveRailBucketForItem(currentItem, displayedBucket);
+          const autoReturnKeys = resolveOverdueCanvasAutoReturnKeys(currentItem, sourceNotesByPath, sourceNoteBlocksByPath);
+          if (railBucket !== displayedBucket && autoReturnKeys.some((key) => !overdueCanvasAutoReturnedKeysRef.current.has(key))) {
+            changed = true;
+            removedForRailBucket = true;
+            autoReturnKeys.forEach((key) => overdueCanvasAutoReturnedKeysRef.current.add(key));
+            return;
+          }
+
           seenItemIds.add(entry.itemId);
           next.push(entry);
           return;
@@ -1991,7 +2051,7 @@ export function NotePage() {
       });
 
       if (changed) {
-        if (next.length === 0 && current.length > 0 && defaultBoardItemIds.length > 0 && boardBounds) {
+        if (!removedForRailBucket && next.length === 0 && current.length > 0 && defaultBoardItemIds.length > 0 && boardBounds) {
           return defaultBoardItemIds.map((itemId, index) => ({
             itemId,
             ...clampCanvasPlacement(
@@ -2029,7 +2089,7 @@ export function NotePage() {
         dragStateRef.current = null;
       }
     }
-  }, [defaultBoardItemIds, draggingBoardItemId, noteItemIdsBySourcePath, noteItemsById]);
+  }, [defaultBoardItemIds, draggingBoardItemId, noteItemIdsBySourcePath, noteItemsById, sourceNoteBlocksByPath, sourceNotesByPath]);
 
   useEffect(() => {
     if (!boardLayerSize) {
@@ -2067,6 +2127,21 @@ export function NotePage() {
       }
 
       const targetItem = noteItemsById.get(itemId);
+      if (targetItem) {
+        const displayedBucket = resolveRememberedFormalBucket(
+          rememberedFormalBucketByAliasRef.current,
+          targetItem,
+          sourceNotesByPath,
+          sourceNoteBlocksByPath,
+        ) ?? targetItem.item.bucket;
+        const railBucket = resolveRailBucketForItem(targetItem, displayedBucket);
+        if (railBucket !== displayedBucket) {
+          resolveOverdueCanvasAutoReturnKeys(targetItem, sourceNotesByPath, sourceNoteBlocksByPath).forEach((key) => {
+            overdueCanvasAutoReturnedKeysRef.current.add(key);
+          });
+        }
+      }
+
       const targetAliases = targetItem ? resolveSourceNoteBlockAliases(targetItem, sourceNotesByPath, sourceNoteBlocksByPath) : [];
       if (targetAliases.length > 0) {
         const replacementIndex = current.findIndex((entry) => {
