@@ -234,6 +234,20 @@ function buildModuleNavigationTarget(
   };
 }
 
+function buildMirrorDetailNavigationTarget(
+  activeDetailKey: "profile" | "memory" | "history",
+  label: string,
+  focusMemoryId?: string,
+): DashboardHomeNavigationTarget {
+  return {
+    activeDetailKey,
+    focusMemoryId,
+    kind: "mirror_detail",
+    label,
+    module: "memory",
+  };
+}
+
 function buildTaskDetailNavigationTarget(taskId: string, label = "打开任务详情"): DashboardHomeNavigationTarget {
   return {
     kind: "task_detail",
@@ -631,19 +645,6 @@ function buildTaskState(
   return state;
 }
 
-function buildNotesItems(recommendations: RecommendationItem[]): DashboardHomeNoteItem[] {
-  return recommendations
-    .filter((item) => inferModuleFromRecommendation(item) === "notes")
-    .slice(0, 3)
-    .map((item, index) => ({
-      id: item.recommendation_id,
-      status: index === 0 ? "processing" : "pending",
-      tag: index === 0 ? "Agent 建议" : "待整理",
-      text: item.text,
-      time: index === 0 ? "现在" : "稍后",
-    }));
-}
-
 function mapHomeNotesFromBuckets(noteBuckets: DashboardHomeNoteBuckets) {
   return [
     ...noteBuckets.upcoming,
@@ -665,28 +666,24 @@ function mapHomeNotesFromBuckets(noteBuckets: DashboardHomeNoteBuckets) {
   } satisfies DashboardHomeNoteItem));
 }
 
-function buildNotesHeadline(noteItems: DashboardHomeNoteItem[], noteBuckets: DashboardHomeNoteBuckets | null) {
+function buildNotesHeadline(noteBuckets: DashboardHomeNoteBuckets | null) {
   if (noteBuckets?.primaryItem) {
     return noteBuckets.primaryItem.item.title;
-  }
-
-  if (noteItems.length > 0) {
-    return `近期便签 ${noteItems.length} 条待整理`;
   }
 
   return "这里还没有可协作的事项";
 }
 
-function buildNotesSubline(noteItems: DashboardHomeNoteItem[], exceptions: number) {
-  if (noteItems[0]) {
-    return noteItems[0].text;
+function buildNotesSubline(noteBuckets: DashboardHomeNoteBuckets | null, exceptions: number) {
+  if (noteBuckets?.primaryItem) {
+    return describeNotePreview(noteBuckets.primaryItem.item, noteBuckets.primaryItem.experience);
   }
 
-  if (exceptions === 0) {
-    return "等你把想记住的事情交给便签协作后，这里会按近期要做、后续安排、重复事项和已结束四组方式整理出来。";
+  if (exceptions > 0) {
+    return `当前例外项 ${exceptions} 条，建议优先整理最接近执行窗口的事项。`;
   }
 
-  return `当前例外项 ${exceptions} 条，建议优先整理最接近执行窗口的事项。`;
+  return "等你把想记住的事情交给便签协作后，这里会按近期要做、后续安排、重复事项和已结束四组方式整理出来。";
 }
 
 function buildNotesContext(noteItems: DashboardHomeNoteItem[], highlights: string[], noteBuckets: DashboardHomeNoteBuckets | null) {
@@ -710,26 +707,6 @@ function buildNotesContext(noteItems: DashboardHomeNoteItem[], highlights: strin
     ];
   }
 
-  if (noteItems.length > 0) {
-    return [
-      {
-        iconKey: "note",
-        text: `推荐事项 ${noteItems.length} 条`,
-        type: "active" as const,
-      },
-      {
-        iconKey: "calendar",
-        text: noteItems[0]?.text ?? "打开便签页查看待处理事项。",
-        type: "hint" as const,
-      },
-      {
-        iconKey: "repeat",
-        text: highlights[0] ?? "打开便签页查看正式状态。",
-        type: "normal" as const,
-      },
-    ];
-  }
-
   return [
     {
       iconKey: "note",
@@ -747,16 +724,15 @@ function buildNotesContext(noteItems: DashboardHomeNoteItem[], highlights: strin
 function buildNotesState(
   stateKey: DashboardHomeEventStateKey,
   notesModule: AgentDashboardModuleGetResult,
-  recommendations: RecommendationItem[],
   noteBuckets: DashboardHomeNoteBuckets | null,
 ) {
   const state = cloneStateData(dashboardHomeStates[stateKey]);
   const highlights = getNotesHighlights(notesModule);
-  const noteItems = noteBuckets ? mapHomeNotesFromBuckets(noteBuckets) : buildNotesItems(recommendations);
+  const noteItems = noteBuckets ? mapHomeNotesFromBuckets(noteBuckets) : [];
   const exceptions = getModuleSummaryNumber(notesModule, "exceptions");
 
-  state.headline = buildNotesHeadline(noteItems, noteBuckets);
-  state.subline = buildNotesSubline(noteItems, exceptions);
+  state.headline = buildNotesHeadline(noteBuckets);
+  state.subline = buildNotesSubline(noteBuckets, exceptions);
   state.context = buildNotesContext(noteItems, highlights, noteBuckets);
   state.notes = noteItems.length > 0 ? noteItems : state.notes;
   state.navigationTarget = buildModuleNavigationTarget("notes");
@@ -782,16 +758,19 @@ function buildMemoryInsights(memoryModule: AgentDashboardModuleGetResult): Dashb
 function buildFormalMirrorInsights(overview: AgentMirrorOverviewGetResult): DashboardHomeInsightItem[] {
   const latestReference = overview.memory_references[0] ?? null;
   if (latestReference) {
+    const summary = latestReference.summary || latestReference.reason || "最近有一条长期记忆再次命中当前协作。";
     return [
       {
         emphasis: true,
         iconKey: "brain",
-        text: latestReference.memory_id,
+        text: summary,
       },
-      {
-        iconKey: "time",
-        text: latestReference.summary || latestReference.reason,
-      },
+      ...(latestReference.reason && latestReference.reason !== summary
+        ? [{
+            iconKey: "repeat",
+            text: latestReference.reason,
+          } satisfies DashboardHomeInsightItem]
+        : []),
     ];
   }
 
@@ -841,22 +820,26 @@ function buildMemorySubline(highlights: string[]) {
 function buildFormalMirrorState(overview: AgentMirrorOverviewGetResult) {
   const latestReference = overview.memory_references[0] ?? null;
   if (latestReference) {
+    const summary = latestReference.summary || latestReference.reason || "最近有一条长期记忆再次命中当前协作。";
     return {
       context: [
         {
           iconKey: "brain",
-          text: `最近记忆引用：${latestReference.memory_id}`,
+          text: summary,
           type: "active" as const,
         },
-        {
-          iconKey: "repeat",
-          text: latestReference.summary || latestReference.reason,
-          type: "hint" as const,
-        },
+        ...(latestReference.reason && latestReference.reason !== summary
+          ? [{
+              iconKey: "repeat",
+              text: latestReference.reason,
+              type: "hint" as const,
+            }]
+          : []),
       ],
       headline: "近期被调用记忆",
       insights: buildFormalMirrorInsights(overview),
-      subline: latestReference.summary || latestReference.reason,
+      navigationTarget: buildMirrorDetailNavigationTarget("memory", "打开镜子页", latestReference.memory_id),
+      subline: summary,
     };
   }
 
@@ -882,6 +865,7 @@ function buildFormalMirrorState(overview: AgentMirrorOverviewGetResult) {
       ],
       headline: "用户画像",
       insights: buildFormalMirrorInsights(overview),
+      navigationTarget: buildMirrorDetailNavigationTarget("profile", "打开镜子页"),
       subline: `工作风格：${profile.work_style}`,
     };
   }
@@ -897,6 +881,7 @@ function buildFormalMirrorState(overview: AgentMirrorOverviewGetResult) {
       ],
       headline: "历史概要",
       insights: buildFormalMirrorInsights(overview),
+      navigationTarget: buildMirrorDetailNavigationTarget("history", "打开镜子页"),
       subline: overview.history_summary[1] ?? overview.history_summary[0],
     };
   }
@@ -917,7 +902,7 @@ function buildMemoryState(
       state.subline = formalMirrorState.subline;
       state.insights = formalMirrorState.insights;
       state.context = formalMirrorState.context;
-      state.navigationTarget = buildModuleNavigationTarget("memory");
+      state.navigationTarget = formalMirrorState.navigationTarget;
       return state;
     }
   }
@@ -1250,7 +1235,7 @@ function buildDashboardHomeData(input: {
   };
 
   stateMap[stateKeys.tasks] = buildTaskState(stateKeys.tasks, input.overview, input.moduleResults.tasks);
-  stateMap[stateKeys.notes] = buildNotesState(stateKeys.notes, input.moduleResults.notes, input.recommendations.items, input.noteBuckets);
+  stateMap[stateKeys.notes] = buildNotesState(stateKeys.notes, input.moduleResults.notes, input.noteBuckets);
   stateMap[stateKeys.memory] = buildMemoryState(stateKeys.memory, input.moduleResults.memory, input.mirrorOverview);
   stateMap[stateKeys.safety] = buildSafetyState(stateKeys.safety, input.overview, input.moduleResults.safety);
 

@@ -71,6 +71,13 @@ export type DashboardHomeNavigationTarget =
       label: string;
       module: "tasks";
       taskId: string;
+    }
+  | {
+      kind: "mirror_detail";
+      label: string;
+      module: "memory";
+      activeDetailKey: "profile" | "memory" | "history";
+      focusMemoryId?: string;
     };
 
 export type DashboardHomeStateData = {

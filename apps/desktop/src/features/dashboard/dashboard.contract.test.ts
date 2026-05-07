@@ -1779,6 +1779,8 @@ test("dashboard event panel routes task-detail actions through the shared naviga
 
   assert.match(panelSource, /navigateToDashboardTaskDetail/);
   assert.match(panelSource, /target\?\.kind === "task_detail"/);
+  assert.match(panelSource, /target\?\.kind === "mirror_detail"/);
+  assert.match(panelSource, /activeDetailKey: target\.activeDetailKey/);
   assert.match(panelSource, /resolvePrimaryActionLabel/);
   assert.match(panelSource, /activeState\.navigationTarget\?\.label/);
 });
@@ -6822,7 +6824,7 @@ test("dashboard home reuses formal mirror profile fields for memory copy", async
 
       const service = requireFn(modulePath) as {
         loadDashboardHomeData: () => Promise<{
-          stateMap: Record<string, { headline: string; subline: string; context?: Array<{ text: string }> }>;
+          stateMap: Record<string, { headline: string; subline: string; context?: Array<{ text: string }>; navigationTarget?: { kind: string; activeDetailKey?: string } }>;
         }>;
       };
 
@@ -6831,6 +6833,8 @@ test("dashboard home reuses formal mirror profile fields for memory copy", async
       assert.equal(data.stateMap.memory_summary?.headline, "用户画像");
       assert.equal(data.stateMap.memory_summary?.subline, "工作风格：偏好即时结果回显");
       assert.equal(data.stateMap.memory_summary?.context?.[0]?.text, "后端画像字段 3 项");
+      assert.equal(data.stateMap.memory_summary?.navigationTarget?.kind, "mirror_detail");
+      assert.equal(data.stateMap.memory_summary?.navigationTarget?.activeDetailKey, "profile");
     },
     {
       getDashboardModule: async (params: unknown) => {
@@ -7059,7 +7063,7 @@ test("dashboard home prefers formal mirror references over profile copy when bot
 
       assert.equal(data.stateMap.memory_habit?.headline, "近期被调用记忆");
       assert.equal(data.stateMap.memory_habit?.subline, "本周战略复盘已被近期任务再次引用。");
-      assert.equal(data.stateMap.memory_habit?.context?.[0]?.text, "最近记忆引用：memory_strategy_weekly");
+      assert.equal(data.stateMap.memory_habit?.context?.[0]?.text, "本周战略复盘已被近期任务再次引用。");
     },
     {
       getDashboardModule: async (params: unknown) => ({

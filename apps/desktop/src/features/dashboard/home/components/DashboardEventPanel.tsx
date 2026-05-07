@@ -116,6 +116,16 @@ export function DashboardEventPanel({ activeState, onClose, onStateChange, state
         return;
       }
 
+      if (target?.kind === "mirror_detail") {
+        navigate(resolveDashboardModuleRoutePath("memory"), {
+          state: {
+            activeDetailKey: target.activeDetailKey,
+            focusMemoryId: target.focusMemoryId,
+          },
+        });
+        return;
+      }
+
       navigate(resolveDashboardModuleRoutePath(target?.module ?? module));
     }, 0);
   }
