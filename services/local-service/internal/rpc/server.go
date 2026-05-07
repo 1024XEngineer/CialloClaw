@@ -2,7 +2,9 @@
 package rpc
 
 import (
+	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
@@ -19,6 +21,10 @@ type Server struct {
 	handlers        map[string]methodHandler
 	orchestrator    *orchestrator.Service
 	now             func() time.Time
+	streamMu        sync.Mutex
+	streamConns     map[net.Conn]struct{}
+	streamWG        sync.WaitGroup
+	shuttingDown    bool
 }
 
 // NewServer wires configured transports to registered handlers without
@@ -29,6 +35,7 @@ func NewServer(cfg serviceconfig.RPCConfig, orchestrator *orchestrator.Service) 
 		namedPipeName: cfg.NamedPipeName,
 		orchestrator:  orchestrator,
 		now:           time.Now,
+		streamConns:   make(map[net.Conn]struct{}),
 	}
 
 	server.registerHandlers()
