@@ -27,6 +27,11 @@ type Server struct {
 	now             func() time.Time
 }
 
+// maxPendingStreamRequests caps per-connection in-flight work so a shared
+// named-pipe stream applies backpressure before requests pile up behind task
+// serialization locks.
+const maxPendingStreamRequests = 32
+
 func NewServer(cfg serviceconfig.RPCConfig, orchestrator *orchestrator.Service) *Server {
 	server := &Server{
 		transport:     cfg.Transport,
@@ -329,6 +334,7 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 	decoder := json.NewDecoder(conn)
 	writer := &streamEnvelopeWriter{encoder: json.NewEncoder(conn)}
 	taskCoordinator := newStreamTaskCoordinator()
+	pendingRequests := make(chan struct{}, maxPendingStreamRequests)
 	var taskStartRequestMu sync.Mutex
 
 	for {
@@ -347,7 +353,11 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 			return
 		}
 
-		go s.handleStreamRequest(request, writer, taskCoordinator, &taskStartRequestMu)
+		pendingRequests <- struct{}{}
+		go func(request requestEnvelope) {
+			defer func() { <-pendingRequests }()
+			s.handleStreamRequest(request, writer, taskCoordinator, &taskStartRequestMu)
+		}(request)
 	}
 }
 

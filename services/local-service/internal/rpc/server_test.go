@@ -772,6 +772,125 @@ func TestHandleStreamConnAllowsSettingsReadWhileTaskConfirmWaits(t *testing.T) {
 	releasedBlocking = true
 }
 
+func TestHandleStreamConnAppliesBackpressureWhenPendingQueueFills(t *testing.T) {
+	server := newTestServer()
+	startedSignals := make(chan struct{}, maxPendingStreamRequests+1)
+	releaseBlocking := make(chan struct{})
+	releasedBlocking := false
+	defer func() {
+		if !releasedBlocking {
+			close(releaseBlocking)
+		}
+	}()
+
+	var startedMu sync.Mutex
+	startedCount := 0
+	server.handlers["test.blocking"] = func(_ map[string]any) (any, *rpcError) {
+		startedMu.Lock()
+		startedCount++
+		startedMu.Unlock()
+
+		startedSignals <- struct{}{}
+		<-releaseBlocking
+		return map[string]any{"status": "released"}, nil
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen loopback: %v", err)
+	}
+	defer listener.Close()
+
+	acceptDone := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			acceptDone <- err
+			return
+		}
+		server.handleStreamConn(conn)
+		acceptDone <- nil
+	}()
+
+	right, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial loopback: %v", err)
+	}
+	defer func() {
+		_ = right.Close()
+		select {
+		case err := <-acceptDone:
+			if err != nil && !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("accept loopback: %v", err)
+			}
+		case <-time.After(500 * time.Millisecond):
+			t.Fatal("expected loopback stream to shut down")
+		}
+	}()
+
+	encoder := json.NewEncoder(right)
+	for index := 0; index < maxPendingStreamRequests; index++ {
+		request := requestEnvelope{
+			JSONRPC: "2.0",
+			ID:      json.RawMessage(fmt.Sprintf(`"req-blocking-%d"`, index)),
+			Method:  "test.blocking",
+			Params:  mustMarshal(t, map[string]any{}),
+		}
+		if err := encoder.Encode(request); err != nil {
+			t.Fatalf("encode blocking request %d: %v", index, err)
+		}
+	}
+
+	for index := 0; index < maxPendingStreamRequests; index++ {
+		select {
+		case <-startedSignals:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("expected request %d to start before the queue filled", index)
+		}
+	}
+
+	startedMu.Lock()
+	if startedCount != maxPendingStreamRequests {
+		startedMu.Unlock()
+		t.Fatalf("expected exactly %d started requests before backpressure, got %d", maxPendingStreamRequests, startedCount)
+	}
+	startedMu.Unlock()
+
+	extraRequestDone := make(chan error, 1)
+	go func() {
+		extraRequestDone <- encoder.Encode(requestEnvelope{
+			JSONRPC: "2.0",
+			ID:      json.RawMessage(`"req-blocking-overflow"`),
+			Method:  "test.blocking",
+			Params:  mustMarshal(t, map[string]any{}),
+		})
+	}()
+
+	select {
+	case <-startedSignals:
+		t.Fatal("expected overflow request to wait until a pending slot is released")
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	close(releaseBlocking)
+	releasedBlocking = true
+
+	select {
+	case <-startedSignals:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected overflow request to start after pending capacity became available")
+	}
+
+	select {
+	case err := <-extraRequestDone:
+		if err != nil {
+			t.Fatalf("encode overflow request: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected overflow request write to complete after backpressure released")
+	}
+}
+
 func TestHandleStreamConnSerializesTaskStartingRequestsOnSharedConnection(t *testing.T) {
 	testCases := []struct {
 		name         string

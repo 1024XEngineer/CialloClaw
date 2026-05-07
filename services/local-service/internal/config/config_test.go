@@ -40,6 +40,26 @@ func TestLoadUsesProvidedDataDirectory(t *testing.T) {
 	}
 }
 
+func TestLoadDataDirectoryDoesNotOverrideExplicitWorkspaceAndDatabaseEnv(t *testing.T) {
+	dataDir := filepath.Join(`C:\Users`, "tester", "AppData", "Roaming", "com.cialloclaw.desktop")
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace-root")
+	databasePath := filepath.Join(t.TempDir(), "data", "override.db")
+	t.Setenv("CIALLOCLAW_WORKSPACE_ROOT", workspaceRoot)
+	t.Setenv("CIALLOCLAW_DATABASE_PATH", databasePath)
+
+	cfg := Load(LoadOptions{DataDir: dataDir})
+
+	if cfg.DataDir != dataDir {
+		t.Fatalf("expected cleaned data dir %q, got %q", dataDir, cfg.DataDir)
+	}
+	if cfg.WorkspaceRoot != workspaceRoot {
+		t.Fatalf("expected workspace env override %q, got %q", workspaceRoot, cfg.WorkspaceRoot)
+	}
+	if cfg.DatabasePath != databasePath {
+		t.Fatalf("expected database env override %q, got %q", databasePath, cfg.DatabasePath)
+	}
+}
+
 func TestLoadTrimsDataDirectoryOverride(t *testing.T) {
 	dataDir := filepath.Join("D:", "runtime", "cialloclaw")
 	cfg := Load(LoadOptions{DataDir: "  " + dataDir + "  "})

@@ -122,9 +122,9 @@ func defaultRuntimeRootFromValues(goos, runtimeOverride, localAppData, homeDir, 
 }
 
 // Load returns the built-in local-service configuration used during bootstrap.
-// It reads path-related environment overrides, then applies any explicit launch
-// overrides from LoadOptions before later startup phases create directories or
-// layer persisted user settings on top.
+// It reads path-related environment overrides first, then applies launch-time
+// transport overrides and an optional packaged data root without displacing
+// explicit workspace or database environment overrides.
 func Load(options ...LoadOptions) Config {
 	loadOptions := LoadOptions{}
 	if len(options) > 0 {
@@ -146,10 +146,18 @@ func Load(options ...LoadOptions) Config {
 		debugHTTPAddress = ":4317"
 	}
 
+	hasDataDirOverride := strings.TrimSpace(loadOptions.DataDir) != ""
+	hasWorkspaceEnvOverride := cleanPathEnv("CIALLOCLAW_WORKSPACE_ROOT") != ""
+	hasDatabaseEnvOverride := cleanPathEnv("CIALLOCLAW_DATABASE_PATH") != ""
+
 	workspaceRoot := DefaultWorkspaceRoot()
 	databasePath := DefaultDatabasePath()
-	if strings.TrimSpace(loadOptions.DataDir) != "" {
+	// Packaged launches may relocate the runtime root, but explicit operator
+	// workspace/database overrides must keep their documented precedence.
+	if hasDataDirOverride && !hasWorkspaceEnvOverride {
 		workspaceRoot = filepath.Join(dataDir, defaultWorkspaceDirName)
+	}
+	if hasDataDirOverride && !hasDatabaseEnvOverride {
 		databasePath = filepath.Join(dataDir, "data", defaultDatabaseFileName)
 	}
 
