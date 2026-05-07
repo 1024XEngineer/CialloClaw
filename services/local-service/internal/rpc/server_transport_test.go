@@ -762,6 +762,115 @@ func TestServerStartRejectsConcurrentServeRun(t *testing.T) {
 	}
 }
 
+func TestServerStartAllowsReuseAfterCleanShutdown(t *testing.T) {
+	server := newTestServer()
+	server.transport = "named_pipe"
+	server.debugHTTPServer = nil
+
+	started := make(chan struct{}, 2)
+	listenerReleased := make(chan struct{}, 2)
+	server.serveNamedPipe = func(ctx context.Context, pipeName string, handler func(net.Conn)) error {
+		started <- struct{}{}
+		<-ctx.Done()
+		<-listenerReleased
+		return nil
+	}
+
+	firstStartErr := make(chan error, 1)
+	go func() {
+		firstStartErr <- server.Start(context.Background())
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected first serve run to start")
+	}
+
+	listenerReleased <- struct{}{}
+	if err := server.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown first serve run: %v", err)
+	}
+
+	select {
+	case err := <-firstStartErr:
+		if err != nil {
+			t.Fatalf("expected first serve run to stop cleanly, got %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected first serve run to exit after shutdown")
+	}
+
+	secondStartErr := make(chan error, 1)
+	go func() {
+		secondStartErr <- server.Start(context.Background())
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected cleanly stopped server to allow a second serve run")
+	}
+
+	listenerReleased <- struct{}{}
+	if err := server.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown second serve run: %v", err)
+	}
+
+	select {
+	case err := <-secondStartErr:
+		if err != nil {
+			t.Fatalf("expected second serve run to stop cleanly, got %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected second serve run to exit after shutdown")
+	}
+}
+
+func TestServerShutdownBeforeStartDoesNotPoisonFutureServeRun(t *testing.T) {
+	server := newTestServer()
+	server.transport = "named_pipe"
+	server.debugHTTPServer = nil
+
+	if err := server.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown idle server: %v", err)
+	}
+
+	started := make(chan struct{}, 1)
+	listenerReleased := make(chan struct{}, 1)
+	server.serveNamedPipe = func(ctx context.Context, pipeName string, handler func(net.Conn)) error {
+		started <- struct{}{}
+		<-ctx.Done()
+		<-listenerReleased
+		return nil
+	}
+
+	startErr := make(chan error, 1)
+	go func() {
+		startErr <- server.Start(context.Background())
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected idle shutdown not to block a later serve run")
+	}
+
+	listenerReleased <- struct{}{}
+	if err := server.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown later serve run: %v", err)
+	}
+
+	select {
+	case err := <-startErr:
+		if err != nil {
+			t.Fatalf("expected later serve run to stop cleanly, got %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected later serve run to exit after shutdown")
+	}
+}
+
 func TestServerHelperUtilitiesCoverFallbackBranches(t *testing.T) {
 	server := newTestServer()
 	recorder := httptest.NewRecorder()
