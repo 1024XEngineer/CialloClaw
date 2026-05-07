@@ -1332,11 +1332,10 @@ func TestServiceSubmitInputUsesSuggestedWorkspaceDeliveryForLongAgentLoopInput(t
 }
 
 func TestServiceStartTaskFailsAfterExecutionTimeout(t *testing.T) {
-	modelService := model.NewService(modelConfig(), &blockingModelClient{
+	service, _ := newTestServiceWithModelClient(t, &blockingModelClient{
 		started:  make(chan string, 1),
 		released: make(chan struct{}, 1),
 	})
-	service, _, _ := newTestServiceWithModelService(t, modelService)
 	service.executionTimeout = 20 * time.Millisecond
 
 	result, err := service.StartTask(map[string]any{
@@ -14434,11 +14433,10 @@ func TestServiceSubmitInputFallsBackWhenContinuationModelTimesOut(t *testing.T) 
 		taskContinuationModelTimeout = originalTimeout
 	}()
 
-	modelService := model.NewService(modelConfig(), &blockingModelClient{
+	service, _ := newTestServiceWithModelClient(t, &blockingModelClient{
 		started:  make(chan string, 1),
 		released: make(chan struct{}, 1),
 	})
-	service, _, _ := newTestServiceWithModelService(t, modelService)
 
 	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
 		SessionID:   "sess_timeout_continuation",
