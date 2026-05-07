@@ -17,7 +17,7 @@ export function formatTaskSourceLabel(sourceType: Task["source_type"]) {
     hover_input: "悬浮输入",
     screen_capture: "屏幕感知",
     selected_text: "选中文本",
-    todo: "待办触发",
+    todo: "便签转入",
     voice: "语音提交",
   };
 

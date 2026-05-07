@@ -84,7 +84,7 @@ function createTaskActions(item: NoteListItem): NoteActionDescriptor[] {
     {
       action: "convert-to-task",
       label: "转交给 Agent",
-      tooltip: "会直接生成任务并跳转到任务页。",
+      tooltip: "会按这条便签生成正式任务并跳转到任务页。",
     },
   ];
 }

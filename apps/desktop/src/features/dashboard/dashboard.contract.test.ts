@@ -6882,16 +6882,19 @@ test("note conversion and confirming-intent surfaces use direct task handoff wor
   const noteActionBarSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NoteActionBar.tsx"), "utf8");
   const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
   const noteServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/notePage.service.ts"), "utf8");
+  const taskMapperSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskPage.mapper.ts"), "utf8");
   const voiceFieldSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/components/DashboardVoiceField.tsx"), "utf8");
   const homeServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts"), "utf8");
 
-  assert.match(noteActionBarSource, /会直接生成任务并跳转到任务页。/);
-  assert.doesNotMatch(noteActionBarSource, /确认后会直接生成任务并跳转到任务页。/);
+  assert.match(noteActionBarSource, /会按这条便签生成正式任务并跳转到任务页。/);
+  assert.doesNotMatch(noteActionBarSource, /会直接生成任务并跳转到任务页。/);
   assert.match(notePageSource, /function getNoteConvertSuccessFeedback\(status: Task\["status"\]\)/);
-  assert.match(notePageSource, /正在打开任务详情，等待你确认处理方式。/);
+  assert.match(notePageSource, /已按这条便签生成任务，正在打开任务详情。/);
+  assert.doesNotMatch(notePageSource, /等待你确认处理方式。/);
   assert.match(notePageSource, /后续还需要处理授权。/);
-  assert.match(noteServiceSource, /如果需要更稳定的执行结果，建议补一条更明确的上下文后再转交给 Agent。/);
-  assert.doesNotMatch(noteServiceSource, /再决定是否转交给 Agent。/);
+  assert.match(noteServiceSource, /这条便签会按当前正文直接生成任务；如果还想补充路径、时间或说明，可以继续写在正文里后再转交给 Agent。/);
+  assert.doesNotMatch(noteServiceSource, /基础便签数据/);
+  assert.match(taskMapperSource, /todo: "便签转入"/);
   assert.match(voiceFieldSource, /return "正在等待确认处理方式";/);
   assert.doesNotMatch(voiceFieldSource, /已进入意图确认/);
   assert.match(homeServiceSource, /actionLabel: "前往处理"/);

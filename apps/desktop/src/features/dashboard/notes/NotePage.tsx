@@ -126,15 +126,11 @@ function normalizeSourceNoteBodyKey(value: string | null | undefined) {
 }
 
 function getNoteConvertSuccessFeedback(status: Task["status"]) {
-  if (status === "confirming_intent") {
-    return "已为这条事项生成任务，正在打开任务详情，等待你确认处理方式。";
-  }
-
   if (status === "waiting_auth") {
-    return "已为这条事项生成任务，正在打开任务详情；后续还需要处理授权。";
+    return "已按这条便签生成任务，正在打开任务详情；后续还需要处理授权。";
   }
 
-  return "已为这条事项生成任务，正在跳转到任务页。";
+  return "已按这条便签生成任务，正在打开任务详情。";
 }
 
 function registerSourceNoteLookupKey(

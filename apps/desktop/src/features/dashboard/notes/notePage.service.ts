@@ -288,7 +288,7 @@ function createFallbackExperience(item: TodoItem): NoteDetailExperience {
     agentSuggestion: {
       detail:
         item.agent_suggestion ??
-        "当前拿到的是协议中的基础便签数据；如果需要更稳定的执行结果，建议补一条更明确的上下文后再转交给 Agent。",
+        "这条便签会按当前正文直接生成任务；如果还想补充路径、时间或说明，可以继续写在正文里后再转交给 Agent。",
       label: "下一步建议",
     },
     canConvertToTask: item.bucket !== "closed" && !item.linked_task_id,
