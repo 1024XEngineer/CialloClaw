@@ -77,6 +77,92 @@ func TestHandleStreamConnServesJSONRPCSuccess(t *testing.T) {
 	}
 }
 
+func TestHandleStreamConnSkipsBufferedLiveRuntimeReplay(t *testing.T) {
+	modelClient := &stubLoopModelClient{
+		generateToolWait: make(chan struct{}),
+		generateToolSeen: make(chan struct{}),
+	}
+	server := newTestServerWithModelClient(modelClient)
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+
+	go server.handleStreamConn(left)
+
+	encoder := json.NewEncoder(right)
+	decoder := json.NewDecoder(right)
+	request := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-stream-runtime-no-replay"`),
+		Method:  "agent.input.submit",
+		Params: mustMarshal(t, map[string]any{
+			"session_id": "sess_stream_runtime_no_replay",
+			"input": map[string]any{
+				"type": "text",
+				"text": "inspect this workspace and answer directly",
+			},
+			"options": map[string]any{
+				"confirm_required": false,
+			},
+		}),
+	}
+
+	if err := encoder.Encode(request); err != nil {
+		t.Fatalf("encode stream request: %v", err)
+	}
+	if err := right.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("set live notification deadline: %v", err)
+	}
+
+	var liveNotification notificationEnvelope
+	if err := decoder.Decode(&liveNotification); err != nil {
+		t.Fatalf("decode live runtime notification: %v", err)
+	}
+	if !isLiveRuntimeMethod(liveNotification.Method) {
+		t.Fatalf("expected live runtime notification before response, got %+v", liveNotification)
+	}
+	if err := right.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear live notification deadline: %v", err)
+	}
+
+	close(modelClient.generateToolWait)
+
+	if err := right.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("set response deadline: %v", err)
+	}
+	responseSeen := false
+	for index := 0; index < 8; index++ {
+		var envelope map[string]any
+		if err := decoder.Decode(&envelope); err != nil {
+			t.Fatalf("decode response envelope: %v", err)
+		}
+		if envelope["id"] == nil {
+			continue
+		}
+		responseSeen = true
+		break
+	}
+	if !responseSeen {
+		t.Fatal("expected final response after live runtime notification")
+	}
+
+	if err := right.SetReadDeadline(time.Now().Add(250 * time.Millisecond)); err != nil {
+		t.Fatalf("set replay deadline: %v", err)
+	}
+	for {
+		var replayed notificationEnvelope
+		if err := decoder.Decode(&replayed); err != nil {
+			break
+		}
+		if isLiveRuntimeMethod(replayed.Method) {
+			t.Fatalf("expected drain replay to skip already streamed runtime notification, got %+v", replayed)
+		}
+	}
+	if err := right.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear replay deadline: %v", err)
+	}
+}
+
 func TestHandleStreamConnReturnsDecodeErrorForMalformedPayload(t *testing.T) {
 	server := newTestServer()
 	left, right := net.Pipe()
