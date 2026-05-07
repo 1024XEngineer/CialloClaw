@@ -36,22 +36,13 @@ func (s *Server) Start(ctx context.Context) error {
 		})
 	}
 
-	return supervisor.Wait(func() error {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return s.Shutdown(shutdownCtx)
-	})
+	return supervisor.Wait(5*time.Second, s.Shutdown)
 }
 
 // Shutdown gracefully closes the debug HTTP server and terminates active stream
 // handlers so Start does not hand a half-stopped transport back to callers.
 func (s *Server) Shutdown(ctx context.Context) error {
 	var shutdownErr error
-
-	if s.debugHTTPServer == nil {
-	} else if err := s.debugHTTPServer.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		shutdownErr = err
-	}
 
 	runCancel, namedPipeCancel, conns := s.beginTransportShutdown()
 	if runCancel != nil {
@@ -64,21 +55,20 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		_ = conn.Close()
 	}
 
-	done := make(chan struct{})
-	go func() {
-		s.streamWG.Wait()
-		close(done)
-	}()
+	if s.debugHTTPServer != nil {
+		if err := s.debugHTTPServer.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			shutdownErr = err
+		}
+	}
 
-	select {
-	case <-done:
-		return shutdownErr
-	case <-ctx.Done():
+	if err := waitWithContext(ctx, s.streamWG.Wait); err != nil {
 		if shutdownErr != nil {
 			return shutdownErr
 		}
-		return ctx.Err()
+		return err
 	}
+
+	return shutdownErr
 }
 
 // transportSupervisor owns the per-Start run context and joins all transport
@@ -116,8 +106,9 @@ func (s *transportSupervisor) Go(run func(context.Context) error) {
 }
 
 // Wait returns the first transport error after canceling sibling transports,
-// running shutdown, and joining every started transport goroutine.
-func (s *transportSupervisor) Wait(shutdown func() error) error {
+// running shutdown, and waiting for every started transport goroutine to exit
+// within the same bounded shutdown window.
+func (s *transportSupervisor) Wait(timeout time.Duration, shutdown func(context.Context) error) error {
 	var transportErr error
 	select {
 	case transportErr = <-s.errCh:
@@ -125,19 +116,21 @@ func (s *transportSupervisor) Wait(shutdown func() error) error {
 	}
 
 	s.cancel()
-	shutdownErr := shutdown()
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	shutdownErr := shutdown(shutdownCtx)
+	waitErr := waitWithContext(shutdownCtx, s.wg.Wait)
 
-	done := make(chan struct{})
-	go func() {
-		s.wg.Wait()
-		close(done)
-	}()
-	<-done
-
+	if waitErr != nil {
+		return waitErr
+	}
+	if shutdownErr != nil {
+		return shutdownErr
+	}
 	if transportErr != nil {
 		return transportErr
 	}
-	return shutdownErr
+	return nil
 }
 
 func (s *Server) beginServeRun(parent context.Context) context.Context {
@@ -189,4 +182,19 @@ func (s *Server) beginTransportShutdown() (context.CancelFunc, context.CancelFun
 		conns = append(conns, conn)
 	}
 	return runCancel, namedPipeCancel, conns
+}
+
+func waitWithContext(ctx context.Context, wait func()) error {
+	done := make(chan struct{})
+	go func() {
+		wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
