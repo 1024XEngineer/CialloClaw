@@ -74,6 +74,16 @@ type stubToolCallingModelClient struct {
 	generateToolCallsCount int
 }
 
+type blockingModelClient struct {
+	started  chan string
+	released chan struct{}
+}
+
+type delayedModelClient struct {
+	delay  time.Duration
+	output string
+}
+
 type failingExecutionBackend struct {
 	err error
 }
@@ -644,6 +654,62 @@ func (s *stubToolCallingModelClient) GenerateToolCalls(_ context.Context, reques
 	result := s.toolCalls[0]
 	s.toolCalls = s.toolCalls[1:]
 	return result, nil
+}
+
+func (s *blockingModelClient) GenerateText(ctx context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	if s.started != nil {
+		select {
+		case s.started <- request.TaskID:
+		default:
+		}
+	}
+	<-ctx.Done()
+	if s.released != nil {
+		select {
+		case s.released <- struct{}{}:
+		default:
+		}
+	}
+	return model.GenerateTextResponse{}, ctx.Err()
+}
+
+func (s *blockingModelClient) GenerateToolCalls(ctx context.Context, request model.ToolCallRequest) (model.ToolCallResult, error) {
+	if s.started != nil {
+		select {
+		case s.started <- request.TaskID:
+		default:
+		}
+	}
+	<-ctx.Done()
+	if s.released != nil {
+		select {
+		case s.released <- struct{}{}:
+		default:
+		}
+	}
+	return model.ToolCallResult{}, ctx.Err()
+}
+
+func (s delayedModelClient) GenerateText(ctx context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	select {
+	case <-ctx.Done():
+		return model.GenerateTextResponse{}, ctx.Err()
+	case <-time.After(s.delay):
+	}
+	return model.GenerateTextResponse{
+		TaskID:     request.TaskID,
+		RunID:      request.RunID,
+		RequestID:  "req_delayed",
+		Provider:   "openai_responses",
+		ModelID:    "gpt-5.4",
+		OutputText: s.output,
+		Usage: model.TokenUsage{
+			InputTokens:  12,
+			OutputTokens: 24,
+			TotalTokens:  36,
+		},
+		LatencyMS: int64(s.delay / time.Millisecond),
+	}, nil
 }
 
 func timePointer(value time.Time) *time.Time {
@@ -1260,6 +1326,116 @@ func TestServiceSubmitInputUsesSuggestedWorkspaceDeliveryForLongAgentLoopInput(t
 	if outputPath == "" {
 		t.Fatal("expected workspace delivery to carry a path")
 	}
+	if _, err := os.Stat(filepath.Join(workspaceRoot, strings.TrimPrefix(outputPath, "workspace/"))); err != nil {
+		t.Fatalf("expected workspace delivery file to exist, got %v", err)
+	}
+}
+
+func TestServiceStartTaskFailsAfterExecutionTimeout(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, &blockingModelClient{
+		started:  make(chan string, 1),
+		released: make(chan struct{}, 1),
+	})
+	service.executionTimeout = 20 * time.Millisecond
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_execution_timeout",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Please rewrite this draft.",
+		},
+		"intent": map[string]any{
+			"name":      "rewrite",
+			"arguments": map[string]any{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] != "failed" {
+		t.Fatalf("expected timed out execution to fail the task, got %+v", task)
+	}
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["text"] != "执行失败：本地任务执行超时，请重试。" {
+		t.Fatalf("expected timeout bubble text, got %+v", bubble)
+	}
+	if result["delivery_result"] != nil {
+		t.Fatalf("expected timed out execution not to return delivery result, got %+v", result["delivery_result"])
+	}
+}
+
+func TestShouldBoundTaskExecutionOnlyForSynchronousBubbleSubmits(t *testing.T) {
+	if !shouldBoundTaskExecution(
+		runengine.TaskRecord{SourceType: "hover_input"},
+		contextsvc.TaskContextSnapshot{Trigger: "hover_text_input"},
+		map[string]any{"name": "rewrite"},
+		"bubble",
+	) {
+		t.Fatal("expected hover text submits to use the bounded execution timeout")
+	}
+	if shouldBoundTaskExecution(
+		runengine.TaskRecord{SourceType: "hover_input"},
+		contextsvc.TaskContextSnapshot{Trigger: "hover_text_input"},
+		map[string]any{"name": "screen_analyze_candidate"},
+		"bubble",
+	) {
+		t.Fatal("expected internal screen analysis to skip the short bubble timeout")
+	}
+	if shouldBoundTaskExecution(
+		runengine.TaskRecord{SourceType: "hover_input"},
+		contextsvc.TaskContextSnapshot{Trigger: "hover_text_input"},
+		map[string]any{"name": "rewrite"},
+		"workspace_document",
+	) {
+		t.Fatal("expected workspace_document delivery to skip the short bubble timeout")
+	}
+	if shouldBoundTaskExecution(
+		runengine.TaskRecord{SourceType: "file"},
+		contextsvc.TaskContextSnapshot{Trigger: "file_drop"},
+		map[string]any{"name": "write_file"},
+		"bubble",
+	) {
+		t.Fatal("expected non-bubble task sources to keep their existing execution timing")
+	}
+}
+
+func TestServiceSubmitInputWorkspaceDeliverySkipsShortBubbleTimeout(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithModelClient(t, delayedModelClient{
+		delay:  40 * time.Millisecond,
+		output: "Long-form result body.",
+	})
+	service.executionTimeout = 20 * time.Millisecond
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_long_command_timeout",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Please review the following document notes and prepare a detailed deliverable:\nLine one explains the rollout plan.\nLine two adds implementation details.\nLine three adds follow-up tasks.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] != "completed" {
+		t.Fatalf("expected long workspace delivery to complete despite the short bubble timeout, got %+v", task)
+	}
+	deliveryResult, ok := result["delivery_result"].(map[string]any)
+	if !ok {
+		t.Fatal("expected long workspace delivery to return delivery_result")
+	}
+	if deliveryResult["type"] != "workspace_document" {
+		t.Fatalf("expected long workspace delivery to preserve workspace_document output, got %v", deliveryResult["type"])
+	}
+	payload := deliveryResult["payload"].(map[string]any)
+	outputPath := payload["path"].(string)
 	if _, err := os.Stat(filepath.Join(workspaceRoot, strings.TrimPrefix(outputPath, "workspace/"))); err != nil {
 		t.Fatalf("expected workspace delivery file to exist, got %v", err)
 	}
@@ -14247,6 +14423,57 @@ func TestServiceSubmitInputConfirmRequiredTextContinuesPendingTask(t *testing.T)
 	}
 	if record.Snapshot.Text != "Use the latest customer impact numbers." {
 		t.Fatalf("expected continued task to keep text follow-up, got %+v", record.Snapshot)
+	}
+}
+
+func TestServiceSubmitInputFallsBackWhenContinuationModelTimesOut(t *testing.T) {
+	originalTimeout := taskContinuationModelTimeout
+	taskContinuationModelTimeout = 20 * time.Millisecond
+	defer func() {
+		taskContinuationModelTimeout = originalTimeout
+	}()
+
+	service, _ := newTestServiceWithModelClient(t, &blockingModelClient{
+		started:  make(chan string, 1),
+		released: make(chan struct{}, 1),
+	})
+
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_timeout_continuation",
+		Title:       "Investigate the current failure",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		CurrentStep: "agent_loop",
+		RiskLevel:   "green",
+	})
+
+	start := time.Now()
+	result, err := service.SubmitInput(map[string]any{
+		"source":  "floating_ball",
+		"trigger": "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "Translate this note into English",
+			"input_mode": "text",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+		"context": map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+	if time.Since(start) > 500*time.Millisecond {
+		t.Fatalf("expected continuation timeout fallback to return quickly, took %s", time.Since(start))
+	}
+
+	task := result["task"].(map[string]any)
+	if task["task_id"] == activeTask.TaskID {
+		t.Fatalf("expected timed out continuation classifier to fall back to a new task, got %+v", task)
+	}
+	if task["status"] != "confirming_intent" {
+		t.Fatalf("expected fallback task to stay in confirming_intent, got %+v", task)
 	}
 }
 

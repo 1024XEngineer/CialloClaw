@@ -52,36 +52,38 @@ var (
 )
 
 const (
-	executionSegmentInitial = "initial"
-	executionSegmentResume  = "resume"
-	executionSegmentRestart = "restart"
-	subjectPreviewMaxLength = 24
-	resultPreviewMaxLength  = 120
+	executionSegmentInitial     = "initial"
+	executionSegmentResume      = "resume"
+	executionSegmentRestart     = "restart"
+	defaultTaskExecutionTimeout = 95 * time.Second
+	subjectPreviewMaxLength     = 24
+	resultPreviewMaxLength      = 120
 )
 
 // Service is the task-centric orchestration entrypoint for the local-service
 // backend.
 type Service struct {
-	context        *contextsvc.Service
-	intent         *intent.Service
-	runEngine      *runengine.Engine
-	delivery       *delivery.Service
-	memory         *memory.Service
-	risk           *risk.Service
-	model          *model.Service
-	tools          *tools.Registry
-	plugin         *plugin.Service
-	audit          *audit.Service
-	recommendation *recommendation.Service
-	traceEval      *traceeval.Service
-	executor       *execution.Service
-	inspector      *taskinspector.Service
-	storage        *storage.Service
-	modelMu        sync.RWMutex
-	runtimeMu      sync.RWMutex
-	runtimeNextID  uint64
-	runtimeTaps    map[uint64]func(taskID, method string, params map[string]any)
-	taskStartTaps  map[uint64]func(taskID, sessionID, traceID string)
+	context          *contextsvc.Service
+	intent           *intent.Service
+	runEngine        *runengine.Engine
+	delivery         *delivery.Service
+	memory           *memory.Service
+	risk             *risk.Service
+	model            *model.Service
+	tools            *tools.Registry
+	plugin           *plugin.Service
+	audit            *audit.Service
+	recommendation   *recommendation.Service
+	traceEval        *traceeval.Service
+	executor         *execution.Service
+	inspector        *taskinspector.Service
+	storage          *storage.Service
+	modelMu          sync.RWMutex
+	runtimeMu        sync.RWMutex
+	executionTimeout time.Duration
+	runtimeNextID    uint64
+	runtimeTaps      map[uint64]func(taskID, method string, params map[string]any)
+	taskStartTaps    map[uint64]func(taskID, sessionID, traceID string)
 }
 
 // budgetDowngradeDecision describes one real execution-time downgrade decision
@@ -116,21 +118,22 @@ func NewService(
 	plugin *plugin.Service,
 ) *Service {
 	return &Service{
-		context:        context,
-		intent:         intent,
-		runEngine:      runEngine,
-		delivery:       delivery,
-		memory:         memory,
-		risk:           risk,
-		model:          model,
-		tools:          tools,
-		plugin:         plugin,
-		audit:          audit.NewService(),
-		recommendation: recommendation.NewService(),
-		traceEval:      traceeval.NewService(nil, nil),
-		inspector:      taskinspector.NewService(nil),
-		runtimeTaps:    map[uint64]func(taskID, method string, params map[string]any){},
-		taskStartTaps:  map[uint64]func(taskID, sessionID, traceID string){},
+		context:          context,
+		intent:           intent,
+		runEngine:        runEngine,
+		delivery:         delivery,
+		memory:           memory,
+		risk:             risk,
+		model:            model,
+		tools:            tools,
+		plugin:           plugin,
+		audit:            audit.NewService(),
+		recommendation:   recommendation.NewService(),
+		traceEval:        traceeval.NewService(nil, nil),
+		inspector:        taskinspector.NewService(nil),
+		executionTimeout: defaultTaskExecutionTimeout,
+		runtimeTaps:      map[uint64]func(taskID, method string, params map[string]any){},
+		taskStartTaps:    map[uint64]func(taskID, sessionID, traceID string){},
 	}
 }
 
@@ -5106,7 +5109,6 @@ func bubbleTextForStart(suggestion intent.Suggestion) string {
 	}
 	return suggestion.ResultBubbleText
 }
-
 func confirmIntentText(taskIntent map[string]any) string {
 	switch stringValue(taskIntent, "name", "") {
 	case "translate":
@@ -7508,7 +7510,18 @@ func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, sn
 	}
 
 	approvedOperation, approvedTargetObject := approvedExecutionFromTask(processingTask)
-	executionResult, err := s.executor.Execute(context.Background(), execution.Request{
+	executionCtx := context.Background()
+	if shouldBoundTaskExecution(processingTask, snapshot, taskIntent, deliveryType) {
+		executionTimeout := s.executionTimeout
+		if executionTimeout <= 0 {
+			executionTimeout = defaultTaskExecutionTimeout
+		}
+		boundedCtx, cancelExecution := context.WithTimeout(context.Background(), executionTimeout)
+		defer cancelExecution()
+		executionCtx = boundedCtx
+	}
+
+	executionResult, err := s.executor.Execute(executionCtx, execution.Request{
 		TaskID:               processingTask.TaskID,
 		RunID:                processingTask.RunID,
 		SourceType:           processingTask.SourceType,
@@ -7582,6 +7595,28 @@ func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, sn
 	updatedTask = s.attachFormalCitations(processingTask, updatedTask, executionResult.ToolCalls, executionResult.ToolOutput, executionResult.DeliveryResult, executionArtifacts)
 	s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshot, taskIntent, executionResult.DeliveryResult, executionArtifacts)
 	return updatedTask, resultBubble, executionResult.DeliveryResult, executionArtifacts, nil
+}
+
+// shouldBoundTaskExecution limits the outer orchestrator timeout to synchronous
+// shell-ball submits that still resolve to bubble delivery. Longer structured
+// flows already carry their own internal timeouts and should not inherit the
+// short near-field deadline.
+func shouldBoundTaskExecution(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, deliveryType string) bool {
+	if strings.TrimSpace(stringValue(taskIntent, "name", "")) == "screen_analyze_candidate" {
+		return false
+	}
+	if strings.TrimSpace(deliveryType) != "bubble" {
+		return false
+	}
+	if strings.TrimSpace(snapshot.Trigger) == "hover_text_input" {
+		return true
+	}
+	switch strings.TrimSpace(task.SourceType) {
+	case "hover_input", "floating_ball":
+		return true
+	default:
+		return false
+	}
 }
 
 // reopenTaskForUserInput keeps the current task open when the agent loop stops
@@ -8248,6 +8283,10 @@ func executionFailureBubble(err error) string {
 		return "执行失败：目标超出工作区边界，已阻止本次操作。"
 	case errors.Is(err, tools.ErrCommandNotAllowed):
 		return "执行失败：命令存在高危风险，已被策略拦截。"
+	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, tools.ErrToolExecutionTimeout):
+		return "执行失败：本地任务执行超时，请重试。"
+	case errors.Is(err, context.Canceled):
+		return "执行失败：本地任务已取消。"
 	case errors.Is(err, tools.ErrCapabilityDenied):
 		return "执行失败：当前平台能力不可用，请检查环境后重试。"
 	case errors.Is(err, tools.ErrToolExecutionFailed):
