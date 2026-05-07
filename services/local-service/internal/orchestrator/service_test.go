@@ -1300,6 +1300,30 @@ func TestServiceStartTaskFailsAfterExecutionTimeout(t *testing.T) {
 	}
 }
 
+func TestShouldBoundTaskExecutionOnlyForSynchronousBubbleSubmits(t *testing.T) {
+	if !shouldBoundTaskExecution(
+		runengine.TaskRecord{SourceType: "hover_input"},
+		contextsvc.TaskContextSnapshot{Trigger: "hover_text_input"},
+		map[string]any{"name": "rewrite"},
+	) {
+		t.Fatal("expected hover text submits to use the bounded execution timeout")
+	}
+	if shouldBoundTaskExecution(
+		runengine.TaskRecord{SourceType: "hover_input"},
+		contextsvc.TaskContextSnapshot{Trigger: "hover_text_input"},
+		map[string]any{"name": "screen_analyze_candidate"},
+	) {
+		t.Fatal("expected internal screen analysis to skip the short bubble timeout")
+	}
+	if shouldBoundTaskExecution(
+		runengine.TaskRecord{SourceType: "file"},
+		contextsvc.TaskContextSnapshot{Trigger: "file_drop"},
+		map[string]any{"name": "write_file"},
+	) {
+		t.Fatal("expected non-bubble task sources to keep their existing execution timing")
+	}
+}
+
 func TestServiceSubmitInputQueuesDirectAgentLoopTaskBehindSameSessionWork(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Queued task output.")
 

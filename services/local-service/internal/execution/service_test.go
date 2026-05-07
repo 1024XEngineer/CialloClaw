@@ -3379,6 +3379,12 @@ func TestExecutionHelperBranchesAndConfigurationAccessors(t *testing.T) {
 	if failure == nil || failure["category"] != "budget_auto_downgrade" || !isBudgetFailureReason(model.ErrClientNotConfigured.Error()) || normalizeBudgetFailureReason("") != "execution fallback" {
 		t.Fatalf("expected budget failure helpers to emit structured failure signal, got %+v", failure)
 	}
+	if budgetFailureSignal(request, context.DeadlineExceeded) != nil || budgetFailureSignal(request, context.Canceled) != nil {
+		t.Fatal("expected execution timeout and cancel to stay out of budget failure signals")
+	}
+	if isBudgetFailureReason(context.DeadlineExceeded.Error()) || isBudgetFailureReason(context.Canceled.Error()) {
+		t.Fatal("expected timeout and cancel reasons to stay outside budget failure classification")
+	}
 	if !containsExecutionString([]string{"a", "b"}, "b") || containsExecutionString([]string{"a"}, "c") {
 		t.Fatal("expected containsExecutionString to match only exact values")
 	}

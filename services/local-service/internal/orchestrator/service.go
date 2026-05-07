@@ -7623,12 +7623,16 @@ func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, sn
 	}
 
 	approvedOperation, approvedTargetObject := approvedExecutionFromTask(processingTask)
-	executionTimeout := s.executionTimeout
-	if executionTimeout <= 0 {
-		executionTimeout = defaultTaskExecutionTimeout
+	executionCtx := context.Background()
+	if shouldBoundTaskExecution(processingTask, snapshot, taskIntent) {
+		executionTimeout := s.executionTimeout
+		if executionTimeout <= 0 {
+			executionTimeout = defaultTaskExecutionTimeout
+		}
+		boundedCtx, cancelExecution := context.WithTimeout(context.Background(), executionTimeout)
+		defer cancelExecution()
+		executionCtx = boundedCtx
 	}
-	executionCtx, cancelExecution := context.WithTimeout(context.Background(), executionTimeout)
-	defer cancelExecution()
 
 	executionResult, err := s.executor.Execute(executionCtx, execution.Request{
 		TaskID:               processingTask.TaskID,
@@ -7704,6 +7708,24 @@ func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, sn
 	updatedTask = s.attachFormalCitations(processingTask, updatedTask, executionResult.ToolCalls, executionResult.ToolOutput, executionResult.DeliveryResult, executionArtifacts)
 	s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshot, taskIntent, executionResult.DeliveryResult, executionArtifacts)
 	return updatedTask, resultBubble, executionResult.DeliveryResult, executionArtifacts, nil
+}
+
+// shouldBoundTaskExecution limits the outer orchestrator timeout to synchronous
+// shell-ball text submits. Longer structured flows already carry their own
+// internal timeouts and should not inherit the short bubble-facing deadline.
+func shouldBoundTaskExecution(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) bool {
+	if strings.TrimSpace(stringValue(taskIntent, "name", "")) == "screen_analyze_candidate" {
+		return false
+	}
+	if strings.TrimSpace(snapshot.Trigger) == "hover_text_input" {
+		return true
+	}
+	switch strings.TrimSpace(task.SourceType) {
+	case "hover_input", "floating_ball":
+		return true
+	default:
+		return false
+	}
 }
 
 // reopenTaskForUserInput keeps the current task open when the agent loop stops
