@@ -1,4 +1,4 @@
-// 该文件负责审计层的最小实现。
+// Package audit provides the minimal audit-layer implementation.
 package audit
 
 import (
@@ -26,13 +26,13 @@ func (noopWriter) WriteAuditRecord(_ context.Context, _ Record) error {
 	return nil
 }
 
-// Service 提供当前模块的服务能力。
+// Service exposes the minimal audit-building and persistence helpers.
 type Service struct {
 	writer Writer
 	now    func() time.Time
 }
 
-// NewService 创建并返回 Service。
+// NewService builds an audit service with an optional injected writer.
 func NewService(writers ...Writer) *Service {
 	writer := Writer(noopWriter{})
 	if len(writers) > 0 && writers[0] != nil {
@@ -45,12 +45,12 @@ func NewService(writers ...Writer) *Service {
 	}
 }
 
-// Status 处理当前模块的相关逻辑。
+// Status reports whether the audit service is ready to accept writes.
 func (s *Service) Status() string {
 	return "ready"
 }
 
-// BuildRecord 将 RecordInput 归一化为最小审计记录。
+// BuildRecord normalizes one RecordInput into a persisted audit record.
 func (s *Service) BuildRecord(input RecordInput) (Record, error) {
 	if err := validateRecordInput(input); err != nil {
 		return Record{}, err
@@ -59,6 +59,7 @@ func (s *Service) BuildRecord(input RecordInput) (Record, error) {
 	return Record{
 		AuditID:   s.nextAuditID(),
 		TaskID:    strings.TrimSpace(input.TaskID),
+		RunID:     strings.TrimSpace(input.RunID),
 		Type:      strings.TrimSpace(input.Type),
 		Action:    strings.TrimSpace(input.Action),
 		Summary:   strings.TrimSpace(input.Summary),
@@ -68,7 +69,8 @@ func (s *Service) BuildRecord(input RecordInput) (Record, error) {
 	}, nil
 }
 
-// BuildRecordInputFromCandidate 将上游 candidate 结构转换为最小 audit 输入。
+// BuildRecordInputFromCandidate adapts an upstream candidate payload into the
+// minimal audit input shape.
 func BuildRecordInputFromCandidate(taskID string, candidate map[string]any) (RecordInput, error) {
 	if strings.TrimSpace(taskID) == "" {
 		return RecordInput{}, ErrTaskIDRequired
@@ -92,9 +94,11 @@ func BuildRecordInputFromCandidate(taskID string, candidate map[string]any) (Rec
 
 	summaryValue, _ := candidate["summary"].(string)
 	targetValue, _ := candidate["target"].(string)
+	runIDValue, _ := candidate["run_id"].(string)
 
 	return RecordInput{
 		TaskID:  strings.TrimSpace(taskID),
+		RunID:   strings.TrimSpace(runIDValue),
 		Type:    strings.TrimSpace(typeValue),
 		Action:  strings.TrimSpace(actionValue),
 		Summary: strings.TrimSpace(summaryValue),
@@ -103,7 +107,7 @@ func BuildRecordInputFromCandidate(taskID string, candidate map[string]any) (Rec
 	}, nil
 }
 
-// Write 归一化并输出一条审计记录。
+// Write normalizes and persists one audit record.
 func (s *Service) Write(ctx context.Context, input RecordInput) (Record, error) {
 	record, err := s.BuildRecord(input)
 	if err != nil {
@@ -115,7 +119,8 @@ func (s *Service) Write(ctx context.Context, input RecordInput) (Record, error) 
 	return record, nil
 }
 
-// BuildToolAudit 根据工具调用输出里的 audit_candidate 构建统一审计记录。
+// BuildToolAudit builds a normalized audit record from a tool-call
+// audit_candidate payload.
 func (s *Service) BuildToolAudit(taskID, runID string, toolCall tools.ToolCallRecord) (map[string]any, map[string]any, bool) {
 	candidate, _ := toolCall.Output["audit_candidate"].(map[string]any)
 	tokenUsage := buildTokenUsage(toolCall.Output)
@@ -161,7 +166,7 @@ func (s *Service) BuildToolAudit(taskID, runID string, toolCall tools.ToolCallRe
 	return record, tokenUsage, true
 }
 
-// BuildDeliveryAudit 记录正式交付阶段的审计摘要。
+// BuildDeliveryAudit records the audit summary for the formal delivery stage.
 func (s *Service) BuildDeliveryAudit(taskID, runID string, deliveryResult map[string]any) map[string]any {
 	if len(deliveryResult) == 0 {
 		return nil
@@ -187,7 +192,7 @@ func (s *Service) BuildDeliveryAudit(taskID, runID string, deliveryResult map[st
 	)
 }
 
-// BuildAuthorizationAudit 记录授权允许或拒绝的审计摘要。
+// BuildAuthorizationAudit records the audit summary for allow/deny decisions.
 func (s *Service) BuildAuthorizationAudit(taskID, runID, decision string, impactScope map[string]any) map[string]any {
 	decision = firstNonEmptyString(strings.TrimSpace(decision), "allow_once")
 	result := "approved"

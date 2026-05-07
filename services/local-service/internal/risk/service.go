@@ -1,36 +1,37 @@
-// 该文件负责风险评估层的最小骨架。
+// This file contains the minimal risk assessment service skeleton.
 package risk
 
 import "strings"
 
-// Service 提供当前模块的服务能力。
+// Service provides risk assessment capabilities for this module.
 type Service struct{}
 
-// NewService 创建并返回Service。
+// NewService creates a Service instance.
 func NewService() *Service {
 	return &Service{}
 }
 
-// DefaultLevel 处理当前模块的相关逻辑。
+// DefaultLevel returns the default risk level for ordinary operations.
 func (s *Service) DefaultLevel() string {
 	return string(RiskLevelGreen)
 }
 
-// Assess 对一次工具或操作请求进行最小风险评估。
+// Assess performs the minimal risk evaluation for a tool or operation request.
 //
-// 当前规则保持保守：
-// 1. 能力不可用 => red + deny
-// 2. 命中危险命令 => red + deny
-// 3. 命中需审批命令 => red + approval_required
-// 4. 超出工作区 => red + deny
-// 5. write_file 且工作区信息未知 => yellow + approval_required
-// 6. 存在覆盖/删除风险 => yellow + checkpoint_required
-// 7. 其他 => green
+// The current rules stay conservative:
+// 1. Capability unavailable => red + deny
+// 2. Denied command matched => red + deny
+// 3. Approval command matched => red + approval_required
+// 4. Out of workspace => red + deny
+// 5. Workspace write with unknown workspace facts => yellow + approval_required
+// 6. Webpage and attached browser operations => explicit webpage policy
+// 7. Overwrite/delete risk => yellow + checkpoint_required
+// 8. Everything else => green
 //
-// 注意：
-// - 这里不直接生成 ApprovalRequest；
-// - 这里不推进状态机；
-// - 这里只给上层一个稳定、可测试的风险判断结果。
+// Notes:
+// - This service does not create ApprovalRequest records directly;
+// - This service does not advance state machines;
+// - This service only returns a stable, testable risk decision for callers.
 func (s *Service) Assess(input AssessmentInput) AssessmentResult {
 	result := AssessmentResult{
 		RiskLevel:   RiskLevelGreen,
@@ -150,6 +151,10 @@ func isApprovalCommand(commandPreview string) bool {
 func isWebpageOperation(operationName string) bool {
 	switch strings.TrimSpace(operationName) {
 	case "page_read", "page_search", "page_interact", "structured_dom":
+		return true
+	case "browser_attach_current", "browser_snapshot", "browser_tabs_list", "browser_tab_focus":
+		return true
+	case "browser_navigate", "browser_interact":
 		return true
 	default:
 		return false

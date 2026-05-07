@@ -1638,14 +1638,15 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 补充约束：
 
 - `approval_request` 是任务详情里的单个安全锚点，只在当前任务处于 `waiting_auth` 且仍持有活跃正式授权对象时返回；否则返回 `null`。
-- `authorization_record` 返回当前任务最近一条正式授权记录；若任务还没有进入授权决策阶段则返回 `null`。
-- `audit_record` 返回当前任务最近一条正式审计记录；若当前任务还没有正式审计记录则返回 `null`。
+- `authorization_record` 返回当前任务当前执行尝试最近一条正式授权记录；若当前尝试还没有进入授权决策阶段则返回 `null`，不能把重启前旧尝试的 allow / deny 结果继续作为当前授权状态返回。
+- `audit_record` 返回当前任务当前执行尝试最近一条正式审计记录；若当前尝试还没有正式审计记录则返回 `null`，不能把重启前旧尝试的审计结果继续作为当前安全摘要返回。
 - 该字段只服务当前 task 的详情承接，不替代 `agent.security.pending.list` 对全局待确认项的聚合查询。
 - `security_summary.pending_authorizations` 在任务详情中收敛为 `0 | 1`，仅反映当前 task 是否存在这一个活跃安全锚点。
 - `security_summary.latest_restore_point` 的正式类型为 `RecoveryPoint | null`。
 - 对屏幕感知类任务，任务详情应通过正式 `delivery_result`、`artifact`、事件和治理对象回看模型结论、截图证据、OCR 摘要和授权过程，而不是直接渲染平台采样结果或裸 worker 输出。
 - 当 `task_run.snapshot_json` 与一等运行态存储同时存在时，`delivery_result` 与 `citations` 必须以前者的正式一等存储记录为准，兼容快照只能作为缺省回退，不能覆盖更新后的正式交付或引用链。
 - 若任务存在正式视觉或上下文引用，`citations` 应返回稳定 `citation` 对象列表，并在需要时补齐 `artifact_id / artifact_type / evidence_role / excerpt_text / screen_session_id` 等结构化字段，用于区分截图证据、OCR 摘要和引用片段，而不是把引用信息混进 artifact 扩展字段或裸 tool output。
+- `citations` 当前只承诺返回“当前 attempt 的正式引用链”；其一等存储写入仍是 task 级替换，不保证旧 attempt 的 citation 历史长期保留。
 - 当 `tasks / task_steps` 已进入结构化读取路径时，`citations` 仍必须可从一等存储重建；不能把 `task_run` 兼容快照当作任务详情正式引用链的唯一来源。
 
 ### agent.task.detail.get 入参说明
@@ -1828,6 +1829,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户点击暂停、继续、取消、重启等操作时
 - **系统处理**：执行任务状态控制并返回最新状态
+- **重启语义**：`restart` 仅适用于已结束任务；后端保留 `task_id`，分配新的 `run_id` 与执行尝试编号，并进入正式执行链路。新尝试必须先重新经过同会话串行队列与风险治理 / 授权判断，不能只把任务状态改回 `processing`，也不能绕过治理后直接执行。
+- **追加边界**：已结束任务不能通过 `agent.task.steer` 补充要求；重启后的追加只在新尝试仍处于可 steering 的 `agent_loop` 执行段，或任务处于 `waiting_auth / blocked` 状态时成立。
 - **入参**：任务 ID、动作、动作参数
 - **出参**：更新后的任务、状态气泡
 
@@ -3488,6 +3491,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - 必须传入 `task_id`
 - 接口当前只返回指定任务的审计记录
+- 当同一 `task_id` 已经发生 `restart` 且当前任务持有新的 `run_id` 时，默认只返回当前执行尝试的审计记录；旧尝试的审计历史可以继续保留在存储层，但不能和当前 attempt 的任务详情 / 审计明细混在一起展示
 
 ### agent.security.audit.list 入参说明
 

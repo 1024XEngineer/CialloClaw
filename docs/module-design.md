@@ -1496,6 +1496,8 @@ flowchart TB
 - 为一次任务执行标记 `initial / resume / restart` 分段；
 - 隔离长任务的 steering message 和重试上下文；
 - 把执行尝试和人类复核后的继续执行放回同一主任务，而不是分叉出新的正式主对象；
+- `restart` 分段必须来自重启前的终态任务快照与重启后的新 `run_id`，`TaskControl` 完成状态迁移后必须把新尝试送回会话串行队列与风险治理 / 授权边界，只有通过这些前置门禁后才启动执行，避免留下没有 executor 承接的 `processing` 快照或绕过治理的执行；
+- 同一 `task_id` 发生 `restart` 后，任务详情和审计明细中的 `delivery_result / artifact / citation / authorization_record / audit_record` 必须按当前 `run_id` 读取正式记录；其中 `delivery_result / artifact / authorization_record / audit_record` 的旧尝试数据可以保留在存储层，但不能继续污染新尝试的任务详情、失败摘要或安全审计 drill-down；`citation` 当前仍是 task 级替换语义，只保证当前尝试的正式引用链正确，不承诺保留旧尝试的 citation 历史；
 - 为后续真正的一等子任务能力预留边界。
 
 #### 关键中间产物
@@ -1681,6 +1683,12 @@ flowchart TB
 4. 把返回值归一成 `ToolCallRecord / tool output / artifact candidate / citation_seed`。
 5. 把错误统一映射为正式错误码，而不是透传底层异常文本。
 
+#### 浏览器附着补充约束
+- `browser_*` intents 仍然走执行层与治理层的正式工具解析路径，不得因为页面附着优化而绕过 `resolveToolExecution / resolveGovernanceToolExecution` 主链；
+- 对 `page_read / page_search / page_interact / structured_dom` 的 attach 注入只允许建立在可信桌面快照上，至少要求当前 `PageURL` 与请求 `url` 归一化后仍能对齐；
+- 当前 3b 只把 `PageURL / PageTitle / BrowserKind` 用作页面级附着线索，`ProcessPath / ProcessID` 仅在快照和续跑链路中保留，尚未进入 worker attach contract 的进程级会话收窄逻辑；
+- URL 归一化目前只安全忽略 host 大小写、fragment 与默认根路径 / 默认端口差异，不在执行层静态处理 redirects 或所有尾斜杠等价关系，避免误附着到错误页面。
+
 #### 关键中间产物
 - governance assessment
 - tool request payload
@@ -1725,9 +1733,11 @@ flowchart TB
 #### 实现约束
 - Playwright sidecar 至少支持 `page_read`、`page_search`、`page_interact`、`structured_dom` 四类兼容能力，以及 `browser_attach_current`、`browser_snapshot`、`browser_navigate`、`browser_tabs_list`、`browser_tab_focus`、`browser_interact` 六类真实浏览器动作；
 - sidecar 可在保持既有 launch 路径兼容的前提下附加 `attach.mode = cdp` 请求形状，用于附着已开启调试端口的本地 Chromium 浏览器；
+- 当前执行层会在可信桌面快照的 `PageURL` 与目标 `url` 对齐时，为 `page_*` 请求自动注入 `attach`，未命中时必须回退到既有 launch 路径而不是伪造附着成功；
 - `attach.target.url / title_contains / page_index` 仅在显式提供时才参与附着页缩小；顶层 `url` 继续保留给 launch 路径与展示 fallback，不得隐式升级成 attach 过滤条件；
 - `attach.endpoint_url` 仅允许 loopback 目标（`localhost`、`127.0.0.0/8`、`::1`），避免 sidecar 退化为通用 outbound CDP dialer；
 - `browser_*` 动作必须显式提供 `attach`，不得偷偷回退到 launch 路径；其中 `browser_navigate` 的顶层 `url` 仅表示导航目标，不参与附着页筛选；
+- 进程级 hint（`ProcessPath / ProcessID`）当前只用于快照持久化与续跑恢复，后续若要做更强的 session narrowing，必须先扩展 attach contract 与 worker 目标选择逻辑；
 - sidecar 启动前必须通过健康检查，避免把未就绪 worker 暴露给主执行链；
 - 传输层失败要清空 ready 状态并触发回收，普通请求失败则保留 ready 状态；
 - 页面交互与结构化 DOM 结果必须通过 `tool_call -> event -> delivery_result` 链回写，而不是前端直连 sidecar；

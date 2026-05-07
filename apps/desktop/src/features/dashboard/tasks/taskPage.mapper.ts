@@ -93,6 +93,16 @@ export function getTaskRunwayTone(status: Task["status"]) {
   return "archive";
 }
 
+// Mirrors the backend task.steer state guard so the dashboard only enables
+// direct follow-up input when the current task can consume it.
+export function canTaskAcceptSteering(task: Task) {
+  if (task.status === "processing") {
+    return task.intent?.name === "agent_loop" && task.current_step === "agent_loop";
+  }
+
+  return task.status === "waiting_auth" || task.status === "blocked";
+}
+
 export function getTaskProgress(timeline: TaskStep[]): TaskProgressState {
   if (timeline.length === 0) {
     return {
@@ -190,8 +200,13 @@ export function getFinishedTaskGroups(items: TaskListItem[], expanded: boolean):
   return groups.filter((group) => group.items.length > 0);
 }
 
-function buildTaskSafetyAction(task: Task, detail: AgentTaskDetailGetResult): TaskPrimaryAction {
-  const hasAnchor = task.status === "waiting_auth" || detail.approval_request !== null || detail.security_summary.latest_restore_point !== null;
+function buildTaskSafetyAction(task: Task, detail: AgentTaskDetailGetResult | null): TaskPrimaryAction {
+  const hasAnchor = detail !== null
+    && (
+      task.status === "waiting_auth"
+      || detail.approval_request !== null
+      || detail.security_summary.latest_restore_point !== null
+    );
 
   return {
     action: "open-safety",
@@ -200,7 +215,7 @@ function buildTaskSafetyAction(task: Task, detail: AgentTaskDetailGetResult): Ta
   };
 }
 
-export function getTaskPrimaryActions(task: Task, detail: AgentTaskDetailGetResult): TaskPrimaryAction[] {
+export function getTaskPrimaryActions(task: Task, detail: AgentTaskDetailGetResult | null): TaskPrimaryAction[] {
   const safetyAction = buildTaskSafetyAction(task, detail);
 
   if (task.status === "processing") {

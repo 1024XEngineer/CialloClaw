@@ -1,6 +1,19 @@
-// 该文件封装前端本地持久化能力。 
+// Keep desktop storage access SSR-safe so contract tests and non-DOM entry
+// points can import the module without crashing on `window`.
+function resolveLocalStorage(): Storage | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    return window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
 export function loadStoredValue<T>(key: string): T | null {
-  const rawValue = window.localStorage.getItem(key);
+  const rawValue = resolveLocalStorage()?.getItem(key);
   if (!rawValue) {
     return null;
   }
@@ -8,11 +21,10 @@ export function loadStoredValue<T>(key: string): T | null {
   return JSON.parse(rawValue) as T;
 }
 
-// saveStoredValue 处理当前模块的相关逻辑。
 export function saveStoredValue<T>(key: string, value: T) {
-  window.localStorage.setItem(key, JSON.stringify(value));
+  resolveLocalStorage()?.setItem(key, JSON.stringify(value));
 }
 
 export function removeStoredValue(key: string) {
-  window.localStorage.removeItem(key);
+  resolveLocalStorage()?.removeItem(key);
 }

@@ -2,11 +2,11 @@
  * Shell-ball interaction state owns the floating hover input, voice capture, and
  * lightweight submission gestures that sit on top of the task-centric backend.
  */
-import type { AgentInputSubmitParams, AgentTaskStartParams, RequestMeta } from "@cialloclaw/protocol";
+import type { AgentTaskStartParams, RequestMeta } from "@cialloclaw/protocol";
 import { useLatest, useUnmount } from "ahooks";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PointerEvent } from "react";
-import { submitTextInput, createTextInputSubmitParams } from "../../services/agentInputService";
+import type { SubmitTextInputClientContext } from "../../services/agentInputService";
 import {
   createShellBallInteractionController,
   getShellBallInputBarMode,
@@ -26,10 +26,12 @@ import {
   getShellBallSpeechRecognitionLanguage,
   type ShellBallSpeechRecognition,
 } from "./shellBall.speech";
+import { submitShellBallInput } from "./shellBallSubmit";
 import { startTaskFromFiles } from "@/services/taskService";
-import { getCurrentConversationSessionId } from "@/services/conversationSessionService";
 import type { ShellBallInteractionEvent, ShellBallVisualState, ShellBallVoiceHintMode } from "./shellBall.types";
 import { useShellBallStore } from "../../stores/shellBallStore";
+
+export { createShellBallInputSubmitParams } from "./shellBallSubmit";
 
 type TimeoutHandle = ReturnType<typeof globalThis.setTimeout>;
 
@@ -61,9 +63,10 @@ const SHELL_BALL_NON_RECOVERABLE_VOICE_ERRORS = new Set([
  * UI such as local bubbles and delivery previews.
  */
 export type ShellBallInputSubmitResult = (
-  | NonNullable<Awaited<ReturnType<typeof submitTextInput>>>
+  | NonNullable<Awaited<ReturnType<typeof submitShellBallInput>>>
   | Awaited<ReturnType<typeof startTaskFromFiles>>
 ) & {
+  clientContext?: SubmitTextInputClientContext;
   delivery_result?: {
     type?: string;
     preview_text?: string | null;
@@ -73,10 +76,17 @@ export type ShellBallInputSubmitResult = (
   } | null;
 };
 
+export type ShellBallPreparedTextSubmitDraft = {
+  currentDraft: string;
+  currentInputValue: string;
+  currentPendingFiles: string[];
+  submittedDraftRevision: number;
+};
+
 type ShellBallPostSubmitReset = {
   nextInputValue: string;
   nextPendingFiles: string[];
-  nextFocused: false;
+  nextFocused: true;
 };
 
 function createShellBallRequestMeta(): RequestMeta {
@@ -151,32 +161,6 @@ export function appendShellBallDroppedText(input: {
 }
 
 /**
- * Builds the formal `agent.input.submit` payload used by shell-ball text and
- * voice submissions.
- *
- * @param input Trigger metadata together with the draft text to submit.
- * @returns The normalized RPC payload, or `null` when the draft is empty.
- */
-export function createShellBallInputSubmitParams(input: {
-  text: string;
-  trigger: "voice_commit" | "hover_text_input";
-  inputMode: "voice" | "text";
-  sessionId?: string;
-}): AgentInputSubmitParams | null {
-  return createTextInputSubmitParams({
-    text: input.text,
-    source: "floating_ball",
-    trigger: input.trigger,
-    inputMode: input.inputMode,
-    sessionId: input.sessionId,
-    options: {
-      confirm_required: false,
-      preferred_delivery: "bubble",
-    },
-  });
-}
-
-/**
  * Builds the formal `agent.task.start` payload used when shell-ball submission
  * includes file attachments.
  *
@@ -212,25 +196,6 @@ export function createShellBallTaskStartParams(input: {
       confirm_required: false,
     },
   };
-}
-
-async function submitShellBallInput(input: {
-  text: string;
-  trigger: "voice_commit" | "hover_text_input";
-  inputMode: "voice" | "text";
-  sessionId?: string;
-}): Promise<ShellBallInputSubmitResult | null> {
-  return submitTextInput({
-    text: input.text,
-    source: "floating_ball",
-    trigger: input.trigger,
-    inputMode: input.inputMode,
-    sessionId: input.sessionId,
-    options: {
-      confirm_required: false,
-      preferred_delivery: "bubble",
-    },
-  });
 }
 
 async function startShellBallFileTask(input: {
@@ -338,7 +303,7 @@ export function getShellBallPostSubmitInputReset(inputValue: string) {
 
   return {
     nextInputValue: "",
-    nextFocused: false,
+    nextFocused: true,
   };
 }
 
@@ -353,8 +318,21 @@ function getShellBallPostSubmitReset(input: {
   return {
     nextInputValue: "",
     nextPendingFiles: [],
-    nextFocused: false,
+    nextFocused: true,
   };
+}
+
+export function shouldRestoreShellBallSubmitFailureDraft(input: {
+  currentInputValue: string;
+  currentPendingFiles: string[];
+  currentDraftRevision: number;
+  submittedDraftRevision: number;
+}) {
+  return (
+    input.currentInputValue.trim() === "" &&
+    input.currentPendingFiles.length === 0 &&
+    input.currentDraftRevision === input.submittedDraftRevision
+  );
 }
 
 export function getShellBallPressCancelEvent(state: ShellBallVisualState): Extract<ShellBallInteractionEvent, "voice_cancel"> | null {
@@ -407,8 +385,8 @@ export function resolveShellBallVoiceRecognitionFinalState(input: {
 export function useShellBallInteraction() {
   const visualState = useShellBallStore((state) => state.visualState);
   const setVisualState = useShellBallStore((state) => state.setVisualState);
-  const [inputValue, setInputValue] = useState("");
-  const [pendingFiles, setPendingFiles] = useState<string[]>([]);
+  const [inputValue, setInputValueState] = useState("");
+  const [pendingFiles, setPendingFilesState] = useState<string[]>([]);
   const [finalizedSpeechPayload, setFinalizedSpeechPayload] = useState<string | null>(null);
   const [regionActive, setRegionActive] = useState(false);
   const [inputFocused, setInputFocused] = useState(false);
@@ -429,6 +407,8 @@ export function useShellBallInteraction() {
   const setVisualStateRef = useLatest<typeof setVisualState>(setVisualState);
   const controllerRef = useRef<ShellBallInteractionController | null>(null);
   const inputValueRef = useLatest<string>(inputValue);
+  const pendingFilesRef = useLatest<string[]>(pendingFiles);
+  const draftRevisionRef = useRef(0);
   const recognitionRef = useRef<ShellBallSpeechRecognition | null>(null);
   const recognitionSessionIdRef = useRef(0);
   const recognitionStopReasonRef = useRef<ShellBallVoiceRecognitionStopReason>("none");
@@ -452,6 +432,13 @@ export function useShellBallInteraction() {
 
   function syncVisualState() {
     setVisualState(controllerRef.current?.getState() ?? visualState);
+  }
+
+  function setTrackedInputValue(nextValue: string) {
+    if (nextValue !== inputValueRef.current) {
+      draftRevisionRef.current += 1;
+    }
+    setInputValueState(nextValue);
   }
 
   function syncVisualStateFromTaskStatus(status: Parameters<typeof getShellBallVisualStateForTaskStatus>[0], fallbackState: ShellBallVisualState) {
@@ -523,7 +510,7 @@ export function useShellBallInteraction() {
 
   function syncVoiceDraft(transcript: string) {
     voiceTranscriptRef.current = transcript;
-    setInputValue(composeShellBallSpeechDraft(voiceBaseDraftRef.current, transcript));
+    setTrackedInputValue(composeShellBallSpeechDraft(voiceBaseDraftRef.current, transcript));
   }
 
   function getVoicePreviewForPointer(input: {
@@ -551,7 +538,7 @@ export function useShellBallInteraction() {
     const committedDraft = composeShellBallSpeechDraft(voiceBaseDraftRef.current, voiceTranscriptRef.current);
     voiceBaseDraftRef.current = committedDraft;
     voiceTranscriptRef.current = "";
-    setInputValue(committedDraft);
+    setTrackedInputValue(committedDraft);
     return committedDraft;
   }
 
@@ -566,7 +553,7 @@ export function useShellBallInteraction() {
     recognitionStopReasonRef.current = "none";
     recognitionSessionIdRef.current += 1;
 
-    setInputValue(resolution.nextInputValue);
+    setTrackedInputValue(resolution.nextInputValue);
     setCurrentVoiceHintMode("hidden");
     setCurrentVoicePreview(null);
     controllerRef.current?.forceState(resolution.nextVisualState, {
@@ -740,6 +727,11 @@ export function useShellBallInteraction() {
   function handleRegionEnter() {
     regionActiveRef.current = true;
     setRegionActive(true);
+    dispatch("pointer_enter_hotspot", {
+      regionActive: true,
+      hoverRetained: getHoverRetained(),
+    });
+    syncVisualState();
   }
 
   function handleRegionLeave() {
@@ -751,53 +743,99 @@ export function useShellBallInteraction() {
       setCurrentVoicePreview(null);
     }
 
-    if (controllerRef.current?.getState() === "hover_input" && inputFocusedRef.current) {
-      dispatch("pointer_leave_region", {
-        regionActive: false,
-        hoverRetained: true,
-      });
-    }
+    dispatch("pointer_leave_region", {
+      regionActive: false,
+      hoverRetained: getHoverRetained(),
+    });
+    syncVisualState();
   }
 
   function handleInputHoverChange(active: boolean) {
     inputHoveredRef.current = active;
   }
 
-  async function handleSubmitText() {
-    const currentDraft = inputValue.trim();
+  /**
+   * Applies the shell-ball optimistic text-submit reset without consuming the
+   * user's draft revision. Callers can restore the captured draft later when
+   * the submit fails and no new draft has claimed the field yet.
+   */
+  function prepareTextSubmitDraft(): ShellBallPreparedTextSubmitDraft | null {
+    const currentInputValue = inputValueRef.current ?? "";
+    const currentPendingFiles = pendingFilesRef.current ?? [];
+    const currentDraft = currentInputValue.trim();
     const reset = getShellBallPostSubmitReset({
-      inputValue,
-      pendingFiles,
+      inputValue: currentInputValue,
+      pendingFiles: currentPendingFiles,
     });
     if (reset === null) {
       return null;
     }
 
+    const submittedDraftRevision = draftRevisionRef.current;
+    dispatch("submit_text");
+    setInputValueState(reset.nextInputValue);
+    setPendingFilesState(reset.nextPendingFiles);
+    inputFocusedRef.current = reset.nextFocused;
+    setInputFocused(reset.nextFocused);
+
+    return {
+      currentDraft,
+      currentInputValue,
+      currentPendingFiles,
+      submittedDraftRevision,
+    };
+  }
+
+  /**
+   * Restores an optimistically-cleared shell-ball draft only when the field is
+   * still untouched and no newer draft has started after the failed submit.
+   * Failed submits must also restore the interactive hover state immediately so
+   * the inline bar does not stay readonly during the controller cooldown.
+   */
+  function restorePreparedTextSubmitDraft(preparedDraft: ShellBallPreparedTextSubmitDraft) {
+    if (shouldRestoreShellBallSubmitFailureDraft({
+      currentInputValue: inputValueRef.current ?? "",
+      currentPendingFiles: pendingFilesRef.current ?? [],
+      currentDraftRevision: draftRevisionRef.current,
+      submittedDraftRevision: preparedDraft.submittedDraftRevision,
+    })) {
+      setInputValueState(preparedDraft.currentInputValue);
+      setPendingFilesState(preparedDraft.currentPendingFiles);
+    }
+    inputFocusedRef.current = true;
+    setInputFocused(true);
+    controllerRef.current?.forceState("hover_input", {
+      regionActive: regionActiveRef.current,
+      hoverRetained: true,
+    });
+    syncVisualState();
+  }
+
+  async function handleSubmitText() {
+    const preparedDraft = prepareTextSubmitDraft();
+    if (preparedDraft === null) {
+      return null;
+    }
+
     try {
       const result =
-        pendingFiles.length > 0
+        preparedDraft.currentPendingFiles.length > 0
           ? await startShellBallFileTask({
-              text: currentDraft,
-              files: pendingFiles,
-              sessionId: getCurrentConversationSessionId(),
+              text: preparedDraft.currentDraft,
+              files: preparedDraft.currentPendingFiles,
             })
           : await submitShellBallInput({
-              text: currentDraft,
+              text: preparedDraft.currentDraft,
               trigger: "hover_text_input",
               inputMode: "text",
-              sessionId: getCurrentConversationSessionId(),
             });
-      dispatch("submit_text");
-      setInputValue(reset.nextInputValue);
-      setPendingFiles(reset.nextPendingFiles);
-      inputFocusedRef.current = reset.nextFocused;
-      setInputFocused(reset.nextFocused);
       if (result?.task) {
         syncVisualStateFromTaskStatus(result.task.status, controllerRef.current?.getState() ?? visualState);
       }
       return result;
     } catch (error) {
       console.warn("shell-ball text submit failed", error);
+      restorePreparedTextSubmitDraft(preparedDraft);
       throw error;
     }
   }
@@ -820,7 +858,6 @@ export function useShellBallInteraction() {
         text: normalizedText,
         trigger: "voice_commit",
         inputMode: "voice",
-        sessionId: getCurrentConversationSessionId(),
       });
 
       if (result?.task) {
@@ -831,7 +868,7 @@ export function useShellBallInteraction() {
     } catch (error) {
       console.warn("shell-ball voice submit failed", error);
       const restoredDraft = composeShellBallSpeechDraft(voiceBaseDraftRef.current, normalizedText);
-      setInputValue(restoredDraft);
+      setInputValueState(restoredDraft);
       inputFocusedRef.current = true;
       setInputFocused(true);
       controllerRef.current?.forceState("hover_input", {
@@ -853,7 +890,8 @@ export function useShellBallInteraction() {
       return;
     }
 
-    setPendingFiles((currentPaths) => mergeShellBallPendingFiles(currentPaths, normalizedPaths));
+    draftRevisionRef.current += 1;
+    setPendingFilesState((currentPaths) => mergeShellBallPendingFiles(currentPaths, normalizedPaths));
     inputFocusedRef.current = true;
     setInputFocused(true);
     controllerRef.current?.forceState("hover_input", {
@@ -869,7 +907,8 @@ export function useShellBallInteraction() {
       return;
     }
 
-    setPendingFiles((currentPaths) => currentPaths.filter((currentPath) => currentPath !== normalizedPath));
+    draftRevisionRef.current += 1;
+    setPendingFilesState((currentPaths) => currentPaths.filter((currentPath) => currentPath !== normalizedPath));
   }
 
   function handlePressStart(event: PointerEvent<HTMLButtonElement>) {
@@ -944,7 +983,7 @@ export function useShellBallInteraction() {
       dispatch("press_start");
 
       if (!startVoiceRecognition()) {
-        setInputValue(voiceBaseDraftRef.current);
+        setInputValueState(voiceBaseDraftRef.current);
         setCurrentVoiceHintMode("hidden");
         controllerRef.current?.forceState(
           voiceStartStateRef.current === "hover_input" || voiceBaseDraftRef.current.trim() !== "" ? "hover_input" : "idle",
@@ -1100,7 +1139,7 @@ export function useShellBallInteraction() {
       return;
     }
 
-    setInputValue(nextInputValue);
+    setTrackedInputValue(nextInputValue);
     handleInputFocusRequest();
   }
 
@@ -1117,6 +1156,23 @@ export function useShellBallInteraction() {
     controllerRef.current?.forceState(state, { regionActive: regionActiveRef.current });
     syncVisualState();
   }
+
+  useEffect(() => {
+    if (getShellBallInputBarMode(visualState) !== "hidden") {
+      return;
+    }
+
+    inputHoveredRef.current = false;
+
+    if (!inputFocusedRef.current) {
+      return;
+    }
+
+    // Hidden input modes should retire any stale textarea-focus bookkeeping so
+    // follow-up hover transitions do not inherit a no-longer-rendered field.
+    inputFocusedRef.current = false;
+    setInputFocused(false);
+  }, [visualState]);
 
   useEffect(() => {
     if (controllerRef.current === null) {
@@ -1154,7 +1210,9 @@ export function useShellBallInteraction() {
     visualState,
     inputValue,
     pendingFiles,
-    setInputValue,
+    setInputValue: setTrackedInputValue,
+    prepareTextSubmitDraft,
+    restorePreparedTextSubmitDraft,
     finalizedSpeechPayload,
     acknowledgeFinalizedSpeechPayload,
     regionActive,
@@ -1184,7 +1242,6 @@ export function useShellBallInteraction() {
     handleInputHoverChange,
     handleInputFocusChange,
     handleInputFocusRequest,
-    getCurrentConversationSessionId,
     handleForceState,
   };
 }

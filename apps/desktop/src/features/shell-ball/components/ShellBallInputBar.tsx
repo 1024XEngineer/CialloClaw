@@ -145,6 +145,23 @@ export function ShellBallInputBar({
     onCompositionStateChange(false);
   }
 
+  function restoreTextareaFocus() {
+    if (!isInteractive) {
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      const field = inputRef.current;
+      if (field === null) {
+        return;
+      }
+
+      field.focus();
+      const selectionIndex = field.value.length;
+      field.setSelectionRange(selectionIndex, selectionIndex);
+    });
+  }
+
   const hiddenState = isHidden || isVoice;
 
   return (
@@ -186,7 +203,18 @@ export function ShellBallInputBar({
           type="button"
           className="shell-ball-uiverse-action"
           data-shell-ball-interactive="true"
-          onClick={auxiliaryAction === "cancel" ? onCancel : onAttachFile}
+          onMouseDown={(event) => {
+            event.preventDefault();
+          }}
+          onClick={() => {
+            if (auxiliaryAction === "cancel") {
+              onCancel?.();
+              return;
+            }
+
+            onAttachFile();
+            restoreTextareaFocus();
+          }}
           disabled={buttonsDisabled}
           aria-label={auxiliaryActionLabel}
         >
@@ -198,7 +226,13 @@ export function ShellBallInputBar({
           type="button"
           className="shell-ball-uiverse-action shell-ball-uiverse-action--send"
           data-shell-ball-interactive="true"
-          onClick={onSubmit}
+          onMouseDown={(event) => {
+            event.preventDefault();
+          }}
+          onClick={() => {
+            onSubmit();
+            restoreTextareaFocus();
+          }}
           disabled={submitDisabled}
           aria-label={isReadonly ? "Send disabled" : isVoice ? "Send unavailable during voice capture" : "Send request"}
         >

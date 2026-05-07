@@ -11,12 +11,13 @@ import { getCurrentWindow, monitorFromPoint } from "@tauri-apps/api/window";
 import { ShellBallSurface, shouldAcceptShellBallTextDrop } from "./ShellBallSurface";
 import { ShellBallAttachmentTray } from "./components/ShellBallAttachmentTray";
 import { ShellBallBubbleZone } from "./components/ShellBallBubbleZone";
+import { ShellBallDevLayer } from "./ShellBallDevLayer";
 import { ShellBallInputBar } from "./components/ShellBallInputBar";
 import { ShellBallVoiceHints } from "./components/ShellBallVoiceHints";
 import type { ShellBallSelectionSnapshot } from "./selection/selection.types";
 import { useShellBallInteraction } from "./useShellBallInteraction";
 import { getShellBallMotionConfig } from "./shellBall.motion";
-import type { ShellBallVisualState } from "./shellBall.types";
+import type { ShellBallInputBarMode, ShellBallVisualState } from "./shellBall.types";
 import { useShellBallCoordinator } from "./useShellBallCoordinator";
 import { useShellBallWindowMetrics } from "./useShellBallWindowMetrics";
 import {
@@ -50,6 +51,8 @@ import {
 import { useDesktopOnboardingActions } from "@/features/onboarding/useDesktopOnboardingActions";
 import { useDesktopOnboardingLoading } from "@/features/onboarding/useDesktopOnboardingLoading";
 import { useDesktopOnboardingSession } from "@/features/onboarding/useDesktopOnboardingSession";
+import { shouldShowShellBallDemoSwitcher } from "./shellBall.dev";
+import { useShellBallStore } from "../../stores/shellBallStore";
 
 type ShellBallAppProps = {
   isDev?: boolean;
@@ -146,6 +149,21 @@ export function isShellBallClipboardPromptActive(
   return prompt !== null && prompt.expiresAt > now;
 }
 
+export function resolveShellBallInlineInputMode(input: {
+  shouldRenderInlineInput: boolean;
+  snapshotInputBarMode: ShellBallInputBarMode;
+}): ShellBallInputBarMode {
+  if (!input.shouldRenderInlineInput) {
+    return "hidden";
+  }
+
+  if (input.snapshotInputBarMode === "readonly") {
+    return "readonly";
+  }
+
+  return "interactive";
+}
+
 function easeShellBallDashboardTransition(progress: number) {
   return 1 - Math.pow(1 - progress, 3);
 }
@@ -231,9 +249,9 @@ async function animateShellBallDashboardWindow(input: {
 }
 
 export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
-  void isDev;
   const onboardingSession = useDesktopOnboardingSession();
   const onboardingLoading = useDesktopOnboardingLoading("shell-ball");
+  const setDemoVisualState = useShellBallStore((state) => state.setVisualState);
   const {
     visualState,
     inputValue,
@@ -262,7 +280,6 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handleInputFocusRequest,
     setInputValue,
     acknowledgeFinalizedSpeechPayload,
-    getCurrentConversationSessionId,
   } = useShellBallInteraction();
   const motionConfig = getShellBallMotionConfig(visualState);
   const [dashboardTransitionPhase, setDashboardTransitionPhase] = useState<ShellBallDashboardTransitionPhase>("idle");
@@ -334,14 +351,18 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     onInputFocusChange: handleInputFocusChange,
     onSubmitText: handleSubmitText,
     onSubmitVoiceText: handleSubmitVoiceText,
-    getCurrentConversationSessionId,
     onAttachFile: handleAttachFile,
     onRequestInputFocus: () => focusInlineInputField(),
   });
-  const shouldRenderInlineInput = snapshot.visibility.input || visualState === "idle";
-  const inlineInputMode = snapshot.inputBarMode === "hidden" ? "interactive" : snapshot.inputBarMode;
+  const shouldRenderInlineInput = snapshot.visibility.input;
+  const inlineInputMode = resolveShellBallInlineInputMode({
+    shouldRenderInlineInput,
+    snapshotInputBarMode: snapshot.inputBarMode,
+  });
   const visibleBubbleItems = getShellBallVisibleBubbleItems(snapshot.bubbleItems);
   const {
+    ballDockSettling,
+    ballDragActive,
     beginBallWindowPointerDrag,
     edgeDockState,
     endBallWindowPointerDrag,
@@ -959,12 +980,15 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     <ShellBallSurface
       containerRef={rootRef}
       dashboardTransitionPhase={dashboardTransitionPhase}
+      dockTarget={edgeDockState.side}
       edgeDockRevealed={edgeDockState.revealed}
       edgeDockSide={edgeDockState.side}
       mascotRef={mascotRef}
       fileDropActive={shouldShowShellBallFileDropOverlay({
         fileDropActive,
       })}
+      isDragging={ballDragActive}
+      isSettling={ballDockSettling}
       topContent={isEdgeDocked ? null : (
         <div className="shell-ball-surface__bubble-reserve" data-visible={snapshot.visibility.bubble && visibleBubbleItems.length > 0 ? "true" : "false"}>
           <div className="shell-ball-surface__bubble-reserve-content">
@@ -1087,6 +1111,9 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
       onPressCancel={handleLockedPressCancel}
     >
       {onboardingLoading ? <div className="shell-ball-onboarding-loading">{onboardingLoading.message}</div> : null}
+      {shouldShowShellBallDemoSwitcher(isDev) ? (
+        <ShellBallDevLayer value={visualState} onChange={setDemoVisualState} />
+      ) : null}
     </ShellBallSurface>
   );
 }

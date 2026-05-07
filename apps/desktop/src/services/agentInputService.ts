@@ -20,7 +20,6 @@ import {
   type DesktopWindowPageContextSnapshot,
 } from "./pageContext";
 import {
-  getCurrentConversationSessionId,
   rememberConversationPageContextFromTask,
   rememberConversationSessionFromTask,
 } from "./conversationSessionService";
@@ -41,11 +40,21 @@ type DesktopClipboardActivitySnapshot = {
   copy_count: number;
 };
 
+export type SubmitTextInputClientContext = {
+  detectedPage?: {
+    appName?: string;
+    title?: string;
+    url: string;
+  };
+};
+
 export type SubmitTextInputParams = {
   text: string;
   source: AgentInputSubmitParams["source"];
   trigger: AgentInputSubmitParams["trigger"];
   inputMode: AgentInputSubmitParams["input"]["input_mode"];
+  includeForegroundBrowserPageContext?: boolean;
+  includeForegroundWindowContext?: boolean;
   context?: InputContext;
   pageContext?: PageContext;
   sessionId?: string;
@@ -212,21 +221,32 @@ function createDesktopScreenSummary(snapshot: DesktopWindowContextSnapshot | nul
   return undefined;
 }
 
-function shouldEnrichVisualContext(params: AgentInputSubmitParams, input: SubmitTextInputParams): boolean {
-  if (input.disableForegroundContextEnrichment) {
+function shouldEnrichVisualContext(
+  params: AgentInputSubmitParams,
+  options: {
+    includeForegroundBrowserPageContext?: boolean;
+    includeForegroundWindowContext?: boolean;
+    disableForegroundContextEnrichment?: boolean;
+  } = {},
+): boolean {
+  if (options.disableForegroundContextEnrichment) {
     return false;
   }
 
-  return compactContextRecord(params.context.page) !== undefined || compactContextRecord(params.context.screen) !== undefined;
+  return options.includeForegroundWindowContext
+    || options.includeForegroundBrowserPageContext
+    || compactContextRecord(params.context.page) !== undefined
+    || compactContextRecord(params.context.screen) !== undefined
+    || compactContextRecord(params.context.error) !== undefined;
 }
 
-function shouldAttachForegroundPageContext(params: AgentInputSubmitParams, input: SubmitTextInputParams): boolean {
-  if (input.disableForegroundContextEnrichment) {
+function shouldUseForegroundBrowserPageContext(snapshot: DesktopWindowContextSnapshot | null): boolean {
+  if (!snapshot) {
     return false;
   }
 
-  return params.source === "floating_ball"
-    && (params.trigger === "hover_text_input" || params.trigger === "voice_commit");
+  const browserKind = snapshot.browser_kind ?? "non_browser";
+  return browserKind !== "non_browser" && sanitizePageContextUrl(snapshot.url) !== undefined;
 }
 
 async function readDesktopWindowContext(): Promise<DesktopWindowContextSnapshot | null> {
@@ -265,8 +285,9 @@ async function readDesktopClipboardActivitySnapshot(): Promise<DesktopClipboardA
  */
 export function createTextInputSubmitParams(input: SubmitTextInputParams): AgentInputSubmitParams | null {
   const normalizedText = input.text.trim();
-  const normalizedSessionId = input.sessionId?.trim()
-    || (input.disableSessionFallback ? undefined : getCurrentConversationSessionId());
+  // Desktop free-form input only reuses a backend session when the caller
+  // explicitly passes one for a known continuation flow.
+  const normalizedSessionId = input.sessionId?.trim() || undefined;
 
   if (normalizedText === "") {
     return null;
@@ -287,28 +308,38 @@ export function createTextInputSubmitParams(input: SubmitTextInputParams): Agent
   };
 }
 
-export type SubmitTextInputResult = AgentInputSubmitResult;
+export type SubmitTextInputResult = AgentInputSubmitResult & {
+  clientContext?: SubmitTextInputClientContext;
+};
 
 async function enrichTextInputSubmitParams(
-  input: SubmitTextInputParams,
   params: AgentInputSubmitParams,
-): Promise<AgentInputSubmitParams> {
-  const enrichVisualContext = shouldEnrichVisualContext(params, input);
-  const attachForegroundPageContext = shouldAttachForegroundPageContext(params, input);
-  const shouldReadForegroundWindowContext = enrichVisualContext || attachForegroundPageContext;
+  options: {
+    includeForegroundBrowserPageContext?: boolean;
+    includeForegroundWindowContext?: boolean;
+    disableForegroundContextEnrichment?: boolean;
+  } = {},
+): Promise<{
+  clientContext?: SubmitTextInputClientContext;
+  params: AgentInputSubmitParams;
+}> {
+  const enrichVisualContext = shouldEnrichVisualContext(params, options);
+  const shouldReadForegroundWindowContext = enrichVisualContext;
   const [windowContext, mouseActivitySnapshot, clipboardActivitySnapshot] = await Promise.all([
     shouldReadForegroundWindowContext ? readDesktopWindowContext() : Promise.resolve(null),
-    // Explicit visual requests still need page/screen fallbacks, while
-    // shell-ball near-field text/voice submits also inherit current browser
-    // attach hints for real-window takeover planning.
     readDesktopMouseActivitySnapshot(),
     readDesktopClipboardActivitySnapshot(),
   ]);
-  const fallbackPageContext = shouldReadForegroundWindowContext
-    ? mapDesktopWindowPageContext(windowContext)
-    : undefined;
-  const fallbackScreenContext = enrichVisualContext ? mapDesktopWindowScreenContext(windowContext) : undefined;
-  const fallbackErrorContext = enrichVisualContext ? mapDesktopWindowErrorContext(windowContext) : undefined;
+  // Shell-ball free-form submits should only attach ambient page context when
+  // the last external foreground window was a browser page with a resolved URL.
+  const ambientWindowContext = options.includeForegroundBrowserPageContext
+    ? (shouldUseForegroundBrowserPageContext(windowContext) ? windowContext : null)
+    : windowContext;
+  const fallbackPageContext = enrichVisualContext ? mapDesktopWindowPageContext(ambientWindowContext) : undefined;
+  const fallbackScreenContext = enrichVisualContext ? mapDesktopWindowScreenContext(ambientWindowContext) : undefined;
+  const fallbackErrorContext = enrichVisualContext ? mapDesktopWindowErrorContext(ambientWindowContext) : undefined;
+  // Browser-only visual gating should not erase switch counters for ordinary
+  // desktop submits when the foreground window is not a browser page.
   const fallbackBehaviorContext = createFallbackBehaviorContext(
     params.trigger,
     mouseActivitySnapshot,
@@ -321,25 +352,52 @@ async function enrichTextInputSubmitParams(
   const mergedScreenContext = mergeContextRecord<ScreenContext>(params.context.screen, fallbackScreenContext);
   const mergedBehaviorContext = mergeContextRecord<BehaviorContext>(params.context.behavior, fallbackBehaviorContext);
   const mergedErrorContext = mergeContextRecord<ErrorContext>(params.context.error, fallbackErrorContext);
+  const clientContext = options.includeForegroundBrowserPageContext && !options.disableForegroundContextEnrichment
+    ? createSubmitTextInputClientContext(ambientWindowContext)
+    : undefined;
 
   return {
-    ...params,
-    context: {
-      ...params.context,
-      files: params.context.files ?? [],
-      ...(mergedPageContext ? {
-        page: mergedPageContext,
-      } : {}),
-      ...(mergedScreenContext ? {
-        screen: mergedScreenContext,
-      } : {}),
-      ...(mergedBehaviorContext ? {
-        behavior: mergedBehaviorContext,
-      } : {}),
-      ...(mergedErrorContext ? {
-        error: mergedErrorContext,
-        error_text: mergedErrorContext.message,
-      } : {}),
+    clientContext,
+    params: {
+      ...params,
+      context: {
+        ...params.context,
+        files: params.context.files ?? [],
+        ...(mergedPageContext ? {
+          page: mergedPageContext,
+        } : {}),
+        ...(mergedScreenContext ? {
+          screen: mergedScreenContext,
+        } : {}),
+        ...(mergedBehaviorContext ? {
+          behavior: mergedBehaviorContext,
+        } : {}),
+        ...(mergedErrorContext ? {
+          error: mergedErrorContext,
+          error_text: mergedErrorContext.message,
+        } : {}),
+      },
+    },
+  };
+}
+
+function createSubmitTextInputClientContext(
+  windowContext: DesktopWindowContextSnapshot | null,
+): SubmitTextInputClientContext | undefined {
+  if (windowContext === null || !shouldUseForegroundBrowserPageContext(windowContext)) {
+    return undefined;
+  }
+
+  const sanitizedUrl = sanitizePageContextUrl(windowContext.url);
+  if (!sanitizedUrl) {
+    return undefined;
+  }
+
+  return {
+    detectedPage: {
+      appName: windowContext.app_name.trim() || undefined,
+      title: windowContext.title?.trim() || undefined,
+      url: sanitizedUrl,
     },
   };
 }
@@ -359,7 +417,12 @@ export async function submitTextInput(input: SubmitTextInputParams) {
     return null;
   }
 
-  const enrichedParams = await enrichTextInputSubmitParams(input, params);
+  const enriched = await enrichTextInputSubmitParams(params, {
+    includeForegroundBrowserPageContext: input.includeForegroundBrowserPageContext,
+    includeForegroundWindowContext: input.includeForegroundWindowContext,
+    disableForegroundContextEnrichment: input.disableForegroundContextEnrichment,
+  });
+  const enrichedParams = enriched.params;
   recordMirrorConversationStart(enrichedParams);
   const rpcMethods = await import("@/rpc/methods");
 
@@ -370,7 +433,7 @@ export async function submitTextInput(input: SubmitTextInputParams) {
       rememberConversationPageContextFromTask(result.task, enrichedParams.context.page);
     }
     recordMirrorConversationSuccess(enrichedParams, result);
-    return result;
+    return enriched.clientContext ? { ...result, clientContext: enriched.clientContext } : result;
   } catch (error) {
     recordMirrorConversationFailure(enrichedParams, error);
     throw error;

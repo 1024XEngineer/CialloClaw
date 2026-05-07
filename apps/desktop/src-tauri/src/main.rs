@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod activity;
+mod internal_windows;
 mod local_path;
 mod runtime_paths;
 mod screen_capture;
