@@ -44,10 +44,12 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 				if notificationTaskID == "" || !tracker.hasTaskID(notificationTaskID) {
 					return
 				}
+				reservationKey := tracker.reserveStreamedRuntime(method, notificationTaskID, params)
 				writeMu.Lock()
-				defer writeMu.Unlock()
-				if err := encoder.Encode(newNotificationEnvelope(method, params)); err == nil {
-					tracker.recordStreamedRuntime(method, notificationTaskID, params)
+				err := encoder.Encode(newNotificationEnvelope(method, params))
+				writeMu.Unlock()
+				if err != nil {
+					tracker.releaseStreamedRuntimeReservation(reservationKey)
 				}
 			})
 		}

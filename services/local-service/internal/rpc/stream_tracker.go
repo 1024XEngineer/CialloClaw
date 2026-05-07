@@ -70,12 +70,29 @@ func (t *streamRequestTracker) matchesTaskStart(sessionID, traceID string) bool 
 	}
 }
 
-func (t *streamRequestTracker) recordStreamedRuntime(method, taskID string, params map[string]any) {
+// reserveStreamedRuntime records the buffered notification key before the
+// transport write starts so replay checks never acquire tracker.mu after
+// writeMu. The reservation is released when the write fails.
+func (t *streamRequestTracker) reserveStreamedRuntime(method, taskID string, params map[string]any) string {
 	key := notificationKey(method, taskID, params)
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.streamedRuntimeCounts[key]++
+	return key
+}
+
+func (t *streamRequestTracker) releaseStreamedRuntimeReservation(key string) {
+	if key == "" {
+		return
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.streamedRuntimeCounts[key] == 0 {
+		return
+	}
+	t.streamedRuntimeCounts[key]--
 }
 
 func (t *streamRequestTracker) shouldSkipBufferedRuntime(method, taskID string, params map[string]any) bool {

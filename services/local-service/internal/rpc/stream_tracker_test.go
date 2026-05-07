@@ -46,7 +46,7 @@ func TestStreamRequestTrackerConsumesLiveRuntimeReplayOnce(t *testing.T) {
 	}
 
 	params := map[string]any{"task_id": "task_tracker", "round": float64(1)}
-	tracker.recordStreamedRuntime("loop.round.completed", "task_tracker", params)
+	tracker.reserveStreamedRuntime("loop.round.completed", "task_tracker", params)
 	if !tracker.shouldSkipBufferedRuntime("loop.round.completed", "task_tracker", params) {
 		t.Fatal("expected buffered replay to skip the already streamed runtime notification")
 	}
@@ -55,5 +55,22 @@ func TestStreamRequestTrackerConsumesLiveRuntimeReplayOnce(t *testing.T) {
 	}
 	if tracker.shouldSkipBufferedRuntime("task.updated", "task_tracker", params) {
 		t.Fatal("expected non-runtime notifications to remain eligible for replay")
+	}
+}
+
+func TestStreamRequestTrackerReleasesFailedRuntimeReservation(t *testing.T) {
+	tracker := newStreamRequestTracker(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-tracker-release"`),
+		Method:  "agent.task.detail.get",
+		Params:  mustMarshal(t, map[string]any{"task_id": "task_tracker"}),
+	})
+
+	params := map[string]any{"task_id": "task_tracker", "round": float64(1)}
+	key := tracker.reserveStreamedRuntime("loop.round.completed", "task_tracker", params)
+	tracker.releaseStreamedRuntimeReservation(key)
+
+	if tracker.shouldSkipBufferedRuntime("loop.round.completed", "task_tracker", params) {
+		t.Fatal("expected failed live runtime writes to keep buffered replay available")
 	}
 }
