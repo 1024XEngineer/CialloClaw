@@ -432,16 +432,6 @@ func seedTestExecutionPluginManifests(t *testing.T, storageService *storage.Serv
 	}
 }
 
-func registerBuiltinTools(t *testing.T) *tools.Registry {
-	t.Helper()
-
-	registry := tools.NewRegistry()
-	if err := builtin.RegisterBuiltinTools(registry); err != nil {
-		t.Fatalf("RegisterBuiltinTools returned error: %v", err)
-	}
-	return registry
-}
-
 func TestExecuteWorkspaceDocumentWritesFile(t *testing.T) {
 	service, workspaceRoot := newTestExecutionService(t, "第一点\n第二点\n第三点")
 
