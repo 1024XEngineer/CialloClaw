@@ -108,6 +108,7 @@ export function MirrorDecorativeBirds() {
         <div key={bird.key} className={`mirror-page__decor-bird ${bird.cornerClassName}`} data-role={bird.role}>
           <div className="mirror-page__decor-bird-shell">
             <ShellBallMascot
+              floatingBallSize="large"
               visualState={bird.visualState}
               voicePreview={null}
               motionConfig={bird.motionConfig}

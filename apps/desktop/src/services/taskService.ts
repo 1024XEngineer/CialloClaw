@@ -4,11 +4,9 @@ import type {
   PageContext,
   RequestMeta,
   RequestSource,
-  Task,
 } from "@cialloclaw/protocol";
 import { getActiveWindowContext, type DesktopWindowContextPayload } from "@/platform/desktopWindowContext";
 import { startTask } from "@/rpc/methods";
-import { useTaskStore } from "@/stores/taskStore";
 import { submitTextInput } from "./agentInputService";
 import {
   getConversationPageContextForSession,
@@ -241,8 +239,4 @@ export async function bootstrapTask(title: string) {
   }
 
   return taskResult.task;
-}
-
-export function listActiveTasks(): Task[] {
-  return useTaskStore.getState().tasks;
 }
