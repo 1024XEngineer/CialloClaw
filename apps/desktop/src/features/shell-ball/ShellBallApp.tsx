@@ -360,6 +360,8 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handleSelectedTextPrompt: handleCoordinatorSelectedTextPrompt,
     handlePrimaryAction: handleCoordinatorPrimaryAction,
     handleBubbleAction: handleCoordinatorBubbleAction,
+    handleErrorSignalAccept: handleCoordinatorErrorSignalAccept,
+    handleErrorSignalIgnore: handleCoordinatorErrorSignalIgnore,
     handleRecommendationAccept: handleCoordinatorRecommendationAccept,
     handleRecommendationIgnore: handleCoordinatorRecommendationIgnore,
     handleConfirmIntentBubble: handleCoordinatorConfirmIntentBubble,
@@ -1065,6 +1067,8 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
                     handleCoordinatorBubbleAction({ action: "deny_approval", bubbleId, source: "bubble" });
                   }}
                   onConfirmIntentBubble={handleCoordinatorConfirmIntentBubble}
+                  onAcceptErrorSignalBubble={handleCoordinatorErrorSignalAccept}
+                  onIgnoreErrorSignalBubble={handleCoordinatorErrorSignalIgnore}
                   onAcceptRecommendationBubble={handleCoordinatorRecommendationAccept}
                   onIgnoreRecommendationBubble={handleCoordinatorRecommendationIgnore}
                   onPinBubble={(bubbleId) => {

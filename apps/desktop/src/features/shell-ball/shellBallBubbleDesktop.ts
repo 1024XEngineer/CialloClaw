@@ -38,6 +38,16 @@ export type ShellBallBubbleInlineRecommendationState = {
   requestContext: RecommendationContext;
 };
 
+/**
+ * Inline error-intake metadata keeps the explicit `error_detected` shortcut in
+ * the local shell-ball bubble chrome until the user promotes it into a formal
+ * task start.
+ */
+export type ShellBallBubbleInlineErrorSignalState = {
+  errorText: string;
+  status: "idle" | "submitting";
+  pageContext?: PageContext;
+};
 export type ShellBallBubbleDesktopState = {
   lifecycleState: ShellBallBubbleDesktopLifecycleState;
   freshnessHint?: ShellBallBubbleDesktopFreshnessHint;
@@ -47,6 +57,7 @@ export type ShellBallBubbleDesktopState = {
   turnPhase?: number;
   inlineApproval?: ShellBallBubbleInlineApprovalState;
   inlineRecommendation?: ShellBallBubbleInlineRecommendationState;
+  inlineErrorSignal?: ShellBallBubbleInlineErrorSignalState;
 };
 
 export type ShellBallBubbleItem = {
@@ -83,12 +94,23 @@ function cloneShellBallBubbleInlineRecommendationState(
   };
 }
 
+function cloneShellBallBubbleInlineErrorSignalState(
+  state: ShellBallBubbleInlineErrorSignalState,
+): ShellBallBubbleInlineErrorSignalState {
+  return {
+    ...state,
+    ...(state.pageContext ? { pageContext: { ...state.pageContext } } : {}),
+  };
+}
 export function cloneShellBallBubbleDesktopState(state: ShellBallBubbleDesktopState): ShellBallBubbleDesktopState {
   return {
     ...state,
     ...(state.inlineApproval ? { inlineApproval: cloneShellBallBubbleInlineApprovalState(state.inlineApproval) } : {}),
     ...(state.inlineRecommendation
       ? { inlineRecommendation: cloneShellBallBubbleInlineRecommendationState(state.inlineRecommendation) }
+      : {}),
+    ...(state.inlineErrorSignal
+      ? { inlineErrorSignal: cloneShellBallBubbleInlineErrorSignalState(state.inlineErrorSignal) }
       : {}),
   };
 }

@@ -106,6 +106,10 @@ type QueuedRuntimeNotification = {
 
 type QueuedTaskUpdatedNotification = TaskUpdatedNotification;
 type ShellBallRuntimeNotification = TaskRuntimeNotification | TaskSteeredNotification;
+type ShellBallDirectErrorPrompt = {
+  errorText: string;
+  pageContext?: PageContext;
+};
 type ShellBallTaskOutputServiceModule = {
   openTaskDeliveryForTask: (taskId: string, artifactId: string | undefined, source?: "rpc" | "mock") => Promise<unknown>;
   performTaskOpenExecution: (
@@ -935,6 +939,41 @@ function createShellBallRecommendationBubbleItem(input: {
   } satisfies ShellBallBubbleItem;
 }
 
+/**
+ * The explicit error-intake bubble preserves a direct `error_detected` path
+ * alongside error-scene recommendations so users can either analyze the raw
+ * failure immediately or choose a suggested next step.
+ */
+function createShellBallErrorIntakeBubbleItem(input: {
+  errorText: string;
+  createdAt: string;
+  pageContext?: PageContext;
+  showRecommendationHint?: boolean;
+  turnIndex?: number;
+  turnPhase?: number;
+}) {
+  const bubbleItem = createShellBallTextBubbleItem({
+    role: "agent",
+    text: createShellBallErrorSignalPromptText(input.errorText, input.showRecommendationHint),
+    bubbleType: "status",
+    createdAt: input.createdAt,
+    turnIndex: input.turnIndex,
+    turnPhase: input.turnPhase,
+  });
+
+  return {
+    ...bubbleItem,
+    desktop: {
+      ...bubbleItem.desktop,
+      inlineErrorSignal: {
+        errorText: input.errorText,
+        status: "idle" as const,
+        ...(input.pageContext ? { pageContext: { ...input.pageContext } } : {}),
+      },
+    },
+  } satisfies ShellBallBubbleItem;
+}
+
 function createShellBallApprovalResponseBubbleItem(input: {
   createdAt: string;
   decision: ApprovalDecision;
@@ -1137,10 +1176,28 @@ function createShellBallApprovalErrorBubbleItem(input: {
   });
 }
 
-function removeShellBallInlineRecommendationBubbles(items: ShellBallBubbleItem[]) {
+function isShellBallInlinePromptBubble(item: ShellBallBubbleItem) {
+  return item.desktop.inlineRecommendation !== undefined || item.desktop.inlineErrorSignal !== undefined;
+}
+
+function hasShellBallInlinePromptBubbles(items: ShellBallBubbleItem[]) {
+  return items.some(isShellBallInlinePromptBubble);
+}
+
+function removeShellBallInlinePromptBubbles(items: ShellBallBubbleItem[]) {
   return sortShellBallBubbleItemsByTimestamp(
-    items.filter((item) => item.desktop.inlineRecommendation === undefined),
+    items.filter((item) => !isShellBallInlinePromptBubble(item)),
   );
+}
+
+function replaceShellBallInlinePromptBubbles(
+  items: ShellBallBubbleItem[],
+  promptItems: ShellBallBubbleItem[],
+) {
+  return sortShellBallBubbleItemsByTimestamp([
+    ...removeShellBallInlinePromptBubbles(items),
+    ...promptItems,
+  ]);
 }
 
 function setShellBallInlineApprovalState(
@@ -1170,6 +1227,96 @@ function setShellBallInlineApprovalState(
   );
 }
 
+function setShellBallInlineErrorSignalState(
+  items: ShellBallBubbleItem[],
+  bubbleId: string,
+  inlineErrorSignal?: ShellBallBubbleItem["desktop"]["inlineErrorSignal"],
+) {
+  return sortShellBallBubbleItemsByTimestamp(
+    items.map((item) => {
+      if (item.bubble.bubble_id !== bubbleId) {
+        return item;
+      }
+
+      const desktopState = { ...item.desktop };
+      Reflect.deleteProperty(desktopState, "inlineErrorSignal");
+
+      return {
+        ...item,
+        desktop: inlineErrorSignal === undefined
+          ? desktopState
+          : {
+              ...desktopState,
+              inlineErrorSignal: {
+                ...inlineErrorSignal,
+                ...(inlineErrorSignal.pageContext ? { pageContext: { ...inlineErrorSignal.pageContext } } : {}),
+              },
+            },
+      };
+    }),
+  );
+}
+
+function createShellBallRecommendationPromptItems(input: {
+  createdAt: string;
+  turnIndex: number;
+  recommendationItems: RecommendationItem[];
+  recommendationContext: PageContext;
+  recommendationRequestContext: RecommendationContext;
+}) {
+  return input.recommendationItems.map((recommendation, index) =>
+    createShellBallRecommendationBubbleItem({
+      recommendation,
+      createdAt: input.createdAt,
+      pageContext: input.recommendationContext,
+      requestContext: input.recommendationRequestContext,
+      turnIndex: input.turnIndex,
+      turnPhase: index,
+    }));
+}
+
+function prependShellBallDirectErrorPromptItem(input: {
+  createdAt: string;
+  turnIndex: number;
+  promptItems: ShellBallBubbleItem[];
+  directErrorPrompt?: ShellBallDirectErrorPrompt | null;
+}) {
+  if (input.directErrorPrompt === null || input.directErrorPrompt === undefined) {
+    return input.promptItems;
+  }
+
+  return [
+    createShellBallErrorIntakeBubbleItem({
+      errorText: input.directErrorPrompt.errorText,
+      createdAt: input.createdAt,
+      pageContext: input.directErrorPrompt.pageContext,
+      showRecommendationHint: input.promptItems.length > 0,
+      turnIndex: input.turnIndex,
+      turnPhase: 0,
+    }),
+    ...input.promptItems.map((item, index) => ({
+      ...item,
+      desktop: {
+        ...item.desktop,
+        turnPhase: index + 1,
+      },
+    })),
+  ];
+}
+
+function createShellBallRecommendationUnavailableBubbleItem(input: {
+  createdAt: string;
+  turnIndex: number;
+}) {
+  return createShellBallTextBubbleItem({
+    role: "agent",
+    text: "Recommendations are unavailable right now. You can type a quick request below.",
+    bubbleType: "status",
+    createdAt: input.createdAt,
+    turnIndex: input.turnIndex,
+    turnPhase: 0,
+  });
+}
 export function applyShellBallBubbleAction(
   items: ShellBallBubbleItem[],
   payload: Pick<ShellBallBubbleActionPayload, "action" | "bubbleId">,
@@ -1236,6 +1383,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const detachedPinnedBubbleIdsRef = useRef(new Set<string>());
   const deliveryReadyBubbleKeysRef = useRef(new Set<string>());
   const approvalPendingBubbleKeysRef = useRef(new Set<string>());
+  const pendingErrorSignalBubbleIdsRef = useRef(new Set<string>());
   const recommendationRequestInFlightRef = useRef(false);
   const runtimeObservationBubbleKeysRef = useRef(new Set<string>());
   // Approval notifications can win the race against `agent.input.submit`.
@@ -1969,9 +2117,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
    * input instead of remaining a visual no-op.
    */
   const handlePrimaryRecommendationClick = useCallback(async () => {
-    const activeRecommendationCount = bubbleItemsRef.current.filter((item) => item.desktop.inlineRecommendation !== undefined).length;
-
-    if (activeRecommendationCount > 0) {
+    if (hasShellBallInlinePromptBubbles(bubbleItemsRef.current)) {
       revealBubbleRegion();
       return;
     }
@@ -1981,6 +2127,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     }
 
     recommendationRequestInFlightRef.current = true;
+    let directErrorPrompt: ShellBallDirectErrorPrompt | null = null;
 
     try {
       let activeWindowContext: Awaited<ReturnType<typeof getActiveWindowContext>> | null = null;
@@ -2022,6 +2169,12 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
 
       const recommendationContext = resolveShellBallRecommendationPageContext(activeWindowContext);
       const errorText = normalizeDesktopErrorSignalText(activeWindowContext?.error_text);
+      if (errorText) {
+        directErrorPrompt = {
+          errorText,
+          pageContext: recommendationContext.pageContext,
+        };
+      }
       const recommendationRequestContext = createShellBallRecommendationRequestContext({
         windowContext: activeWindowContext,
         mouseActivitySnapshot,
@@ -2045,9 +2198,26 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         .filter((item) => item.text.trim() !== "")
         .slice(0, 2);
 
+      const createdAt = new Date().toISOString();
+      const turnIndex = allocateBubbleTurnIndex();
+      const recommendationPromptItems = createShellBallRecommendationPromptItems({
+        createdAt,
+        turnIndex,
+        recommendationItems,
+        recommendationContext: recommendationContext.pageContext,
+        recommendationRequestContext,
+      });
+      const promptItems = prependShellBallDirectErrorPromptItem({
+        createdAt,
+        turnIndex,
+        promptItems: recommendationPromptItems,
+        directErrorPrompt,
+      });
+
       if (recommendationItems.length === 0) {
-        if (recommendationScene === "error" && errorText) {
-          await handleErrorSignalPrompt(errorText, recommendationContext.pageContext);
+        if (promptItems.length > 0) {
+          setBubbleItems((currentItems) => replaceShellBallInlinePromptBubbles(currentItems, promptItems));
+          revealBubbleRegion();
           return;
         }
 
@@ -2055,48 +2225,80 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         return;
       }
 
-      const turnIndex = allocateBubbleTurnIndex();
-      const createdAt = new Date().toISOString();
-
-      setBubbleItems((currentItems) =>
-        sortShellBallBubbleItemsByTimestamp([
-          ...removeShellBallInlineRecommendationBubbles(currentItems),
-          ...recommendationItems.map((recommendation, index) =>
-            createShellBallRecommendationBubbleItem({
-              recommendation,
-              createdAt,
-              pageContext: recommendationContext.pageContext,
-              requestContext: recommendationRequestContext,
-              turnIndex,
-              turnPhase: index,
-            })),
-        ]),
-      );
+      setBubbleItems((currentItems) => replaceShellBallInlinePromptBubbles(currentItems, promptItems));
       revealBubbleRegion();
     } catch (error) {
       console.warn("shell-ball recommendation request failed", error);
       const createdAt = new Date().toISOString();
       const turnIndex = allocateBubbleTurnIndex();
 
-      setBubbleItems((currentItems) =>
-        sortShellBallBubbleItemsByTimestamp([
-          ...removeShellBallInlineRecommendationBubbles(currentItems),
-          createShellBallTextBubbleItem({
-            role: "agent",
-            text: "Recommendations are unavailable right now. You can type a quick request below.",
-            bubbleType: "status",
-            createdAt,
-            turnIndex,
-            turnPhase: 0,
-          }),
-        ]),
-      );
-      handlersRef.current.onRequestInputFocus();
+      if (directErrorPrompt !== null) {
+        const errorPrompt = directErrorPrompt;
+        setBubbleItems((currentItems) =>
+          replaceShellBallInlinePromptBubbles(currentItems, [
+            createShellBallErrorIntakeBubbleItem({
+              errorText: errorPrompt.errorText,
+              createdAt,
+              pageContext: errorPrompt.pageContext,
+              showRecommendationHint: false,
+              turnIndex,
+              turnPhase: 0,
+            }),
+          ]),
+        );
+      } else {
+        setBubbleItems((currentItems) =>
+          replaceShellBallInlinePromptBubbles(currentItems, [
+            createShellBallRecommendationUnavailableBubbleItem({
+              createdAt,
+              turnIndex,
+            }),
+          ]),
+        );
+        handlersRef.current.onRequestInputFocus();
+      }
       revealBubbleRegion();
     } finally {
       recommendationRequestInFlightRef.current = false;
     }
-  }, [allocateBubbleTurnIndex, handleErrorSignalPrompt, input.visualState, revealBubbleRegion]);
+  }, [allocateBubbleTurnIndex, input.visualState, revealBubbleRegion]);
+
+  /**
+   * Direct error-intake bubbles provide an explicit `error_detected` path that
+   * coexists with recommendation bubbles in the same near-field click flow.
+   */
+  const handleErrorSignalAccept = useCallback(async (bubbleId: string) => {
+    const bubbleItem = bubbleItemsRef.current.find((item) => item.bubble.bubble_id === bubbleId);
+    const inlineErrorSignal = bubbleItem?.desktop.inlineErrorSignal;
+
+    if (bubbleItem === undefined || inlineErrorSignal === undefined) {
+      return;
+    }
+    if (pendingErrorSignalBubbleIdsRef.current.has(bubbleId)) {
+      return;
+    }
+
+    pendingErrorSignalBubbleIdsRef.current.add(bubbleId);
+    setBubbleItems((currentItems) =>
+      setShellBallInlineErrorSignalState(currentItems, bubbleId, {
+        ...inlineErrorSignal,
+        status: "submitting",
+      }),
+    );
+
+    try {
+      setBubbleItems((currentItems) => removeShellBallInlinePromptBubbles(currentItems));
+      await handleErrorSignalPrompt(inlineErrorSignal.errorText, inlineErrorSignal.pageContext);
+    } finally {
+      pendingErrorSignalBubbleIdsRef.current.delete(bubbleId);
+    }
+  }, [handleErrorSignalPrompt]);
+
+  const handleErrorSignalIgnore = useCallback((bubbleId: string) => {
+    setBubbleItems((currentItems) =>
+      sortShellBallBubbleItemsByTimestamp(currentItems.filter((item) => item.bubble.bubble_id !== bubbleId)),
+    );
+  }, []);
 
   /**
    * Accepting a recommendation should remove the transient suggestion bubbles
@@ -2133,7 +2335,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
 
     setBubbleItems((currentItems) =>
       sortShellBallBubbleItemsByTimestamp([
-        ...removeShellBallInlineRecommendationBubbles(currentItems),
+        ...removeShellBallInlinePromptBubbles(currentItems),
         userBubbleItem,
         pendingAgentBubbleItem,
       ]),
@@ -3402,6 +3604,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     handleClipboardPrompt,
     handlePrimaryAction,
     handleBubbleAction,
+    handleErrorSignalAccept,
+    handleErrorSignalIgnore,
     handleRecommendationAccept,
     handleRecommendationIgnore,
     handleConfirmIntentBubble,
@@ -3516,6 +3720,16 @@ function createShellBallErrorSignalPreview(text: string) {
   }
 
   return `检测到当前错误：${normalizedText.slice(0, 28)}…`;
+}
+
+function createShellBallErrorSignalPromptText(text: string, showRecommendationHint = false) {
+  const preview = createShellBallErrorSignalPreview(text);
+
+  if (showRecommendationHint) {
+    return `${preview}\n可以直接分析这个错误，或先试试下面的建议。`;
+  }
+
+  return `${preview}\n可以直接开始分析。`;
 }
 
 /**

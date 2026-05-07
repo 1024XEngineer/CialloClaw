@@ -8,6 +8,8 @@ type ShellBallBubbleMessageProps = {
   onAllowApproval?: (bubbleId: string) => void;
   onDenyApproval?: (bubbleId: string) => void;
   onConfirmIntent?: (taskId: string) => void;
+  onAcceptErrorSignal?: (bubbleId: string) => void;
+  onIgnoreErrorSignal?: (bubbleId: string) => void;
   onAcceptRecommendation?: (bubbleId: string) => void;
   onIgnoreRecommendation?: (bubbleId: string) => void;
 };
@@ -19,6 +21,8 @@ export function ShellBallBubbleMessage({
   onAllowApproval,
   onDenyApproval,
   onConfirmIntent,
+  onAcceptErrorSignal,
+  onIgnoreErrorSignal,
   onAcceptRecommendation,
   onIgnoreRecommendation,
 }: ShellBallBubbleMessageProps) {
@@ -28,16 +32,23 @@ export function ShellBallBubbleMessage({
   const showMarkdown = item.role === "agent" && item.bubble.type !== "intent_confirm";
   const showLoadingState = item.desktop.presentationHint === "loading";
   const inlineApproval = item.role === "agent" ? item.desktop.inlineApproval : undefined;
+  const inlineErrorSignal = item.role === "agent" ? item.desktop.inlineErrorSignal : undefined;
   const inlineRecommendation = item.role === "agent" ? item.desktop.inlineRecommendation : undefined;
   const inlineApprovalBusy = inlineApproval?.status === "submitting";
+  const inlineErrorSignalBusy = inlineErrorSignal?.status === "submitting";
   const shouldShowInlineApprovalActions =
     inlineApproval !== undefined && onAllowApproval !== undefined && onDenyApproval !== undefined;
+  const shouldShowInlineErrorSignalActions =
+    inlineErrorSignal !== undefined && onAcceptErrorSignal !== undefined && onIgnoreErrorSignal !== undefined;
   const shouldShowInlineRecommendationActions =
     inlineRecommendation !== undefined && onAcceptRecommendation !== undefined && onIgnoreRecommendation !== undefined;
   const shouldShowIntentConfirmAction =
     item.role === "agent" && item.bubble.type === "intent_confirm" && taskId !== "" && onConfirmIntent !== undefined;
   const shouldShowBubbleControls =
-    !shouldShowInlineApprovalActions && !shouldShowInlineRecommendationActions && !shouldShowIntentConfirmAction;
+    !shouldShowInlineApprovalActions
+    && !shouldShowInlineErrorSignalActions
+    && !shouldShowInlineRecommendationActions
+    && !shouldShowIntentConfirmAction;
 
   const allowApprovalLabel = inlineApprovalBusy && inlineApproval?.pendingDecision === "allow_once" ? "Allowing..." : "Allow";
   const denyApprovalLabel = inlineApprovalBusy && inlineApproval?.pendingDecision === "deny_once" ? "Denying..." : "Deny";
@@ -117,6 +128,35 @@ export function ShellBallBubbleMessage({
               }}
             >
               {allowApprovalLabel}
+            </button>
+          </div>
+        ) : shouldShowInlineErrorSignalActions ? (
+          <div className="shell-ball-bubble-message__recommendation-actions">
+            <button
+              type="button"
+              className="shell-ball-bubble-message__recommendation-action shell-ball-bubble-message__recommendation-action--ignore"
+              data-bubble-action="ignore_error_signal"
+              data-bubble-id={bubbleId}
+              aria-label="Dismiss error analysis"
+              disabled={inlineErrorSignalBusy}
+              onClick={() => {
+                onIgnoreErrorSignal?.(bubbleId);
+              }}
+            >
+              Not now
+            </button>
+            <button
+              type="button"
+              className="shell-ball-bubble-message__approval-action shell-ball-bubble-message__approval-action--allow"
+              data-bubble-action="accept_error_signal"
+              data-bubble-id={bubbleId}
+              aria-label="Analyze error"
+              disabled={inlineErrorSignalBusy}
+              onClick={() => {
+                onAcceptErrorSignal?.(bubbleId);
+              }}
+            >
+              {inlineErrorSignalBusy ? "Starting..." : "Analyze error"}
             </button>
           </div>
         ) : shouldShowInlineRecommendationActions ? (
