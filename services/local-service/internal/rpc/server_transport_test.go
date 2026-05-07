@@ -470,6 +470,109 @@ func TestServerShutdownCancelsNamedPipeRunWithoutParentContextCancellation(t *te
 	}
 }
 
+func TestServerShutdownStopsStreamsBeforeDebugHTTPDrainCompletes(t *testing.T) {
+	server := newTestServer()
+
+	requestStarted := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	server.debugHTTPServer = &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			close(requestStarted)
+			<-releaseRequest
+			w.WriteHeader(http.StatusNoContent)
+		}),
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen debug http test server: %v", err)
+	}
+	defer listener.Close()
+
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- server.debugHTTPServer.Serve(listener)
+	}()
+
+	httpErr := make(chan error, 1)
+	go func() {
+		response, err := http.Get("http://" + listener.Addr().String())
+		if response != nil {
+			response.Body.Close()
+		}
+		httpErr <- err
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected blocking debug HTTP request to start")
+	}
+
+	left, right := net.Pipe()
+	defer right.Close()
+
+	streamDone := make(chan struct{})
+	go func() {
+		server.handleStreamConn(left)
+		close(streamDone)
+	}()
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for {
+		server.streamMu.Lock()
+		tracked := len(server.streamConns)
+		server.streamMu.Unlock()
+		if tracked == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("expected stream handler to register active connection")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	shutdownDone := make(chan error, 1)
+	go func() {
+		shutdownDone <- server.Shutdown(context.Background())
+	}()
+
+	select {
+	case <-streamDone:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected shutdown to stop active streams before debug HTTP drain completes")
+	}
+
+	close(releaseRequest)
+
+	select {
+	case err := <-shutdownDone:
+		if err != nil {
+			t.Fatalf("shutdown with blocking debug HTTP request: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected shutdown to finish after debug HTTP drain releases")
+	}
+
+	select {
+	case err := <-serveDone:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			t.Fatalf("serve debug http test server: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected debug HTTP server to stop after shutdown")
+	}
+
+	select {
+	case err := <-httpErr:
+		if err != nil {
+			t.Fatalf("debug HTTP request after shutdown: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected debug HTTP client to finish after shutdown")
+	}
+}
+
 func TestHandleStreamConnRejectsNewHandlersDuringShutdown(t *testing.T) {
 	server := newTestServer()
 	server.shuttingDown = true
@@ -504,7 +607,7 @@ func TestTransportSupervisorCancelsShutdownAndJoinsWorkers(t *testing.T) {
 	})
 
 	shutdownCalled := false
-	err := supervisor.Wait(func() error {
+	err := supervisor.Wait(time.Second, func(context.Context) error {
 		shutdownCalled = true
 		return nil
 	})
@@ -518,6 +621,35 @@ func TestTransportSupervisorCancelsShutdownAndJoinsWorkers(t *testing.T) {
 	case <-workerExited:
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("expected sibling worker to exit before Wait returns")
+	}
+}
+
+func TestTransportSupervisorReturnsTimeoutWhenWorkerDoesNotExit(t *testing.T) {
+	supervisor := newTransportSupervisor(context.Background(), 2)
+	releaseWorker := make(chan struct{})
+	workerExited := make(chan struct{})
+
+	supervisor.Go(func(context.Context) error {
+		<-releaseWorker
+		close(workerExited)
+		return nil
+	})
+	supervisor.Go(func(context.Context) error {
+		return errors.New("listen failed")
+	})
+
+	err := supervisor.Wait(25*time.Millisecond, func(context.Context) error {
+		return nil
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected bounded shutdown timeout, got %v", err)
+	}
+
+	close(releaseWorker)
+	select {
+	case <-workerExited:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected stalled worker to exit once released")
 	}
 }
 
