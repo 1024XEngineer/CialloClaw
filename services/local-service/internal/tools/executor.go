@@ -157,7 +157,7 @@ func (e *ToolExecutor) ExecuteToolWithContext(ctx context.Context, execCtx *Tool
 	duration := normalizeDuration(time.Since(start))
 
 	if execErr != nil || errors.Is(callCtx.Err(), context.DeadlineExceeded) {
-		finalErr, status := e.normalizeExecutionError(callCtx, execErr)
+		status, finalErr := e.normalizeExecutionError(callCtx, execErr)
 		result := e.buildErrorExecutionResult(ctx, metadata, name, toolResult, duration, record, status, finalErr)
 		return result, finalErr
 	}
@@ -226,14 +226,14 @@ func (e *ToolExecutor) resolveTimeout(tool Tool) time.Duration {
 	return time.Duration(DefaultTimeoutSec) * time.Second
 }
 
-func (e *ToolExecutor) normalizeExecutionError(ctx context.Context, execErr error) (error, ToolCallStatus) {
+func (e *ToolExecutor) normalizeExecutionError(ctx context.Context, execErr error) (ToolCallStatus, error) {
 	if errors.Is(execErr, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return fmt.Errorf("%w: %v", ErrToolExecutionTimeout, context.DeadlineExceeded), ToolCallStatusTimeout
+		return ToolCallStatusTimeout, fmt.Errorf("%w: %v", ErrToolExecutionTimeout, context.DeadlineExceeded)
 	}
 	if execErr == nil {
 		execErr = ErrToolExecutionFailed
 	}
-	return errors.Join(ErrToolExecutionFailed, execErr), ToolCallStatusFailed
+	return ToolCallStatusFailed, errors.Join(ErrToolExecutionFailed, execErr)
 }
 
 func (e *ToolExecutor) buildErrorExecutionResult(ctx context.Context, metadata ToolMetadata, name string, toolResult *ToolResult, duration time.Duration, record ToolCallRecord, status ToolCallStatus, err error) *ToolExecutionResult {
