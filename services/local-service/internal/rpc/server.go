@@ -16,31 +16,34 @@ import (
 // Protocol envelopes, handler behavior, and notification routing live in
 // dedicated files so transport lifecycle stays easy to audit.
 type Server struct {
-	transport       string
-	namedPipeName   string
-	debugHTTPServer *http.Server
-	handlers        map[string]methodHandler
-	orchestrator    *orchestrator.Service
-	serveNamedPipe  func(ctx context.Context, pipeName string, handler func(net.Conn)) error
-	now             func() time.Time
-	streamMu        sync.Mutex
-	streamConns     map[net.Conn]struct{}
-	streamWG        sync.WaitGroup
-	runCancel       context.CancelFunc
-	namedPipeCancel context.CancelFunc
-	shuttingDown    bool
+	transport                string
+	namedPipeName            string
+	debugHTTPServer          *http.Server
+	handlers                 map[string]methodHandler
+	orchestrator             *orchestrator.Service
+	serveNamedPipe           func(ctx context.Context, pipeName string, handler func(net.Conn)) error
+	now                      func() time.Time
+	transportShutdownTimeout time.Duration
+	streamMu                 sync.Mutex
+	streamConns              map[net.Conn]struct{}
+	streamWG                 sync.WaitGroup
+	runCancel                context.CancelFunc
+	namedPipeCancel          context.CancelFunc
+	shuttingDown             bool
+	terminalErr              error
 }
 
 // NewServer wires configured transports to registered handlers without
 // starting network or named-pipe listeners.
 func NewServer(cfg serviceconfig.RPCConfig, orchestrator *orchestrator.Service) *Server {
 	server := &Server{
-		transport:      cfg.Transport,
-		namedPipeName:  cfg.NamedPipeName,
-		orchestrator:   orchestrator,
-		serveNamedPipe: serveNamedPipe,
-		now:            time.Now,
-		streamConns:    make(map[net.Conn]struct{}),
+		transport:                cfg.Transport,
+		namedPipeName:            cfg.NamedPipeName,
+		orchestrator:             orchestrator,
+		serveNamedPipe:           serveNamedPipe,
+		now:                      time.Now,
+		transportShutdownTimeout: defaultTransportShutdownTimeout,
+		streamConns:              make(map[net.Conn]struct{}),
 	}
 
 	server.registerHandlers()

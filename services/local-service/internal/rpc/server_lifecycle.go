@@ -3,17 +3,27 @@ package rpc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"sync"
 	"time"
 )
 
+const defaultTransportShutdownTimeout = 5 * time.Second
+
+var errTransportShutdownIncomplete = errors.New("rpc transport shutdown incomplete")
+
 // Start serves configured transports until one fails or ctx is canceled.
-// Shutdown always runs before Start returns, and the supervisor waits for
-// transport goroutines so callers do not inherit a partially stopped server.
+// Shutdown always runs before Start returns; if a transport misses the shutdown
+// window, the server is fenced into a terminal state instead of being reusable.
 func (s *Server) Start(ctx context.Context) error {
-	supervisor := newTransportSupervisor(s.beginServeRun(ctx), 2)
+	runCtx, err := s.beginServeRun(ctx)
+	if err != nil {
+		return err
+	}
+
+	supervisor := newTransportSupervisor(runCtx, 2)
 	defer s.clearServeRun()
 
 	if s.debugHTTPServer != nil {
@@ -36,11 +46,17 @@ func (s *Server) Start(ctx context.Context) error {
 		})
 	}
 
-	return supervisor.Wait(5*time.Second, s.Shutdown)
+	if err := supervisor.Wait(s.shutdownTimeout(), s.Shutdown); err != nil {
+		if isTransportShutdownIncomplete(err) {
+			return s.markTransportTerminal(err)
+		}
+		return err
+	}
+	return nil
 }
 
 // Shutdown gracefully closes the debug HTTP server and terminates active stream
-// handlers so Start does not hand a half-stopped transport back to callers.
+// handlers. Any incomplete stop fences this Server instance from future reuse.
 func (s *Server) Shutdown(ctx context.Context) error {
 	var shutdownErr error
 
@@ -63,16 +79,19 @@ func (s *Server) Shutdown(ctx context.Context) error {
 
 	if err := waitWithContext(ctx, s.streamWG.Wait); err != nil {
 		if shutdownErr != nil {
-			return shutdownErr
+			return s.markTransportTerminal(shutdownErr)
 		}
-		return err
+		return s.markTransportTerminal(err)
 	}
 
-	return shutdownErr
+	if shutdownErr != nil {
+		return s.markTransportTerminal(shutdownErr)
+	}
+	return nil
 }
 
-// transportSupervisor owns the per-Start run context and joins all transport
-// workers before the caller regains control.
+// transportSupervisor owns the per-Start run context and coordinates transport
+// cancellation, graceful shutdown, and bounded worker joins.
 type transportSupervisor struct {
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -105,9 +124,9 @@ func (s *transportSupervisor) Go(run func(context.Context) error) {
 	}()
 }
 
-// Wait returns the first transport error after canceling sibling transports,
-// running shutdown, and waiting for every started transport goroutine to exit
-// within the same bounded shutdown window.
+// Wait returns the first transport error after canceling sibling transports and
+// running shutdown. A worker that misses the bounded shutdown window returns the
+// context error so callers can fence the owning server before reuse.
 func (s *transportSupervisor) Wait(timeout time.Duration, shutdown func(context.Context) error) error {
 	var transportErr error
 	select {
@@ -133,16 +152,21 @@ func (s *transportSupervisor) Wait(timeout time.Duration, shutdown func(context.
 	return nil
 }
 
-func (s *Server) beginServeRun(parent context.Context) context.Context {
+func (s *Server) beginServeRun(parent context.Context) (context.Context, error) {
 	runCtx, runCancel := context.WithCancel(parent)
 
 	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+
+	if s.terminalErr != nil {
+		runCancel()
+		return nil, s.terminalErr
+	}
+
 	s.runCancel = runCancel
 	s.namedPipeCancel = nil
 	s.shuttingDown = false
-	s.streamMu.Unlock()
-
-	return runCtx
+	return runCtx, nil
 }
 
 func (s *Server) clearServeRun() {
@@ -182,6 +206,37 @@ func (s *Server) beginTransportShutdown() (context.CancelFunc, context.CancelFun
 		conns = append(conns, conn)
 	}
 	return runCancel, namedPipeCancel, conns
+}
+
+func (s *Server) shutdownTimeout() time.Duration {
+	if s.transportShutdownTimeout > 0 {
+		return s.transportShutdownTimeout
+	}
+	return defaultTransportShutdownTimeout
+}
+
+func (s *Server) markTransportTerminal(cause error) error {
+	if cause == nil {
+		return nil
+	}
+
+	terminalErr := cause
+	if !errors.Is(cause, errTransportShutdownIncomplete) {
+		terminalErr = fmt.Errorf("%w: %w", errTransportShutdownIncomplete, cause)
+	}
+
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+	if s.terminalErr == nil {
+		s.terminalErr = terminalErr
+	}
+	return s.terminalErr
+}
+
+func isTransportShutdownIncomplete(err error) bool {
+	return errors.Is(err, errTransportShutdownIncomplete) ||
+		errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded)
 }
 
 func waitWithContext(ctx context.Context, wait func()) error {

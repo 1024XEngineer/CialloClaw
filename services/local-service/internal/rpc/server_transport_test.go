@@ -653,6 +653,59 @@ func TestTransportSupervisorReturnsTimeoutWhenWorkerDoesNotExit(t *testing.T) {
 	}
 }
 
+func TestServerStartFencesReuseAfterTransportTimeout(t *testing.T) {
+	server := newTestServer()
+	server.transport = "named_pipe"
+	server.debugHTTPServer = nil
+	server.transportShutdownTimeout = 25 * time.Millisecond
+
+	startCalls := make(chan struct{}, 2)
+	releaseListener := make(chan struct{})
+	defer close(releaseListener)
+	server.serveNamedPipe = func(context.Context, string, func(net.Conn)) error {
+		startCalls <- struct{}{}
+		<-releaseListener
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	startErr := make(chan error, 1)
+	go func() {
+		startErr <- server.Start(ctx)
+	}()
+
+	select {
+	case <-startCalls:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected named-pipe listener to start")
+	}
+	cancel()
+
+	select {
+	case err := <-startErr:
+		if !errors.Is(err, errTransportShutdownIncomplete) || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("expected incomplete shutdown timeout to fence server reuse, got %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected Start to return once transport shutdown times out")
+	}
+
+	reuseErr := make(chan error, 1)
+	go func() {
+		reuseErr <- server.Start(context.Background())
+	}()
+	select {
+	case err := <-reuseErr:
+		if !errors.Is(err, errTransportShutdownIncomplete) {
+			t.Fatalf("expected terminal server reuse to fail, got %v", err)
+		}
+	case <-startCalls:
+		t.Fatal("expected terminal server to reject reuse before starting transports")
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected terminal server reuse to return without blocking")
+	}
+}
+
 func TestServerHelperUtilitiesCoverFallbackBranches(t *testing.T) {
 	server := newTestServer()
 	recorder := httptest.NewRecorder()
