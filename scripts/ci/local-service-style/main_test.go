@@ -1,8 +1,13 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestFindCommentViolationsRejectsAddedChineseComments(t *testing.T) {
+	root := writeTestFile(t, "package demo\n// Load loads 配置.\nfunc Load() {}\nvar _ = 1 /* 中文 block */\n")
 	diff := `diff --git a/services/local-service/internal/demo/demo.go b/services/local-service/internal/demo/demo.go
 index 1111111..2222222 100644
 --- a/services/local-service/internal/demo/demo.go
@@ -14,19 +19,23 @@ index 1111111..2222222 100644
 +var _ = 1 /* 中文 block */
 `
 
-	violations := findCommentViolations(diff)
+	violations, err := findCommentViolations(root, diff)
+	if err != nil {
+		t.Fatalf("findCommentViolations returned error: %v", err)
+	}
 	if len(violations) != 2 {
 		t.Fatalf("expected two violations, got %d: %#v", len(violations), violations)
 	}
-	if violations[0].line != 3 {
-		t.Fatalf("expected first violation on line 3, got %d", violations[0].line)
+	if violations[0].line != 2 {
+		t.Fatalf("expected first violation on line 2, got %d", violations[0].line)
 	}
-	if violations[1].line != 5 {
-		t.Fatalf("expected second violation on line 5, got %d", violations[1].line)
+	if violations[1].line != 4 {
+		t.Fatalf("expected second violation on line 4, got %d", violations[1].line)
 	}
 }
 
 func TestFindCommentViolationsIgnoresChineseStringLiterals(t *testing.T) {
+	root := writeTestFile(t, "package demo\nconst message = \"中文 // not a comment\"\nconst raw = `中文 /* not a comment */`\n")
 	diff := `diff --git a/services/local-service/internal/demo/demo.go b/services/local-service/internal/demo/demo.go
 index 1111111..2222222 100644
 --- a/services/local-service/internal/demo/demo.go
@@ -37,13 +46,17 @@ index 1111111..2222222 100644
 +const raw = ` + "`" + `中文 /* not a comment */` + "`" + `
 `
 
-	violations := findCommentViolations(diff)
+	violations, err := findCommentViolations(root, diff)
+	if err != nil {
+		t.Fatalf("findCommentViolations returned error: %v", err)
+	}
 	if len(violations) != 0 {
 		t.Fatalf("expected no violations, got %#v", violations)
 	}
 }
 
 func TestFindCommentViolationsTracksAddedBlockComments(t *testing.T) {
+	root := writeTestFile(t, "package demo\n/*\nEnglish line.\n中文 line.\n*/\n")
 	diff := `diff --git a/services/local-service/internal/demo/demo.go b/services/local-service/internal/demo/demo.go
 index 1111111..2222222 100644
 --- a/services/local-service/internal/demo/demo.go
@@ -56,11 +69,64 @@ index 1111111..2222222 100644
 +*/
 `
 
-	violations := findCommentViolations(diff)
+	violations, err := findCommentViolations(root, diff)
+	if err != nil {
+		t.Fatalf("findCommentViolations returned error: %v", err)
+	}
 	if len(violations) != 1 {
 		t.Fatalf("expected one violation, got %d: %#v", len(violations), violations)
 	}
-	if violations[0].line != 5 {
-		t.Fatalf("expected violation on line 5, got %d", violations[0].line)
+	if violations[0].line != 4 {
+		t.Fatalf("expected violation on line 4, got %d", violations[0].line)
 	}
+}
+
+func TestFindCommentViolationsTracksAddedLinesInsideExistingBlockComments(t *testing.T) {
+	root := writeTestFile(t, "package demo\n/*\nEnglish line.\n中文 line.\n*/\nfunc Load() {}\n")
+	diff := `diff --git a/services/local-service/internal/demo/demo.go b/services/local-service/internal/demo/demo.go
+index 1111111..2222222 100644
+--- a/services/local-service/internal/demo/demo.go
++++ b/services/local-service/internal/demo/demo.go
+@@ -3,0 +4 @@
++中文 line.
+`
+
+	violations, err := findCommentViolations(root, diff)
+	if err != nil {
+		t.Fatalf("findCommentViolations returned error: %v", err)
+	}
+	if len(violations) != 1 {
+		t.Fatalf("expected one violation, got %d: %#v", len(violations), violations)
+	}
+	if violations[0].line != 4 {
+		t.Fatalf("expected violation on line 4, got %d", violations[0].line)
+	}
+}
+
+func TestFilterReportedPathsIgnoresDownloadNoise(t *testing.T) {
+	output := "go: downloading golang.org/x/tools v0.44.0\nservices/local-service/internal/demo/demo.go\n"
+	filtered := filterReportedPaths(output, []string{
+		"services/local-service/internal/demo/demo.go",
+		"scripts/ci/local-service-style/main.go",
+	})
+	if len(filtered) != 1 {
+		t.Fatalf("expected one reported path, got %d: %#v", len(filtered), filtered)
+	}
+	if filtered[0] != "services/local-service/internal/demo/demo.go" {
+		t.Fatalf("unexpected reported path %q", filtered[0])
+	}
+}
+
+func writeTestFile(t *testing.T, content string) string {
+	t.Helper()
+
+	root := t.TempDir()
+	path := filepath.Join(root, localServicePath, "internal", "demo", "demo.go")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("create test directory: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+	return root
 }

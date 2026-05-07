@@ -5,8 +5,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"go/scanner"
+	"go/token"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -26,8 +29,9 @@ type violation struct {
 	text string
 }
 
-type commentState struct {
-	inBlock bool
+type addedLine struct {
+	file string
+	line int
 }
 
 func main() {
@@ -89,13 +93,15 @@ func checkGoimports(root, baseRef string) error {
 	if err != nil {
 		return fmt.Errorf("run goimports check: %w\n%s", err, strings.TrimSpace(output))
 	}
-	if strings.TrimSpace(output) == "" {
+
+	unformattedFiles := filterReportedPaths(output, files)
+	if len(unformattedFiles) == 0 {
 		return nil
 	}
 
 	return fmt.Errorf(
 		"goimports is required for:\n%s\nrun: go run golang.org/x/tools/cmd/goimports@latest -w %s %s",
-		strings.TrimSpace(output),
+		strings.Join(unformattedFiles, "\n"),
 		localServicePath,
 		styleToolPath,
 	)
@@ -126,7 +132,10 @@ func checkAddedComments(root, baseRef string) error {
 		return err
 	}
 
-	violations := findCommentViolations(diff)
+	violations, err := findCommentViolations(root, diff)
+	if err != nil {
+		return err
+	}
 	if len(violations) == 0 {
 		return nil
 	}
@@ -224,10 +233,36 @@ func isZeroRevision(revision string) bool {
 	return trimmed == ""
 }
 
-func findCommentViolations(diff string) []violation {
-	var violations []violation
-	states := make(map[string]*commentState)
+func findCommentViolations(root, diff string) ([]violation, error) {
+	addedLines := collectAddedLines(diff)
+	if len(addedLines) == 0 {
+		return nil, nil
+	}
 
+	commentLinesByFile := make(map[string]map[int][]string)
+	var violations []violation
+	for _, item := range addedLines {
+		commentLines := commentLinesByFile[item.file]
+		if commentLines == nil {
+			var err error
+			commentLines, err = scanCommentLines(root, item.file)
+			if err != nil {
+				return nil, err
+			}
+			commentLinesByFile[item.file] = commentLines
+		}
+		for _, comment := range commentLines[item.line] {
+			if containsHan(comment) {
+				violations = append(violations, violation{file: item.file, line: item.line, text: comment})
+			}
+		}
+	}
+
+	return violations, nil
+}
+
+func collectAddedLines(diff string) []addedLine {
+	var addedLines []addedLine
 	var (
 		file    string
 		newLine int
@@ -241,19 +276,12 @@ func findCommentViolations(diff string) []violation {
 		case strings.HasPrefix(rawLine, "+++ "):
 			file = parseNewFile(rawLine)
 			newLine = 0
-			if file != "" && states[file] == nil {
-				states[file] = &commentState{}
-			}
 		case strings.HasPrefix(rawLine, "@@ "):
 			newLine = parseNewLine(rawLine)
 		case file == "" || newLine == 0:
 			continue
 		case strings.HasPrefix(rawLine, "+") && !strings.HasPrefix(rawLine, "+++"):
-			added := strings.TrimPrefix(rawLine, "+")
-			comment, ok := addedComment(added, states[file])
-			if ok && containsHan(comment) {
-				violations = append(violations, violation{file: file, line: newLine, text: comment})
-			}
+			addedLines = append(addedLines, addedLine{file: file, line: newLine})
 			newLine++
 		case strings.HasPrefix(rawLine, "-") && !strings.HasPrefix(rawLine, "---"):
 			continue
@@ -264,7 +292,7 @@ func findCommentViolations(diff string) []violation {
 		}
 	}
 
-	return violations
+	return addedLines
 }
 
 func parseNewFile(line string) string {
@@ -294,75 +322,52 @@ func parseNewLine(line string) int {
 	return value
 }
 
-func addedComment(line string, state *commentState) (string, bool) {
-	if state == nil {
-		state = &commentState{}
+func scanCommentLines(root, relativePath string) (map[int][]string, error) {
+	source, err := os.ReadFile(filepath.Join(root, relativePath))
+	if err != nil {
+		return nil, fmt.Errorf("read %s for comment scan: %w", relativePath, err)
 	}
 
-	if state.inBlock {
-		if strings.Contains(line, "*/") {
-			state.inBlock = false
+	fset := token.NewFileSet()
+	file := fset.AddFile(relativePath, -1, len(source))
+	var scan scanner.Scanner
+	scan.Init(file, source, nil, scanner.ScanComments)
+
+	commentLines := make(map[int][]string)
+	for {
+		pos, tok, lit := scan.Scan()
+		if tok == token.EOF {
+			break
 		}
-		return line, true
-	}
-
-	index, block := commentStart(line)
-	if index < 0 {
-		return "", false
-	}
-
-	comment := line[index:]
-	if block && !strings.Contains(comment, "*/") {
-		state.inBlock = true
-	}
-	return comment, true
-}
-
-func commentStart(line string) (int, bool) {
-	var quote byte
-	escaped := false
-
-	for i := 0; i < len(line); i++ {
-		ch := line[i]
-		if quote != 0 {
-			switch quote {
-			case '`':
-				if ch == '`' {
-					quote = 0
-				}
-			default:
-				if escaped {
-					escaped = false
-					continue
-				}
-				if ch == '\\' {
-					escaped = true
-					continue
-				}
-				if ch == quote {
-					quote = 0
-				}
-			}
+		if tok != token.COMMENT {
 			continue
 		}
-
-		switch ch {
-		case '"', '\'', '`':
-			quote = ch
-		case '/':
-			if i+1 >= len(line) {
-				continue
-			}
-			if line[i+1] == '/' {
-				return i, false
-			}
-			if line[i+1] == '*' {
-				return i, true
-			}
+		startLine := fset.Position(pos).Line
+		for offset, line := range strings.Split(lit, "\n") {
+			commentLines[startLine+offset] = append(commentLines[startLine+offset], line)
 		}
 	}
 
-	return -1, false
+	return commentLines, nil
+}
+
+func filterReportedPaths(output string, expected []string) []string {
+	allowed := make(map[string]struct{}, len(expected))
+	for _, file := range expected {
+		allowed[file] = struct{}{}
+	}
+
+	var filtered []string
+	for _, line := range strings.Split(output, "\n") {
+		file := strings.TrimSpace(line)
+		if file == "" {
+			continue
+		}
+		if _, ok := allowed[file]; ok {
+			filtered = append(filtered, file)
+		}
+	}
+	return filtered
 }
 
 func containsHan(text string) bool {
