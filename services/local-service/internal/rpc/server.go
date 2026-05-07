@@ -5,11 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -101,173 +99,6 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-// handleHealthz returns a minimal health snapshot plus orchestrator state.
-func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
-	writeDebugCORSHeaders(w)
-	setDebugCORSOrigin(w, r)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-
-	w.Header().Set("content-type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"status":       "ok",
-		"service":      "local-service",
-		"transport":    s.transport,
-		"named_pipe":   s.namedPipeName,
-		"orchestrator": s.orchestrator.Snapshot(),
-	})
-}
-
-// handleHTTPRPC serves debug-time HTTP JSON-RPC requests.
-func (s *Server) handleHTTPRPC(w http.ResponseWriter, r *http.Request) {
-	writeDebugCORSHeaders(w)
-	setDebugCORSOrigin(w, r)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-
-	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	defer r.Body.Close()
-
-	request, rpcErr := decodeRequest(r.Body)
-	if rpcErr != nil {
-		w.Header().Set("content-type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(newErrorEnvelope(nil, rpcErr))
-		return
-	}
-
-	response := s.dispatch(request)
-	w.Header().Set("content-type", "application/json")
-	_ = json.NewEncoder(w).Encode(response)
-}
-
-// handleDebugEvents returns buffered notifications for a task.
-func (s *Server) handleDebugEvents(w http.ResponseWriter, r *http.Request) {
-	writeDebugCORSHeaders(w)
-	setDebugCORSOrigin(w, r)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-
-	if r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	taskID := r.URL.Query().Get("task_id")
-	if taskID == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": "task_id is required"})
-		return
-	}
-
-	events, err := s.orchestrator.PendingNotifications(taskID)
-	if err != nil {
-		w.WriteHeader(http.StatusNotFound)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
-		return
-	}
-
-	w.Header().Set("content-type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"task_id": taskID,
-		"items":   events,
-	})
-}
-
-// handleDebugEventStream polls and emits task notifications over SSE for debug
-// consumers.
-func (s *Server) handleDebugEventStream(w http.ResponseWriter, r *http.Request) {
-	writeDebugCORSHeaders(w)
-	setDebugCORSOrigin(w, r)
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-
-	if r.Method != http.MethodGet {
-		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
-	}
-
-	taskID := r.URL.Query().Get("task_id")
-	if taskID == "" {
-		w.WriteHeader(http.StatusBadRequest)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": "task_id is required"})
-		return
-	}
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		w.WriteHeader(http.StatusInternalServerError)
-		_ = json.NewEncoder(w).Encode(map[string]any{"error": "streaming is not supported by this response writer"})
-		return
-	}
-
-	w.Header().Set("content-type", "text/event-stream")
-	w.Header().Set("cache-control", "no-cache")
-	w.Header().Set("connection", "keep-alive")
-
-	ticker := time.NewTicker(250 * time.Millisecond)
-	defer ticker.Stop()
-
-	ctx := r.Context()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			notifications, err := s.orchestrator.DrainNotifications(taskID)
-			if err != nil {
-				_, _ = fmt.Fprintf(w, "event: error\ndata: %s\n\n", marshalSSEData(map[string]any{"error": err.Error()}))
-				flusher.Flush()
-				return
-			}
-
-			for _, notification := range notifications {
-				method := stringValue(notification, "method", "task.updated")
-				params := mapValue(notification, "params")
-				_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", method, marshalSSEData(params))
-				flusher.Flush()
-			}
-		}
-	}
-}
-
-func writeDebugCORSHeaders(w http.ResponseWriter) {
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-}
-
-func setDebugCORSOrigin(w http.ResponseWriter, r *http.Request) {
-	origin := strings.TrimSpace(r.Header.Get("Origin"))
-	if origin == "" {
-		return
-	}
-
-	parsed, err := url.Parse(origin)
-	if err != nil {
-		return
-	}
-
-	host := strings.ToLower(parsed.Hostname())
-	if host != "localhost" && host != "127.0.0.1" {
-		return
-	}
-
-	w.Header().Set("Access-Control-Allow-Origin", origin)
-	w.Header().Set("Vary", "Origin")
 }
 
 // handleStreamConn serves JSON-RPC requests on a long-lived stream and then
@@ -548,13 +379,4 @@ func collectTaskIDs(rawValue any, ids map[string]struct{}) {
 			collectTaskIDs(item, ids)
 		}
 	}
-}
-
-// marshalSSEData encodes arbitrary debug payloads into an SSE data field.
-func marshalSSEData(value any) string {
-	encoded, err := json.Marshal(value)
-	if err != nil {
-		return `{}`
-	}
-	return string(encoded)
 }
