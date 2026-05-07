@@ -38,7 +38,7 @@ import {
   updateSourceNoteEditorDraftContent,
   upsertSourceNoteEditorBlock,
 } from "./sourceNoteEditor";
-import type { NoteDetailAction, NoteListItem, NotePreviewGroupKey, SourceNoteDocument, SourceNoteEditorDraft } from "./notePage.types";
+import type { NoteDetailAction, NoteListItem, NotePreviewGroupKey, SourceNoteDocument, SourceNoteEditorBlock, SourceNoteEditorDraft } from "./notePage.types";
 import { NoteDetailPanel } from "./components/NoteDetailPanel";
 import { NoteEmptyState } from "./components/NoteEmptyState";
 import { NotePreviewCard } from "./components/NotePreviewCard";
@@ -72,6 +72,8 @@ type SourceNoteIdentity = {
   sourceLine?: number | null;
   title: string;
 };
+
+type SourceNotePathLookup = Map<string, SourceNoteDocument[]>;
 
 const NOTE_CANVAS_CARD_WIDTH = 360;
 const NOTE_CANVAS_CARD_HEIGHT = 280;
@@ -116,35 +118,138 @@ function normalizeSourceNoteTitleKey(value: string) {
   return value.trim().toLowerCase();
 }
 
+function normalizeSourceNoteBodyKey(value: string | null | undefined) {
+  return value ? value.trim().replace(/\r\n/g, "\n").toLowerCase() : "";
+}
+
 function registerSourceNoteLookupKey(
-  lookup: Map<string, SourceNoteDocument>,
-  conflictingKeys: Set<string>,
+  lookup: SourceNotePathLookup,
   key: string,
   note: SourceNoteDocument,
 ) {
   const normalizedKey = normalizeSourceNoteKey(key);
-  if (normalizedKey === "" || conflictingKeys.has(normalizedKey)) {
+  if (normalizedKey === "") {
     return;
   }
 
-  const existing = lookup.get(normalizedKey);
-  if (!existing) {
-    lookup.set(normalizedKey, note);
+  const existing = lookup.get(normalizedKey) ?? [];
+  if (existing.some((candidate) => candidate.path === note.path)) {
     return;
   }
 
-  if (existing.path !== note.path) {
-    lookup.delete(normalizedKey);
-    conflictingKeys.add(normalizedKey);
+  lookup.set(normalizedKey, [...existing, note]);
+}
+
+function getSourceNoteLookupCandidates(lookup: SourceNotePathLookup, key: string) {
+  return lookup.get(normalizeSourceNoteKey(key)) ?? [];
+}
+
+function scoreSourceNoteBlockCandidate(item: NoteListItem, block: SourceNoteEditorBlock) {
+  const sourceLine = item.sourceNote?.sourceLine ?? readTodoSourceLine(item.item);
+  const normalizedTitle = normalizeSourceNoteTitleKey(item.sourceNote?.title ?? item.item.title);
+  const normalizedNoteText = normalizeSourceNoteBodyKey(item.item.note_text ?? item.experience.noteText);
+  const normalizedRepeatRule = normalizeSourceNoteBodyKey(item.item.repeat_rule ?? item.experience.repeatRule);
+  const normalizedRecentInstanceStatus = normalizeSourceNoteBodyKey(item.item.recent_instance_status ?? item.experience.recentInstanceStatus);
+  const normalizedDueAt = (item.item.due_at ?? item.experience.plannedAt ?? "").trim();
+  let score = 0;
+
+  if (typeof sourceLine === "number" && sourceLine > 0) {
+    if (block.sourceLine !== sourceLine) {
+      return -1;
+    }
+
+    score += 8;
   }
+
+  if (normalizeSourceNoteTitleKey(block.title) === normalizedTitle) {
+    score += 4;
+  } else if (!sourceLine) {
+    return -1;
+  }
+
+  if (normalizedNoteText !== "" && normalizeSourceNoteBodyKey(block.noteText) === normalizedNoteText) {
+    score += 2;
+  }
+
+  if (normalizedRepeatRule !== "" && normalizeSourceNoteBodyKey(block.repeatRule) === normalizedRepeatRule) {
+    score += 1;
+  }
+
+  if (normalizedRecentInstanceStatus !== "" && normalizeSourceNoteBodyKey(block.recentInstanceStatus) === normalizedRecentInstanceStatus) {
+    score += 1;
+  }
+
+  if (normalizedDueAt !== "" && block.dueAt === normalizedDueAt) {
+    score += 1;
+  }
+
+  return score;
+}
+
+/**
+ * When multiple task roots expose the same relative file path, the backend can
+ * still point formal note items at `workspace/<relative>`. Resolve those
+ * collisions locally by matching only against note blocks from that relative
+ * path instead of falling back to unrelated titles across the whole workspace.
+ */
+function resolveAmbiguousSourceNoteCandidate(
+  item: NoteListItem,
+  candidates: SourceNoteDocument[],
+  sourceNoteBlocksByPath: Map<string, SourceNoteEditorBlock[]>,
+) {
+  let bestMatch: SourceNoteDocument | null = null;
+  let bestScore = -1;
+  let tied = false;
+
+  candidates.forEach((candidate) => {
+    const blocks = sourceNoteBlocksByPath.get(candidate.path) ?? [];
+    const candidateScore = blocks.reduce((maxScore, block) => Math.max(maxScore, scoreSourceNoteBlockCandidate(item, block)), -1);
+    if (candidateScore < 0) {
+      return;
+    }
+
+    if (candidateScore > bestScore) {
+      bestMatch = candidate;
+      bestScore = candidateScore;
+      tied = false;
+      return;
+    }
+
+    if (candidateScore === bestScore) {
+      tied = true;
+    }
+  });
+
+  if (!bestMatch || tied) {
+    return;
+  }
+
+  return bestMatch;
+}
+
+function resolveSourceNoteLookupMatch(
+  item: NoteListItem,
+  lookup: SourceNotePathLookup,
+  sourceNoteBlocksByPath: Map<string, SourceNoteEditorBlock[]>,
+  key: string,
+) {
+  const candidates = getSourceNoteLookupCandidates(lookup, key);
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  if (candidates.length === 1) {
+    return candidates[0];
+  }
+
+  return resolveAmbiguousSourceNoteCandidate(item, candidates, sourceNoteBlocksByPath) ?? null;
 }
 
 function buildSourceNotePathLookup(sourceNotes: SourceNoteDocument[]) {
-  const lookup = new Map<string, SourceNoteDocument>();
-  const conflictingKeys = new Set<string>();
+  const lookup: SourceNotePathLookup = new Map();
 
   sourceNotes.forEach((note) => {
-    registerSourceNoteLookupKey(lookup, conflictingKeys, note.path, note);
+    registerSourceNoteLookupKey(lookup, note.path, note);
 
     const normalizedNotePath = normalizeSourceNoteKey(note.path);
     const normalizedSourceRoot = normalizeSourceNoteKey(note.sourceRoot);
@@ -158,8 +263,8 @@ function buildSourceNotePathLookup(sourceNotes: SourceNoteDocument[]) {
       return;
     }
 
-    registerSourceNoteLookupKey(lookup, conflictingKeys, relativePath, note);
-    registerSourceNoteLookupKey(lookup, conflictingKeys, `workspace/${relativePath}`, note);
+    registerSourceNoteLookupKey(lookup, relativePath, note);
+    registerSourceNoteLookupKey(lookup, `workspace/${relativePath}`, note);
   });
 
   return lookup;
@@ -277,20 +382,21 @@ function findPreferredItemIdForSourceNote(
 
 function resolveNoteItemSourceNotePath(
   item: NoteListItem,
-  sourceNotesByPath: Map<string, SourceNoteDocument>,
+  sourceNotesByPath: SourceNotePathLookup,
+  sourceNoteBlocksByPath: Map<string, SourceNoteEditorBlock[]>,
 ) {
   const sourcePath = readTodoSourcePath(item.item);
   if (sourcePath) {
-    return sourceNotesByPath.get(normalizeSourceNoteKey(sourcePath))?.path ?? null;
+    return resolveSourceNoteLookupMatch(item, sourceNotesByPath, sourceNoteBlocksByPath, sourcePath)?.path ?? null;
   }
 
   if (item.sourceNote?.path) {
-    return sourceNotesByPath.get(normalizeSourceNoteKey(item.sourceNote.path))?.path ?? null;
+    return resolveSourceNoteLookupMatch(item, sourceNotesByPath, sourceNoteBlocksByPath, item.sourceNote.path)?.path ?? null;
   }
 
   const resourceMatch = item.experience.relatedResources
-    .map((resource) => sourceNotesByPath.get(normalizeSourceNoteKey(resource.path)))
-    .find((note) => note !== undefined);
+    .map((resource) => resolveSourceNoteLookupMatch(item, sourceNotesByPath, sourceNoteBlocksByPath, resource.path))
+    .find((note): note is SourceNoteDocument => note !== null);
   if (resourceMatch) {
     return resourceMatch.path;
   }
@@ -301,17 +407,19 @@ function resolveNoteItemSourceNotePath(
 function matchesSourceNotePath(
   item: NoteListItem,
   sourceNotePath: string,
-  sourceNotesByPath: Map<string, SourceNoteDocument>,
+  sourceNotesByPath: SourceNotePathLookup,
+  sourceNoteBlocksByPath: Map<string, SourceNoteEditorBlock[]>,
 ) {
-  const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath);
+  const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath, sourceNoteBlocksByPath);
   return matchedPath !== null && normalizeSourceNoteKey(matchedPath) === normalizeSourceNoteKey(sourceNotePath);
 }
 
 function resolveSourceNoteBlockAliases(
   item: NoteListItem,
-  sourceNotesByPath: Map<string, SourceNoteDocument>,
+  sourceNotesByPath: SourceNotePathLookup,
+  sourceNoteBlocksByPath: Map<string, SourceNoteEditorBlock[]>,
 ) {
-  const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath);
+  const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath, sourceNoteBlocksByPath);
   if (!matchedPath) {
     return [];
   }
@@ -321,6 +429,23 @@ function resolveSourceNoteBlockAliases(
     item.sourceNote?.title ?? item.item.title,
     item.sourceNote?.sourceLine ?? readTodoSourceLine(item.item),
   );
+}
+
+/**
+ * A board card can temporarily stay on the canvas as a renderer-local fallback
+ * while the formal bucket item for the same source block has already arrived.
+ * Treat either representation as one visible note so the rail never shows a
+ * duplicate beside the board.
+ */
+function isNoteItemRepresentedOnCanvas(
+  item: NoteListItem,
+  canvasItemIdSet: Set<string>,
+  canvasRepresentedSourceNoteBlocks: Set<string>,
+  sourceNotesByPath: SourceNotePathLookup,
+  sourceNoteBlocksByPath: Map<string, SourceNoteEditorBlock[]>,
+) {
+  return canvasItemIdSet.has(item.item.item_id)
+    || resolveSourceNoteBlockAliases(item, sourceNotesByPath, sourceNoteBlocksByPath).some((alias) => canvasRepresentedSourceNoteBlocks.has(alias));
 }
 
 function createEmptyBucketGroups(): Record<NotePreviewGroupKey, NoteListItem[]> {
@@ -351,7 +476,8 @@ function updateRememberedFormalBucketForItem(
   rememberedBucketByAlias: Map<string, NotePreviewGroupKey>,
   item: NoteListItem,
   nextBucket: NotePreviewGroupKey | null,
-  sourceNotesByPath: Map<string, SourceNoteDocument>,
+  sourceNotesByPath: SourceNotePathLookup,
+  sourceNoteBlocksByPath: Map<string, SourceNoteEditorBlock[]>,
   options: {
     allowLaterReset?: boolean;
   } = {},
@@ -360,7 +486,7 @@ function updateRememberedFormalBucketForItem(
     return;
   }
 
-  resolveSourceNoteBlockAliases(item, sourceNotesByPath).forEach((alias) => {
+  resolveSourceNoteBlockAliases(item, sourceNotesByPath, sourceNoteBlocksByPath).forEach((alias) => {
     if (!nextBucket) {
       rememberedBucketByAlias.delete(alias);
       return;
@@ -377,30 +503,21 @@ function updateRememberedFormalBucketForItem(
   });
 }
 
-function applyRememberedFormalBucket(
+function resolveRememberedFormalBucket(
   rememberedBucketByAlias: Map<string, NotePreviewGroupKey>,
   item: NoteListItem,
-  sourceNotesByPath: Map<string, SourceNoteDocument>,
+  sourceNotesByPath: SourceNotePathLookup,
+  sourceNoteBlocksByPath: Map<string, SourceNoteEditorBlock[]>,
 ) {
   if (item.sourceNote?.localOnly || item.item.bucket !== "later") {
-    return item;
+    return null;
   }
 
-  const rememberedBucket = resolveSourceNoteBlockAliases(item, sourceNotesByPath).find((alias) => {
+  const rememberedAlias = resolveSourceNoteBlockAliases(item, sourceNotesByPath, sourceNoteBlocksByPath).find((alias) => {
     const bucket = rememberedBucketByAlias.get(alias);
     return bucket !== undefined && bucket !== "later";
   });
-  if (!rememberedBucket) {
-    return item;
-  }
-
-  return {
-    ...item,
-    item: {
-      ...item.item,
-      bucket: rememberedBucketByAlias.get(rememberedBucket) ?? item.item.bucket,
-    },
-  };
+  return rememberedAlias ? rememberedBucketByAlias.get(rememberedAlias) ?? null : null;
 }
 
 /**
@@ -553,6 +670,10 @@ export function NotePage() {
   const sourceNotes = useMemo(() => sourceNotesData ?? [], [sourceNotesData]);
   const resolvedSourceRoots = useMemo(() => sourceRootsData ?? taskSourceRoots, [sourceRootsData, taskSourceRoots]);
   const sourceNotesByPath = useMemo(() => buildSourceNotePathLookup(sourceNotes), [sourceNotes]);
+  const sourceNoteBlocksByPath = useMemo(
+    () => new Map(sourceNotes.map((note) => [note.path, parseSourceNoteEditorBlocks(note)])),
+    [sourceNotes],
+  );
   const rawRpcItems = useMemo(
     () => [
       ...(upcomingQuery.data?.items ?? []),
@@ -569,22 +690,22 @@ export function NotePage() {
         item,
         item.item.bucket,
         sourceNotesByPath,
+        sourceNoteBlocksByPath,
       );
     });
-  }, [rawRpcItems, sourceNotesByPath]);
+  }, [rawRpcItems, sourceNoteBlocksByPath, sourceNotesByPath]);
   const rpcItemsByBucket = useMemo(() => {
     const nextGroups = createEmptyBucketGroups();
 
     rawRpcItems
-      .map((item) =>
-        applyRememberedFormalBucket(
+      .forEach((item) => {
+        const displayedBucket = resolveRememberedFormalBucket(
           rememberedFormalBucketByAliasRef.current,
           item,
           sourceNotesByPath,
-        ),
-      )
-      .forEach((item) => {
-        nextGroups[item.item.bucket].push(item);
+          sourceNoteBlocksByPath,
+        ) ?? item.item.bucket;
+        nextGroups[displayedBucket].push(item);
       });
 
     nextGroups.upcoming = sortNotesByUrgency(nextGroups.upcoming);
@@ -593,7 +714,7 @@ export function NotePage() {
     nextGroups.closed = sortClosedNotes(nextGroups.closed);
 
     return nextGroups;
-  }, [rawRpcItems, sourceNotesByPath]);
+  }, [rawRpcItems, sourceNoteBlocksByPath, sourceNotesByPath]);
   const rpcUpcomingItems = rpcItemsByBucket.upcoming;
   const rpcLaterItems = rpcItemsByBucket.later;
   const rpcRecurringItems = rpcItemsByBucket.recurring_rule;
@@ -602,13 +723,13 @@ export function NotePage() {
     const representedBlocks = new Set<string>();
 
     [...rpcUpcomingItems, ...rpcLaterItems, ...rpcRecurringItems, ...rpcClosedItems].forEach((item) => {
-      resolveSourceNoteBlockAliases(item, sourceNotesByPath).forEach((alias) => {
+      resolveSourceNoteBlockAliases(item, sourceNotesByPath, sourceNoteBlocksByPath).forEach((alias) => {
         representedBlocks.add(alias);
       });
     });
 
     return representedBlocks;
-  }, [rpcClosedItems, rpcLaterItems, rpcRecurringItems, rpcUpcomingItems, sourceNotesByPath]);
+  }, [rpcClosedItems, rpcLaterItems, rpcRecurringItems, rpcUpcomingItems, sourceNoteBlocksByPath, sourceNotesByPath]);
   const sourceNoteFallbackItems = useMemo(
     () =>
       sourceNotes
@@ -616,9 +737,9 @@ export function NotePage() {
         .flatMap((note) => buildSourceNoteFallbackItems(note))
         .filter(
           (item) =>
-            !resolveSourceNoteBlockAliases(item, sourceNotesByPath).some((alias) => representedSourceNoteBlocks.has(alias)),
+            !resolveSourceNoteBlockAliases(item, sourceNotesByPath, sourceNoteBlocksByPath).some((alias) => representedSourceNoteBlocks.has(alias)),
         ),
-    [representedSourceNoteBlocks, sourceNotes, sourceNotesByPath],
+    [representedSourceNoteBlocks, sourceNoteBlocksByPath, sourceNotes, sourceNotesByPath],
   );
   const sourceFallbackItemsByBucket = useMemo(() => {
     const nextGroups: Record<NotePreviewGroupKey, NoteListItem[]> = {
@@ -654,11 +775,53 @@ export function NotePage() {
   const formalLaterItems = useMemo(() => laterItems.filter((item) => !item.sourceNote?.localOnly), [laterItems]);
   const formalRecurringItems = useMemo(() => recurringItems.filter((item) => !item.sourceNote?.localOnly), [recurringItems]);
   const formalClosedItems = useMemo(() => closedItems.filter((item) => !item.sourceNote?.localOnly), [closedItems]);
+  const allItems = useMemo(() => [...upcomingItems, ...laterItems, ...recurringItems, ...closedItems], [upcomingItems, laterItems, recurringItems, closedItems]);
+  const noteItemsById = useMemo(() => new Map(allItems.map((item) => [item.item.item_id, item])), [allItems]);
   const canvasItemIdSet = useMemo(() => new Set(canvasCards.map((entry) => entry.itemId)), [canvasCards]);
-  const visibleUpcomingItems = useMemo(() => upcomingItems.filter((item) => !canvasItemIdSet.has(item.item.item_id)), [canvasItemIdSet, upcomingItems]);
-  const visibleLaterItems = useMemo(() => laterItems.filter((item) => !canvasItemIdSet.has(item.item.item_id)), [canvasItemIdSet, laterItems]);
-  const visibleRecurringItems = useMemo(() => recurringItems.filter((item) => !canvasItemIdSet.has(item.item.item_id)), [canvasItemIdSet, recurringItems]);
-  const visibleClosedItems = useMemo(() => closedItems.filter((item) => !canvasItemIdSet.has(item.item.item_id)), [canvasItemIdSet, closedItems]);
+  const canvasRepresentedSourceNoteBlocks = useMemo(() => {
+    const representedBlocks = new Set<string>();
+
+    canvasCards.forEach((entry) => {
+      const item = noteItemsById.get(entry.itemId);
+      if (!item) {
+        return;
+      }
+
+      resolveSourceNoteBlockAliases(item, sourceNotesByPath, sourceNoteBlocksByPath).forEach((alias) => {
+        representedBlocks.add(alias);
+      });
+    });
+
+    return representedBlocks;
+  }, [canvasCards, noteItemsById, sourceNoteBlocksByPath, sourceNotesByPath]);
+  const visibleUpcomingItems = useMemo(
+    () =>
+      upcomingItems.filter(
+        (item) => !isNoteItemRepresentedOnCanvas(item, canvasItemIdSet, canvasRepresentedSourceNoteBlocks, sourceNotesByPath, sourceNoteBlocksByPath),
+      ),
+    [canvasItemIdSet, canvasRepresentedSourceNoteBlocks, sourceNoteBlocksByPath, sourceNotesByPath, upcomingItems],
+  );
+  const visibleLaterItems = useMemo(
+    () =>
+      laterItems.filter(
+        (item) => !isNoteItemRepresentedOnCanvas(item, canvasItemIdSet, canvasRepresentedSourceNoteBlocks, sourceNotesByPath, sourceNoteBlocksByPath),
+      ),
+    [canvasItemIdSet, canvasRepresentedSourceNoteBlocks, laterItems, sourceNoteBlocksByPath, sourceNotesByPath],
+  );
+  const visibleRecurringItems = useMemo(
+    () =>
+      recurringItems.filter(
+        (item) => !isNoteItemRepresentedOnCanvas(item, canvasItemIdSet, canvasRepresentedSourceNoteBlocks, sourceNotesByPath, sourceNoteBlocksByPath),
+      ),
+    [canvasItemIdSet, canvasRepresentedSourceNoteBlocks, recurringItems, sourceNoteBlocksByPath, sourceNotesByPath],
+  );
+  const visibleClosedItems = useMemo(
+    () =>
+      closedItems.filter(
+        (item) => !isNoteItemRepresentedOnCanvas(item, canvasItemIdSet, canvasRepresentedSourceNoteBlocks, sourceNotesByPath, sourceNoteBlocksByPath),
+      ),
+    [canvasItemIdSet, canvasRepresentedSourceNoteBlocks, closedItems, sourceNoteBlocksByPath, sourceNotesByPath],
+  );
   /**
    * Keep renderer-local source note cards on the canvas only. The sidebar
    * should list formal note items instead of duplicating local markdown
@@ -686,20 +849,18 @@ export function NotePage() {
     () => buildNoteSummary({ recurring_rule: formalRecurringItems, upcoming: formalUpcomingItems }),
     [formalRecurringItems, formalUpcomingItems],
   );
-  const allItems = useMemo(() => [...upcomingItems, ...laterItems, ...recurringItems, ...closedItems], [upcomingItems, laterItems, recurringItems, closedItems]);
-  const noteItemsById = useMemo(() => new Map(allItems.map((item) => [item.item.item_id, item])), [allItems]);
   const noteItemSourcePathById = useMemo(() => {
     const itemPathMap = new Map<string, string>();
 
     allItems.forEach((item) => {
-      const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath);
+      const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath, sourceNoteBlocksByPath);
       if (matchedPath) {
         itemPathMap.set(item.item.item_id, matchedPath);
       }
     });
 
     return itemPathMap;
-  }, [allItems, sourceNotesByPath]);
+  }, [allItems, sourceNoteBlocksByPath, sourceNotesByPath]);
   const noteItemIdsBySourcePath = useMemo(() => {
     const pathItemMap = new Map<string, string[]>();
 
@@ -833,6 +994,7 @@ export function NotePage() {
     const latestSourceNotesResult = await sourceNotesQuery.refetch();
     const latestSourceNotes = latestSourceNotesResult.data?.notes ?? sourceNotes;
     const latestSourceNotesByPath = buildSourceNotePathLookup(latestSourceNotes);
+    const latestSourceNoteBlocksByPath = new Map(latestSourceNotes.map((note) => [note.path, parseSourceNoteEditorBlocks(note)]));
     const normalizedExpectedPath = normalizeSourceNoteKey(sourceIdentity.path);
     const normalizedExpectedTitle = normalizeSourceNoteTitleKey(sourceIdentity.title);
     const refetchedItems = await refetchAllNoteBuckets();
@@ -841,7 +1003,7 @@ export function NotePage() {
         return false;
       }
 
-      const matchedPath = resolveNoteItemSourceNotePath(item, latestSourceNotesByPath);
+      const matchedPath = resolveNoteItemSourceNotePath(item, latestSourceNotesByPath, latestSourceNoteBlocksByPath);
       if (!matchedPath || normalizeSourceNoteKey(matchedPath) !== normalizedExpectedPath) {
         return false;
       }
@@ -856,7 +1018,7 @@ export function NotePage() {
         (item) =>
           !item.sourceNote?.localOnly
           && normalizeSourceNoteTitleKey(item.item.title) === normalizedExpectedTitle
-          && matchesSourceNotePath(item, savedNote.path, latestSourceNotesByPath),
+          && matchesSourceNotePath(item, savedNote.path, latestSourceNotesByPath, latestSourceNoteBlocksByPath),
       );
 
     if (!matchedItem) {
@@ -947,13 +1109,13 @@ export function NotePage() {
   }
 
   function resolveSourceNotePathForItem(item: NoteListItem) {
-    return resolveNoteItemSourceNotePath(item, sourceNotesByPath);
+    return resolveNoteItemSourceNotePath(item, sourceNotesByPath, sourceNoteBlocksByPath);
   }
 
   function openSourceStudioForItem(item: NoteListItem) {
     const matchedPath = resolveSourceNotePathForItem(item) ?? primarySourceNote?.path ?? null;
     const matchedNote = matchedPath
-      ? sourceNotesByPath.get(normalizeSourceNoteKey(matchedPath)) ?? primarySourceNote
+      ? getSourceNoteLookupCandidates(sourceNotesByPath, matchedPath)[0] ?? primarySourceNote
       : primarySourceNote;
 
     if (matchedNote) {
@@ -1097,6 +1259,7 @@ export function NotePage() {
           updatedItem,
           updatedBucket,
           sourceNotesByPath,
+          sourceNoteBlocksByPath,
           { allowLaterReset: true },
         );
       }
@@ -1579,7 +1742,7 @@ export function NotePage() {
       }
 
       const targetItem = noteItemsById.get(itemId);
-      const targetAliases = targetItem ? resolveSourceNoteBlockAliases(targetItem, sourceNotesByPath) : [];
+      const targetAliases = targetItem ? resolveSourceNoteBlockAliases(targetItem, sourceNotesByPath, sourceNoteBlocksByPath) : [];
       if (targetAliases.length > 0) {
         const replacementIndex = current.findIndex((entry) => {
           const currentItem = noteItemsById.get(entry.itemId);
@@ -1587,7 +1750,7 @@ export function NotePage() {
             return false;
           }
 
-          return resolveSourceNoteBlockAliases(currentItem, sourceNotesByPath).some((alias) => targetAliases.includes(alias));
+          return resolveSourceNoteBlockAliases(currentItem, sourceNotesByPath, sourceNoteBlocksByPath).some((alias) => targetAliases.includes(alias));
         });
 
         if (replacementIndex >= 0) {
@@ -1677,6 +1840,7 @@ export function NotePage() {
         updatedItem,
         outcome.result.notepad_item?.bucket ?? null,
         sourceNotesByPath,
+        sourceNoteBlocksByPath,
         { allowLaterReset: true },
       );
     }

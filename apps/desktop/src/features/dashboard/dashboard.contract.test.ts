@@ -6506,9 +6506,27 @@ test("note page no longer guesses source-note paths from duplicated titles", () 
 
   assert.match(notePageSource, /function resolveNoteItemSourceNotePath\(/);
   assert.match(notePageSource, /function buildSourceNotePathLookup\(sourceNotes: SourceNoteDocument\[\]\)/);
-  assert.match(notePageSource, /registerSourceNoteLookupKey\(lookup, conflictingKeys, `workspace\/\$\{relativePath\}`, note\);/);
+  assert.match(notePageSource, /registerSourceNoteLookupKey\(lookup, `workspace\/\$\{relativePath\}`, note\);/);
   assert.doesNotMatch(notePageSource, /sourceNotesByTitle\.get\(item\.item\.title/);
   assert.match(notePageSource, /return null;/);
+});
+
+test("note page disambiguates duplicated relative source-note paths within the same lookup key instead of dropping them", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /type SourceNotePathLookup = Map<string, SourceNoteDocument\[\]>;/);
+  assert.match(notePageSource, /function resolveAmbiguousSourceNoteCandidate\(/);
+  assert.match(notePageSource, /const candidates = getSourceNoteLookupCandidates\(lookup, key\);/);
+  assert.match(notePageSource, /return resolveAmbiguousSourceNoteCandidate\(item, candidates, sourceNoteBlocksByPath\) \?\? null;/);
+  assert.match(notePageSource, /const sourceNoteBlocksByPath = useMemo\(\s*\(\) => new Map\(sourceNotes\.map\(\(note\) => \[note\.path, parseSourceNoteEditorBlocks\(note\)\]\)\),/);
+});
+
+test("note page keeps scanning related resources after null source-path misses", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /\.map\(\(resource\) => resolveSourceNoteLookupMatch\(item, sourceNotesByPath, sourceNoteBlocksByPath, resource\.path\)\)/);
+  assert.match(notePageSource, /\.find\(\(note\): note is SourceNoteDocument => note !== null\)/);
+  assert.doesNotMatch(notePageSource, /\.find\(\(note\) => note !== undefined\)/);
 });
 
 test("note service no longer invents related resources from title keywords", () => {
@@ -7166,9 +7184,9 @@ test("note page deduplicates source-note fallback cards and canvas cards by sour
 
   assert.match(notePageSource, /function buildSourceNoteBlockAliases\(/);
   assert.match(notePageSource, /function resolveSourceNoteBlockAliases\(/);
-  assert.match(notePageSource, /resolveSourceNoteBlockAliases\(item, sourceNotesByPath\)\.forEach\(\(alias\) => \{/);
-  assert.match(notePageSource, /resolveSourceNoteBlockAliases\(item, sourceNotesByPath\)\.some\(\(alias\) => representedSourceNoteBlocks\.has\(alias\)\)/);
-  assert.match(notePageSource, /const targetAliases = targetItem \? resolveSourceNoteBlockAliases\(targetItem, sourceNotesByPath\) : \[\];/);
+  assert.match(notePageSource, /resolveSourceNoteBlockAliases\(item, sourceNotesByPath, sourceNoteBlocksByPath\)\.forEach\(\(alias\) => \{/);
+  assert.match(notePageSource, /resolveSourceNoteBlockAliases\(item, sourceNotesByPath, sourceNoteBlocksByPath\)\.some\(\(alias\) => representedSourceNoteBlocks\.has\(alias\)\)/);
+  assert.match(notePageSource, /const targetAliases = targetItem \? resolveSourceNoteBlockAliases\(targetItem, sourceNotesByPath, sourceNoteBlocksByPath\) : \[\];/);
   assert.match(notePageSource, /next\[replacementIndex\] = \{ \.\.\.next\[replacementIndex\], itemId \};/);
 });
 
@@ -7193,10 +7211,17 @@ test("note page keeps local source-note fallback cards off the rail buckets whil
   assert.match(notePageSource, /const laterItems = useMemo\([\s\S]*sortNotesByUrgency\(\[\.\.\.sourceFallbackItemsByBucket\.later, \.\.\.rpcLaterItems\]\)/);
   assert.match(notePageSource, /const recurringItems = useMemo\([\s\S]*sortNotesByUrgency\(\[\.\.\.sourceFallbackItemsByBucket\.recurring_rule, \.\.\.rpcRecurringItems\]\)/);
   assert.match(notePageSource, /const closedItems = useMemo\([\s\S]*sortClosedNotes\(\[\.\.\.sourceFallbackItemsByBucket\.closed, \.\.\.rpcClosedItems\]\)/);
+  assert.match(notePageSource, /function isNoteItemRepresentedOnCanvas\(/);
+  assert.match(notePageSource, /const canvasRepresentedSourceNoteBlocks = useMemo\(\(\) => \{/);
+  assert.match(notePageSource, /resolveSourceNoteBlockAliases\(item, sourceNotesByPath, sourceNoteBlocksByPath\)\.some\(\(alias\) => canvasRepresentedSourceNoteBlocks\.has\(alias\)\)/);
+  assert.match(notePageSource, /const visibleUpcomingItems = useMemo\([\s\S]*!isNoteItemRepresentedOnCanvas\(item, canvasItemIdSet, canvasRepresentedSourceNoteBlocks, sourceNotesByPath, sourceNoteBlocksByPath\)/);
   assert.match(notePageSource, /const railUpcomingItems = useMemo\(\(\) => visibleUpcomingItems\.filter\(\(item\) => !item\.sourceNote\?\.localOnly\), \[visibleUpcomingItems\]\);/);
   assert.match(notePageSource, /const formalLaterItems = useMemo\(\(\) => laterItems\.filter\(\(item\) => !item\.sourceNote\?\.localOnly\), \[laterItems\]\);/);
+  assert.match(notePageSource, /const visibleLaterItems = useMemo\([\s\S]*!isNoteItemRepresentedOnCanvas\(item, canvasItemIdSet, canvasRepresentedSourceNoteBlocks, sourceNotesByPath, sourceNoteBlocksByPath\)/);
   assert.match(notePageSource, /const railLaterItems = useMemo\(\(\) => visibleLaterItems\.filter\(\(item\) => !item\.sourceNote\?\.localOnly\), \[visibleLaterItems\]\);/);
+  assert.match(notePageSource, /const visibleRecurringItems = useMemo\([\s\S]*!isNoteItemRepresentedOnCanvas\(item, canvasItemIdSet, canvasRepresentedSourceNoteBlocks, sourceNotesByPath, sourceNoteBlocksByPath\)/);
   assert.match(notePageSource, /const railRecurringItems = useMemo\(\(\) => visibleRecurringItems\.filter\(\(item\) => !item\.sourceNote\?\.localOnly\), \[visibleRecurringItems\]\);/);
+  assert.match(notePageSource, /const visibleClosedItems = useMemo\([\s\S]*!isNoteItemRepresentedOnCanvas\(item, canvasItemIdSet, canvasRepresentedSourceNoteBlocks, sourceNotesByPath, sourceNoteBlocksByPath\)/);
   assert.match(notePageSource, /const railClosedItems = useMemo\(\(\) => visibleClosedItems\.filter\(\(item\) => !item\.sourceNote\?\.localOnly\), \[visibleClosedItems\]\);/);
   assert.match(notePageSource, /items=\{railUpcomingItems\}/);
   assert.match(notePageSource, /items=\{railLaterItems\}/);
@@ -7213,10 +7238,12 @@ test("note page keeps formal source-note buckets stable across inspection refres
   assert.match(notePageSource, /const rememberedFormalBucketByAliasRef = useRef\(new Map<string, NotePreviewGroupKey>\(\)\);/);
   assert.match(notePageSource, /const rawRpcItems = useMemo\(\s*\(\) => \[/);
   assert.match(notePageSource, /updateRememberedFormalBucketForItem\(\s*rememberedFormalBucketByAliasRef\.current,\s*item,\s*item\.item\.bucket,/);
-  assert.match(notePageSource, /applyRememberedFormalBucket\(\s*rememberedFormalBucketByAliasRef\.current,\s*item,/);
+  assert.match(notePageSource, /function resolveRememberedFormalBucket\(/);
+  assert.match(notePageSource, /const displayedBucket = resolveRememberedFormalBucket\(/);
   assert.match(notePageSource, /if \(nextBucket === "later"\) \{\s*if \(options\.allowLaterReset\) \{\s*rememberedBucketByAlias\.delete\(alias\);/);
   assert.match(notePageSource, /updateRememberedFormalBucketForItem\([\s\S]*allowLaterReset: true/);
-  assert.match(notePageSource, /nextGroups\[item\.item\.bucket\]\.push\(item\);/);
+  assert.match(notePageSource, /nextGroups\[displayedBucket\]\.push\(item\);/);
+  assert.doesNotMatch(notePageSource, /bucket:\s*rememberedBucketByAlias\.get\(rememberedBucket\)/);
 });
 
 test("note sidebar keeps single preview cards compact instead of stretching to fill the whole bucket", () => {
