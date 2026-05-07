@@ -706,6 +706,62 @@ func TestServerStartFencesReuseAfterTransportTimeout(t *testing.T) {
 	}
 }
 
+func TestServerStartRejectsConcurrentServeRun(t *testing.T) {
+	server := newTestServer()
+	server.transport = "named_pipe"
+	server.debugHTTPServer = nil
+
+	started := make(chan struct{}, 1)
+	listenerReleased := make(chan struct{})
+	server.serveNamedPipe = func(ctx context.Context, pipeName string, handler func(net.Conn)) error {
+		started <- struct{}{}
+		<-ctx.Done()
+		<-listenerReleased
+		return nil
+	}
+
+	firstStartErr := make(chan error, 1)
+	go func() {
+		firstStartErr <- server.Start(context.Background())
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected first serve run to start")
+	}
+
+	secondStartErr := make(chan error, 1)
+	go func() {
+		secondStartErr <- server.Start(context.Background())
+	}()
+
+	select {
+	case err := <-secondStartErr:
+		if !errors.Is(err, errServerAlreadyRunning) {
+			t.Fatalf("expected concurrent Start to be rejected, got %v", err)
+		}
+	case <-started:
+		t.Fatal("expected second Start to fail before opening another listener")
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected concurrent Start to return without blocking")
+	}
+
+	close(listenerReleased)
+	if err := server.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown first serve run: %v", err)
+	}
+
+	select {
+	case err := <-firstStartErr:
+		if err != nil {
+			t.Fatalf("expected first serve run to stop cleanly, got %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected first serve run to exit after shutdown")
+	}
+}
+
 func TestServerHelperUtilitiesCoverFallbackBranches(t *testing.T) {
 	server := newTestServer()
 	recorder := httptest.NewRecorder()
