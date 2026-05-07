@@ -12,6 +12,11 @@ import (
 // notifications can be emitted before the matching response, while buffered
 // task notifications are replayed on the same connection after the response.
 func (s *Server) handleStreamConn(conn net.Conn) {
+	if !s.registerStreamConn(conn) {
+		_ = conn.Close()
+		return
+	}
+	defer s.unregisterStreamConn(conn)
 	defer conn.Close()
 
 	decoder := json.NewDecoder(conn)
@@ -96,4 +101,27 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 			}
 		}
 	}
+}
+
+// registerStreamConn binds a named-pipe stream to the current server lifetime.
+// Once shutdown starts, new handlers refuse the connection so Start can finish
+// without leaking post-cancel stream loops.
+func (s *Server) registerStreamConn(conn net.Conn) bool {
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+
+	if s.shuttingDown {
+		return false
+	}
+
+	s.streamConns[conn] = struct{}{}
+	s.streamWG.Add(1)
+	return true
+}
+
+func (s *Server) unregisterStreamConn(conn net.Conn) {
+	s.streamMu.Lock()
+	delete(s.streamConns, conn)
+	s.streamMu.Unlock()
+	s.streamWG.Done()
 }

@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"sync"
 	"time"
@@ -41,17 +42,36 @@ func (s *Server) Start(ctx context.Context) error {
 	})
 }
 
-// Shutdown gracefully closes the debug HTTP server when it was configured.
+// Shutdown gracefully closes the debug HTTP server and terminates active stream
+// handlers so Start does not hand a half-stopped transport back to callers.
 func (s *Server) Shutdown(ctx context.Context) error {
+	var shutdownErr error
+
 	if s.debugHTTPServer == nil {
-		return nil
+	} else if err := s.debugHTTPServer.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		shutdownErr = err
 	}
 
-	if err := s.debugHTTPServer.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
+	conns := s.beginStreamShutdown()
+	for _, conn := range conns {
+		_ = conn.Close()
 	}
 
-	return nil
+	done := make(chan struct{})
+	go func() {
+		s.streamWG.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		return shutdownErr
+	case <-ctx.Done():
+		if shutdownErr != nil {
+			return shutdownErr
+		}
+		return ctx.Err()
+	}
 }
 
 // transportSupervisor owns the per-Start run context and joins all transport
@@ -111,4 +131,16 @@ func (s *transportSupervisor) Wait(shutdown func() error) error {
 		return transportErr
 	}
 	return shutdownErr
+}
+
+func (s *Server) beginStreamShutdown() []net.Conn {
+	s.streamMu.Lock()
+	defer s.streamMu.Unlock()
+
+	s.shuttingDown = true
+	conns := make([]net.Conn, 0, len(s.streamConns))
+	for conn := range s.streamConns {
+		conns = append(conns, conn)
+	}
+	return conns
 }

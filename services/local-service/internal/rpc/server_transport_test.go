@@ -389,6 +389,61 @@ func TestServerStartHandlesShutdownAndImmediateListenErrors(t *testing.T) {
 	}
 }
 
+func TestServerShutdownClosesActiveStreamHandlers(t *testing.T) {
+	server := newTestServer()
+	left, right := net.Pipe()
+	defer right.Close()
+
+	done := make(chan struct{})
+	go func() {
+		server.handleStreamConn(left)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for {
+		server.streamMu.Lock()
+		tracked := len(server.streamConns)
+		server.streamMu.Unlock()
+		if tracked == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("expected stream handler to register active connection")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := server.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown active stream handler: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected shutdown to wait for active stream handler exit")
+	}
+}
+
+func TestHandleStreamConnRejectsNewHandlersDuringShutdown(t *testing.T) {
+	server := newTestServer()
+	server.shuttingDown = true
+	left, right := net.Pipe()
+	defer right.Close()
+
+	done := make(chan struct{})
+	go func() {
+		server.handleStreamConn(left)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected handler to exit immediately once shutdown begins")
+	}
+}
+
 func TestTransportSupervisorCancelsShutdownAndJoinsWorkers(t *testing.T) {
 	transportErr := errors.New("listen failed")
 	supervisor := newTransportSupervisor(context.Background(), 2)
