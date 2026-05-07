@@ -19,6 +19,8 @@ import (
 const (
 	localServicePath = "services/local-service"
 	styleToolPath    = "scripts/ci/local-service-style"
+	goimportsTool    = "golang.org/x/tools/cmd/goimports"
+	goimportsRunCmd  = "go run " + goimportsTool
 )
 
 var hunkHeaderPattern = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
@@ -87,7 +89,7 @@ func checkGoimports(root, baseRef string) error {
 		return nil
 	}
 
-	args := []string{"run", "golang.org/x/tools/cmd/goimports@latest", "-l"}
+	args := []string{"run", goimportsTool, "-l"}
 	args = append(args, files...)
 	output, err := commandOutput(root, "go", args...)
 	if err != nil {
@@ -100,8 +102,9 @@ func checkGoimports(root, baseRef string) error {
 	}
 
 	return fmt.Errorf(
-		"goimports is required for:\n%s\nrun: go run golang.org/x/tools/cmd/goimports@latest -w %s %s",
+		"goimports is required for:\n%s\nrun: %s -w %s %s",
 		strings.Join(unformattedFiles, "\n"),
+		goimportsRunCmd,
 		localServicePath,
 		styleToolPath,
 	)
