@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import { buildDashboardTaskDetailRouteState } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
+import { navigateToDashboardResultPage } from "@/features/dashboard/shared/dashboardResultPageNavigation";
 import { resolveDashboardModuleRoutePath, resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { subscribeDeliveryReady, subscribeTaskRuntime, subscribeTaskUpdated } from "@/rpc/subscriptions";
 import { cn } from "@/utils/cn";
@@ -251,6 +252,14 @@ export function TaskDeliveryPage() {
         onOpenTaskDetail: ({ taskId: resolvedTaskId }) => {
           navigate(resolveDashboardModuleRoutePath("tasks"), {
             state: buildDashboardTaskDetailRouteState(resolvedTaskId),
+          });
+          return plan.feedback;
+        },
+        onOpenResultPage: ({ taskId: resolvedTaskId, url }) => {
+          navigateToDashboardResultPage(navigate, {
+            taskId: resolvedTaskId,
+            title: result.delivery_result.title,
+            url,
           });
           return plan.feedback;
         },

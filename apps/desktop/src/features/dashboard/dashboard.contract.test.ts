@@ -6375,10 +6375,12 @@ test("task workspace routes formal delivery through a dedicated page and keeps l
   assert.match(taskDeliverySource, /mergedArtifacts\.push\(artifact\);/);
   assert.doesNotMatch(taskDeliverySource, /const artifactItems = artifactListQuery\.data\?\.items \?\? detailData\?\.detail\.artifacts \?\? \[\];/);
   assert.match(taskDeliverySource, /buildDashboardTaskDetailRouteState/);
+  assert.match(taskDeliverySource, /navigateToDashboardResultPage/);
   assert.match(taskDeliverySource, /isAllowedTaskOpenUrl/);
   assert.match(taskDeliverySource, /formalDeliveryUrlIsAllowed/);
   assert.doesNotMatch(taskDeliverySource, /href=\{formalDeliveryResult\.payload\.url\}/);
   assert.match(taskDeliverySource, /当前正式结果已经在交付页中展示/);
+  assert.match(taskDeliverySource, /onOpenResultPage:/);
 
   assert.doesNotMatch(taskDetailSource, /当前协议尚未提供稳定的 artifact\.open 能力/);
   assert.match(taskDetailSource, /onOpenArtifact/);
