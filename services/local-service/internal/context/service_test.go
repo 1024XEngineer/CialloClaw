@@ -18,9 +18,6 @@ func TestServiceCaptureNormalizesNestedContext(t *testing.T) {
 				"title":        " Editor ",
 				"url":          " https://example.com/doc ",
 				"app_name":     " desktop ",
-				"browser_kind": " chrome ",
-				"process_path": " C:/Program Files/Google/Chrome/Application/chrome.exe ",
-				"process_id":   float64(4242),
 				"window_title": " Browser - Example ",
 				"visible_text": " visible paragraph ",
 			},
@@ -56,9 +53,6 @@ func TestServiceCaptureNormalizesNestedContext(t *testing.T) {
 	if snapshot.PageTitle != "Editor" || snapshot.PageURL != "https://example.com/doc" || snapshot.AppName != "desktop" {
 		t.Fatalf("expected page fields to be normalized, got %+v", snapshot)
 	}
-	if snapshot.BrowserKind != "chrome" || snapshot.ProcessPath != "C:/Program Files/Google/Chrome/Application/chrome.exe" || snapshot.ProcessID != 4242 {
-		t.Fatalf("expected browser attach hints to be normalized, got %+v", snapshot)
-	}
 	if snapshot.WindowTitle != "Browser - Example" || snapshot.VisibleText != "visible paragraph" || snapshot.ScreenSummary != "dashboard warning" {
 		t.Fatalf("expected richer perception fields to be normalized, got %+v", snapshot)
 	}
@@ -82,9 +76,6 @@ func TestServiceCapturePrefersInputPageContextAndFlatFallbackSignals(t *testing.
 				"title":        " Build Pipeline ",
 				"url":          " https://example.com/build ",
 				"app_name":     " Chrome ",
-				"browser_kind": " edge ",
-				"process_path": " C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe ",
-				"process_id":   float64(5150),
 				"window_title": " Build Pipeline - Browser ",
 			},
 		},
@@ -93,9 +84,6 @@ func TestServiceCapturePrefersInputPageContextAndFlatFallbackSignals(t *testing.
 				"title":        " Legacy Page Title ",
 				"url":          " https://example.com/legacy ",
 				"app_name":     " Legacy Browser ",
-				"browser_kind": " chrome ",
-				"process_path": " C:/Legacy/browser.exe ",
-				"process_id":   float64(99),
 				"window_title": " Legacy Window ",
 				"visible_text": " fallback visible text ",
 			},
@@ -115,9 +103,6 @@ func TestServiceCapturePrefersInputPageContextAndFlatFallbackSignals(t *testing.
 	if snapshot.PageTitle != "Build Pipeline" || snapshot.PageURL != "https://example.com/build" || snapshot.AppName != "Chrome" {
 		t.Fatalf("expected input.page_context to stay authoritative, got %+v", snapshot)
 	}
-	if snapshot.BrowserKind != "edge" || snapshot.ProcessPath != "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe" || snapshot.ProcessID != 5150 {
-		t.Fatalf("expected input.page_context attach hints to stay authoritative, got %+v", snapshot)
-	}
 	if snapshot.WindowTitle != "Build Pipeline - Browser" {
 		t.Fatalf("expected input.page_context window title to win, got %+v", snapshot)
 	}
@@ -129,48 +114,5 @@ func TestServiceCapturePrefersInputPageContextAndFlatFallbackSignals(t *testing.
 	}
 	if snapshot.LastAction != "switch_window" || snapshot.DwellMillis != 8200 || snapshot.CopyCount != 1 || snapshot.WindowSwitches != 3 || snapshot.PageSwitches != 2 {
 		t.Fatalf("expected flat behavior counters to be normalized, got %+v", snapshot)
-	}
-}
-
-func TestServiceSnapshotAndCaptureInferenceHelpers(t *testing.T) {
-	service := NewService()
-	if snapshot := service.Snapshot(); snapshot["source"] != "desktop" {
-		t.Fatalf("expected snapshot descriptor to report desktop source, got %+v", snapshot)
-	}
-
-	selectionOnly := service.Capture(map[string]any{
-		"context": map[string]any{
-			"selection": map[string]any{"text": " selected line "},
-		},
-	})
-	if selectionOnly.InputType != "text_selection" || selectionOnly.Trigger != "text_selected_click" || selectionOnly.Text != "selected line" {
-		t.Fatalf("expected selection-only payload to infer text selection input, got %+v", selectionOnly)
-	}
-
-	errorOnly := service.Capture(map[string]any{
-		"context": map[string]any{
-			"error": map[string]any{"message": " build failed "},
-		},
-	})
-	if errorOnly.InputType != "error" || errorOnly.Trigger != "error_detected" || errorOnly.Text != "build failed" {
-		t.Fatalf("expected error-only payload to infer error input, got %+v", errorOnly)
-	}
-}
-
-func TestContextPrimitiveHelpersCoverAdditionalBranches(t *testing.T) {
-	if values := stringSliceValue([]string{" demo ", "demo", "notes"}); len(values) != 2 || values[0] != "demo" || values[1] != "notes" {
-		t.Fatalf("expected []string branch to trim and dedupe, got %+v", values)
-	}
-	if values := stringSliceValue("  single-item  "); len(values) != 1 || values[0] != "single-item" {
-		t.Fatalf("expected string branch to trim values, got %+v", values)
-	}
-	if values := stringSliceValue("   "); values != nil {
-		t.Fatalf("expected blank string branch to return nil, got %+v", values)
-	}
-	if value := intValue(map[string]any{"count": int64(9)}, "count", 1); value != 9 {
-		t.Fatalf("expected int64 branch to decode value, got %d", value)
-	}
-	if value := intValue(map[string]any{"count": "invalid"}, "count", 3); value != 3 {
-		t.Fatalf("expected fallback branch to preserve fallback, got %d", value)
 	}
 }

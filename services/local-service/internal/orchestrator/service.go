@@ -3714,15 +3714,6 @@ func snapshotWithMissingAnchors(selected, fallback contextsvc.TaskContextSnapsho
 	if strings.TrimSpace(merged.AppName) == "" {
 		merged.AppName = fallback.AppName
 	}
-	if strings.TrimSpace(merged.BrowserKind) == "" {
-		merged.BrowserKind = fallback.BrowserKind
-	}
-	if strings.TrimSpace(merged.ProcessPath) == "" {
-		merged.ProcessPath = fallback.ProcessPath
-	}
-	if merged.ProcessID == 0 {
-		merged.ProcessID = fallback.ProcessID
-	}
 	if strings.TrimSpace(merged.WindowTitle) == "" {
 		merged.WindowTitle = fallback.WindowTitle
 	}
@@ -6560,9 +6551,6 @@ func isEmptySnapshot(snapshot contextsvc.TaskContextSnapshot) bool {
 		strings.TrimSpace(snapshot.PageTitle) == "" &&
 		strings.TrimSpace(snapshot.PageURL) == "" &&
 		strings.TrimSpace(snapshot.AppName) == "" &&
-		strings.TrimSpace(snapshot.BrowserKind) == "" &&
-		strings.TrimSpace(snapshot.ProcessPath) == "" &&
-		snapshot.ProcessID == 0 &&
 		strings.TrimSpace(snapshot.WindowTitle) == "" &&
 		strings.TrimSpace(snapshot.VisibleText) == "" &&
 		strings.TrimSpace(snapshot.ScreenSummary) == "" &&
