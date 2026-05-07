@@ -8,7 +8,7 @@
     "dev:service": "go run ./services/local-service/cmd/server",
     "lint": "pnpm --dir apps/desktop lint",
     "lint:fix": "pnpm --dir apps/desktop lint:fix",
-    "lint:service": "go run ./scripts/ci/local-service-style && go vet ./services/local-service/... && go run honnef.co/go/tools/cmd/staticcheck@latest ./services/local-service/...",
+    "lint:service": "go run ./scripts/ci/local-service-style && go vet ./services/local-service/... && go run honnef.co/go/tools/cmd/staticcheck ./services/local-service/...",
     "test:service": "go test ./services/local-service/...",
     "typecheck": "pnpm --dir apps/desktop typecheck"
   }
