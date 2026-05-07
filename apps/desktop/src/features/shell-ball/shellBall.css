@@ -140,13 +140,26 @@ body[data-app-window="shell-ball"],
 }
 
 .shell-ball-surface[data-floating-ball-size="medium"] {
+  --shell-ball-size-multiplier: 1.5;
+  --shell-ball-mascot-scale: 0.99;
+}
+
+.shell-ball-surface[data-floating-ball-size="large"] {
   --shell-ball-size-multiplier: 2;
   --shell-ball-mascot-scale: 1.32;
 }
 
-.shell-ball-surface[data-floating-ball-size="large"] {
-  --shell-ball-size-multiplier: 3;
-  --shell-ball-mascot-scale: 1.98;
+.shell-ball-mascot[data-floating-ball-size="small"],
+.shell-ball-mascot[data-floating-ball-size="small"] {
+  --shell-ball-mascot-scale: 0.66;
+}
+
+.shell-ball-mascot[data-floating-ball-size="medium"] {
+  --shell-ball-mascot-scale: 0.99;
+}
+
+.shell-ball-mascot[data-floating-ball-size="large"] {
+  --shell-ball-mascot-scale: 1.32;
 }
 
 .shell-ball-surface[data-dashboard-transition-phase="opening"],

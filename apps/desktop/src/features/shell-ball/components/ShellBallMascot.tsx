@@ -12,6 +12,7 @@ type ShellBallMascotProps = {
   dockTarget?: ShellBallEdgeDockSide | null;
   edgeDockRevealed?: boolean;
   edgeDockSide?: ShellBallEdgeDockSide | null;
+  floatingBallSize?: "small" | "medium" | "large";
   hasAlertOpportunity?: boolean;
   hasPendingAgentLoading?: boolean;
   hasPendingApproval?: boolean;
@@ -236,6 +237,7 @@ export function ShellBallMascot({
   dockTarget = null,
   edgeDockRevealed = false,
   edgeDockSide = null,
+  floatingBallSize,
   hasAlertOpportunity = false,
   hasPendingAgentLoading = false,
   hasPendingApproval = false,
@@ -495,6 +497,7 @@ export function ShellBallMascot({
       data-dock-target={dockTarget ?? "none"}
       data-edge-dock-revealed={edgeDockRevealed ? "true" : "false"}
       data-edge-dock-side={edgeDockSide ?? "none"}
+      data-floating-ball-size={floatingBallSize}
       data-shell-ball-dragging={isDragging ? "true" : "false"}
       data-shell-ball-settling={isSettling ? "true" : "false"}
       data-tone={motionConfig.accentTone}
