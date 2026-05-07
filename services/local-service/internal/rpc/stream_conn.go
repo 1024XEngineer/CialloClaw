@@ -17,6 +17,11 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 	decoder := json.NewDecoder(conn)
 	encoder := json.NewEncoder(conn)
 	var writeMu sync.Mutex
+	writeEnvelope := func(envelope any) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		return encoder.Encode(envelope)
+	}
 
 	for {
 		var request requestEnvelope
@@ -25,7 +30,7 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 				return
 			}
 
-			_ = encoder.Encode(newErrorEnvelope(nil, &rpcError{
+			_ = writeEnvelope(newErrorEnvelope(nil, &rpcError{
 				Code:    errInvalidParams,
 				Message: "INVALID_PARAMS",
 				Detail:  "invalid json-rpc payload",
@@ -46,9 +51,7 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 					return
 				}
 				reservationKey := tracker.reserveStreamedRuntime(method, notificationTaskID, params)
-				writeMu.Lock()
-				err := encoder.Encode(newNotificationEnvelope(method, params))
-				writeMu.Unlock()
+				err := writeEnvelope(newNotificationEnvelope(method, params))
 				if err != nil {
 					tracker.releaseStreamedRuntimeReservation(reservationKey)
 				}
@@ -69,9 +72,7 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 		unsubscribeTaskStart()
 		unsubscribeRuntime()
 
-		writeMu.Lock()
-		err := encoder.Encode(response)
-		writeMu.Unlock()
+		err := writeEnvelope(response)
 		if err != nil {
 			return
 		}
@@ -88,9 +89,7 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 				if tracker.shouldSkipBufferedRuntime(method, taskID, params) {
 					continue
 				}
-				writeMu.Lock()
-				err := encoder.Encode(newNotificationEnvelope(method, params))
-				writeMu.Unlock()
+				err := writeEnvelope(newNotificationEnvelope(method, params))
 				if err != nil {
 					return
 				}
