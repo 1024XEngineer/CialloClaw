@@ -49,6 +49,7 @@ import { NoteEmptyState } from "./components/NoteEmptyState";
 import { NotePreviewCard } from "./components/NotePreviewCard";
 import { NotePreviewSection } from "./components/NotePreviewSection";
 import { SourceNoteStudio } from "./components/SourceNoteStudio";
+import { loadStoredValue, removeStoredValue, saveStoredValue } from "@/platform/storage";
 import "./notePage.css";
 
 type NoteCanvasCard = {
@@ -64,6 +65,12 @@ type NoteDrawerDragPreview = {
   width: number;
   x: number;
   y: number;
+};
+
+type PersistedNoteBoardState = {
+  boardSeeded: boolean;
+  canvasCards: NoteCanvasCard[];
+  overdueAutoReturnedKeys: string[];
 };
 
 type PendingCreatedSourceNote = {
@@ -84,12 +91,53 @@ const NOTE_CANVAS_CARD_WIDTH = 360;
 const NOTE_CANVAS_CARD_HEIGHT = 280;
 const NOTE_CANVAS_GRID_SIZE = 28;
 const SOURCE_NOTE_INDEX_POLL_INTERVAL_MS = 2_500;
+const NOTE_BOARD_STORAGE_KEY = "cialloclaw.dashboard.notes.board";
 const NOTE_CANVAS_SEED_POSITIONS = [
   { x: 56, y: 48 },
   { x: 448, y: 56 },
   { x: 840, y: 84 },
   { x: 280, y: 320 },
 ];
+
+function isPersistedNoteCanvasCard(value: unknown): value is NoteCanvasCard {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const itemId = Reflect.get(value, "itemId");
+  const x = Reflect.get(value, "x");
+  const y = Reflect.get(value, "y");
+  const zIndex = Reflect.get(value, "zIndex");
+
+  return typeof itemId === "string"
+    && Number.isFinite(x)
+    && Number.isFinite(y)
+    && Number.isFinite(zIndex);
+}
+
+function loadPersistedNoteBoardState(): PersistedNoteBoardState | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const storedState = loadStoredValue<PersistedNoteBoardState>(NOTE_BOARD_STORAGE_KEY);
+    if (!storedState) {
+      return null;
+    }
+
+    return {
+      boardSeeded: storedState.boardSeeded === true,
+      canvasCards: Array.isArray(storedState.canvasCards) ? storedState.canvasCards.filter(isPersistedNoteCanvasCard) : [],
+      overdueAutoReturnedKeys: Array.isArray(storedState.overdueAutoReturnedKeys)
+        ? storedState.overdueAutoReturnedKeys.filter((value): value is string => typeof value === "string" && value.length > 0)
+        : [],
+    };
+  } catch {
+    removeStoredValue(NOTE_BOARD_STORAGE_KEY);
+    return null;
+  }
+}
 
 function snapCanvasCoordinate(value: number, max: number) {
   return Math.min(max, Math.max(0, Math.round(value / NOTE_CANVAS_GRID_SIZE) * NOTE_CANVAS_GRID_SIZE));
@@ -669,6 +717,7 @@ function resolveRememberedFormalBucket(
 export function NotePage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const persistedBoardStateRef = useRef<PersistedNoteBoardState | null>(loadPersistedNoteBoardState());
   const boardLayerRef = useRef<HTMLDivElement | null>(null);
   const railRef = useRef<HTMLElement | null>(null);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
@@ -677,7 +726,8 @@ export function NotePage() {
   const [expandedBucket, setExpandedBucket] = useState<NotePreviewGroupKey>("upcoming");
   const [showMoreClosed, setShowMoreClosed] = useState(false);
   const [canvasCards, setCanvasCards] = useState<NoteCanvasCard[]>([]);
-  const [boardSeeded, setBoardSeeded] = useState(false);
+  const [boardSeeded, setBoardSeeded] = useState(() => persistedBoardStateRef.current?.boardSeeded ?? false);
+  const [boardStateHydrated, setBoardStateHydrated] = useState(() => persistedBoardStateRef.current === null);
   const [isBoardDropTarget, setIsBoardDropTarget] = useState(false);
   const [isRailDropTarget, setIsRailDropTarget] = useState(false);
   const [activeRailDropBucket, setActiveRailDropBucket] = useState<NotePreviewGroupKey | null>(null);
@@ -704,6 +754,7 @@ export function NotePage() {
   const [noteScheduleRepeatRule, setNoteScheduleRepeatRule] = useState("");
   const [isSavingNoteSchedule, setIsSavingNoteSchedule] = useState(false);
   const [isRunningInspection, setIsRunningInspection] = useState(false);
+  const [overdueCanvasAutoReturnedKeysVersion, setOverdueCanvasAutoReturnedKeysVersion] = useState(0);
   const feedbackTimeoutRef = useRef<number | null>(null);
   const rememberedFormalBucketByAliasRef = useRef(new Map<string, NotePreviewGroupKey>());
   const overdueCanvasAutoReturnedKeysRef = useRef(new Set<string>());
@@ -813,6 +864,7 @@ export function NotePage() {
   const sourceNotesData = sourceNotesQuery.data?.notes;
   const sourceNoteIndexData = sourceNoteIndexQuery.data?.notes;
   const sourceRootsData = sourceNotesQuery.data?.sourceRoots;
+  const noteBucketsResolved = !upcomingQuery.isPending && !laterQuery.isPending && !recurringQuery.isPending && !closedQuery.isPending;
   const sourceNotes = useMemo(() => sourceNotesData ?? [], [sourceNotesData]);
   const resolvedSourceRoots = useMemo(() => sourceRootsData ?? taskSourceRoots, [sourceRootsData, taskSourceRoots]);
   const sourceNotesByPath = useMemo(() => buildSourceNotePathLookup(sourceNotes), [sourceNotes]);
@@ -841,6 +893,31 @@ export function NotePage() {
     });
   }, [rawRpcItems, sourceNoteBlocksByPath, sourceNotesByPath]);
   useEffect(() => {
+    if (boardStateHydrated || !boardLayerSize || !noteBucketsResolved) {
+      return;
+    }
+
+    const persistedBoardState = persistedBoardStateRef.current;
+    if (!persistedBoardState) {
+      setBoardStateHydrated(true);
+      return;
+    }
+
+    overdueCanvasAutoReturnedKeysRef.current = new Set(persistedBoardState.overdueAutoReturnedKeys);
+    setCanvasCards(
+      persistedBoardState.canvasCards.map((entry) => ({
+        ...entry,
+        ...clampCanvasPlacement({ x: entry.x, y: entry.y }, boardLayerSize),
+      })),
+    );
+    setBoardSeeded(persistedBoardState.boardSeeded);
+    setBoardStateHydrated(true);
+  }, [boardLayerSize, boardStateHydrated, noteBucketsResolved]);
+  useEffect(() => {
+    if (!boardStateHydrated) {
+      return;
+    }
+
     const activeOverdueKeys = new Set<string>();
 
     rawRpcItems.forEach((item) => {
@@ -855,13 +932,10 @@ export function NotePage() {
         resolveOverdueCanvasAutoReturnKeys(item, sourceNotesByPath, sourceNoteBlocksByPath).forEach((key) => activeOverdueKeys.add(key));
       }
     });
-
-    overdueCanvasAutoReturnedKeysRef.current.forEach((key) => {
-      if (!activeOverdueKeys.has(key)) {
-        overdueCanvasAutoReturnedKeysRef.current.delete(key);
-      }
-    });
-  }, [rawRpcItems, sourceNoteBlocksByPath, sourceNotesByPath]);
+    replaceOverdueCanvasAutoReturnedKeys(
+      [...overdueCanvasAutoReturnedKeysRef.current].filter((key) => activeOverdueKeys.has(key)),
+    );
+  }, [boardStateHydrated, rawRpcItems, sourceNoteBlocksByPath, sourceNotesByPath]);
   const displayRpcItems = useMemo(
     () => rawRpcItems.map((item) => applySourceNoteDisplayOverrides(item, sourceNotesByPath, sourceNoteBlocksByPath)),
     [rawRpcItems, sourceNoteBlocksByPath, sourceNotesByPath],
@@ -1980,7 +2054,7 @@ export function NotePage() {
   }, []);
 
   useEffect(() => {
-    if (boardSeeded || defaultBoardItemIds.length === 0 || !boardLayerSize) {
+    if (!boardStateHydrated || boardSeeded || defaultBoardItemIds.length === 0 || !boardLayerSize) {
       return;
     }
 
@@ -1998,7 +2072,7 @@ export function NotePage() {
       })),
     );
     setBoardSeeded(true);
-  }, [boardLayerSize, boardSeeded, defaultBoardItemIds]);
+  }, [boardLayerSize, boardSeeded, boardStateHydrated, defaultBoardItemIds]);
 
   useEffect(() => {
     // Keep the canvas purely local to this page. Once a card is placed, detail
@@ -2038,7 +2112,7 @@ export function NotePage() {
           if (railBucket !== displayedBucket && autoReturnKeys.some((key) => !overdueCanvasAutoReturnedKeysRef.current.has(key))) {
             changed = true;
             removedForRailBucket = true;
-            autoReturnKeys.forEach((key) => overdueCanvasAutoReturnedKeysRef.current.add(key));
+            addOverdueCanvasAutoReturnedKeys(autoReturnKeys);
             return;
           }
 
@@ -2114,6 +2188,22 @@ export function NotePage() {
       return changed ? next : current;
     });
   }, [boardLayerSize]);
+  useEffect(() => {
+    if (!boardStateHydrated) {
+      return;
+    }
+
+    if (!boardSeeded && canvasCards.length === 0 && overdueCanvasAutoReturnedKeysRef.current.size === 0) {
+      removeStoredValue(NOTE_BOARD_STORAGE_KEY);
+      return;
+    }
+
+    saveStoredValue<PersistedNoteBoardState>(NOTE_BOARD_STORAGE_KEY, {
+      boardSeeded,
+      canvasCards,
+      overdueAutoReturnedKeys: [...overdueCanvasAutoReturnedKeysRef.current],
+    });
+  }, [boardSeeded, boardStateHydrated, canvasCards, overdueCanvasAutoReturnedKeysVersion]);
 
   function openNoteDetail(itemId: string) {
     setSelectedItemId(itemId);
@@ -2136,9 +2226,7 @@ export function NotePage() {
         ) ?? targetItem.item.bucket;
         const railBucket = resolveRailBucketForItem(targetItem, displayedBucket);
         if (railBucket !== displayedBucket) {
-          resolveOverdueCanvasAutoReturnKeys(targetItem, sourceNotesByPath, sourceNoteBlocksByPath).forEach((key) => {
-            overdueCanvasAutoReturnedKeysRef.current.add(key);
-          });
+          addOverdueCanvasAutoReturnedKeys(resolveOverdueCanvasAutoReturnKeys(targetItem, sourceNotesByPath, sourceNoteBlocksByPath));
         }
       }
 
@@ -2173,6 +2261,35 @@ export function NotePage() {
     });
   }
   pinNoteToCanvasRef.current = pinNoteToCanvas;
+
+  function replaceOverdueCanvasAutoReturnedKeys(keys: Iterable<string>) {
+    const nextKeys = new Set(keys);
+    const currentKeys = overdueCanvasAutoReturnedKeysRef.current;
+    if (currentKeys.size === nextKeys.size && [...nextKeys].every((key) => currentKeys.has(key))) {
+      return;
+    }
+
+    overdueCanvasAutoReturnedKeysRef.current = nextKeys;
+    setOverdueCanvasAutoReturnedKeysVersion((current) => current + 1);
+  }
+
+  function addOverdueCanvasAutoReturnedKeys(keys: Iterable<string>) {
+    const nextKeys = new Set(overdueCanvasAutoReturnedKeysRef.current);
+    let changed = false;
+
+    Array.from(keys).forEach((key) => {
+      if (!nextKeys.has(key)) {
+        nextKeys.add(key);
+        changed = true;
+      }
+    });
+
+    if (!changed) {
+      return;
+    }
+
+    overdueCanvasAutoReturnedKeysRef.current = nextKeys;
+  }
 
   useEffect(() => {
     const pendingSourceNote = pendingCreatedSourceNoteRef.current;

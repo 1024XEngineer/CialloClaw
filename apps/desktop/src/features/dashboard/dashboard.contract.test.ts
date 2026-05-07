@@ -7401,6 +7401,19 @@ test("note page files overdue upcoming notes into the closed sidebar bucket with
   assert.match(notePageSource, /if \(!removedForRailBucket && next\.length === 0 && current\.length > 0 && defaultBoardItemIds\.length > 0 && boardBounds\) \{/);
 });
 
+test("note page persists local board layout and overdue auto-return markers across refreshes", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /import \{ loadStoredValue, removeStoredValue, saveStoredValue \} from "@\/platform\/storage";/);
+  assert.match(notePageSource, /const NOTE_BOARD_STORAGE_KEY = "cialloclaw\.dashboard\.notes\.board";/);
+  assert.match(notePageSource, /const persistedBoardStateRef = useRef<PersistedNoteBoardState \| null>\(loadPersistedNoteBoardState\(\)\);/);
+  assert.match(notePageSource, /const \[boardStateHydrated, setBoardStateHydrated\] = useState\(\(\) => persistedBoardStateRef\.current === null\);/);
+  assert.match(notePageSource, /if \(boardStateHydrated \|\| !boardLayerSize \|\| !noteBucketsResolved\) \{/);
+  assert.match(notePageSource, /saveStoredValue<PersistedNoteBoardState>\(NOTE_BOARD_STORAGE_KEY, \{/);
+  assert.match(notePageSource, /overdueAutoReturnedKeys: \[\.\.\.overdueCanvasAutoReturnedKeysRef\.current\],/);
+  assert.match(notePageSource, /removeStoredValue\(NOTE_BOARD_STORAGE_KEY\);/);
+});
+
 test("note preview stacks assign increasing sidebar z-order so later cards cover earlier cards", () => {
   const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
   const notePreviewSectionSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NotePreviewSection.tsx"), "utf8");
