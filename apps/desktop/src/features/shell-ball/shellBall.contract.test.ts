@@ -40,6 +40,7 @@ import {
   normalizeShellBallFloatingSize,
   resolveShellBallInlineInputMode,
   ShellBallApp,
+  shouldRetainShellBallEdgeDockReveal,
   shouldArmShellBallTextDropTarget,
   shouldShowShellBallFileDropOverlay,
   shouldShowShellBallSelectionIndicator,
@@ -4226,6 +4227,20 @@ test("shell-ball mascot pet mapping keeps happy as a local override and voice lo
 test("shell-ball mascot exposes edge and corner posture states", () => {
   const mascotSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallMascot.tsx"), "utf8");
   const shellBallStyles = readFileSync(resolve(desktopRoot, "src/features/shell-ball/shellBall.css"), "utf8");
+  const leftMarkup = renderToStaticMarkup(
+    createElement(ShellBallMascot, {
+      visualState: "idle",
+      edgeDockSide: "left",
+      motionConfig: getShellBallMotionConfig("idle"),
+    }),
+  );
+  const rightMarkup = renderToStaticMarkup(
+    createElement(ShellBallMascot, {
+      visualState: "idle",
+      edgeDockSide: "right",
+      motionConfig: getShellBallMotionConfig("idle"),
+    }),
+  );
   const topMarkup = renderToStaticMarkup(
     createElement(ShellBallMascot, {
       visualState: "idle",
@@ -4275,6 +4290,8 @@ test("shell-ball mascot exposes edge and corner posture states", () => {
     }),
   );
 
+  assert.match(leftMarkup, /rotate\(8deg\)/);
+  assert.match(rightMarkup, /rotate\(-8deg\)/);
   assert.match(topMarkup, /data-edge-dock-side="top"/);
   assert.match(bottomMarkup, /data-edge-dock-side="bottom"/);
   assert.match(topLeftMarkup, /data-edge-dock-side="top_left"/);
@@ -4294,6 +4311,43 @@ test("shell-ball mascot exposes edge and corner posture states", () => {
   assert.match(shellBallStyles, /\.shell-ball-mascot__visual \{/);
   assert.match(shellBallStyles, /\.shell-ball-mascot__pet-shell \{/);
   assert.match(shellBallStyles, /\.shell-ball-mascot__pet \{/);
+});
+
+test("shell-ball edge-dock reveal keeps the orb open while the pointer hugs the parked edge", () => {
+  const bounds = {
+    minX: 0,
+    minY: 0,
+    maxX: 1920,
+    maxY: 1080,
+  };
+
+  assert.equal(
+    shouldRetainShellBallEdgeDockReveal({
+      bounds,
+      edgeDockSide: "left",
+      screenX: 8,
+      screenY: 420,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldRetainShellBallEdgeDockReveal({
+      bounds,
+      edgeDockSide: "right",
+      screenX: 1914,
+      screenY: 420,
+    }),
+    true,
+  );
+  assert.equal(
+    shouldRetainShellBallEdgeDockReveal({
+      bounds,
+      edgeDockSide: "left",
+      screenX: 48,
+      screenY: 420,
+    }),
+    false,
+  );
 });
 
 test("shell-ball release preview recomputes from the final pointer position", () => {

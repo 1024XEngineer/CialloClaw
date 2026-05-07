@@ -26,8 +26,8 @@ type ShellBallMascotProps = {
   motionConfig: ShellBallMotionConfig;
   onPrimaryClick?: () => void;
   onDoubleClick?: () => void;
-  onHotspotEnter?: () => void;
-  onHotspotLeave?: () => void;
+  onHotspotEnter?: (event: PointerEvent<HTMLButtonElement>) => void;
+  onHotspotLeave?: (event: PointerEvent<HTMLButtonElement>) => void;
   onHotspotDragStart?: (event: PointerEvent<HTMLButtonElement>) => void;
   onHotspotDragMove?: (event: PointerEvent<HTMLButtonElement>) => void;
   onHotspotDragEnd?: (event: PointerEvent<HTMLButtonElement>) => void;
@@ -192,13 +192,16 @@ function resolveShellBallDockStyle(input: {
 
   let shiftX = 0;
   let shiftY = 0;
+  let tiltDeg = 0;
 
   switch (input.edgeDockSide) {
     case "left":
       shiftX = input.edgeDockRevealed ? 2 : 6;
+      tiltDeg = input.edgeDockRevealed ? 5 : 8;
       break;
     case "right":
       shiftX = input.edgeDockRevealed ? -2 : -6;
+      tiltDeg = input.edgeDockRevealed ? -5 : -8;
       break;
     case "top":
       shiftY = input.edgeDockRevealed ? 0 : -8;
@@ -206,18 +209,22 @@ function resolveShellBallDockStyle(input: {
     case "top_left":
       shiftX = input.edgeDockRevealed ? 1 : 5;
       shiftY = input.edgeDockRevealed ? 0 : -8;
+      tiltDeg = input.edgeDockRevealed ? 4 : 7;
       break;
     case "top_right":
       shiftX = input.edgeDockRevealed ? -1 : -5;
       shiftY = input.edgeDockRevealed ? 0 : -8;
+      tiltDeg = input.edgeDockRevealed ? -4 : -7;
       break;
     case "bottom_left":
       shiftX = input.edgeDockRevealed ? 1 : 4;
       shiftY = input.edgeDockRevealed ? 0 : 4;
+      tiltDeg = input.edgeDockRevealed ? 4 : 6;
       break;
     case "bottom_right":
       shiftX = input.edgeDockRevealed ? -1 : -4;
       shiftY = input.edgeDockRevealed ? 0 : 4;
+      tiltDeg = input.edgeDockRevealed ? -4 : -6;
       break;
     default:
       shiftY = input.edgeDockRevealed ? 0 : 4;
@@ -229,7 +236,7 @@ function resolveShellBallDockStyle(input: {
   }
 
   return {
-    transform: `translate(${shiftX}px, ${shiftY}px)`,
+    transform: `translate(${shiftX}px, ${shiftY}px) rotate(${tiltDeg}deg)`,
   };
 }
 

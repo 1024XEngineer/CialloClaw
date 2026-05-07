@@ -18,7 +18,7 @@ import { useShellBallInteraction } from "./useShellBallInteraction";
 import { getShellBallMotionConfig } from "./shellBall.motion";
 import type { ShellBallInputBarMode, ShellBallVisualState } from "./shellBall.types";
 import { useShellBallCoordinator } from "./useShellBallCoordinator";
-import { useShellBallWindowMetrics } from "./useShellBallWindowMetrics";
+import { useShellBallWindowMetrics, type ShellBallEdgeDockSide } from "./useShellBallWindowMetrics";
 import {
   getShellBallVisibleBubbleItems,
   shellBallWindowSyncEvents,
@@ -60,11 +60,19 @@ type ShellBallWindowAnchor = {
 };
 
 type ShellBallFloatingSize = "small" | "medium" | "large";
+type ShellBallEdgeDockRevealBounds = {
+  maxX: number;
+  maxY: number;
+  minX: number;
+  minY: number;
+};
 
 const SHELL_BALL_DASHBOARD_TRANSITION_DURATION_MS = 260;
 const SHELL_BALL_SELECTION_PROMPT_CLEAR_DELAY_MS = 240;
 const SHELL_BALL_SELECTION_PROMPT_WINDOW_MS = 10_000;
 const SHELL_BALL_CLIPBOARD_PROMPT_WINDOW_MS = 10_000;
+const SHELL_BALL_EDGE_DOCK_REVEAL_GUARD_PX = 16;
+const SHELL_BALL_EDGE_DOCK_REVEAL_HIDE_DELAY_MS = 90;
 
 export function normalizeShellBallFloatingSize(size: string | null | undefined): ShellBallFloatingSize {
   if (size === "small" || size === "medium" || size === "large") {
@@ -72,6 +80,45 @@ export function normalizeShellBallFloatingSize(size: string | null | undefined):
   }
 
   return "medium";
+}
+
+export function shouldRetainShellBallEdgeDockReveal(input: {
+  bounds: ShellBallEdgeDockRevealBounds;
+  edgeDockSide: ShellBallEdgeDockSide | null;
+  guardPx?: number;
+  screenX: number;
+  screenY: number;
+}) {
+  if (input.edgeDockSide === null) {
+    return false;
+  }
+
+  const guardPx = input.guardPx ?? SHELL_BALL_EDGE_DOCK_REVEAL_GUARD_PX;
+  const nearLeftEdge = input.screenX <= input.bounds.minX + guardPx;
+  const nearRightEdge = input.screenX >= input.bounds.maxX - guardPx;
+  const nearTopEdge = input.screenY <= input.bounds.minY + guardPx;
+  const nearBottomEdge = input.screenY >= input.bounds.maxY - guardPx;
+
+  switch (input.edgeDockSide) {
+    case "left":
+      return nearLeftEdge;
+    case "right":
+      return nearRightEdge;
+    case "top":
+      return nearTopEdge;
+    case "bottom":
+      return nearBottomEdge;
+    case "top_left":
+      return nearLeftEdge || nearTopEdge;
+    case "top_right":
+      return nearRightEdge || nearTopEdge;
+    case "bottom_left":
+      return nearLeftEdge || nearBottomEdge;
+    case "bottom_right":
+      return nearRightEdge || nearBottomEdge;
+    default:
+      return false;
+  }
 }
 
 type ShellBallClipboardPrompt = {
@@ -336,6 +383,7 @@ export function ShellBallApp() {
   const selectionPromptExpiryTimeoutRef = useRef<number | null>(null);
   const previousVisualStateRef = useRef<ShellBallVisualState>(visualState);
   const transitionQueueRef = useRef(Promise.resolve());
+  const edgeDockRevealHideTimeoutRef = useRef<number | null>(null);
   const dragDropHandlersRef = useRef<{
     handleDroppedFiles: (paths: string[]) => Promise<void> | void;
   }>({
@@ -433,6 +481,13 @@ export function ShellBallApp() {
     handleDroppedFiles: handleCoordinatorDroppedFiles,
   };
   windowFrameRef.current = windowFrame;
+
+  const cancelEdgeDockRevealHide = useCallback(() => {
+    if (edgeDockRevealHideTimeoutRef.current !== null) {
+      window.clearTimeout(edgeDockRevealHideTimeoutRef.current);
+      edgeDockRevealHideTimeoutRef.current = null;
+    }
+  }, []);
 
   const reportInteractiveRegions = useCallback(async () => {
     const currentWindow = getCurrentWindow();
@@ -768,11 +823,12 @@ export function ShellBallApp() {
     // Reset native mascot hotspot state only when the shell-ball host actually
     // unmounts so ordinary frame updates do not churn IPC requests.
     return () => {
+      cancelEdgeDockRevealHide();
       void setShellBallInteractiveRegions([]);
       void setShellBallPressLock(false);
       lastReportedInteractiveRegionsRef.current = "";
     };
-  }, []);
+  }, [cancelEdgeDockRevealHide]);
 
   useEffect(() => {
     if (getCurrentWindow().label !== shellBallWindowLabels.ball) {
@@ -1071,15 +1127,59 @@ export function ShellBallApp() {
     handlePrimaryClick();
   }, [clipboardPrompt, handleCoordinatorClipboardPrompt, handleCoordinatorSelectedTextPrompt, handlePrimaryClick, selectionPrompt]);
 
-  const handleDockAwareRegionEnter = useCallback(() => {
+  const handleDockAwareRegionEnter = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+    void event;
+    cancelEdgeDockRevealHide();
     setEdgeDockRevealed(true);
     handleCoordinatorRegionEnter();
-  }, [handleCoordinatorRegionEnter, setEdgeDockRevealed]);
+  }, [cancelEdgeDockRevealHide, handleCoordinatorRegionEnter, setEdgeDockRevealed]);
 
-  const handleDockAwareRegionLeave = useCallback(() => {
-    setEdgeDockRevealed(false);
-    handleCoordinatorRegionLeave();
-  }, [handleCoordinatorRegionLeave, setEdgeDockRevealed]);
+  const handleDockAwareRegionLeave = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+    const dockSide = edgeDockState.side;
+
+    if (dockSide === null) {
+      setEdgeDockRevealed(false);
+      handleCoordinatorRegionLeave();
+      return;
+    }
+
+    const screenX = event.screenX;
+    const screenY = event.screenY;
+    cancelEdgeDockRevealHide();
+
+    // Keep the parked orb revealed while the pointer is still hugging the same
+    // monitor edge, so sub-pixel leave events at the screen boundary do not
+    // bounce between parked and revealed states.
+    edgeDockRevealHideTimeoutRef.current = window.setTimeout(() => {
+      edgeDockRevealHideTimeoutRef.current = null;
+
+      void (async () => {
+        const monitor = await monitorFromPoint(screenX, screenY);
+        if (monitor !== null) {
+          const logicalPosition = monitor.position.toLogical(monitor.scaleFactor);
+          const logicalSize = monitor.size.toLogical(monitor.scaleFactor);
+          const shouldRetainReveal = shouldRetainShellBallEdgeDockReveal({
+            bounds: {
+              minX: logicalPosition.x,
+              minY: logicalPosition.y,
+              maxX: logicalPosition.x + logicalSize.width,
+              maxY: logicalPosition.y + logicalSize.height,
+            },
+            edgeDockSide: dockSide,
+            screenX,
+            screenY,
+          });
+
+          if (shouldRetainReveal) {
+            return;
+          }
+        }
+
+        setEdgeDockRevealed(false);
+        handleCoordinatorRegionLeave();
+      })();
+    }, SHELL_BALL_EDGE_DOCK_REVEAL_HIDE_DELAY_MS);
+  }, [cancelEdgeDockRevealHide, edgeDockState.side, handleCoordinatorRegionLeave, setEdgeDockRevealed]);
 
   return (
     <ShellBallSurface
