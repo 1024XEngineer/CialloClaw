@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"io"
@@ -8,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // maxPendingStreamRequests caps per-connection in-flight work so a shared
@@ -116,7 +118,8 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 	defer s.unregisterStreamConn(conn)
 	defer conn.Close()
 
-	decoder := json.NewDecoder(conn)
+	reader := bufio.NewReader(conn)
+	decoder := json.NewDecoder(reader)
 	writer := &streamEnvelopeWriter{encoder: json.NewEncoder(conn)}
 	connState := newStreamConnState()
 	defer connState.close()
@@ -128,7 +131,13 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 		// Acquire pending capacity before decoding the next request so a
 		// disconnected client cannot leave behind a stale, already-decoded payload
 		// that only starts after an in-flight worker frees a slot.
-		pendingRequests <- struct{}{}
+		pendingAcquireBlocked := false
+		select {
+		case pendingRequests <- struct{}{}:
+		default:
+			pendingAcquireBlocked = true
+			pendingRequests <- struct{}{}
+		}
 
 		var request requestEnvelope
 		if err := decoder.Decode(&request); err != nil {
@@ -145,6 +154,13 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 			}))
 			return
 		}
+		// If backpressure delayed decode until after the client had already
+		// disconnected, drop this stale request instead of dispatching it after an
+		// unrelated worker frees capacity.
+		if pendingAcquireBlocked && streamReaderReachedEOF(reader, conn) {
+			<-pendingRequests
+			return
+		}
 
 		s.streamWG.Add(1)
 		go func(request requestEnvelope) {
@@ -153,6 +169,26 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 			s.handleStreamRequest(request, writer, connState, taskCoordinator, &taskStartRequestMu)
 		}(request)
 	}
+}
+
+func streamReaderReachedEOF(reader *bufio.Reader, conn net.Conn) bool {
+	if reader == nil || conn == nil {
+		return false
+	}
+	if reader.Buffered() > 0 {
+		return false
+	}
+	if err := conn.SetReadDeadline(time.Now()); err != nil {
+		return false
+	}
+	defer conn.SetReadDeadline(time.Time{})
+
+	_, err := reader.Peek(1)
+	if errors.Is(err, io.EOF) {
+		return true
+	}
+	var netErr net.Error
+	return !errors.As(err, &netErr)
 }
 
 func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnvelopeWriter, connState *streamConnState, taskCoordinator *streamTaskCoordinator, taskStartMu *sync.Mutex) {
