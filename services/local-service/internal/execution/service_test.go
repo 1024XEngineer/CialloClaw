@@ -4197,6 +4197,9 @@ func TestExecutionHelperBranchesAndConfigurationAccessors(t *testing.T) {
 	if agentloopAppendSteeringInput("base", []string{" ", "first", "second"}) == "base" || !isAgentLoopIntent(map[string]any{"name": defaultAgentLoopIntentName}) {
 		t.Fatal("expected steering and intent helpers to cover follow-up guidance branches")
 	}
+	if !strings.Contains(appendPromptSteeringInput("base", []string{"follow up"}), "Follow-up steering:") {
+		t.Fatal("expected prompt steering helper to preserve the follow-up steering label")
+	}
 	definitions := configuredService.agentLoopToolDefinitions()
 	if len(definitions) == 0 {
 		t.Fatal("expected agentLoopToolDefinitions to expose a bounded tool set")
