@@ -37,7 +37,6 @@ import { navigateToDashboardTaskDetail } from "@/features/dashboard/shared/dashb
 import {
   isDashboardSafetyApprovalSnapshotOnly,
   resolveDashboardSafetyNavigationRoute,
-  resolveDashboardSafetyFocusTarget,
   resolveDashboardSafetySnapshotLifecycle,
   shouldRetainDashboardSafetyActiveDetail,
 } from "@/features/dashboard/shared/dashboardSafetyNavigation";

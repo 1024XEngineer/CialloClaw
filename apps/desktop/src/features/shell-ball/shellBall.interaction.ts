@@ -26,6 +26,7 @@ export type ShellBallGestureAxisIntent = "vertical" | "horizontal";
 type ShellBallControllerDispatchOptions = {
   regionActive?: boolean;
   hoverRetained?: boolean;
+  scheduleProcessingReturn?: boolean;
 };
 
 type ShellBallScheduledTransition =
@@ -439,7 +440,7 @@ export function createShellBallInteractionController(deps: {
       hoverRetained = options.hoverRetained;
     }
 
-    applyState(state, { cancelExisting: true, scheduleProcessingReturn: true });
+    applyState(state, { cancelExisting: true, scheduleProcessingReturn: options?.scheduleProcessingReturn ?? true });
     return currentState;
   }
 

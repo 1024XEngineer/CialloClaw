@@ -348,7 +348,10 @@ export function syncShellBallInteractionController(input: {
     return input.visualState;
   }
 
-  return input.controller.forceState(input.visualState, { regionActive: input.regionActive });
+  return input.controller.forceState(input.visualState, {
+    regionActive: input.regionActive,
+    scheduleProcessingReturn: false,
+  });
 }
 
 export function resolveShellBallVoiceRecognitionFinalState(input: {
@@ -444,6 +447,7 @@ export function useShellBallInteraction() {
   function syncVisualStateFromTaskStatus(status: Parameters<typeof getShellBallVisualStateForTaskStatus>[0], fallbackState: ShellBallVisualState) {
     controllerRef.current?.forceState(getShellBallVisualStateForTaskStatus(status, fallbackState), {
       regionActive: regionActiveRef.current,
+      scheduleProcessingReturn: false,
     });
     syncVisualState();
   }
@@ -707,21 +711,6 @@ export function useShellBallInteraction() {
       recognitionSessionIdRef.current += 1;
       return false;
     }
-  }
-
-  function syncHoverRetention() {
-    if (regionActiveRef.current) {
-      return;
-    }
-
-    if (controllerRef.current?.getState() !== "hover_input") {
-      return;
-    }
-
-    dispatch("pointer_leave_region", {
-      regionActive: false,
-      hoverRetained: getHoverRetained(),
-    });
   }
 
   function handlePrimaryClick() {
@@ -1081,7 +1070,7 @@ export function useShellBallInteraction() {
     return false;
   }
 
-  function handlePressCancel(event: PointerEvent<HTMLButtonElement>) {
+  function handlePressCancel(_event: PointerEvent<HTMLButtonElement>) {
     clearLongPressTimer();
 
     const cancelEvent = getShellBallPressCancelEvent(controllerRef.current?.getState() ?? visualState);
@@ -1112,14 +1101,20 @@ export function useShellBallInteraction() {
     }
 
     if (!focused) {
+      const currentState = controllerRef.current?.getState() ?? visualState;
+
       // Blur should fully retire the higher-level input-active state so later
-      // mascot gestures do not inherit a stale input hover relationship.
+      // mascot gestures do not inherit a stale input hover relationship. Once
+      // formal task states take over, blur must not clobber them back to idle.
       inputHoveredRef.current = false;
-      controllerRef.current?.forceState("idle", {
-        regionActive: false,
-        hoverRetained: false,
-      });
-      syncVisualState();
+
+      if (currentState === "hover_input") {
+        controllerRef.current?.forceState("idle", {
+          regionActive: false,
+          hoverRetained: false,
+        });
+        syncVisualState();
+      }
     }
   }
 

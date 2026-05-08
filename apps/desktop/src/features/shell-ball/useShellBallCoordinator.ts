@@ -52,7 +52,7 @@ import {
   type ShellBallPrimaryAction,
 } from "./shellBall.windowSync";
 import { getShellBallBubbleAnchor } from "./useShellBallWindowMetrics";
-import { getShellBallVisualStateForTaskStatus } from "./shellBall.interaction";
+import { getShellBallProcessingReturnState, getShellBallVisualStateForTaskStatus } from "./shellBall.interaction";
 import { useShellBallStore } from "../../stores/shellBallStore";
 
 type ShellBallCoordinatorInput = {
@@ -2047,6 +2047,11 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     );
     revealBubbleRegion();
 
+    // Voice submissions do not pass through the hover-input confirming state,
+    // so surface the local thinking motion immediately while the formal task
+    // result is still in flight.
+    useShellBallStore.getState().setVisualState("processing");
+
     /**
      * Voice submissions should reuse the same task/bubble/delivery pipeline as
      * hover-text submissions so the shell-ball can track task detail routing and
@@ -2057,6 +2062,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     void Promise.resolve(handlersRef.current.onSubmitVoiceText(finalizedSpeechPayload))
       .then((result) => {
         if (!isShellBallInputSubmitResult(result)) {
+          useShellBallStore.getState().setVisualState(getShellBallProcessingReturnState(input.regionActive));
           setBubbleItems((currentItems) =>
             replaceShellBallPendingBubble(currentItems, pendingAgentBubbleItem.bubble.bubble_id),
           );
@@ -2097,6 +2103,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       })
       .catch((error) => {
         console.warn("shell-ball voice submit failed", error);
+        useShellBallStore.getState().setVisualState(getShellBallProcessingReturnState(input.regionActive));
         setBubbleItems((currentItems) =>
           replaceShellBallPendingBubble(
             currentItems,
@@ -2115,7 +2122,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         finishPendingTaskRegistration();
         handlersRef.current.onFinalizedSpeechHandled();
       });
-  }, [allocateBubbleTurnIndex, autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, input.finalizedSpeechPayload, registerShellBallTask, revealBubbleRegion]);
+  }, [allocateBubbleTurnIndex, autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, input.finalizedSpeechPayload, input.regionActive, registerShellBallTask, revealBubbleRegion]);
 
   useEffect(() => {
     const clearTaskSubscription = subscribeTaskUpdated((payload) => {
@@ -2645,6 +2652,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         );
         revealBubbleRegion();
 
+        // Text submissions should surface think immediately on send, then let
+        // formal task updates replace that optimistic processing state.
+        useShellBallStore.getState().setVisualState("processing");
+
         let result: ShellBallInputSubmitResult | null | void;
 
         const finishPendingTaskRegistration = beginPendingShellBallTaskRegistration();
@@ -2653,6 +2664,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           result = await handlersRef.current.onSubmitText();
         } catch (error) {
           console.warn("shell-ball text submit failed", error);
+          useShellBallStore.getState().setVisualState(getShellBallProcessingReturnState(input.regionActive));
           setBubbleItems((currentItems) =>
             replaceShellBallPendingBubble(
               currentItems,
@@ -2706,6 +2718,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           break;
         }
 
+        useShellBallStore.getState().setVisualState(getShellBallProcessingReturnState(input.regionActive));
+
         setBubbleItems((currentItems) =>
           replaceShellBallPendingBubble(currentItems, pendingAgentBubbleItem.bubble.bubble_id),
         );
@@ -2716,7 +2730,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         handlersRef.current.onPrimaryClick();
         break;
     }
-  }, [allocateBubbleTurnIndex, autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, bindTaskToBubbleTurn, getTaskBubbleTurnIndex, handleScreenshotPrompt, handleWindowPrompt, registerShellBallTask, revealBubbleRegion]);
+  }, [allocateBubbleTurnIndex, autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, bindTaskToBubbleTurn, getTaskBubbleTurnIndex, handleScreenshotPrompt, handleWindowPrompt, input.regionActive, registerShellBallTask, revealBubbleRegion]);
 
   return {
     snapshot,
