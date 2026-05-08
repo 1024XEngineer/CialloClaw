@@ -125,8 +125,14 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 	var taskStartRequestMu sync.Mutex
 
 	for {
+		// Acquire pending capacity before decoding the next request so a
+		// disconnected client cannot leave behind a stale, already-decoded payload
+		// that only starts after an in-flight worker frees a slot.
+		pendingRequests <- struct{}{}
+
 		var request requestEnvelope
 		if err := decoder.Decode(&request); err != nil {
+			<-pendingRequests
 			if errors.Is(err, io.EOF) {
 				return
 			}
@@ -140,7 +146,6 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 			return
 		}
 
-		pendingRequests <- struct{}{}
 		s.streamWG.Add(1)
 		go func(request requestEnvelope) {
 			defer s.streamWG.Done()
