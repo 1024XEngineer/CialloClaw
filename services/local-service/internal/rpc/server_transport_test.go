@@ -425,6 +425,84 @@ func TestServerShutdownClosesActiveStreamHandlers(t *testing.T) {
 	}
 }
 
+func TestServerShutdownWaitsForInFlightStreamRequests(t *testing.T) {
+	server := newTestServer()
+	requestStarted := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	requestFinished := make(chan struct{})
+	server.handlers["test.blocking"] = func(_ map[string]any) (any, *rpcError) {
+		close(requestStarted)
+		<-releaseRequest
+		close(requestFinished)
+		return map[string]any{"status": "released"}, nil
+	}
+
+	left, right := net.Pipe()
+	defer right.Close()
+
+	streamDone := make(chan struct{})
+	go func() {
+		server.handleStreamConn(left)
+		close(streamDone)
+	}()
+
+	request := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-blocking-shutdown"`),
+		Method:  "test.blocking",
+		Params:  mustMarshal(t, map[string]any{}),
+	}
+	if err := json.NewEncoder(right).Encode(request); err != nil {
+		t.Fatalf("encode blocking stream request: %v", err)
+	}
+
+	select {
+	case <-requestStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected blocking stream request to start running")
+	}
+
+	shutdownDone := make(chan error, 1)
+	go func() {
+		shutdownDone <- server.Shutdown(context.Background())
+	}()
+
+	select {
+	case <-streamDone:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected shutdown to close the outer stream loop promptly")
+	}
+
+	select {
+	case err := <-shutdownDone:
+		t.Fatalf("expected shutdown to keep waiting for the in-flight request, got %v", err)
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	select {
+	case <-requestFinished:
+		t.Fatal("expected blocking stream request to remain in flight until explicitly released")
+	default:
+	}
+
+	close(releaseRequest)
+
+	select {
+	case <-requestFinished:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected blocking stream request to finish after release")
+	}
+
+	select {
+	case err := <-shutdownDone:
+		if err != nil {
+			t.Fatalf("shutdown in-flight stream request: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected shutdown to finish after the in-flight request exits")
+	}
+}
+
 func TestServerShutdownCancelsNamedPipeRunWithoutParentContextCancellation(t *testing.T) {
 	server := newTestServer()
 	server.transport = "named_pipe"

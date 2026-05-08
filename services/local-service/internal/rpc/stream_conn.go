@@ -106,7 +106,9 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 		}
 
 		pendingRequests <- struct{}{}
+		s.streamWG.Add(1)
 		go func(request requestEnvelope) {
+			defer s.streamWG.Done()
 			defer func() { <-pendingRequests }()
 			s.handleStreamRequest(request, writer, taskCoordinator, &taskStartRequestMu)
 		}(request)
