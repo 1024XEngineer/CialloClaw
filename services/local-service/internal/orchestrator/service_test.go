@@ -12777,6 +12777,95 @@ func TestServiceTaskArtifactListFallsBackToRuntimeArtifactsWhenStoreEmpty(t *tes
 	}
 }
 
+func TestServiceTaskArtifactListMergesStoredAndRuntimeArtifacts(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "artifact list merge")
+	if service.storage == nil || service.storage.ArtifactStore() == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_merge_artifact",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请整理 artifact 列表",
+		},
+		"intent": map[string]any{
+			"name": "summarize",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	task, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected runtime task to exist")
+	}
+	if err := service.storage.ArtifactStore().SaveArtifacts(context.Background(), []storage.ArtifactRecord{{
+		ArtifactID:          "art_stored_001",
+		TaskID:              taskID,
+		RunID:               task.RunID,
+		ArtifactType:        "generated_doc",
+		Title:               "stored.md",
+		Path:                "workspace/stored.md",
+		MimeType:            "text/markdown",
+		DeliveryType:        "workspace_document",
+		DeliveryPayloadJSON: `{"path":"workspace/stored.md","task_id":"` + taskID + `"}`,
+		CreatedAt:           "2026-04-15T10:00:00Z",
+	}}); err != nil {
+		t.Fatalf("save stored artifact failed: %v", err)
+	}
+	_, _ = service.runEngine.SetPresentation(taskID, task.BubbleMessage, task.DeliveryResult, []map[string]any{
+		{
+			"artifact_id":      "art_stored_001",
+			"task_id":          taskID,
+			"artifact_type":    "generated_doc",
+			"title":            "runtime stale.md",
+			"path":             "workspace/runtime-stale.md",
+			"mime_type":        "text/markdown",
+			"delivery_type":    "workspace_document",
+			"delivery_payload": map[string]any{"path": "workspace/runtime-stale.md", "task_id": taskID},
+		},
+		{
+			"artifact_id":      "art_runtime_002",
+			"task_id":          taskID,
+			"artifact_type":    "generated_doc",
+			"title":            "runtime-new.md",
+			"path":             "workspace/runtime-new.md",
+			"mime_type":        "text/markdown",
+			"delivery_type":    "workspace_document",
+			"delivery_payload": map[string]any{"path": "workspace/runtime-new.md", "task_id": taskID},
+		},
+	})
+
+	result, err := service.TaskArtifactList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task artifact list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	byID := make(map[string]map[string]any, len(items))
+	for _, item := range items {
+		byID[item["artifact_id"].(string)] = item
+	}
+	if len(byID) != len(items) {
+		t.Fatalf("expected merged artifact list to de-duplicate duplicate artifact ids, got %+v", items)
+	}
+	if len(items) < 2 {
+		t.Fatalf("expected merged artifact list to include stored and runtime-only entries, got %+v", items)
+	}
+	if byID["art_stored_001"]["path"] != "workspace/stored.md" {
+		t.Fatalf("expected stored artifact to stay authoritative for duplicate ids, got %+v", byID["art_stored_001"])
+	}
+	if byID["art_runtime_002"]["path"] != "workspace/runtime-new.md" {
+		t.Fatalf("expected runtime-only artifact to remain visible, got %+v", items)
+	}
+	page := result["page"].(map[string]any)
+	if page["total"] != len(items) {
+		t.Fatalf("expected page total to match merged artifact count, got %+v", page)
+	}
+}
+
 func TestServiceRuntimeArtifactsBackfillStableArtifactIdentifiersWhenMissing(t *testing.T) {
 	service := newTestService()
 	startResult, err := service.StartTask(map[string]any{
@@ -13871,6 +13960,34 @@ func TestServiceTaskEventsListSupportsTimeWindowFilters(t *testing.T) {
 	items := result["items"].([]map[string]any)
 	if len(items) != 1 || items[0]["run_id"] != "run_loop_time_b" {
 		t.Fatalf("expected time-filtered loop event, got %+v", items)
+	}
+}
+
+func TestServiceTaskEventsListKeepsSameSecondNanoEventsAtLowerBound(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "loop event nano lower bound")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected loop runtime store to be wired")
+	}
+	if err := service.storage.LoopRuntimeStore().SaveEvents(context.Background(), []storage.EventRecord{
+		{EventID: "evt_loop_nano_001", RunID: "run_loop_nano_a", TaskID: "task_loop_nano_001", StepID: "step_a", Type: "loop.round.started", Level: "info", PayloadJSON: `{}`, CreatedAt: "2026-04-17T10:00:00.123Z"},
+		{EventID: "evt_loop_nano_002", RunID: "run_loop_nano_b", TaskID: "task_loop_nano_001", StepID: "step_b", Type: "loop.failed", Level: "error", PayloadJSON: `{}`, CreatedAt: "2026-04-17T10:00:01Z"},
+	}); err != nil {
+		t.Fatalf("save loop nano events failed: %v", err)
+	}
+
+	result, err := service.TaskEventsList(map[string]any{
+		"task_id":         "task_loop_nano_001",
+		"created_at_from": "2026-04-17T10:00:00Z",
+		"created_at_to":   "2026-04-17T10:00:00.999Z",
+		"limit":           20,
+		"offset":          0,
+	})
+	if err != nil {
+		t.Fatalf("task events list with nano lower bound failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["event_id"] != "evt_loop_nano_001" {
+		t.Fatalf("expected same-second nano event to survive lower-bound filtering, got %+v", items)
 	}
 }
 
