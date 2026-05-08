@@ -214,11 +214,14 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 				})
 			}
 			defer releasePending()
-			s.handleStreamRequest(request, writer, connState, reader, conn, pendingState, taskCoordinator, &taskStartRequestMu, releasePending)
+			s.handleStreamRequest(request, writer, connState, pendingState, taskCoordinator, &taskStartRequestMu, releasePending)
 		}(request)
 	}
 }
 
+// streamReaderReachedEOF is only safe on the main stream read loop goroutine.
+// It temporarily shortens read wait time to distinguish a disconnected peer
+// from an idle shared stream before the next decode begins.
 func streamReaderReachedEOF(reader *bufio.Reader, conn net.Conn) bool {
 	if reader == nil || conn == nil {
 		return false
@@ -242,7 +245,7 @@ func streamReaderReachedEOF(reader *bufio.Reader, conn net.Conn) bool {
 	return !errors.As(err, &netErr)
 }
 
-func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnvelopeWriter, connState *streamConnState, reader *bufio.Reader, conn net.Conn, pendingState *streamPendingState, taskCoordinator *streamTaskCoordinator, taskStartMu *sync.Mutex, releasePending func()) {
+func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnvelopeWriter, connState *streamConnState, pendingState *streamPendingState, taskCoordinator *streamTaskCoordinator, taskStartMu *sync.Mutex, releasePending func()) {
 	if connState.isClosed() {
 		return
 	}
@@ -305,8 +308,17 @@ func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnve
 		response := s.dispatch(request)
 		unsubscribeTaskStart()
 		unsubscribeRuntime()
-		if shouldProbeBlockedDisconnect && pendingState.isBlocked() && streamReaderReachedEOF(reader, conn) {
-			connState.close()
+		if shouldProbeBlockedDisconnect && pendingState.isBlocked() {
+			// Free one pending slot while the current task lock is still held so
+			// the main read loop can run its safe EOF probe before same-task backlog
+			// waiters are allowed to dispatch. Workers intentionally do not touch
+			// the shared reader or connection read deadlines here.
+			releasePending()
+			select {
+			case <-connState.closed:
+				return
+			case <-time.After(blockedStreamDisconnectProbeWindow):
+			}
 		}
 
 		responseTaskIDs := taskIDsFromResponse(response)

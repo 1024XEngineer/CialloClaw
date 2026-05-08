@@ -1123,6 +1123,137 @@ func TestHandleStreamConnDropsDecodedSameTaskBacklogAfterDisconnect(t *testing.T
 	}
 }
 
+func TestHandleStreamConnKeepsHealthyIdleSameTaskBacklogAlive(t *testing.T) {
+	server := newTestServer()
+	taskID := "task_idle_same_task_backlog"
+	startedSignals := make(chan int, maxPendingStreamRequests)
+	releaseFirst := make(chan struct{})
+
+	var startedMu sync.Mutex
+	startedCount := 0
+	server.handlers["test.same.task.healthy"] = func(params map[string]any) (any, *rpcError) {
+		startedMu.Lock()
+		startedCount++
+		callIndex := startedCount
+		startedMu.Unlock()
+
+		startedSignals <- callIndex
+		if callIndex == 1 {
+			<-releaseFirst
+		}
+
+		return map[string]any{
+			"task": map[string]any{
+				"task_id": stringValue(params, "task_id", ""),
+			},
+		}, nil
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen loopback: %v", err)
+	}
+	defer listener.Close()
+
+	acceptDone := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			acceptDone <- err
+			return
+		}
+		server.handleStreamConn(conn)
+		acceptDone <- nil
+	}()
+
+	right, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial loopback: %v", err)
+	}
+	defer right.Close()
+
+	encoder := json.NewEncoder(right)
+	decoder := json.NewDecoder(right)
+	for index := 0; index < maxPendingStreamRequests; index++ {
+		request := requestEnvelope{
+			JSONRPC: "2.0",
+			ID:      json.RawMessage(fmt.Sprintf(`"req-same-task-healthy-%d"`, index)),
+			Method:  "test.same.task.healthy",
+			Params: mustMarshal(t, map[string]any{
+				"task_id": taskID,
+			}),
+		}
+		if err := encoder.Encode(request); err != nil {
+			t.Fatalf("encode same-task request %d: %v", index, err)
+		}
+	}
+
+	select {
+	case callIndex := <-startedSignals:
+		if callIndex != 1 {
+			t.Fatalf("expected the first same-task request to start first, got call %d", callIndex)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected the first same-task request to start")
+	}
+
+	select {
+	case callIndex := <-startedSignals:
+		t.Fatalf("expected same-task backlog to stay queued behind the first request, got call %d", callIndex)
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	close(releaseFirst)
+
+	if err := right.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	defer func() {
+		if err := right.SetReadDeadline(time.Time{}); err != nil {
+			t.Fatalf("clear read deadline: %v", err)
+		}
+	}()
+
+	var firstEnvelope map[string]any
+	if err := decoder.Decode(&firstEnvelope); err != nil {
+		t.Fatalf("decode first same-task response: %v", err)
+	}
+	if firstEnvelope["id"] == nil {
+		t.Fatalf("expected the first same-task response envelope, got %+v", firstEnvelope)
+	}
+	if firstEnvelope["error"] != nil {
+		t.Fatalf("expected first same-task response to succeed, got %+v", firstEnvelope)
+	}
+
+	select {
+	case callIndex := <-startedSignals:
+		if callIndex != 2 {
+			t.Fatalf("expected the second same-task request to dispatch next, got call %d", callIndex)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected the second same-task request to dispatch after the first response")
+	}
+
+	var secondEnvelope map[string]any
+	if err := decoder.Decode(&secondEnvelope); err != nil {
+		t.Fatalf("decode second same-task response: %v", err)
+	}
+	if secondEnvelope["id"] == nil {
+		t.Fatalf("expected the second same-task response envelope, got %+v", secondEnvelope)
+	}
+	if secondEnvelope["error"] != nil {
+		t.Fatalf("expected same-task backlog to stay on the healthy shared stream, got %+v", secondEnvelope)
+	}
+
+	select {
+	case err := <-acceptDone:
+		if err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("accept loopback: %v", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+	}
+}
+
 func TestHandleStreamConnSerializesTaskStartingRequestsOnSharedConnection(t *testing.T) {
 	testCases := []struct {
 		name         string
