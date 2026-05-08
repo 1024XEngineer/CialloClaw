@@ -308,25 +308,23 @@ func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnve
 		response := s.dispatch(request)
 		unsubscribeTaskStart()
 		unsubscribeRuntime()
-		if shouldProbeBlockedDisconnect && pendingState.isBlocked() {
-			// Free one pending slot while the current task lock is still held so
-			// the main read loop can run its safe EOF probe before same-task backlog
-			// waiters are allowed to dispatch. Workers intentionally do not touch
-			// the shared reader or connection read deadlines here.
-			releasePending()
-			select {
-			case <-connState.closed:
-				return
-			case <-time.After(blockedStreamDisconnectProbeWindow):
-			}
-		}
-
 		responseTaskIDs := taskIDsFromResponse(response)
 		lateTaskIDs := responseTaskIDLocks(responseTaskIDs, initialTaskIDs)
 		// Requests that only learn their task id from the response must claim the
 		// real task lock before writing the response and destructively replaying the
 		// buffered notification queue for that task.
 		taskCoordinator.withTaskLocks(lateTaskIDs, func() {
+			if shouldProbeBlockedDisconnect && pendingState.isBlocked() {
+				// Keep late-discovered task ownership fenced before freeing pending
+				// capacity so a queued same-task follow-up cannot overtake the
+				// response that established the task mapping on this shared stream.
+				releasePending()
+				select {
+				case <-connState.closed:
+					return
+				case <-time.After(blockedStreamDisconnectProbeWindow):
+				}
+			}
 			if connState.isClosed() {
 				return
 			}
