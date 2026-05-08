@@ -70,14 +70,23 @@ func (s *Service) DeliveryOpen(params map[string]any) (map[string]any, error) {
 		result["artifact"] = protocolArtifactMap(artifact)
 		return result, nil
 	}
-	task, ok := s.runEngine.GetTask(taskID)
-	if !ok {
-		task, ok = s.taskDetailFromStorage(taskID)
+	task, ok := s.taskDetailFromStorage(taskID)
+	if runtimeTask, runtimeOK := s.runEngine.TaskDetail(taskID); runtimeOK {
+		if ok {
+			task = mergeRuntimeTaskDetail(task, runtimeTask)
+		} else {
+			task = runtimeTask
+			ok = true
+		}
 	}
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
-	return buildDeliveryOpenResult(nil, cloneMap(task.DeliveryResult), taskID), nil
+	deliveryResult := s.latestAttemptDeliveryResultFromStorage(task)
+	if len(deliveryResult) == 0 {
+		deliveryResult = cloneMap(task.DeliveryResult)
+	}
+	return buildDeliveryOpenResult(nil, deliveryResult, taskID), nil
 }
 
 func inferArtifactDeliveryType(artifact map[string]any) string {

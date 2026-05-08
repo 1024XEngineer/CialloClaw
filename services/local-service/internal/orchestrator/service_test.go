@@ -12576,6 +12576,77 @@ func TestServiceDeliveryOpenReturnsTaskDeliveryResult(t *testing.T) {
 	}
 }
 
+func TestServiceDeliveryOpenPrefersStoredDeliveryResultOverRuntimeCompatibility(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "delivery open storage precedence")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	runtimeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_delivery_open_prefer",
+		Title:       "delivery open preference task",
+		SourceType:  "floating_ball",
+		Status:      "completed",
+		Intent:      map[string]any{"name": "summarize"},
+		CurrentStep: "deliver_result",
+		Timeline:    initialTimeline("completed", "deliver_result"),
+	})
+	if _, ok := service.runEngine.SetPresentation(runtimeTask.TaskID, nil, map[string]any{
+		"type":         "workspace_document",
+		"title":        "runtime result",
+		"preview_text": "runtime preview",
+		"payload":      map[string]any{"path": "workspace/runtime.md", "task_id": runtimeTask.TaskID},
+	}, nil); !ok {
+		t.Fatal("expected runtime presentation to update")
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:            runtimeTask.TaskID,
+		SessionID:         runtimeTask.SessionID,
+		RunID:             runtimeTask.RunID,
+		PrimaryRunID:      runtimeTask.RunID,
+		Title:             runtimeTask.Title,
+		SourceType:        runtimeTask.SourceType,
+		Status:            runtimeTask.Status,
+		IntentName:        "summarize",
+		PreferredDelivery: "workspace_document",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       runtimeTask.CurrentStep,
+		CurrentStepStatus: "completed",
+		RiskLevel:         "green",
+		RequestSource:     "floating_ball",
+		RequestTrigger:    "hover_text_input",
+		StartedAt:         runtimeTask.StartedAt.Format(time.RFC3339Nano),
+		UpdatedAt:         runtimeTask.UpdatedAt.Format(time.RFC3339Nano),
+		FinishedAt:        runtimeTask.UpdatedAt.Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveDeliveryResult(context.Background(), storage.DeliveryResultRecord{
+		DeliveryResultID: "delivery_open_prefer_stored",
+		TaskID:           runtimeTask.TaskID,
+		RunID:            runtimeTask.RunID,
+		Type:             "workspace_document",
+		Title:            "stored result",
+		PayloadJSON:      `{"path":"workspace/stored.md","task_id":"` + runtimeTask.TaskID + `"}`,
+		PreviewText:      "stored preview",
+		CreatedAt:        runtimeTask.UpdatedAt.Add(time.Second).Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatalf("save stored delivery result failed: %v", err)
+	}
+
+	result, err := service.DeliveryOpen(map[string]any{"task_id": runtimeTask.TaskID})
+	if err != nil {
+		t.Fatalf("delivery open failed: %v", err)
+	}
+	payload := result["resolved_payload"].(map[string]any)
+	if payload["path"] != "workspace/stored.md" {
+		t.Fatalf("expected stored delivery payload to override runtime compatibility data, got %+v", payload)
+	}
+	deliveryResult := result["delivery_result"].(map[string]any)
+	if deliveryResult["title"] != "stored result" || deliveryResult["preview_text"] != "stored preview" {
+		t.Fatalf("expected stored delivery result metadata to override runtime compatibility data, got %+v", deliveryResult)
+	}
+}
+
 func TestServiceDeliveryOpenReturnsArtifactDeliveryResult(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "delivery open artifact")
 	if service.storage == nil {
