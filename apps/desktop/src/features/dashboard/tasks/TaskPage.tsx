@@ -56,6 +56,7 @@ import {
 import {
   canOpenTaskDeliveryResult,
   describeTaskOpenResultForCurrentTask,
+  mergeTaskArtifactItems,
   loadTaskArtifactPage,
   mergeTaskArtifactItems,
   openTaskArtifactForTask,
@@ -501,7 +502,7 @@ export function TaskPage() {
   });
 
   async function handleResolvedOpen(
-    result: Awaited<ReturnType<typeof openTaskArtifactForTask>>,
+    result: Awaited<ReturnType<typeof openTaskArtifactForTask> | ReturnType<typeof openTaskDeliveryForTask>>,
     fallbackTaskId: string | null,
   ) {
     const plan = resolveTaskOpenExecutionPlan(result, fallbackTaskId);

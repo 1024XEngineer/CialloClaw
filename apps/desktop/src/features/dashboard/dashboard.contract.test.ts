@@ -6370,10 +6370,10 @@ test("task workspace routes formal delivery through a dedicated page and keeps l
   assert.match(taskDeliverySource, /subscribeDeliveryReady\(\(payload\) => \{[\s\S]*invalidateCurrentTaskDelivery\(\);/);
   assert.match(taskDeliverySource, /subscribeTaskRuntime\(taskId, \(\) => \{[\s\S]*scheduleTaskDetailRefresh\(\);/);
   assert.match(taskDeliverySource, /const taskDetailArtifacts = useMemo\(\(\) => detailData\?\.detail\.artifacts \?\? \[\], \[detailData\?\.detail\.artifacts\]\);/);
-  assert.match(taskDeliverySource, /const artifactItems = useMemo\(\(\) => \{/);
-  assert.match(taskDeliverySource, /const listedArtifacts = artifactListQuery\.data\?\.items \?\? \[\];/);
-  assert.match(taskDeliverySource, /mergedArtifacts\.push\(artifact\);/);
+  assert.match(taskDeliverySource, /mergeTaskArtifactItems/);
+  assert.match(taskDeliverySource, /const artifactItems = useMemo\([\s\S]*mergeTaskArtifactItems\(artifactListQuery\.data\?\.items \?\? \[\], taskDetailArtifacts\)/);
   assert.doesNotMatch(taskDeliverySource, /const artifactItems = artifactListQuery\.data\?\.items \?\? detailData\?\.detail\.artifacts \?\? \[\];/);
+  assert.match(taskDeliverySource, /getTaskDeliveryOpenLabel/);
   assert.match(taskDeliverySource, /buildDashboardTaskDetailRouteState/);
   assert.match(taskDeliverySource, /navigateToDashboardResultPage/);
   assert.match(taskDeliverySource, /isAllowedTaskOpenUrl/);
@@ -6385,9 +6385,17 @@ test("task workspace routes formal delivery through a dedicated page and keeps l
   assert.doesNotMatch(taskDetailSource, /当前协议尚未提供稳定的 artifact\.open 能力/);
   assert.match(taskDetailSource, /onOpenArtifact/);
   assert.match(taskDetailSource, /onOpenLatestDelivery/);
-  assert.match(taskDetailSource, /查看结果页/);
+  assert.match(taskDetailSource, /打开结果页/);
+  assert.doesNotMatch(taskDetailSource, /查看结果页/);
   assert.doesNotMatch(taskDetailSource, /文件舱门/);
   assert.match(taskDetailSource, /artifactItems/);
+  assert.match(taskPageSource, /mergeTaskArtifactItems/);
+  assert.match(taskPageSource, /const mergedArtifactItems = useMemo\([\s\S]*mergeTaskArtifactItems\(artifactListQuery\.data\?\.items \?\? \[\], detailData\?\.detail\.artifacts \?\? \[\]\)/);
+  assert.match(taskPageSource, /openTaskDeliveryForTask/);
+  assert.match(taskPageSource, /const deliveryOpenMutation = useMutation\(/);
+  assert.match(taskPageSource, /canOpenTaskDeliveryResult/);
+  assert.match(taskPageSource, /if \(!canOpenTaskDeliveryResult\(detailData\?\.detail\.delivery_result \?\? null\)\) \{/);
+  assert.match(taskPageSource, /deliveryOpenMutation\.mutate\(selectedTaskControlTargetId\);/);
 
   assert.match(taskDeliveryNavigationSource, /dashboardTaskDeliveryRoutePattern = "delivery\/:taskId"/);
   assert.match(taskDeliveryNavigationSource, /encodeURIComponent\(taskId\)/);
@@ -9650,15 +9658,18 @@ test("task detail fallback keeps operator controls available from preview tasks 
   assert.doesNotMatch(mapperSource, /detail\?\.approval_request !== null \|\| detail\?\.security_summary\.latest_restore_point !== null/);
 });
 
-test("TaskDetailPanel renders runtime summary fields from the formal detail payload", () => {
+test("TaskDetailPanel folds loop summary signals into the runtime events section", () => {
   const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
 
-  assert.match(panelSource, /Runtime Summary/);
-  assert.match(panelSource, /循环停止原因与调试概览/);
-  assert.match(panelSource, /runtimeSummary\.loop_stop_reason \?\? "当前还没有停止原因"/);
-  assert.match(panelSource, /runtimeSummary\.latest_event_type \?\? "当前还没有 runtime event"/);
+  assert.match(panelSource, /Loop Signals/);
+  assert.match(panelSource, /循环事件与停止信号/);
+  assert.match(panelSource, /if \(!runtimeSummary \|\| !hasRuntimeSummarySignals\) \{/);
+  assert.match(panelSource, /<h3 className="task-detail-card__title">执行事件与循环回流<\/h3>[\s\S]*\{renderRuntimeSummarySection\(\)\}/);
+  assert.match(panelSource, /runtimeSummary\.loop_stop_reason \?\? "当前未返回停止原因"/);
+  assert.match(panelSource, /runtimeSummary\.latest_event_type \?\? "当前未返回 runtime event"/);
   assert.match(panelSource, /runtimeSummary\.events_count/);
   assert.match(panelSource, /runtimeSummary\.active_steering_count/);
+  assert.doesNotMatch(panelSource, /循环停止原因与调试概览/);
 });
 
 test("TaskDetailPanel keeps evidence artifacts scoped to formal citation links", () => {
@@ -9668,16 +9679,28 @@ test("TaskDetailPanel keeps evidence artifacts scoped to formal citation links",
   assert.match(panelSource, /const evidenceArtifacts = artifactItems\.filter\(\(artifact\) => evidenceArtifactRefs\.has\(artifact\.artifact_id\) \|\| evidenceArtifactRefs\.has\(artifact\.path\)\)/);
   assert.match(panelSource, /const outputArtifacts = artifactItems\.filter\(\(artifact\) => !evidenceArtifactRefs\.has\(artifact\.artifact_id\) && !evidenceArtifactRefs\.has\(artifact\.path\)\)/);
   assert.match(panelSource, /const formalEvidenceCount = new Set\(/);
+  assert.match(panelSource, /const hasEvidenceContent = evidenceItems\.length > 0 \|\| evidenceArtifacts\.length > 0;/);
+  assert.match(panelSource, /if \(!isScreenTask \|\| detail === null \|\| !hasEvidenceContent\) \{/);
+  assert.match(panelSource, /该区域只在屏幕类任务中展示正式截图、OCR 摘要与引用片段。/);
   assert.match(panelSource, /return sourceRef\.length > 0 \? sourceRef : citation\.citation_id/);
   assert.doesNotMatch(panelSource, /artifactItems\.map\(\(artifact\) => \(/);
+  assert.doesNotMatch(panelSource, /当前没有可展示的正式证据链/);
 });
 
-test("TaskDetailPanel separates formal delivery from structured evidence metadata", () => {
+test("TaskDetailPanel renders formal delivery as a first-class output entry", () => {
   const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
 
   assert.match(panelSource, /const formalDeliveryResult = detail\?\.delivery_result \?\? null;/);
-  assert.match(panelSource, /Formal Delivery/);
-  assert.match(panelSource, /该区域只消费正式 `delivery_result`/);
+  assert.match(panelSource, /const hasFormalOutput = formalDeliveryResult !== null;/);
+  assert.match(panelSource, /const hasOutputContent = hasFormalOutput \|\| hasOutputArtifacts;/);
+  assert.match(panelSource, /canOpenTaskDeliveryResult/);
+  assert.match(panelSource, /getTaskDeliveryOpenLabel\(formalDeliveryResult\)/);
+  assert.match(panelSource, /task-detail-output-item--bubble/);
+  assert.match(panelSource, /task-detail-output-item__bubble-copy/);
+  assert.match(panelSource, /const shouldHideEndedResultCopy = ended && isInlineBubbleOutput && !hasOutputArtifacts;/);
+  assert.match(panelSource, /当前没有可直接打开的产出内容。/);
+  assert.doesNotMatch(panelSource, /Formal Delivery/);
+  assert.doesNotMatch(panelSource, /该区域只消费正式 `delivery_result`/);
   assert.match(panelSource, /citation\.evidence_role/);
   assert.match(panelSource, /citation\.artifact_type/);
   assert.match(panelSource, /citation\.excerpt_text/);
@@ -9707,12 +9730,14 @@ test("TaskDetailPanel keeps runtime sections visible for ended tasks and clears 
   assert.match(panelSource, /steeringSuccessVersion: number/);
   assert.match(panelSource, /if \(steeringPending \|\| steeringSuccessVersion === 0\)/);
   assert.doesNotMatch(panelSource, /handleSubmitSteering\(\)[\s\S]*setSteeringMessage\(""\)/);
-  assert.match(panelSource, /\{renderRuntimeSummarySection\(\)\}/);
+  assert.match(panelSource, /const hasRuntimeProcessContent = hasRuntimeSummarySignals \|\| eventItems\.length > 0 \|\| eventLoading \|\| eventErrorMessage !== null;/);
+  assert.match(panelSource, /if \(detail === null \|\| !hasRuntimeProcessContent\) \{/);
+  assert.match(panelSource, /<h3 className="task-detail-card__title">执行事件与循环回流<\/h3>[\s\S]*\{renderRuntimeSummarySection\(\)\}/);
   assert.match(panelSource, /\{renderRuntimeEventsSection\(\)\}/);
   assert.match(taskPageSource, /const \[steeringSuccessVersion, setSteeringSuccessVersion\] = useState\(0\);/);
   assert.match(taskPageSource, /setSteeringSuccessVersion\(\(current\) => current \+ 1\);/);
   assert.match(taskPageSource, /steeringSuccessVersion=\{steeringSuccessVersion\}/);
-  assert.match(taskPageSource, /invalidateTaskRuntimeQueries\(selectedTaskId\)/);
+  assert.match(taskPageSource, /deliveryActionPending=\{deliveryOpenMutation\.isPending\}/);
 });
 
 test("TaskDetailPanel exposes formal runtime event filters and applies them explicitly", () => {
