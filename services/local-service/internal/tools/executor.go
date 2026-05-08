@@ -331,6 +331,11 @@ func approvalBypassAllowed(execCtx *ToolExecuteContext, toolName string, prechec
 	}
 	target := strings.TrimSpace(precheckInput.Workspace.TargetPath)
 	if target == "" {
+		if toolName == "browser_tabs_list" {
+			target = browserAttachKind(precheckInput.Input)
+		}
+	}
+	if target == "" {
 		target = strings.TrimSpace(precheckInput.Workspace.WorkspacePath)
 	}
 	if target == "" {
