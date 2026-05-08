@@ -27,9 +27,7 @@ func TestServiceAssess(t *testing.T) {
 				OperationName:       "read_file",
 				TargetObject:        "D:/workspace/notes/demo.txt",
 				CapabilityAvailable: true,
-				ImpactScope: ImpactScope{
-					Files: []string{"D:/workspace/notes/demo.txt"},
-				},
+				ImpactScope:         ImpactScope{Files: []string{"D:/workspace/notes/demo.txt"}},
 			},
 			want: AssessmentResult{
 				RiskLevel:   RiskLevelGreen,
@@ -44,11 +42,7 @@ func TestServiceAssess(t *testing.T) {
 				TargetObject:        "D:/workspace/report.md",
 				CapabilityAvailable: false,
 			},
-			want: AssessmentResult{
-				RiskLevel: RiskLevelRed,
-				Deny:      true,
-				Reason:    ReasonCapabilityDenied,
-			},
+			want: AssessmentResult{RiskLevel: RiskLevelRed, Deny: true, Reason: ReasonCapabilityDenied},
 		},
 		{
 			name: "command_not_allowed_red",
@@ -57,11 +51,7 @@ func TestServiceAssess(t *testing.T) {
 				CapabilityAvailable: true,
 				CommandPreview:      "rm -rf /tmp/demo",
 			},
-			want: AssessmentResult{
-				RiskLevel: RiskLevelRed,
-				Deny:      true,
-				Reason:    ReasonCommandNotAllowed,
-			},
+			want: AssessmentResult{RiskLevel: RiskLevelRed, Deny: true, Reason: ReasonCommandNotAllowed},
 		},
 		{
 			name: "command_requires_approval_red",
@@ -70,12 +60,7 @@ func TestServiceAssess(t *testing.T) {
 				CapabilityAvailable: true,
 				CommandPreview:      "powershell Get-Process",
 			},
-			want: AssessmentResult{
-				RiskLevel:          RiskLevelRed,
-				ApprovalRequired:   true,
-				CheckpointRequired: true,
-				Reason:             ReasonCommandApproval,
-			},
+			want: AssessmentResult{RiskLevel: RiskLevelRed, ApprovalRequired: true, CheckpointRequired: true, Reason: ReasonCommandApproval},
 		},
 		{
 			name: "safe_command_still_requires_approval",
@@ -84,18 +69,14 @@ func TestServiceAssess(t *testing.T) {
 				TargetObject:        "D:/workspace",
 				CapabilityAvailable: true,
 				WorkspaceKnown:      true,
-				ImpactScope: ImpactScope{
-					Files: []string{"D:/workspace"},
-				},
+				ImpactScope:         ImpactScope{Files: []string{"D:/workspace"}},
 			},
 			want: AssessmentResult{
 				RiskLevel:          RiskLevelYellow,
 				ApprovalRequired:   true,
 				CheckpointRequired: true,
 				Reason:             ReasonCommandApproval,
-				ImpactScope: ImpactScope{
-					Files: []string{"D:/workspace"},
-				},
+				ImpactScope:        ImpactScope{Files: []string{"D:/workspace"}},
 			},
 		},
 		{
@@ -105,19 +86,13 @@ func TestServiceAssess(t *testing.T) {
 				TargetObject:        "D:/outside/report.md",
 				CapabilityAvailable: true,
 				WorkspaceKnown:      true,
-				ImpactScope: ImpactScope{
-					Files:          []string{"D:/outside/report.md"},
-					OutOfWorkspace: true,
-				},
+				ImpactScope:         ImpactScope{Files: []string{"D:/outside/report.md"}, OutOfWorkspace: true},
 			},
 			want: AssessmentResult{
-				RiskLevel: RiskLevelRed,
-				Deny:      true,
-				Reason:    ReasonOutOfWorkspace,
-				ImpactScope: ImpactScope{
-					Files:          []string{"D:/outside/report.md"},
-					OutOfWorkspace: true,
-				},
+				RiskLevel:   RiskLevelRed,
+				Deny:        true,
+				Reason:      ReasonOutOfWorkspace,
+				ImpactScope: ImpactScope{Files: []string{"D:/outside/report.md"}, OutOfWorkspace: true},
 			},
 		},
 		{
@@ -126,33 +101,39 @@ func TestServiceAssess(t *testing.T) {
 				OperationName:       "page_read",
 				TargetObject:        "https://example.com/demo",
 				CapabilityAvailable: true,
-				ImpactScope: ImpactScope{
-					Webpages: []string{"https://example.com/demo"},
-				},
+				ImpactScope:         ImpactScope{Webpages: []string{"https://example.com/demo"}},
 			},
-			want: AssessmentResult{
-				RiskLevel:        RiskLevelYellow,
-				ApprovalRequired: true,
-				Reason:           ReasonWebpageApproval,
-				ImpactScope:      ImpactScope{Webpages: []string{"https://example.com/demo"}},
+			want: AssessmentResult{RiskLevel: RiskLevelYellow, ApprovalRequired: true, Reason: ReasonWebpageApproval, ImpactScope: ImpactScope{Webpages: []string{"https://example.com/demo"}}},
+		},
+		{
+			name: "browser_snapshot_is_low_risk_observation",
+			input: AssessmentInput{
+				OperationName:       "browser_snapshot",
+				TargetObject:        "https://example.com/demo",
+				CapabilityAvailable: true,
+				ImpactScope:         ImpactScope{Webpages: []string{"https://example.com/demo"}, Apps: []string{"chrome"}},
 			},
+			want: AssessmentResult{RiskLevel: RiskLevelGreen, Reason: ReasonNormal, ImpactScope: ImpactScope{Webpages: []string{"https://example.com/demo"}, Apps: []string{"chrome"}}},
+		},
+		{
+			name: "browser_tabs_list_requires_approval",
+			input: AssessmentInput{
+				OperationName:       "browser_tabs_list",
+				TargetObject:        "browser_tab:0",
+				CapabilityAvailable: true,
+				ImpactScope:         ImpactScope{Apps: []string{"chrome"}},
+			},
+			want: AssessmentResult{RiskLevel: RiskLevelYellow, ApprovalRequired: true, Reason: ReasonWebpageApproval, ImpactScope: ImpactScope{Apps: []string{"chrome"}}},
 		},
 		{
 			name: "browser_navigate_requires_approval",
 			input: AssessmentInput{
 				OperationName:       "browser_navigate",
-				TargetObject:        "https://example.com/new-page",
+				TargetObject:        "https://example.com/next",
 				CapabilityAvailable: true,
-				ImpactScope: ImpactScope{
-					Webpages: []string{"https://example.com/new-page"},
-				},
+				ImpactScope:         ImpactScope{Webpages: []string{"https://example.com/next"}, Apps: []string{"edge"}},
 			},
-			want: AssessmentResult{
-				RiskLevel:        RiskLevelYellow,
-				ApprovalRequired: true,
-				Reason:           ReasonWebpageApproval,
-				ImpactScope:      ImpactScope{Webpages: []string{"https://example.com/new-page"}},
-			},
+			want: AssessmentResult{RiskLevel: RiskLevelYellow, ApprovalRequired: true, Reason: ReasonWebpageApproval, ImpactScope: ImpactScope{Webpages: []string{"https://example.com/next"}, Apps: []string{"edge"}}},
 		},
 		{
 			name: "browser_interact_requires_approval",
@@ -160,16 +141,9 @@ func TestServiceAssess(t *testing.T) {
 				OperationName:       "browser_interact",
 				TargetObject:        "Example Docs",
 				CapabilityAvailable: true,
-				ImpactScope: ImpactScope{
-					Webpages: []string{"Example Docs"},
-				},
+				ImpactScope:         ImpactScope{Webpages: []string{"Example Docs"}},
 			},
-			want: AssessmentResult{
-				RiskLevel:        RiskLevelYellow,
-				ApprovalRequired: true,
-				Reason:           ReasonWebpageApproval,
-				ImpactScope:      ImpactScope{Webpages: []string{"Example Docs"}},
-			},
+			want: AssessmentResult{RiskLevel: RiskLevelYellow, ApprovalRequired: true, Reason: ReasonWebpageApproval, ImpactScope: ImpactScope{Webpages: []string{"Example Docs"}}},
 		},
 		{
 			name: "write_file_unknown_workspace_requires_approval",
@@ -179,11 +153,7 @@ func TestServiceAssess(t *testing.T) {
 				CapabilityAvailable: true,
 				WorkspaceKnown:      false,
 			},
-			want: AssessmentResult{
-				RiskLevel:        RiskLevelYellow,
-				ApprovalRequired: true,
-				Reason:           ReasonWorkspaceUnknown,
-			},
+			want: AssessmentResult{RiskLevel: RiskLevelYellow, ApprovalRequired: true, Reason: ReasonWorkspaceUnknown},
 		},
 		{
 			name: "transcode_media_unknown_workspace_requires_approval",
@@ -193,11 +163,7 @@ func TestServiceAssess(t *testing.T) {
 				CapabilityAvailable: true,
 				WorkspaceKnown:      false,
 			},
-			want: AssessmentResult{
-				RiskLevel:        RiskLevelYellow,
-				ApprovalRequired: true,
-				Reason:           ReasonWorkspaceUnknown,
-			},
+			want: AssessmentResult{RiskLevel: RiskLevelYellow, ApprovalRequired: true, Reason: ReasonWorkspaceUnknown},
 		},
 		{
 			name: "overwrite_requires_checkpoint",
@@ -206,20 +172,14 @@ func TestServiceAssess(t *testing.T) {
 				TargetObject:        "D:/workspace/report.md",
 				CapabilityAvailable: true,
 				WorkspaceKnown:      true,
-				ImpactScope: ImpactScope{
-					Files:                 []string{"D:/workspace/report.md"},
-					OverwriteOrDeleteRisk: true,
-				},
+				ImpactScope:         ImpactScope{Files: []string{"D:/workspace/report.md"}, OverwriteOrDeleteRisk: true},
 			},
 			want: AssessmentResult{
 				RiskLevel:          RiskLevelYellow,
 				ApprovalRequired:   true,
 				CheckpointRequired: true,
 				Reason:             ReasonOverwriteOrDelete,
-				ImpactScope: ImpactScope{
-					Files:                 []string{"D:/workspace/report.md"},
-					OverwriteOrDeleteRisk: true,
-				},
+				ImpactScope:        ImpactScope{Files: []string{"D:/workspace/report.md"}, OverwriteOrDeleteRisk: true},
 			},
 		},
 		{
@@ -229,20 +189,14 @@ func TestServiceAssess(t *testing.T) {
 				TargetObject:        "D:/workspace/frames",
 				CapabilityAvailable: true,
 				WorkspaceKnown:      true,
-				ImpactScope: ImpactScope{
-					Files:                 []string{"D:/workspace/frames"},
-					OverwriteOrDeleteRisk: true,
-				},
+				ImpactScope:         ImpactScope{Files: []string{"D:/workspace/frames"}, OverwriteOrDeleteRisk: true},
 			},
 			want: AssessmentResult{
 				RiskLevel:          RiskLevelYellow,
 				ApprovalRequired:   true,
 				CheckpointRequired: true,
 				Reason:             ReasonOverwriteOrDelete,
-				ImpactScope: ImpactScope{
-					Files:                 []string{"D:/workspace/frames"},
-					OverwriteOrDeleteRisk: true,
-				},
+				ImpactScope:        ImpactScope{Files: []string{"D:/workspace/frames"}, OverwriteOrDeleteRisk: true},
 			},
 		},
 	}

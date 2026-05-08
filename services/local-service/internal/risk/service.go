@@ -1,37 +1,24 @@
-// This file contains the minimal risk assessment service skeleton.
+// Package risk implements the minimal governance assessment layer.
 package risk
 
 import "strings"
 
-// Service provides risk assessment capabilities for this module.
+// Service evaluates tool risk without mutating orchestrator state.
 type Service struct{}
 
-// NewService creates a Service instance.
+// NewService constructs a minimal risk assessment service.
 func NewService() *Service {
 	return &Service{}
 }
 
-// DefaultLevel returns the default risk level for ordinary operations.
+// DefaultLevel returns the default risk level used by callers that need a
+// stable fallback before any assessment runs.
 func (s *Service) DefaultLevel() string {
 	return string(RiskLevelGreen)
 }
 
-// Assess performs the minimal risk evaluation for a tool or operation request.
-//
-// The current rules stay conservative:
-// 1. Capability unavailable => red + deny
-// 2. Denied command matched => red + deny
-// 3. Approval command matched => red + approval_required
-// 4. Out of workspace => red + deny
-// 5. Workspace write with unknown workspace facts => yellow + approval_required
-// 6. Webpage and attached browser operations => explicit webpage policy
-// 7. Overwrite/delete risk => yellow + checkpoint_required
-// 8. Everything else => green
-//
-// Notes:
-// - This service does not create ApprovalRequest records directly;
-// - This service does not advance state machines;
-// - This service only returns a stable, testable risk decision for callers.
+// Assess returns a stable, testable governance decision for one tool request.
+// It does not allocate approval records or mutate any task state.
 func (s *Service) Assess(input AssessmentInput) AssessmentResult {
 	result := AssessmentResult{
 		RiskLevel:   RiskLevelGreen,
@@ -75,7 +62,11 @@ func (s *Service) Assess(input AssessmentInput) AssessmentResult {
 		return result
 	}
 
-	if isWebpageOperation(input.OperationName) {
+	if isLowRiskBrowserObservationOperation(input.OperationName) {
+		return result
+	}
+
+	if isApprovalBrowserOperation(input.OperationName) {
 		result.RiskLevel = RiskLevelYellow
 		result.ApprovalRequired = true
 		result.Reason = ReasonWebpageApproval
@@ -148,13 +139,18 @@ func isApprovalCommand(commandPreview string) bool {
 	return false
 }
 
-func isWebpageOperation(operationName string) bool {
+func isApprovalBrowserOperation(operationName string) bool {
 	switch strings.TrimSpace(operationName) {
-	case "page_read", "page_search", "page_interact", "structured_dom":
+	case "page_read", "page_search", "page_interact", "structured_dom", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact":
 		return true
-	case "browser_attach_current", "browser_snapshot", "browser_tabs_list", "browser_tab_focus":
-		return true
-	case "browser_navigate", "browser_interact":
+	default:
+		return false
+	}
+}
+
+func isLowRiskBrowserObservationOperation(operationName string) bool {
+	switch strings.TrimSpace(operationName) {
+	case "browser_attach_current", "browser_snapshot":
 		return true
 	default:
 		return false

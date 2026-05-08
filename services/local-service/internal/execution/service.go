@@ -24,6 +24,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
+	risksvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textdecode"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
@@ -302,6 +303,15 @@ func (s *Service) AssessGovernance(ctx context.Context, request Request) (Govern
 	if reason == "" {
 		reason = precheck.DenyReason
 	}
+	if requiresBrowserObservationApproval(toolName, mapValue(request.Intent, "arguments"), toolInput, request.Snapshot) && !precheck.Deny {
+		precheck.ApprovalRequired = true
+		if precheck.RiskLevel == "" || precheck.RiskLevel == tools.RiskLevelGreen {
+			precheck.RiskLevel = tools.RiskLevelYellow
+		}
+		if reason == "" {
+			reason = risksvc.ReasonWebpageApproval
+		}
+	}
 	if requireAuthorizationFlag(request.Intent) && !precheck.Deny {
 		precheck.ApprovalRequired = true
 		if precheck.RiskLevel == "" || precheck.RiskLevel == tools.RiskLevelGreen {
@@ -321,6 +331,69 @@ func (s *Service) AssessGovernance(ctx context.Context, request Request) (Govern
 		Reason:             reason,
 		ImpactScope:        cloneMap(precheck.ImpactScope),
 	}, true, nil
+}
+
+// requiresBrowserObservationApproval preserves the low-risk classification for
+// browser_attach_current/browser_snapshot only when the request observes the
+// currently captured browser page through the default local endpoint. Explicit
+// selectors for other tabs or explicit endpoint overrides must be promoted
+// back onto the approval path.
+func requiresBrowserObservationApproval(toolName string, arguments map[string]any, toolInput map[string]any, snapshot contextsvc.TaskContextSnapshot) bool {
+	switch strings.TrimSpace(toolName) {
+	case "browser_attach_current", "browser_snapshot":
+	default:
+		return false
+	}
+	if hasExplicitBrowserObservationEndpoint(toolInput) {
+		return true
+	}
+
+	if !hasExplicitBrowserObservationTarget(arguments) {
+		return false
+	}
+
+	attach := mapValue(toolInput, "attach")
+	target := mapValue(attach, "target")
+	if len(target) == 0 {
+		return false
+	}
+	if _, ok := browserAttachPageIndex(target["page_index"]); ok {
+		return true
+	}
+	if targetURL := comparablePageURL(stringValue(target, "url", "")); targetURL != "" {
+		snapshotURL := comparablePageURL(snapshot.PageURL)
+		return snapshotURL == "" || snapshotURL != targetURL
+	}
+	return strings.TrimSpace(stringValue(target, "title_contains", "")) != ""
+}
+
+func hasExplicitBrowserObservationEndpoint(toolInput map[string]any) bool {
+	attach := mapValue(toolInput, "attach")
+	return strings.TrimSpace(stringValue(attach, "endpoint_url", "")) != ""
+}
+
+func hasExplicitBrowserObservationTarget(arguments map[string]any) bool {
+	if targetURL := strings.TrimSpace(stringValue(arguments, "target_url", "")); targetURL != "" {
+		return true
+	}
+	if titleContains := strings.TrimSpace(stringValue(arguments, "title_contains", "")); titleContains != "" {
+		return true
+	}
+	if _, ok := browserAttachPageIndex(arguments["page_index"]); ok {
+		return true
+	}
+	attachTarget := mapValue(mapValue(arguments, "attach"), "target")
+	if len(attachTarget) == 0 {
+		return false
+	}
+	if strings.TrimSpace(stringValue(attachTarget, "url", "")) != "" {
+		return true
+	}
+	if strings.TrimSpace(stringValue(attachTarget, "title_contains", "")) != "" {
+		return true
+	}
+	_, ok := browserAttachPageIndex(attachTarget["page_index"])
+	return ok
 }
 
 // Execute runs the minimum content-generation and persistence flow for one task.
@@ -982,7 +1055,7 @@ func (s *Service) executeDirectBuiltinTool(ctx context.Context, request Request)
 	args := mapValue(request.Intent, "arguments")
 	// Browser intents must stay on the direct execution path so attach-only
 	// requests do not fall back to model generation before the tool runs.
-	toolInput, ok := resolveBrowserToolInput(intentName, args)
+	toolInput, ok := resolveBrowserToolInput(intentName, args, request.Snapshot)
 	if !ok {
 		toolInput, ok = resolveDirectToolInput(intentName, args, request.Snapshot)
 	}
@@ -1112,7 +1185,7 @@ func (s *Service) resolveToolExecution(request Request, deliveryResult map[strin
 	if _, err := s.tools.Get(intentName); err != nil {
 		return "", nil, false
 	}
-	if browserInput, ok := resolveBrowserToolInput(intentName, args); ok {
+	if browserInput, ok := resolveBrowserToolInput(intentName, args, request.Snapshot); ok {
 		return intentName, browserInput, true
 	}
 
@@ -1194,35 +1267,6 @@ func resolveDirectToolInput(intentName string, args map[string]any, snapshot con
 		if limit, ok := args["limit"]; ok {
 			input["limit"] = limit
 		}
-		return input, true
-	default:
-		return nil, false
-	}
-}
-
-func resolveBrowserToolInput(intentName string, args map[string]any) (map[string]any, bool) {
-	attach := mapValue(args, "attach")
-	if len(attach) == 0 {
-		return nil, false
-	}
-	input := map[string]any{"attach": cloneMap(attach)}
-	trimmedIntentName := strings.TrimSpace(intentName)
-	switch trimmedIntentName {
-	case "browser_attach_current", "browser_snapshot", "browser_tabs_list", "browser_tab_focus":
-		return input, true
-	case "browser_navigate":
-		urlValue := stringValue(args, "url", "")
-		if urlValue == "" {
-			return nil, false
-		}
-		input["url"] = urlValue
-		return input, true
-	case "browser_interact":
-		actions, ok := args["actions"]
-		if !ok {
-			return nil, false
-		}
-		input["actions"] = actions
 		return input, true
 	default:
 		return nil, false
@@ -1994,7 +2038,7 @@ func (s *Service) generateOutput(ctx context.Context, request Request, inputText
 		// Prompt-only execution does not have a live loop poller, so queued
 		// steering must be folded into this generation request before the task
 		// resumes from authorization or a session queue.
-		promptInputText = agentloopAppendSteeringInput(inputText, request.SteeringMessages)
+		promptInputText = appendPromptSteeringInput(inputText, request.SteeringMessages)
 	}
 	trace, err := s.generateOutputWithPrompt(ctx, request, promptInputText)
 	if err != nil {
@@ -2088,9 +2132,9 @@ func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Reque
 		InputText:       runtimeInput,
 		ResultTitle:     request.ResultTitle,
 		FallbackOutput:  fallbackOutput(request, inputText),
-		ToolDefinitions: s.agentLoopToolDefinitions(),
+		ToolDefinitions: s.agentLoopToolDefinitionsForSnapshot(request.Snapshot),
 		AllowedTool: func(name string) bool {
-			return s.isAllowedAgentLoopTool(name) && !budgetDowngradeDisallowsDirectTool(request, name)
+			return s.isAllowedAgentLoopToolForSnapshot(name, request.Snapshot) && !budgetDowngradeDisallowsDirectTool(request, name)
 		},
 		PollSteering: func(_ context.Context, taskID string) []string {
 			if s.steeringPoller == nil {
@@ -2701,6 +2745,24 @@ func (noopAgentLoopHook) AfterTool(_ context.Context, _ agentloop.PersistedRound
 	return nil
 }
 
+func appendPromptSteeringInput(inputText string, steeringMessages []string) string {
+	if len(steeringMessages) == 0 {
+		return inputText
+	}
+	steeringLines := make([]string, 0, len(steeringMessages))
+	for _, item := range steeringMessages {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		steeringLines = append(steeringLines, "- "+trimmed)
+	}
+	if len(steeringLines) == 0 {
+		return inputText
+	}
+	return strings.TrimSpace(inputText) + "\n\nFollow-up steering:\n" + strings.Join(steeringLines, "\n")
+}
+
 func agentloopAppendSteeringInput(inputText string, steeringMessages []string) string {
 	if len(steeringMessages) == 0 {
 		return inputText
@@ -2828,11 +2890,14 @@ func annotateLoopRound(record tools.ToolCallRecord, loopRound int) tools.ToolCal
 // turn. The returned tool record is also preserved for audit and task history.
 func (s *Service) executeAgentLoopTool(ctx context.Context, request Request, call model.ToolInvocation, loopRound int) (string, tools.ToolCallRecord) {
 	toolName := strings.TrimSpace(call.Name)
-	if !s.isAllowedAgentLoopTool(toolName) {
+	if !s.isAllowedAgentLoopToolForSnapshot(toolName, request.Snapshot) {
 		return fmt.Sprintf("Tool %s is not allowed in the current agent loop.", toolName), tools.ToolCallRecord{}
 	}
 
-	toolInput := cloneMap(call.Arguments)
+	toolInput, ok := resolveAgentLoopToolInput(toolName, cloneMap(call.Arguments), request.Snapshot)
+	if !ok {
+		return fmt.Sprintf("Tool %s is missing required inputs for the current context.", toolName), tools.ToolCallRecord{}
+	}
 	toolResult, _, err := s.executeTool(ctx, request, s.workspace, toolName, toolInput)
 	if err != nil {
 		if toolResult != nil {
@@ -3104,8 +3169,8 @@ func (s *Service) resolveGovernanceToolExecution(request Request) (string, map[s
 			if budgetDowngradeDisallowsDirectTool(request, intentName) {
 				return "", nil, nil, false, nil
 			}
-			if browserInput, ok := resolveBrowserToolInput(intentName, args); ok {
-				return intentName, browserInput, s.toolExecutionContext(s.workspace, request), true, nil
+			if input, ok := resolveBrowserToolInput(intentName, args, request.Snapshot); ok {
+				return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
 			}
 			switch intentName {
 			case "read_file":
@@ -3261,8 +3326,10 @@ func governanceTargetObject(toolName string, toolInput map[string]any, execCtx *
 	case "page_read", "page_search", "page_interact", "structured_dom":
 		return stringValue(toolInput, "url", "")
 	case "browser_navigate":
-		return firstNonEmpty(strings.TrimSpace(stringValue(toolInput, "url", "")), browserTargetObject(mapValue(toolInput, "attach")))
-	case "browser_attach_current", "browser_snapshot", "browser_tabs_list", "browser_tab_focus", "browser_interact":
+		return firstNonEmpty(strings.TrimSpace(stringValue(toolInput, "url", "")), browserStableTargetObject(mapValue(toolInput, "attach")))
+	case "browser_tab_focus", "browser_interact":
+		return browserStableTargetObject(mapValue(toolInput, "attach"))
+	case "browser_attach_current", "browser_snapshot", "browser_tabs_list":
 		return browserTargetObject(mapValue(toolInput, "attach"))
 	default:
 		for _, key := range governedTargetKeys(toolName) {
@@ -3298,6 +3365,14 @@ func approvedTargetObject(intent map[string]any, workspacePath string) string {
 	if intentName == "exec_command" {
 		return workspacePath
 	}
+	if intentName == "browser_navigate" {
+		if url := strings.TrimSpace(stringValue(arguments, "url", "")); url != "" {
+			return url
+		}
+	}
+	if target := browserIntentTargetObject(intentName, arguments); target != "" {
+		return target
+	}
 	if url := strings.TrimSpace(stringValue(arguments, "url", "")); url != "" {
 		return url
 	}
@@ -3326,13 +3401,193 @@ func approvedTargetKeys(intentName string) []string {
 	}
 }
 
+func resolveBrowserToolInput(intentName string, arguments map[string]any, snapshot contextsvc.TaskContextSnapshot) (map[string]any, bool) {
+	if explicitInput, ok := resolveExplicitBrowserToolInput(intentName, arguments); ok {
+		return explicitInput, true
+	}
+
+	browserKind := strings.ToLower(strings.TrimSpace(snapshot.BrowserKind))
+	if browserKind != "chrome" && browserKind != "edge" {
+		return nil, false
+	}
+
+	useSnapshotTarget := true
+	allowEmptyTarget := false
+	requireStableTarget := requiresStableBrowserTarget(intentName)
+	if intentName == "browser_tabs_list" {
+		allowEmptyTarget = true
+	}
+	if intentName == "browser_tab_focus" {
+		useSnapshotTarget = browserTargetOverrideMissing(arguments)
+	}
+
+	attach := buildBrowserAttachInput(browserKind, snapshot, arguments, useSnapshotTarget, allowEmptyTarget, requireStableTarget)
+	if len(attach) == 0 {
+		return nil, false
+	}
+
+	input := map[string]any{"attach": attach}
+	switch strings.TrimSpace(intentName) {
+	case "browser_attach_current", "browser_snapshot", "browser_tabs_list", "browser_tab_focus":
+		return input, true
+	case "browser_navigate":
+		urlValue := strings.TrimSpace(stringValue(arguments, "url", ""))
+		if urlValue == "" {
+			return nil, false
+		}
+		input["url"] = urlValue
+		return input, true
+	case "browser_interact":
+		actions, ok := arguments["actions"]
+		if !ok {
+			return nil, false
+		}
+		input["actions"] = actions
+		return input, true
+	default:
+		return nil, false
+	}
+}
+
+func resolveExplicitBrowserToolInput(intentName string, arguments map[string]any) (map[string]any, bool) {
+	attach := mergeExplicitBrowserAttachInput(mapValue(arguments, "attach"), arguments)
+	if len(attach) == 0 {
+		return nil, false
+	}
+	if requiresStableBrowserTarget(intentName) && !hasStableBrowserAttachTarget(attach) {
+		return nil, false
+	}
+
+	input := map[string]any{"attach": cloneMap(attach)}
+	switch strings.TrimSpace(intentName) {
+	case "browser_attach_current", "browser_snapshot", "browser_tabs_list", "browser_tab_focus":
+		return input, true
+	case "browser_navigate":
+		urlValue := strings.TrimSpace(stringValue(arguments, "url", ""))
+		if urlValue == "" {
+			return nil, false
+		}
+		input["url"] = urlValue
+		return input, true
+	case "browser_interact":
+		actions, ok := arguments["actions"]
+		if !ok {
+			return nil, false
+		}
+		input["actions"] = actions
+		return input, true
+	default:
+		return nil, false
+	}
+}
+
+func mergeExplicitBrowserAttachInput(attachInput map[string]any, arguments map[string]any) map[string]any {
+	merged := cloneMap(attachInput)
+	if merged == nil {
+		merged = map[string]any{}
+	}
+	target := cloneMap(mapValue(merged, "target"))
+	if target == nil {
+		target = map[string]any{}
+	}
+	if targetURL := strings.TrimSpace(stringValue(arguments, "target_url", "")); targetURL != "" {
+		target["url"] = targetURL
+	}
+	if titleContains := strings.TrimSpace(stringValue(arguments, "title_contains", "")); titleContains != "" {
+		target["title_contains"] = titleContains
+	}
+	if pageIndex, ok := browserAttachPageIndex(arguments["page_index"]); ok {
+		target["page_index"] = pageIndex
+	}
+	if len(target) > 0 {
+		merged["target"] = target
+	}
+	return merged
+}
+
+func buildBrowserAttachInput(browserKind string, snapshot contextsvc.TaskContextSnapshot, arguments map[string]any, useSnapshotTarget, allowEmptyTarget, requireStableTarget bool) map[string]any {
+	target := map[string]any{}
+	if pageIndex, ok := browserAttachPageIndex(arguments["page_index"]); ok {
+		target["page_index"] = pageIndex
+	}
+	if targetURL := strings.TrimSpace(stringValue(arguments, "target_url", "")); targetURL != "" {
+		target["url"] = targetURL
+	} else if useSnapshotTarget && strings.TrimSpace(snapshot.PageURL) != "" {
+		target["url"] = strings.TrimSpace(snapshot.PageURL)
+	}
+	if !requireStableTarget {
+		if titleContains := strings.TrimSpace(stringValue(arguments, "title_contains", "")); titleContains != "" {
+			target["title_contains"] = titleContains
+		} else if useSnapshotTarget {
+			if pageTitle := strings.TrimSpace(snapshot.PageTitle); pageTitle != "" {
+				target["title_contains"] = pageTitle
+			} else if windowTitle := strings.TrimSpace(snapshot.WindowTitle); windowTitle != "" {
+				target["title_contains"] = windowTitle
+			}
+		}
+	}
+	if requireStableTarget && !hasStableBrowserTarget(target) {
+		return nil
+	}
+	if len(target) == 0 && !allowEmptyTarget {
+		return nil
+	}
+
+	attach := map[string]any{
+		"mode":         string(tools.BrowserAttachModeCDP),
+		"browser_kind": browserKind,
+	}
+	if len(target) > 0 {
+		attach["target"] = target
+	}
+	return attach
+}
+
 func browserIntentTargetObject(intentName string, arguments map[string]any) string {
+	if requiresStableBrowserTarget(intentName) {
+		if strings.TrimSpace(intentName) == "browser_navigate" {
+			if value := strings.TrimSpace(stringValue(arguments, "url", "")); value != "" {
+				return value
+			}
+		}
+		if targetURL := strings.TrimSpace(stringValue(arguments, "target_url", "")); targetURL != "" {
+			return targetURL
+		}
+		if pageIndex, ok := browserAttachPageIndex(arguments["page_index"]); ok {
+			return fmt.Sprintf("browser_tab:%d", pageIndex)
+		}
+		return browserStableTargetObject(mapValue(arguments, "attach"))
+	}
+
 	if strings.TrimSpace(intentName) == "browser_navigate" {
 		if value := strings.TrimSpace(stringValue(arguments, "url", "")); value != "" {
 			return value
 		}
 	}
+	if targetURL := strings.TrimSpace(stringValue(arguments, "target_url", "")); targetURL != "" {
+		return targetURL
+	}
+	if titleContains := strings.TrimSpace(stringValue(arguments, "title_contains", "")); titleContains != "" {
+		return titleContains
+	}
+	if pageIndex, ok := browserAttachPageIndex(arguments["page_index"]); ok {
+		return fmt.Sprintf("browser_tab:%d", pageIndex)
+	}
 	return browserTargetObject(mapValue(arguments, "attach"))
+}
+
+func browserStableTargetObject(attach map[string]any) string {
+	if len(attach) == 0 {
+		return ""
+	}
+	target := mapValue(attach, "target")
+	if value := strings.TrimSpace(stringValue(target, "url", "")); value != "" {
+		return value
+	}
+	if pageIndex, ok := browserAttachPageIndex(target["page_index"]); ok {
+		return fmt.Sprintf("browser_tab:%d", pageIndex)
+	}
+	return ""
 }
 
 func browserTargetObject(attach map[string]any) string {
@@ -3343,13 +3598,37 @@ func browserTargetObject(attach map[string]any) string {
 	if value := strings.TrimSpace(stringValue(target, "url", "")); value != "" {
 		return value
 	}
-	if value := strings.TrimSpace(stringValue(target, "title_contains", "")); value != "" {
-		return value
-	}
 	if pageIndex, ok := browserAttachPageIndex(target["page_index"]); ok {
 		return fmt.Sprintf("browser_tab:%d", pageIndex)
 	}
+	if value := strings.TrimSpace(stringValue(target, "title_contains", "")); value != "" {
+		return value
+	}
 	return strings.TrimSpace(stringValue(attach, "browser_kind", ""))
+}
+
+func requiresStableBrowserTarget(intentName string) bool {
+	switch strings.TrimSpace(intentName) {
+	case "browser_navigate", "browser_tab_focus", "browser_interact":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasStableBrowserAttachTarget(attach map[string]any) bool {
+	return hasStableBrowserTarget(mapValue(attach, "target"))
+}
+
+func hasStableBrowserTarget(target map[string]any) bool {
+	if len(target) == 0 {
+		return false
+	}
+	if strings.TrimSpace(stringValue(target, "url", "")) != "" {
+		return true
+	}
+	_, ok := browserAttachPageIndex(target["page_index"])
+	return ok
 }
 
 func browserAttachPageIndex(rawValue any) (int, bool) {
@@ -3364,6 +3643,16 @@ func browserAttachPageIndex(rawValue any) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+func browserTargetOverrideMissing(arguments map[string]any) bool {
+	if _, ok := browserAttachPageIndex(arguments["page_index"]); ok {
+		return false
+	}
+	if strings.TrimSpace(stringValue(arguments, "target_url", "")) != "" {
+		return false
+	}
+	return strings.TrimSpace(stringValue(arguments, "title_contains", "")) == ""
 }
 
 func resolvePageToolInput(intentName string, arguments map[string]any, snapshot contextsvc.TaskContextSnapshot) (map[string]any, bool) {
@@ -3398,7 +3687,7 @@ func pageAttachInput(urlValue string, arguments map[string]any, snapshot context
 	// can request a page tool, but it must not steer browser kind or CDP endpoint
 	// away from the observed foreground session.
 	browserKind := strings.ToLower(strings.TrimSpace(snapshot.BrowserKind))
-	if browserKind != "" && browserKind != "chrome" && browserKind != "edge" {
+	if browserKind != "chrome" && browserKind != "edge" {
 		return nil
 	}
 	pageURL := comparablePageURL(snapshot.PageURL)
@@ -3411,11 +3700,9 @@ func pageAttachInput(urlValue string, arguments map[string]any, snapshot context
 		target["title_contains"] = pageTitle
 	}
 	attach := map[string]any{
-		"mode":   string(tools.BrowserAttachModeCDP),
-		"target": target,
-	}
-	if browserKind != "" {
-		attach["browser_kind"] = browserKind
+		"mode":         string(tools.BrowserAttachModeCDP),
+		"browser_kind": browserKind,
+		"target":       target,
 	}
 	return attach
 }
