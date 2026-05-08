@@ -291,6 +291,27 @@ function getSummonNextStep(state: DashboardHomeStateData, quickActions?: string[
   return state.navigationTarget?.label ?? dashboardModuleNextSteps[state.module];
 }
 
+function appendDistinctContextItem(
+  items: DashboardHomeContextItem[],
+  candidate: DashboardHomeContextItem | null,
+) {
+  if (!candidate) {
+    return items;
+  }
+
+  const normalizedCandidate = candidate.text.trim();
+  if (normalizedCandidate === "") {
+    return items;
+  }
+
+  if (items.some((item) => item.text.trim() === normalizedCandidate)) {
+    return items;
+  }
+
+  items.push(candidate);
+  return items;
+}
+
 function dedupeSummonTemplates(templates: Array<Omit<DashboardHomeSummonEvent, "id">>) {
   const seen = new Set<string>();
 
@@ -774,31 +795,17 @@ function buildReferenceMirrorState(
   state.subline = summary;
   state.context = [
     {
+      iconKey: "link",
+      text: `记忆 ID：${latestReference.memory_id}`,
+      type: "hint",
+    },
+    {
       iconKey: "brain",
-      text: summary,
+      text: `命中内容：${summary}`,
       type: "active",
     },
-    ...(latestReference.reason && latestReference.reason !== summary
-      ? [{
-          iconKey: "repeat",
-          text: latestReference.reason,
-          type: "hint",
-        } satisfies DashboardHomeContextItem]
-      : []),
   ];
-  state.insights = [
-    {
-      emphasis: true,
-      iconKey: "brain",
-      text: summary,
-    },
-    ...(latestReference.reason && latestReference.reason !== summary
-      ? [{
-          iconKey: "repeat",
-          text: latestReference.reason,
-        } satisfies DashboardHomeInsightItem]
-      : []),
-  ];
+  state.insights = undefined;
   state.navigationTarget = buildMirrorDetailNavigationTarget("memory", "打开镜子页", latestReference.memory_id);
   return state;
 }
@@ -817,11 +824,6 @@ function buildProfileMirrorState(
   state.subline = `工作风格：${profile.work_style}`;
   state.context = [
     {
-      iconKey: "brain",
-      text: "后端画像字段 3 项",
-      type: "active",
-    },
-    {
       iconKey: "chat",
       text: `偏好交付：${profile.preferred_output}`,
       type: "normal",
@@ -832,21 +834,7 @@ function buildProfileMirrorState(
       type: "hint",
     },
   ];
-  state.insights = [
-    {
-      emphasis: true,
-      iconKey: "brain",
-      text: `工作风格：${profile.work_style}`,
-    },
-    {
-      iconKey: "chat",
-      text: `偏好交付：${profile.preferred_output}`,
-    },
-    {
-      iconKey: "time",
-      text: `活跃时段：${profile.active_hours}`,
-    },
-  ];
+  state.insights = undefined;
   state.navigationTarget = buildMirrorDetailNavigationTarget("profile", "打开镜子页");
   return state;
 }
@@ -861,21 +849,13 @@ function buildHistoryMirrorState(
 
   const state = createFormalMirrorStateBase(stateKey);
   state.headline = "历史概要";
-  state.subline = overview.history_summary[1] ?? overview.history_summary[0];
-  state.context = [
-    {
-      iconKey: "repeat",
-      text: overview.history_summary[0],
-      type: "active",
-    },
-  ];
-  state.insights = [
-    {
-      emphasis: true,
-      iconKey: "repeat",
-      text: overview.history_summary[0],
-    },
-  ];
+  state.subline = overview.history_summary[0];
+  state.context = overview.history_summary.slice(1, 3).map((summary, index) => ({
+    iconKey: index === 0 ? "repeat" : "time",
+    text: summary,
+    type: "hint",
+  }));
+  state.insights = undefined;
   state.navigationTarget = buildMirrorDetailNavigationTarget("history", "打开镜子页");
   return state;
 }
@@ -983,23 +963,6 @@ function buildSafetyState(stateKey: DashboardHomeEventStateKey, overview: AgentD
     (trustSummary.pending_authorizations > 0
       ? "建议先处理待授权操作，再继续推进其它任务。"
       : `工作区位于 ${trustSummary.workspace_path || "当前默认目录"}。`);
-  state.context = [
-    {
-      iconKey: "shield",
-      text: `风险等级：${riskLabel}`,
-      type: trustSummary.risk_level === "green" ? "normal" : "warn",
-    },
-    {
-      iconKey: "lock",
-      text: `待授权：${trustSummary.pending_authorizations} 项`,
-      type: trustSummary.pending_authorizations > 0 ? "warn" : "normal",
-    },
-    {
-      iconKey: "history",
-      text: trustSummary.has_restore_point ? "最近恢复点可用" : "当前还没有恢复点",
-      type: trustSummary.has_restore_point ? "hint" : "warn",
-    },
-  ];
   state.signals = [
     {
       iconKey: "shield",
@@ -1023,11 +986,32 @@ function buildSafetyState(stateKey: DashboardHomeEventStateKey, overview: AgentD
       value: trustSummary.has_restore_point ? "可用" : "暂无",
     },
   ];
+  state.context = [];
+  appendDistinctContextItem(
+    state.context,
+    highlights[0]
+      ? {
+          iconKey: trustSummary.pending_authorizations > 0 ? "lock" : "shield",
+          text: highlights[0],
+          type: trustSummary.pending_authorizations > 0 ? "warn" : "hint",
+        }
+      : null,
+  );
+  appendDistinctContextItem(
+    state.context,
+    trustSummary.workspace_path
+      ? {
+          iconKey: "file",
+          text: `工作区：${trustSummary.workspace_path}`,
+          type: "hint",
+        }
+      : null,
+  );
 
   if (trustSummary.pending_authorizations > 0 || trustSummary.risk_level !== "green") {
     state.anomaly = {
       actionLabel: "查看安全详情",
-      desc: highlights[0] ?? "当前存在需要优先确认的安全事项。",
+      desc: trustSummary.pending_authorizations > 0 ? "先处理待授权操作，再继续推进其它任务。" : "建议先确认当前风险边界。",
       dismissLabel: "稍后再看",
       severity: trustSummary.pending_authorizations > 0 ? "error" : "warn",
       title: trustSummary.pending_authorizations > 0 ? "安全链路有待处理项" : "当前需要留意执行边界",

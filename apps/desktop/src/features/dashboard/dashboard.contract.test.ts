@@ -1783,6 +1783,10 @@ test("dashboard event panel routes task-detail actions through the shared naviga
   assert.match(panelSource, /activeDetailKey: target\.activeDetailKey/);
   assert.match(panelSource, /resolvePrimaryActionLabel/);
   assert.match(panelSource, /activeState\.navigationTarget\?\.label/);
+  assert.match(panelSource, /filterDistinctContextItems/);
+  assert.match(panelSource, /filterDistinctSignals/);
+  assert.match(panelSource, /buildMetaPills/);
+  assert.doesNotMatch(panelSource, /这是首页事件舱/);
 });
 
 test("dashboard home randomizes summons while preferring a different module when alternatives exist", () => {
@@ -6832,7 +6836,8 @@ test("dashboard home reuses formal mirror profile fields for memory copy", async
 
       assert.equal(data.stateMap.memory_summary?.headline, "用户画像");
       assert.equal(data.stateMap.memory_summary?.subline, "工作风格：偏好即时结果回显");
-      assert.equal(data.stateMap.memory_summary?.context?.[0]?.text, "后端画像字段 3 项");
+      assert.equal(data.stateMap.memory_summary?.context?.[0]?.text, "偏好交付：bubble");
+      assert.equal(data.stateMap.memory_summary?.context?.[1]?.text, "活跃时段：16-21h");
       assert.equal(data.stateMap.memory_summary?.navigationTarget?.kind, "mirror_detail");
       assert.equal(data.stateMap.memory_summary?.navigationTarget?.activeDetailKey, "profile");
     },
@@ -7063,7 +7068,8 @@ test("dashboard home prefers formal mirror references over profile copy when bot
 
       assert.equal(data.stateMap.memory_habit?.headline, "近期被调用记忆");
       assert.equal(data.stateMap.memory_habit?.subline, "本周战略复盘已被近期任务再次引用。");
-      assert.equal(data.stateMap.memory_habit?.context?.[0]?.text, "本周战略复盘已被近期任务再次引用。");
+      assert.equal(data.stateMap.memory_habit?.context?.[0]?.text, "记忆 ID：memory_strategy_weekly");
+      assert.equal(data.stateMap.memory_habit?.context?.[1]?.text, "命中内容：本周战略复盘已被近期任务再次引用。");
     },
     {
       getDashboardModule: async (params: unknown) => ({
