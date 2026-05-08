@@ -308,10 +308,10 @@ func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnve
 		response := s.dispatch(request)
 		unsubscribeTaskStart()
 		unsubscribeRuntime()
-		responseTaskIDs := taskIDsFromResponse(response)
-		lateTaskIDs := responseTaskIDLocks(responseTaskIDs, initialTaskIDs)
-		// Requests that only learn their task id from the response must claim the
-		// real task lock before writing the response and destructively replaying the
+		ownedTaskIDs := ownedTaskIDsForReplay(request.Method, tracker.taskIDsSnapshot(), response)
+		lateTaskIDs := responseTaskIDLocks(ownedTaskIDs, initialTaskIDs)
+		// Requests that establish task ownership during dispatch must claim the real
+		// task lock before writing the response and destructively replaying the
 		// buffered notification queue for that task.
 		taskCoordinator.withTaskLocks(lateTaskIDs, func() {
 			if shouldProbeBlockedDisconnect && pendingState.isBlocked() {
@@ -332,7 +332,7 @@ func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnve
 				return
 			}
 
-			for _, taskID := range responseTaskIDs {
+			for _, taskID := range ownedTaskIDs {
 				notifications, err := s.orchestrator.DrainNotifications(taskID)
 				if err != nil {
 					continue

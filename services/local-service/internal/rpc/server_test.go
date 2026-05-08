@@ -1445,7 +1445,7 @@ func TestHandleStreamConnReplaysLateTaskNotificationsBeforeQueuedSameTaskFollowU
 	}
 
 	firstReturned := make(chan struct{})
-	server.handlers["test.response.task"] = func(_ map[string]any) (any, *rpcError) {
+	server.handlers["agent.task.start"] = func(_ map[string]any) (any, *rpcError) {
 		select {
 		case <-firstReturned:
 		default:
@@ -1476,8 +1476,16 @@ func TestHandleStreamConnReplaysLateTaskNotificationsBeforeQueuedSameTaskFollowU
 	firstRequest := requestEnvelope{
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-late-task-starter"`),
-		Method:  "test.response.task",
-		Params:  mustMarshal(t, map[string]any{}),
+		Method:  "agent.task.start",
+		Params: mustMarshal(t, map[string]any{
+			"session_id": "sess_late_task_response_owner",
+			"source":     "floating_ball",
+			"trigger":    "text_selected_click",
+			"input": map[string]any{
+				"type": "text_selection",
+				"text": "start a task on the shared stream",
+			},
+		}),
 	}
 	if err := encoder.Encode(firstRequest); err != nil {
 		t.Fatalf("encode first late-task response request: %v", err)
@@ -1486,7 +1494,7 @@ func TestHandleStreamConnReplaysLateTaskNotificationsBeforeQueuedSameTaskFollowU
 	select {
 	case <-firstReturned:
 	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected first response-discovered task request to finish dispatch")
+		t.Fatal("expected first task-starting request to finish dispatch")
 	}
 
 	secondRequest := requestEnvelope{
@@ -1538,6 +1546,130 @@ func TestHandleStreamConnReplaysLateTaskNotificationsBeforeQueuedSameTaskFollowU
 	}
 	if !notificationBeforeFollowUp {
 		t.Fatal("expected buffered notifications for the started task to replay before the queued same-task follow-up response")
+	}
+}
+
+func TestHandleStreamConnTaskListDoesNotStealBufferedNotifications(t *testing.T) {
+	server := newTestServer()
+	startResult, err := server.orchestrator.StartTask(map[string]any{
+		"session_id": "sess_task_list_replay_owner",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "queue notifications for task.list replay ownership",
+		},
+	})
+	if err != nil {
+		t.Fatalf("seed task.start: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	notifications, err := server.orchestrator.PendingNotifications(taskID)
+	if err != nil || len(notifications) == 0 {
+		t.Fatalf("expected seeded task to queue notifications, err=%v notifications=%+v", err, notifications)
+	}
+
+	listStarted := make(chan struct{})
+	allowListReturn := make(chan struct{})
+	server.handlers["agent.task.list"] = func(_ map[string]any) (any, *rpcError) {
+		select {
+		case <-listStarted:
+		default:
+			close(listStarted)
+		}
+		<-allowListReturn
+		return map[string]any{
+			"items": []any{
+				map[string]any{"task_id": taskID},
+			},
+		}, nil
+	}
+	server.handlers["test.followup.task"] = func(params map[string]any) (any, *rpcError) {
+		return map[string]any{
+			"task": map[string]any{
+				"task_id": stringValue(params, "task_id", ""),
+			},
+		}, nil
+	}
+
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+
+	go server.handleStreamConn(left)
+
+	encoder := json.NewEncoder(right)
+	decoder := json.NewDecoder(right)
+	if err := encoder.Encode(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-task-list-owned"`),
+		Method:  "agent.task.list",
+		Params:  mustMarshal(t, map[string]any{}),
+	}); err != nil {
+		t.Fatalf("encode task.list request: %v", err)
+	}
+
+	select {
+	case <-listStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected task.list request to start dispatch")
+	}
+
+	if err := encoder.Encode(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-task-list-followup"`),
+		Method:  "test.followup.task",
+		Params: mustMarshal(t, map[string]any{
+			"task_id": taskID,
+		}),
+	}); err != nil {
+		t.Fatalf("encode follow-up request: %v", err)
+	}
+	close(allowListReturn)
+
+	if err := right.SetReadDeadline(time.Now().Add(1500 * time.Millisecond)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	defer func() {
+		if err := right.SetReadDeadline(time.Time{}); err != nil {
+			t.Fatalf("clear read deadline: %v", err)
+		}
+	}()
+
+	taskListResponseSeen := false
+	followUpResponseSeen := false
+	notificationAfterFollowUp := false
+	for index := 0; index < 16; index++ {
+		var envelope map[string]any
+		if err := decoder.Decode(&envelope); err != nil {
+			t.Fatalf("decode shared stream envelope: %v", err)
+		}
+		if envelopeID, _ := envelope["id"].(string); envelopeID == "req-task-list-owned" {
+			taskListResponseSeen = true
+			continue
+		}
+		if envelopeID, _ := envelope["id"].(string); envelopeID == "req-task-list-followup" {
+			followUpResponseSeen = true
+			continue
+		}
+		if method, _ := envelope["method"].(string); method != "" {
+			if !followUpResponseSeen {
+				t.Fatalf("expected task.list not to replay %s before the follow-up response, got %+v", method, envelope)
+			}
+			notificationAfterFollowUp = true
+			if taskListResponseSeen {
+				break
+			}
+		}
+	}
+	if !taskListResponseSeen {
+		t.Fatal("expected task.list response to arrive on the shared stream")
+	}
+	if !followUpResponseSeen {
+		t.Fatal("expected follow-up response to arrive on the shared stream")
+	}
+	if !notificationAfterFollowUp {
+		t.Fatal("expected the owning follow-up request to replay buffered notifications after its response")
 	}
 }
 
