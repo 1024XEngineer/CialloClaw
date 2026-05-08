@@ -3126,6 +3126,27 @@ func TestAssessGovernanceBrowserSnapshotRequiresApprovalForNonCurrentExplicitTar
 	}
 }
 
+func TestAssessGovernanceBrowserSnapshotRequiresApprovalForTopLevelTargetURL(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_browser_snapshot_top_level_url",
+		RunID:  "run_browser_snapshot_top_level_url",
+		Intent: map[string]any{"name": "browser_snapshot", "arguments": map[string]any{
+			"target_url": "https://example.com/other",
+		}},
+		Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com/docs", PageTitle: "Example Docs"},
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected browser_snapshot top-level target governance path to be handled")
+	}
+	if !assessment.ApprovalRequired || assessment.RiskLevel != string(risk.RiskLevelYellow) {
+		t.Fatalf("expected browser_snapshot top-level target_url to require approval, got %+v", assessment)
+	}
+}
+
 func TestAssessGovernanceBrowserAttachCurrentRequiresApprovalForTitleOnlyExplicitTarget(t *testing.T) {
 	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
 	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
@@ -3148,6 +3169,27 @@ func TestAssessGovernanceBrowserAttachCurrentRequiresApprovalForTitleOnlyExplici
 	}
 	if !assessment.ApprovalRequired || assessment.RiskLevel != string(risk.RiskLevelYellow) {
 		t.Fatalf("expected browser_attach_current title-only target to require approval, got %+v", assessment)
+	}
+}
+
+func TestAssessGovernanceBrowserAttachCurrentRequiresApprovalForTopLevelPageIndex(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_browser_attach_page_index",
+		RunID:  "run_browser_attach_page_index",
+		Intent: map[string]any{"name": "browser_attach_current", "arguments": map[string]any{
+			"page_index": 2,
+		}},
+		Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com/docs", PageTitle: "Example Docs"},
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected browser_attach_current top-level page_index governance path to be handled")
+	}
+	if !assessment.ApprovalRequired || assessment.RiskLevel != string(risk.RiskLevelYellow) {
+		t.Fatalf("expected browser_attach_current top-level page_index to require approval, got %+v", assessment)
 	}
 }
 

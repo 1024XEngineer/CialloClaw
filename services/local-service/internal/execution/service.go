@@ -303,7 +303,7 @@ func (s *Service) AssessGovernance(ctx context.Context, request Request) (Govern
 	if reason == "" {
 		reason = precheck.DenyReason
 	}
-	if requiresBrowserObservationApproval(toolName, mapValue(request.Intent, "arguments"), request.Snapshot) && !precheck.Deny {
+	if requiresBrowserObservationApproval(toolName, mapValue(request.Intent, "arguments"), toolInput, request.Snapshot) && !precheck.Deny {
 		precheck.ApprovalRequired = true
 		if precheck.RiskLevel == "" || precheck.RiskLevel == tools.RiskLevelGreen {
 			precheck.RiskLevel = tools.RiskLevelYellow
@@ -337,17 +337,18 @@ func (s *Service) AssessGovernance(ctx context.Context, request Request) (Govern
 // browser_attach_current/browser_snapshot only when the request observes the
 // currently captured browser page. Explicit selectors for other tabs must be
 // promoted back onto the approval path.
-func requiresBrowserObservationApproval(toolName string, arguments map[string]any, snapshot contextsvc.TaskContextSnapshot) bool {
+func requiresBrowserObservationApproval(toolName string, arguments map[string]any, toolInput map[string]any, snapshot contextsvc.TaskContextSnapshot) bool {
 	switch strings.TrimSpace(toolName) {
 	case "browser_attach_current", "browser_snapshot":
 	default:
 		return false
 	}
 
-	attach := mapValue(arguments, "attach")
-	if len(attach) == 0 {
+	if !hasExplicitBrowserObservationTarget(arguments) {
 		return false
 	}
+
+	attach := mapValue(toolInput, "attach")
 	target := mapValue(attach, "target")
 	if len(target) == 0 {
 		return false
@@ -360,6 +361,30 @@ func requiresBrowserObservationApproval(toolName string, arguments map[string]an
 		return snapshotURL == "" || snapshotURL != targetURL
 	}
 	return strings.TrimSpace(stringValue(target, "title_contains", "")) != ""
+}
+
+func hasExplicitBrowserObservationTarget(arguments map[string]any) bool {
+	if targetURL := strings.TrimSpace(stringValue(arguments, "target_url", "")); targetURL != "" {
+		return true
+	}
+	if titleContains := strings.TrimSpace(stringValue(arguments, "title_contains", "")); titleContains != "" {
+		return true
+	}
+	if _, ok := browserAttachPageIndex(arguments["page_index"]); ok {
+		return true
+	}
+	attachTarget := mapValue(mapValue(arguments, "attach"), "target")
+	if len(attachTarget) == 0 {
+		return false
+	}
+	if strings.TrimSpace(stringValue(attachTarget, "url", "")) != "" {
+		return true
+	}
+	if strings.TrimSpace(stringValue(attachTarget, "title_contains", "")) != "" {
+		return true
+	}
+	_, ok := browserAttachPageIndex(attachTarget["page_index"])
+	return ok
 }
 
 // Execute runs the minimum content-generation and persistence flow for one task.
