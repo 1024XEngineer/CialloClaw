@@ -17,6 +17,11 @@ import (
 // serialization locks.
 const maxPendingStreamRequests = 32
 
+// blockedStreamDisconnectProbeWindow gives a briefly backpressured reader a
+// chance to observe a peer disconnect before it dispatches a stale overflow
+// request that was only decoded after capacity freed.
+const blockedStreamDisconnectProbeWindow = 15 * time.Millisecond
+
 type streamConnState struct {
 	closeOnce sync.Once
 	closed    chan struct{}
@@ -178,7 +183,7 @@ func streamReaderReachedEOF(reader *bufio.Reader, conn net.Conn) bool {
 	if reader.Buffered() > 0 {
 		return false
 	}
-	if err := conn.SetReadDeadline(time.Now()); err != nil {
+	if err := conn.SetReadDeadline(time.Now().Add(blockedStreamDisconnectProbeWindow)); err != nil {
 		return false
 	}
 	defer conn.SetReadDeadline(time.Time{})
