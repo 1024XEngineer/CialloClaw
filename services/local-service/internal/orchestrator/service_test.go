@@ -5607,6 +5607,150 @@ func TestServiceTaskListPrefersStructuredTaskStoreFallback(t *testing.T) {
 	}
 }
 
+func TestStructuredTaskRecordToRuntimeSkipsDetailHydrationForLists(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured task list lightweight")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	taskID := "task_structured_lightweight"
+	runID := "run_structured_lightweight"
+	sessionID := "sess_structured_lightweight"
+	startedAt := time.Date(2026, 4, 17, 9, 0, 0, 0, time.UTC)
+	updatedAt := time.Date(2026, 4, 17, 9, 4, 0, 0, time.UTC)
+	finishedAt := time.Date(2026, 4, 17, 9, 6, 0, 0, time.UTC)
+	snapshotJSONBytes, err := json.Marshal(storage.TaskRunRecord{
+		TaskID:           taskID,
+		SessionID:        sessionID,
+		RunID:            runID,
+		Title:            "snapshot title should stay detail-only",
+		SourceType:       "hover_input",
+		Status:           "completed",
+		Intent:           map[string]any{"name": "summarize", "arguments": map[string]any{"style": "snapshot"}},
+		CurrentStep:      "deliver_result",
+		RiskLevel:        "green",
+		StartedAt:        startedAt,
+		UpdatedAt:        updatedAt,
+		FinishedAt:       timePointer(finishedAt),
+		MirrorReferences: []map[string]any{{"memory_id": "mem_structured_lightweight"}},
+	})
+	if err != nil {
+		t.Fatalf("marshal structured snapshot failed: %v", err)
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           sessionID,
+		RunID:               runID,
+		Title:               "structured lightweight task",
+		SourceType:          "hover_input",
+		Status:              "completed",
+		IntentName:          "summarize",
+		IntentArgumentsJSON: `{"style":"key_points"}`,
+		PreferredDelivery:   "workspace_document",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "green",
+		StartedAt:           startedAt.Format(time.RFC3339Nano),
+		UpdatedAt:           updatedAt.Format(time.RFC3339Nano),
+		FinishedAt:          finishedAt.Format(time.RFC3339Nano),
+		SnapshotJSON:        string(snapshotJSONBytes),
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.TaskStepStore().ReplaceTaskSteps(context.Background(), taskID, []storage.TaskStepRecord{{
+		StepID:        "step_structured_lightweight",
+		TaskID:        taskID,
+		Name:          "deliver_result",
+		Status:        "completed",
+		OrderIndex:    1,
+		InputSummary:  "structured input",
+		OutputSummary: "structured output",
+		CreatedAt:     startedAt.Format(time.RFC3339Nano),
+		UpdatedAt:     updatedAt.Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatalf("replace structured task steps failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveRun(context.Background(), storage.RunRecord{
+		RunID:      runID,
+		TaskID:     taskID,
+		SessionID:  sessionID,
+		SourceType: "hover_input",
+		Status:     "completed",
+		IntentName: "summarize",
+		StartedAt:  startedAt.Format(time.RFC3339Nano),
+		UpdatedAt:  updatedAt.Format(time.RFC3339Nano),
+		FinishedAt: finishedAt.Format(time.RFC3339Nano),
+		StopReason: "completed",
+	}); err != nil {
+		t.Fatalf("save structured run failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveDeliveryResult(context.Background(), storage.DeliveryResultRecord{
+		DeliveryResultID: "delivery_structured_lightweight",
+		TaskID:           taskID,
+		RunID:            runID,
+		Type:             "workspace_document",
+		Title:            "Structured lightweight result",
+		PayloadJSON:      `{"path":"workspace/lightweight.md"}`,
+		PreviewText:      "detail-only delivery",
+		CreatedAt:        finishedAt.Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatalf("save structured delivery result failed: %v", err)
+	}
+	if err := service.storage.ArtifactStore().SaveArtifacts(context.Background(), []storage.ArtifactRecord{{
+		ArtifactID:          "art_structured_lightweight",
+		TaskID:              taskID,
+		RunID:               runID,
+		ArtifactType:        "workspace_document",
+		Title:               "Structured lightweight artifact",
+		Path:                "workspace/lightweight.md",
+		MimeType:            "text/markdown",
+		DeliveryType:        "workspace_document",
+		DeliveryPayloadJSON: `{"path":"workspace/lightweight.md"}`,
+		CreatedAt:           finishedAt.Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatalf("save structured artifact failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().ReplaceTaskCitations(context.Background(), taskID, []storage.CitationRecord{{
+		CitationID:   "cit_structured_lightweight",
+		TaskID:       taskID,
+		RunID:        runID,
+		SourceType:   "file",
+		SourceRef:    "art_structured_lightweight",
+		Label:        "workspace artifact",
+		ArtifactID:   "art_structured_lightweight",
+		ArtifactType: "workspace_document",
+		OrderIndex:   1,
+	}}); err != nil {
+		t.Fatalf("save structured citation failed: %v", err)
+	}
+
+	record, err := service.storage.TaskStore().GetTask(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("get structured task failed: %v", err)
+	}
+	listTask, ok := service.structuredTaskRecordToRuntime(record, false)
+	if !ok {
+		t.Fatal("expected list hydration to succeed")
+	}
+	if listTask.TaskID != taskID || listTask.Title != "structured lightweight task" {
+		t.Fatalf("expected list hydration to preserve top-level task fields, got %+v", listTask)
+	}
+	if len(listTask.Timeline) != 0 || len(listTask.Artifacts) != 0 || len(listTask.Citations) != 0 ||
+		len(listTask.DeliveryResult) != 0 || len(listTask.MirrorReferences) != 0 || strings.TrimSpace(listTask.LoopStopReason) != "" {
+		t.Fatalf("expected list hydration to skip detail-only fields, got %+v", listTask)
+	}
+
+	detailTask, ok := service.structuredTaskRecordToRuntime(record, true)
+	if !ok {
+		t.Fatal("expected detail hydration to succeed")
+	}
+	if len(detailTask.Timeline) != 1 || len(detailTask.Artifacts) != 1 || len(detailTask.Citations) != 1 ||
+		len(detailTask.DeliveryResult) == 0 || strings.TrimSpace(detailTask.LoopStopReason) != "completed" ||
+		len(detailTask.MirrorReferences) != 1 {
+		t.Fatalf("expected detail hydration to include timeline, delivery, evidence, run, and snapshot fields, got %+v", detailTask)
+	}
+}
+
 func TestServiceTaskListKeepsLegacyTaskRunsAlongsideStructuredTasks(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "merged storage task list")
 	if service.storage == nil {

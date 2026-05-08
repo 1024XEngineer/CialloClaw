@@ -101,13 +101,41 @@ func (s *Service) listTasksFromStructuredStorage(group, sortBy, sortOrder string
 	return tasks[offset:end], total, true
 }
 
+func (s *Service) taskListRecords(group, sortBy, sortOrder string) []runengine.TaskRecord {
+	runtimeTasks, _ := s.runEngine.ListTasks(group, sortBy, sortOrder, 0, 0)
+	storageTasks := filterAndSortTasks(s.loadAllTaskListFromStorage(), group, sortBy, sortOrder)
+	merged := mergeTaskLists(runtimeTasks, storageTasks)
+	if len(merged) > 0 {
+		runengineSortTaskRecords(merged, sortBy, sortOrder)
+	}
+	return merged
+}
+
+func (s *Service) loadAllTaskListFromStorage() []runengine.TaskRecord {
+	if s.storage == nil {
+		return nil
+	}
+	structuredTasks := []runengine.TaskRecord(nil)
+	if s.storage.TaskStore() != nil {
+		structuredTasks = s.loadAllTasksFromStructuredStorage(false)
+	}
+	if len(structuredTasks) == 0 {
+		return s.loadAllTasksFromTaskRunStorage()
+	}
+	legacyTasks := s.loadLegacyTaskRunsFromStorage(structuredTasks)
+	if len(legacyTasks) == 0 {
+		return structuredTasks
+	}
+	return mergeStructuredTaskListCompatibility(structuredTasks, legacyTasks)
+}
+
 func (s *Service) loadAllTasksFromStorage() []runengine.TaskRecord {
 	if s.storage == nil {
 		return nil
 	}
 	structuredTasks := []runengine.TaskRecord(nil)
 	if s.storage.TaskStore() != nil {
-		structuredTasks = s.loadAllTasksFromStructuredStorage()
+		structuredTasks = s.loadAllTasksFromStructuredStorage(true)
 	}
 	if len(structuredTasks) == 0 {
 		return s.loadAllTasksFromTaskRunStorage()
@@ -181,14 +209,14 @@ func mergeStructuredTaskListCompatibility(structuredTasks, taskRunTasks []runeng
 	return merged
 }
 
-func (s *Service) loadAllTasksFromStructuredStorage() []runengine.TaskRecord {
+func (s *Service) loadAllTasksFromStructuredStorage(includeCompatibility bool) []runengine.TaskRecord {
 	records, _, err := s.storage.TaskStore().ListTasks(context.Background(), 0, 0)
 	if err != nil || len(records) == 0 {
 		return nil
 	}
 	tasks := make([]runengine.TaskRecord, 0, len(records))
 	for _, record := range records {
-		task, ok := s.structuredTaskRecordToRuntime(record, false)
+		task, ok := s.structuredTaskRecordToRuntime(record, includeCompatibility)
 		if !ok {
 			continue
 		}
@@ -751,19 +779,11 @@ func taskRecordFromStorage(record storage.TaskRunRecord) runengine.TaskRecord {
 	}
 }
 
-// structuredTaskRecordToRuntime hydrates one task-centric read model from the
-// new first-class tasks/task_steps tables while still reusing snapshot_json as
-// the compatibility bridge for fields that are not fully normalized yet.
+// structuredTaskRecordToRuntime builds one task-centric read model. List callers
+// pass includeCompatibility=false so each row only uses first-class task fields;
+// detail callers opt into timeline, formal artifacts, governance, and snapshot
+// compatibility reads.
 func (s *Service) structuredTaskRecordToRuntime(record storage.TaskRecord, includeCompatibility bool) (runengine.TaskRecord, bool) {
-	var snapshotCompatibility runengine.TaskRecord
-	var snapshotCompatibilityOK bool
-	if strings.TrimSpace(record.SnapshotJSON) != "" {
-		snapshot, err := storageTaskRunRecordFromSnapshotJSON(record.SnapshotJSON)
-		if err == nil {
-			snapshotCompatibility = taskRecordFromStorage(snapshot)
-			snapshotCompatibilityOK = true
-		}
-	}
 	startedAt, err := time.Parse(time.RFC3339Nano, record.StartedAt)
 	if err != nil {
 		return runengine.TaskRecord{}, false
@@ -803,12 +823,26 @@ func (s *Service) structuredTaskRecordToRuntime(record storage.TaskRecord, inclu
 		StartedAt:         startedAt,
 		UpdatedAt:         updatedAt,
 		FinishedAt:        finishedAt,
-		Timeline:          s.taskTimelineFromStructuredStorage(record.TaskID),
 		CurrentStepStatus: record.CurrentStepStatus,
 	}
+	if !includeCompatibility {
+		return runtime, true
+	}
+
+	runtime.Timeline = s.taskTimelineFromStructuredStorage(record.TaskID)
 	s.hydrateStructuredTaskFormalArtifacts(&runtime)
 	s.hydrateStructuredTaskSessionAndRun(&runtime)
 	s.hydrateStructuredTaskGovernance(&runtime)
+
+	var snapshotCompatibility runengine.TaskRecord
+	var snapshotCompatibilityOK bool
+	if strings.TrimSpace(record.SnapshotJSON) != "" {
+		snapshot, err := storageTaskRunRecordFromSnapshotJSON(record.SnapshotJSON)
+		if err == nil {
+			snapshotCompatibility = taskRecordFromStorage(snapshot)
+			snapshotCompatibilityOK = true
+		}
+	}
 	if snapshotCompatibilityOK {
 		runtime = mergeStructuredTaskDetailCompatibility(runtime, snapshotCompatibility)
 	}

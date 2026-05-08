@@ -22,7 +22,7 @@ func (s *Service) TaskList(params map[string]any) (map[string]any, error) {
 	offset := clampListOffset(intValue(params, "offset", 0))
 	sortBy := stringValue(params, "sort_by", "updated_at")
 	sortOrder := stringValue(params, "sort_order", "desc")
-	allTasks := newTaskQueryViews(s).tasks(group, sortBy, sortOrder)
+	allTasks := s.taskListRecords(group, sortBy, sortOrder)
 	total := len(allTasks)
 	tasks := []runengine.TaskRecord{}
 	if offset < total {
