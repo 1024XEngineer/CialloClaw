@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/bootstrap"
@@ -31,6 +32,8 @@ var (
 	logFatalForMain      = func(err error) { log.Fatalf("local service: %v", err) }
 )
 
+const runtimeRootEnvKey = "CIALLOCLAW_RUNTIME_ROOT"
+
 func main() {
 	ctx, stop := notifyContextForMain(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -52,11 +55,32 @@ func runMain(ctx context.Context, args []string) error {
 		return err
 	}
 
-	return run(ctx, loadConfigForMain(config.LoadOptions{
+	loadOptions := config.LoadOptions{
 		DataDir:          *dataDir,
 		NamedPipeName:    *namedPipe,
 		DebugHTTPAddress: *debugHTTP,
-	}))
+	}
+	cfg := loadConfigForMain(loadOptions)
+	if err := activateBootstrapRuntimeRoot(loadOptions, cfg); err != nil {
+		return err
+	}
+	return run(ctx, cfg)
+}
+
+// activateBootstrapRuntimeRoot promotes an explicit packaged data-dir into the
+// process runtime-root environment so older Default* helpers keep resolving the
+// same workspace and database roots as the loaded bootstrap config.
+func activateBootstrapRuntimeRoot(options config.LoadOptions, cfg config.Config) error {
+	if strings.TrimSpace(options.DataDir) == "" {
+		return nil
+	}
+	if strings.TrimSpace(cfg.DataDir) == "" {
+		return nil
+	}
+	if err := os.Setenv(runtimeRootEnvKey, cfg.DataDir); err != nil {
+		return fmt.Errorf("activate runtime root: %w", err)
+	}
+	return nil
 }
 
 // run owns startup wiring after config resolution so main remains the only

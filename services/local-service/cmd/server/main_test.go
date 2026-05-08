@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -29,6 +30,10 @@ func (s *stubMainApp) Start(ctx context.Context) error {
 }
 
 func TestRunMainPassesFlagsToBootstrapAndStartsApp(t *testing.T) {
+	t.Setenv(runtimeRootEnvKey, "")
+	t.Setenv("CIALLOCLAW_WORKSPACE_ROOT", "")
+	t.Setenv("CIALLOCLAW_DATABASE_PATH", "")
+
 	originalLoadConfig := loadConfigForMain
 	originalNewBootstrap := newBootstrapForMain
 	originalLogPrintf := logPrintfForMain
@@ -43,6 +48,9 @@ func TestRunMainPassesFlagsToBootstrapAndStartsApp(t *testing.T) {
 	debugHTTP := `127.0.0.1:0`
 	var capturedOptions config.LoadOptions
 	var capturedConfig config.Config
+	var observedRuntimeRoot string
+	var observedWorkspaceRoot string
+	var observedDatabasePath string
 	var loggedMessage string
 	app := &stubMainApp{}
 
@@ -52,6 +60,9 @@ func TestRunMainPassesFlagsToBootstrapAndStartsApp(t *testing.T) {
 	}
 	newBootstrapForMain = func(cfg config.Config) (appStarter, error) {
 		capturedConfig = cfg
+		observedRuntimeRoot = config.DefaultRuntimeRoot()
+		observedWorkspaceRoot = config.DefaultWorkspaceRoot()
+		observedDatabasePath = config.DefaultDatabasePath()
 		return app, nil
 	}
 	logPrintfForMain = func(format string, args ...any) {
@@ -86,6 +97,15 @@ func TestRunMainPassesFlagsToBootstrapAndStartsApp(t *testing.T) {
 	if capturedConfig.RPC.DebugHTTPAddress != debugHTTP {
 		t.Fatalf("expected loaded config debug http %q, got %q", debugHTTP, capturedConfig.RPC.DebugHTTPAddress)
 	}
+	if observedRuntimeRoot != dataDir {
+		t.Fatalf("expected runtime root default to activate data-dir %q before bootstrap, got %q", dataDir, observedRuntimeRoot)
+	}
+	if observedWorkspaceRoot != filepath.Join(dataDir, "workspace") {
+		t.Fatalf("expected workspace root default to follow data-dir %q, got %q", filepath.Join(dataDir, "workspace"), observedWorkspaceRoot)
+	}
+	if observedDatabasePath != filepath.Join(dataDir, "data", "cialloclaw.db") {
+		t.Fatalf("expected database path default to follow data-dir %q, got %q", filepath.Join(dataDir, "data", "cialloclaw.db"), observedDatabasePath)
+	}
 	if !app.started {
 		t.Fatal("expected bootstrap app to start")
 	}
@@ -94,6 +114,41 @@ func TestRunMainPassesFlagsToBootstrapAndStartsApp(t *testing.T) {
 	}
 	if !strings.Contains(loggedMessage, pipeName) || !strings.Contains(loggedMessage, dataDir) {
 		t.Fatalf("expected startup log to include runtime paths, got %q", loggedMessage)
+	}
+}
+
+func TestRunMainKeepsExplicitWorkspaceAndDatabaseOverridesActive(t *testing.T) {
+	t.Setenv(runtimeRootEnvKey, "")
+	workspaceRoot := filepath.Join(t.TempDir(), "explicit-workspace")
+	databasePath := filepath.Join(t.TempDir(), "data", "override.db")
+	t.Setenv("CIALLOCLAW_WORKSPACE_ROOT", workspaceRoot)
+	t.Setenv("CIALLOCLAW_DATABASE_PATH", databasePath)
+
+	originalNewBootstrap := newBootstrapForMain
+	originalLogPrintf := logPrintfForMain
+	t.Cleanup(func() {
+		newBootstrapForMain = originalNewBootstrap
+		logPrintfForMain = originalLogPrintf
+	})
+
+	dataDir := t.TempDir()
+	var observedWorkspaceRoot string
+	var observedDatabasePath string
+	newBootstrapForMain = func(cfg config.Config) (appStarter, error) {
+		observedWorkspaceRoot = config.DefaultWorkspaceRoot()
+		observedDatabasePath = config.DefaultDatabasePath()
+		return &stubMainApp{}, nil
+	}
+	logPrintfForMain = func(string, ...any) {}
+
+	if err := runMain(context.Background(), []string{"--data-dir", dataDir}); err != nil {
+		t.Fatalf("runMain returned error: %v", err)
+	}
+	if observedWorkspaceRoot != workspaceRoot {
+		t.Fatalf("expected explicit workspace override %q to remain active, got %q", workspaceRoot, observedWorkspaceRoot)
+	}
+	if observedDatabasePath != databasePath {
+		t.Fatalf("expected explicit database override %q to remain active, got %q", databasePath, observedDatabasePath)
 	}
 }
 
