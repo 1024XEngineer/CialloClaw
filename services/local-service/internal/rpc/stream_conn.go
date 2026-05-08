@@ -15,6 +15,38 @@ import (
 // serialization locks.
 const maxPendingStreamRequests = 32
 
+type streamConnState struct {
+	closeOnce sync.Once
+	closed    chan struct{}
+}
+
+func newStreamConnState() *streamConnState {
+	return &streamConnState{
+		closed: make(chan struct{}),
+	}
+}
+
+func (s *streamConnState) close() {
+	if s == nil {
+		return
+	}
+	s.closeOnce.Do(func() {
+		close(s.closed)
+	})
+}
+
+func (s *streamConnState) isClosed() bool {
+	if s == nil {
+		return true
+	}
+	select {
+	case <-s.closed:
+		return true
+	default:
+		return false
+	}
+}
+
 type streamEnvelopeWriter struct {
 	encoder *json.Encoder
 	writeMu sync.Mutex
@@ -86,6 +118,8 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 
 	decoder := json.NewDecoder(conn)
 	writer := &streamEnvelopeWriter{encoder: json.NewEncoder(conn)}
+	connState := newStreamConnState()
+	defer connState.close()
 	taskCoordinator := newStreamTaskCoordinator()
 	pendingRequests := make(chan struct{}, maxPendingStreamRequests)
 	var taskStartRequestMu sync.Mutex
@@ -111,12 +145,16 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 		go func(request requestEnvelope) {
 			defer s.streamWG.Done()
 			defer func() { <-pendingRequests }()
-			s.handleStreamRequest(request, writer, taskCoordinator, &taskStartRequestMu)
+			s.handleStreamRequest(request, writer, connState, taskCoordinator, &taskStartRequestMu)
 		}(request)
 	}
 }
 
-func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnvelopeWriter, taskCoordinator *streamTaskCoordinator, taskStartMu *sync.Mutex) {
+func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnvelopeWriter, connState *streamConnState, taskCoordinator *streamTaskCoordinator, taskStartMu *sync.Mutex) {
+	if connState.isClosed() {
+		return
+	}
+
 	tracker := newStreamRequestTracker(request)
 	initialTaskIDs := tracker.taskIDsSnapshot()
 	if tracker.shouldSubscribeTaskStart() {
@@ -126,12 +164,24 @@ func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnve
 		// otherwise cross-wire notifications before that mapping is established.
 		taskStartMu.Lock()
 		defer taskStartMu.Unlock()
+		if connState.isClosed() {
+			return
+		}
 	}
 
 	taskCoordinator.withTaskLocks(initialTaskIDs, func() {
+		// Closing the stream must fence queued requests before dispatch so a dead
+		// transport does not continue mutating task state from stale backlog.
+		if connState.isClosed() {
+			return
+		}
+
 		unsubscribeRuntime := func() {}
 		if tracker.shouldSubscribeRuntime() {
 			unsubscribeRuntime = s.orchestrator.SubscribeRuntimeNotifications(func(taskID string, method string, params map[string]any) {
+				if connState.isClosed() {
+					return
+				}
 				if !isLiveRuntimeMethod(method) {
 					return
 				}
@@ -167,6 +217,9 @@ func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnve
 		// real task lock before writing the response and destructively replaying the
 		// buffered notification queue for that task.
 		taskCoordinator.withTaskLocks(lateTaskIDs, func() {
+			if connState.isClosed() {
+				return
+			}
 			if err := writer.writeEnvelope(response); err != nil {
 				return
 			}

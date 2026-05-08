@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -500,6 +501,91 @@ func TestServerShutdownWaitsForInFlightStreamRequests(t *testing.T) {
 		}
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("expected shutdown to finish after the in-flight request exits")
+	}
+}
+
+func TestHandleStreamConnSkipsQueuedRequestsAfterClientDisconnect(t *testing.T) {
+	server := newTestServer()
+	taskID := "task_disconnect_queue"
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var (
+		callMu    sync.Mutex
+		callCount int
+	)
+
+	server.handlers["test.same.task.queue"] = func(_ map[string]any) (any, *rpcError) {
+		callMu.Lock()
+		callCount++
+		currentCall := callCount
+		callMu.Unlock()
+
+		if currentCall == 1 {
+			close(firstStarted)
+			<-releaseFirst
+		}
+
+		return map[string]any{
+			"task": map[string]any{
+				"task_id": taskID,
+			},
+		}, nil
+	}
+
+	left, right := net.Pipe()
+	streamDone := make(chan struct{})
+	go func() {
+		server.handleStreamConn(left)
+		close(streamDone)
+	}()
+
+	encoder := json.NewEncoder(right)
+	firstRequest := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-disconnect-first"`),
+		Method:  "test.same.task.queue",
+		Params: mustMarshal(t, map[string]any{
+			"task_id": taskID,
+		}),
+	}
+	secondRequest := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-disconnect-second"`),
+		Method:  "test.same.task.queue",
+		Params: mustMarshal(t, map[string]any{
+			"task_id": taskID,
+		}),
+	}
+
+	if err := encoder.Encode(firstRequest); err != nil {
+		t.Fatalf("encode first queued request: %v", err)
+	}
+	select {
+	case <-firstStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected first queued request to start running")
+	}
+
+	if err := encoder.Encode(secondRequest); err != nil {
+		t.Fatalf("encode second queued request: %v", err)
+	}
+	if err := right.Close(); err != nil {
+		t.Fatalf("close client stream: %v", err)
+	}
+
+	select {
+	case <-streamDone:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected outer stream loop to stop after client disconnect")
+	}
+
+	close(releaseFirst)
+	time.Sleep(150 * time.Millisecond)
+
+	callMu.Lock()
+	defer callMu.Unlock()
+	if callCount != 1 {
+		t.Fatalf("expected queued request backlog to stop before dispatch after disconnect, got %d calls", callCount)
 	}
 }
 
