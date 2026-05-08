@@ -50,10 +50,30 @@ export function describeNotePreview(item: TodoItem, experience: NoteDetailExperi
   }
 
   if (item.bucket === "recurring_rule") {
+    if (experience.isRecurringEnabled === false) {
+      return "重复规则 · 已暂停";
+    }
+
     return `${experience.repeatRule ?? "重复规则"} · 下次 ${experience.timeHint}`;
   }
 
   return `${experience.previewStatus} · ${experience.timeHint}`;
+}
+
+export function formatNoteBoardTimeHint(item: TodoItem, experience: NoteDetailExperience) {
+  if (item.bucket === "recurring_rule") {
+    if (experience.isRecurringEnabled === false) {
+      return "重复已暂停";
+    }
+
+    return `下次执行 ${experience.timeHint}`;
+  }
+
+  if (item.bucket === "closed") {
+    return `结束时间 ${experience.timeHint}`;
+  }
+
+  return `开始时间 ${experience.timeHint}`;
 }
 
 /**
