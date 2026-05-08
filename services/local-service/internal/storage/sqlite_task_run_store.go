@@ -249,18 +249,12 @@ func (s *SQLiteTaskRunStore) GetTaskRun(ctx context.Context, taskID string) (Tas
 func (s *SQLiteTaskRunStore) LoadLegacyTaskRuns(ctx context.Context, structuredTaskIDs []string) ([]TaskRunRecord, error) {
 	query := `SELECT record_json FROM task_runs`
 	args := make([]any, 0, len(structuredTaskIDs))
-	filteredTaskIDs := make([]string, 0, len(structuredTaskIDs))
-	for _, taskID := range structuredTaskIDs {
-		taskID = strings.TrimSpace(taskID)
-		if taskID == "" {
-			continue
-		}
-		filteredTaskIDs = append(filteredTaskIDs, taskID)
+	filteredTaskIDs := uniqueNonEmptyTaskIDs(structuredTaskIDs)
+	for _, taskID := range filteredTaskIDs {
 		args = append(args, taskID)
 	}
 	if len(filteredTaskIDs) > 0 {
-		placeholders := strings.TrimRight(strings.Repeat("?,", len(filteredTaskIDs)), ",")
-		query += ` WHERE task_id NOT IN (` + placeholders + `)`
+		query += ` WHERE task_id NOT IN (` + sqlitePlaceholders(len(filteredTaskIDs)) + `)`
 	}
 	query += ` ORDER BY started_at DESC, task_id DESC`
 
@@ -284,6 +278,43 @@ func (s *SQLiteTaskRunStore) LoadLegacyTaskRuns(ctx context.Context, structuredT
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate legacy task run rows: %w", err)
+	}
+	return records, nil
+}
+
+func (s *SQLiteTaskRunStore) LoadLegacyTaskRunsByTaskIDs(ctx context.Context, taskIDs []string) ([]TaskRunRecord, error) {
+	filteredTaskIDs := uniqueNonEmptyTaskIDs(taskIDs)
+	if len(filteredTaskIDs) == 0 {
+		return nil, nil
+	}
+	args := make([]any, 0, len(filteredTaskIDs))
+	for _, taskID := range filteredTaskIDs {
+		args = append(args, taskID)
+	}
+	query := `SELECT record_json
+		FROM task_runs
+		WHERE task_id IN (` + sqlitePlaceholders(len(filteredTaskIDs)) + `)
+		  AND task_id NOT IN (SELECT task_id FROM tasks)`
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("load legacy task runs by ids: %w", err)
+	}
+	defer rows.Close()
+
+	records := make([]TaskRunRecord, 0, len(filteredTaskIDs))
+	for rows.Next() {
+		var recordJSON string
+		if err := rows.Scan(&recordJSON); err != nil {
+			return nil, fmt.Errorf("scan legacy task run by ids row: %w", err)
+		}
+		record, err := unmarshalTaskRunRecord(recordJSON)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate legacy task run by ids rows: %w", err)
 	}
 	return records, nil
 }
