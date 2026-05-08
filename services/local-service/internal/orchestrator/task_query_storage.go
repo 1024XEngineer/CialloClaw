@@ -276,11 +276,94 @@ func (s *Service) countRuntimeOnlyTasksForList(group string, runtimeTasks []rune
 	if s == nil || s.storage == nil || s.storage.TaskStore() == nil {
 		return len(runtimeTasks)
 	}
+	structuredStatuses, legacyStatuses, ok := s.taskListStorageStatusesByID(runtimeTasks)
+	if !ok {
+		return s.countRuntimeOnlyTasksForListFallback(group, runtimeTasks)
+	}
+	count := 0
+	for _, runtimeTask := range runtimeTasks {
+		taskID := strings.TrimSpace(runtimeTask.TaskID)
+		if taskID == "" {
+			count++
+			continue
+		}
+		if status, exists := structuredStatuses[taskID]; exists {
+			if !matchesTaskGroup(runengine.TaskRecord{Status: status}, group) {
+				count++
+			}
+			continue
+		}
+		if status, exists := legacyStatuses[taskID]; exists {
+			if !matchesTaskGroup(runengine.TaskRecord{Status: status}, group) {
+				count++
+			}
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+// taskListStorageStatusesByID batches the structured and legacy compatibility
+// lookups needed to decide whether one live runtime task is truly absent from
+// the current task-list group or simply fresher than persisted state.
+func (s *Service) taskListStorageStatusesByID(runtimeTasks []runengine.TaskRecord) (map[string]string, map[string]string, bool) {
+	taskIDs := runtimeTaskIDs(runtimeTasks)
+	if len(taskIDs) == 0 {
+		return map[string]string{}, map[string]string{}, true
+	}
+	structuredStatuses := make(map[string]string, len(taskIDs))
+	if s.storage.TaskStore() != nil {
+		records, err := s.storage.TaskStore().ListTasksByIDs(context.Background(), taskIDs)
+		if err != nil {
+			return nil, nil, false
+		}
+		for _, record := range records {
+			structuredStatuses[strings.TrimSpace(record.TaskID)] = record.Status
+		}
+	}
+	legacyStatuses := make(map[string]string, len(taskIDs))
+	if s.storage.TaskRunStore() != nil {
+		records, err := s.storage.TaskRunStore().LoadLegacyTaskRunsByTaskIDs(context.Background(), taskIDs)
+		if err != nil {
+			return nil, nil, false
+		}
+		for _, record := range records {
+			legacyStatuses[strings.TrimSpace(record.TaskID)] = record.Status
+		}
+	}
+	return structuredStatuses, legacyStatuses, true
+}
+
+func runtimeTaskIDs(runtimeTasks []runengine.TaskRecord) []string {
+	taskIDs := make([]string, 0, len(runtimeTasks))
+	seen := make(map[string]struct{}, len(runtimeTasks))
+	for _, runtimeTask := range runtimeTasks {
+		taskID := strings.TrimSpace(runtimeTask.TaskID)
+		if taskID == "" {
+			continue
+		}
+		if _, duplicate := seen[taskID]; duplicate {
+			continue
+		}
+		seen[taskID] = struct{}{}
+		taskIDs = append(taskIDs, taskID)
+	}
+	return taskIDs
+}
+
+func (s *Service) countRuntimeOnlyTasksForListFallback(group string, runtimeTasks []runengine.TaskRecord) int {
+	if s == nil || s.storage == nil || s.storage.TaskStore() == nil {
+		return len(runtimeTasks)
+	}
 	count := 0
 	for _, runtimeTask := range runtimeTasks {
 		record, err := s.storage.TaskStore().GetTask(context.Background(), runtimeTask.TaskID)
 		if err != nil {
 			if storage.IsTaskRecordNotFound(err) {
+				if s.runtimeTaskExistsOnlyInLegacyStorage(runtimeTask.TaskID, group) {
+					continue
+				}
 				count++
 			}
 			continue
@@ -291,6 +374,17 @@ func (s *Service) countRuntimeOnlyTasksForList(group string, runtimeTasks []rune
 		}
 	}
 	return count
+}
+
+func (s *Service) runtimeTaskExistsOnlyInLegacyStorage(taskID, group string) bool {
+	if s == nil || s.storage == nil || s.storage.TaskRunStore() == nil {
+		return false
+	}
+	records, err := s.storage.TaskRunStore().LoadLegacyTaskRunsByTaskIDs(context.Background(), []string{taskID})
+	if err != nil || len(records) == 0 {
+		return false
+	}
+	return matchesTaskGroup(runengine.TaskRecord{Status: records[0].Status}, group)
 }
 
 // taskQueryViews caches runtime and storage-backed task snapshots for one

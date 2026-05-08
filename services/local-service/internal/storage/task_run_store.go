@@ -160,6 +160,30 @@ func (s *InMemoryTaskRunStore) LoadLegacyTaskRuns(_ context.Context, structuredT
 	return records, nil
 }
 
+func (s *InMemoryTaskRunStore) LoadLegacyTaskRunsByTaskIDs(_ context.Context, taskIDs []string) ([]TaskRunRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	filteredTaskIDs := uniqueNonEmptyTaskIDs(taskIDs)
+	if len(filteredTaskIDs) == 0 {
+		return nil, nil
+	}
+	records := make([]TaskRunRecord, 0, len(filteredTaskIDs))
+	for _, taskID := range filteredTaskIDs {
+		if s.taskStore != nil {
+			if _, err := s.taskStore.GetTask(context.Background(), taskID); err == nil {
+				continue
+			}
+		}
+		record, ok := s.records[taskID]
+		if !ok {
+			continue
+		}
+		records = append(records, cloneTaskRunRecord(record))
+	}
+	return records, nil
+}
+
 func (s *InMemoryTaskRunStore) ListLegacyTaskRunsForTaskList(_ context.Context, statusGroup, sortBy, sortOrder string, limit, offset int) ([]TaskRunRecord, int, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

@@ -515,6 +515,7 @@ type countingTaskRunStore struct {
 	loadCalls       int
 	loadAllCalls    int
 	legacyLoadCalls int
+	legacyByIDCalls int
 	getCalls        int
 }
 
@@ -526,6 +527,7 @@ type stubStrongholdProvider struct {
 
 type countingTaskStore struct {
 	base                 storage.TaskStore
+	getCalls             int
 	listCalls            int
 	listForTaskListCalls int
 	lastTaskListLimit    int
@@ -582,6 +584,12 @@ func (s *countingTaskRunStore) LoadLegacyTaskRuns(ctx context.Context, structure
 	return s.base.LoadLegacyTaskRuns(ctx, structuredTaskIDs)
 }
 
+func (s *countingTaskRunStore) LoadLegacyTaskRunsByTaskIDs(ctx context.Context, taskIDs []string) ([]storage.TaskRunRecord, error) {
+	s.loadCalls++
+	s.legacyByIDCalls++
+	return s.base.LoadLegacyTaskRunsByTaskIDs(ctx, taskIDs)
+}
+
 func (s *countingTaskRunStore) ListLegacyTaskRunsForTaskList(ctx context.Context, statusGroup, sortBy, sortOrder string, limit, offset int) ([]storage.TaskRunRecord, int, error) {
 	s.loadCalls++
 	s.legacyLoadCalls++
@@ -610,12 +618,17 @@ func (s *countingTaskStore) DeleteTask(ctx context.Context, taskID string) error
 }
 
 func (s *countingTaskStore) GetTask(ctx context.Context, taskID string) (storage.TaskRecord, error) {
+	s.getCalls++
 	return s.base.GetTask(ctx, taskID)
 }
 
 func (s *countingTaskStore) ListTasks(ctx context.Context, limit, offset int) ([]storage.TaskRecord, int, error) {
 	s.listCalls++
 	return s.base.ListTasks(ctx, limit, offset)
+}
+
+func (s *countingTaskStore) ListTasksByIDs(ctx context.Context, taskIDs []string) ([]storage.TaskRecord, error) {
+	return s.base.ListTasksByIDs(ctx, taskIDs)
 }
 
 func (s *countingTaskStore) ListTasksForTaskList(ctx context.Context, statusGroup, sortBy, sortOrder string, limit, offset int) ([]storage.TaskRecord, int, error) {
@@ -15893,6 +15906,80 @@ func TestServiceTaskListKeepsRuntimeOnlyTasksInPagedMerge(t *testing.T) {
 	page := result["page"].(map[string]any)
 	if page["total"] != 5 {
 		t.Fatalf("expected merged total to include the runtime-only task, got %+v", page)
+	}
+}
+
+func TestServiceTaskListDoesNotDoubleCountRuntimeTasksBackedByLegacyRows(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "runtime legacy total dedupe")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	originalTaskStore := service.storage.TaskStore()
+	originalTaskRunStore := service.storage.TaskRunStore()
+	defer replaceTaskStore(t, service.storage, originalTaskStore)
+	defer replaceTaskRunStore(t, service.storage, originalTaskRunStore)
+
+	countingTaskStore := &countingTaskStore{base: originalTaskStore}
+	countingTaskRunStore := &countingTaskRunStore{base: originalTaskRunStore}
+	replaceTaskStore(t, service.storage, countingTaskStore)
+	replaceTaskRunStore(t, service.storage, countingTaskRunStore)
+
+	runtimeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:      "sess_runtime_legacy_dedupe",
+		RequestSource:  "floating_ball",
+		RequestTrigger: "hover_text_input",
+		Title:          "runtime task with legacy row",
+		SourceType:     "hover_input",
+		Status:         "processing",
+		Intent:         map[string]any{"name": "summarize"},
+		CurrentStep:    "generate_output",
+		RiskLevel:      "green",
+	})
+	updatedRuntimeTask, ok := service.runEngine.RecordLoopLifecycle(runtimeTask.TaskID, "loop.round.completed", "paused_by_session", map[string]any{"stop_reason": "paused_by_session"})
+	if !ok {
+		t.Fatal("expected runtime task to update successfully")
+	}
+	legacyTask := storage.TaskRunRecord{
+		TaskID:            runtimeTask.TaskID,
+		SessionID:         runtimeTask.SessionID,
+		RunID:             "run_runtime_legacy_dedupe",
+		Title:             runtimeTask.Title,
+		SourceType:        runtimeTask.SourceType,
+		Status:            "processing",
+		Intent:            runtimeTask.Intent,
+		CurrentStep:       runtimeTask.CurrentStep,
+		RiskLevel:         runtimeTask.RiskLevel,
+		StartedAt:         updatedRuntimeTask.StartedAt,
+		UpdatedAt:         updatedRuntimeTask.UpdatedAt.Add(-time.Minute),
+		CurrentStepStatus: "processing",
+	}
+	if err := countingTaskRunStore.SaveTaskRun(context.Background(), legacyTask); err != nil {
+		t.Fatalf("save legacy task run failed: %v", err)
+	}
+	if err := service.storage.TaskStore().DeleteTask(context.Background(), runtimeTask.TaskID); err != nil {
+		t.Fatalf("delete structured task failed: %v", err)
+	}
+
+	result, err := service.TaskList(map[string]any{
+		"group":      "unfinished",
+		"sort_by":    "updated_at",
+		"sort_order": "desc",
+		"limit":      20,
+		"offset":     0,
+	})
+	if err != nil {
+		t.Fatalf("task list failed: %v", err)
+	}
+	if countingTaskStore.getCalls != 0 {
+		t.Fatalf("expected runtime total reconciliation to avoid per-task structured lookups, got %d", countingTaskStore.getCalls)
+	}
+	page := result["page"].(map[string]any)
+	if page["total"] != 1 {
+		t.Fatalf("expected legacy-backed runtime task to be counted once, got %+v", page)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["task_id"] != runtimeTask.TaskID {
+		t.Fatalf("expected merged task list to return one deduplicated runtime task, got %+v", items)
 	}
 }
 

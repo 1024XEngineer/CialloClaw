@@ -119,6 +119,30 @@ func (s *inMemoryTaskStore) ListTasks(_ context.Context, limit, offset int) ([]T
 	return pageTasks(items, limit, offset), len(items), nil
 }
 
+func (s *inMemoryTaskStore) ListTasksByIDs(_ context.Context, taskIDs []string) ([]TaskRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	items := make([]TaskRecord, 0, len(taskIDs))
+	seen := make(map[string]struct{}, len(taskIDs))
+	for _, taskID := range taskIDs {
+		taskID = strings.TrimSpace(taskID)
+		if taskID == "" {
+			continue
+		}
+		if _, duplicate := seen[taskID]; duplicate {
+			continue
+		}
+		record, ok := s.records[taskID]
+		if !ok {
+			continue
+		}
+		items = append(items, record)
+		seen[taskID] = struct{}{}
+	}
+	return items, nil
+}
+
 func (s *inMemoryTaskStore) ListTasksForTaskList(_ context.Context, statusGroup, sortBy, sortOrder string, limit, offset int) ([]TaskRecord, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -265,6 +289,35 @@ func (s *SQLiteTaskStore) ListTasks(ctx context.Context, limit, offset int) ([]T
 		return nil, 0, fmt.Errorf("iterate tasks: %w", err)
 	}
 	return items, total, nil
+}
+
+func (s *SQLiteTaskStore) ListTasksByIDs(ctx context.Context, taskIDs []string) ([]TaskRecord, error) {
+	filteredTaskIDs := uniqueNonEmptyTaskIDs(taskIDs)
+	if len(filteredTaskIDs) == 0 {
+		return nil, nil
+	}
+	args := make([]any, 0, len(filteredTaskIDs))
+	for _, taskID := range filteredTaskIDs {
+		args = append(args, taskID)
+	}
+	query := `SELECT ` + structuredTaskSelectColumns + ` FROM tasks WHERE task_id IN (` + sqlitePlaceholders(len(filteredTaskIDs)) + `)`
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list tasks by ids: %w", err)
+	}
+	defer rows.Close()
+	items := make([]TaskRecord, 0, len(filteredTaskIDs))
+	for rows.Next() {
+		var record TaskRecord
+		if err := scanStructuredTask(rows, &record); err != nil {
+			return nil, fmt.Errorf("scan task by ids: %w", err)
+		}
+		items = append(items, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tasks by ids: %w", err)
+	}
+	return items, nil
 }
 
 func (s *SQLiteTaskStore) ListTasksForTaskList(ctx context.Context, statusGroup, sortBy, sortOrder string, limit, offset int) ([]TaskRecord, int, error) {
@@ -464,6 +517,30 @@ func taskRecordListSortTime(record TaskRecord, sortBy string) string {
 	default:
 		return record.UpdatedAt
 	}
+}
+
+func uniqueNonEmptyTaskIDs(taskIDs []string) []string {
+	filtered := make([]string, 0, len(taskIDs))
+	seen := make(map[string]struct{}, len(taskIDs))
+	for _, taskID := range taskIDs {
+		taskID = strings.TrimSpace(taskID)
+		if taskID == "" {
+			continue
+		}
+		if _, duplicate := seen[taskID]; duplicate {
+			continue
+		}
+		seen[taskID] = struct{}{}
+		filtered = append(filtered, taskID)
+	}
+	return filtered
+}
+
+func sqlitePlaceholders(count int) string {
+	if count <= 0 {
+		return ""
+	}
+	return strings.TrimRight(strings.Repeat("?,", count), ",")
 }
 
 type SQLiteTaskStepStore struct {
