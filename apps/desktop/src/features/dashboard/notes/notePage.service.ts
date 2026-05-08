@@ -9,6 +9,7 @@ import type {
   TodoBucket,
   TodoItem,
 } from "@cialloclaw/protocol";
+import { openDesktopExternalUrl } from "@/platform/desktopExternalUrl";
 import { openDesktopLocalPath, revealDesktopLocalPath } from "@/platform/desktopLocalPath";
 import { convertNotepadToTask, listNotepad, updateNotepad } from "@/rpc/methods";
 import type { NoteConvertOutcome, NoteDetailExperience, NoteListItem, NoteResource, NoteUpdateOutcome, SourceNoteDocument } from "./notePage.types";
@@ -840,7 +841,7 @@ export async function performNoteResourceOpenExecution(
       return "已拦截不受支持的便签资源链接。";
     }
 
-    window.open(plan.url, "_blank", "noopener,noreferrer");
+    await openDesktopExternalUrl(plan.url);
     return plan.feedback;
   }
 

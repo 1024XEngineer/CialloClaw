@@ -1,4 +1,5 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, type MouseEvent, type ReactNode } from "react";
+import { openDesktopExternalUrl } from "@/platform/desktopExternalUrl";
 
 type ShellBallMarkdownProps = {
   text: string;
@@ -31,6 +32,14 @@ export function ShellBallMarkdown({ text }: ShellBallMarkdownProps) {
       {blocks.map((block) => renderMarkdownBlock(block, createBlockKey(block)))}
     </div>
   );
+}
+
+function handleShellBallLinkClick(event: MouseEvent<HTMLAnchorElement>, href: string) {
+  event.preventDefault();
+  event.stopPropagation();
+  void openDesktopExternalUrl(href).catch((error) => {
+    console.warn("shell-ball external link open failed", error);
+  });
 }
 
 function renderMarkdownBlock(block: MarkdownBlock, key: string) {
@@ -105,9 +114,13 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
         nodes.push(
           <a
             key={matchKey}
+            data-shell-ball-interactive="true"
             href={match.href}
             target="_blank"
             rel="noreferrer"
+            onClick={(event) => {
+              handleShellBallLinkClick(event, match.href);
+            }}
           >
             {renderInline(match.label, `${matchKey}-label`)}
           </a>,
@@ -117,9 +130,13 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
         nodes.push(
           <a
             key={matchKey}
+            data-shell-ball-interactive="true"
             href={match.href}
             target="_blank"
             rel="noreferrer"
+            onClick={(event) => {
+              handleShellBallLinkClick(event, match.href);
+            }}
           >
             {match.href}
           </a>,

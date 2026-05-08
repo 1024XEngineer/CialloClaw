@@ -8,6 +8,7 @@ import type {
   DeliveryPayload,
   RequestMeta,
 } from "@cialloclaw/protocol";
+import { openDesktopExternalUrl } from "@/platform/desktopExternalUrl";
 import { openDesktopLocalPath, revealDesktopLocalPath } from "@/platform/desktopLocalPath";
 import { listTaskArtifacts, openDelivery, openTaskArtifact } from "@/rpc/methods";
 
@@ -173,7 +174,7 @@ export async function performTaskOpenExecution(plan: TaskOpenExecutionPlan, opti
       return "已拦截不受支持的结果链接。";
     }
 
-    window.open(plan.url, "_blank", "noopener,noreferrer");
+    await openDesktopExternalUrl(plan.url);
     return plan.feedback;
   }
 
