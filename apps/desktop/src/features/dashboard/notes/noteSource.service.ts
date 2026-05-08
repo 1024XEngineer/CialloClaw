@@ -20,7 +20,7 @@ import { getTaskInspectorConfig, runTaskInspector } from "@/rpc/methods";
 import {
   hydrateDesktopRuntimeDefaults,
   loadSettings,
-  saveSettings,
+  saveSettingsAndSyncDesktopSnapshot,
   toProtocolSettingsSnapshot,
 } from "@/services/settingsService";
 import type {
@@ -178,7 +178,7 @@ async function persistResolvedTaskSources(taskSources: string[]) {
     return;
   }
 
-  saveSettings({
+  await saveSettingsAndSyncDesktopSnapshot({
     settings: {
       ...currentSettings.settings,
       task_automation: {
