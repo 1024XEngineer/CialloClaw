@@ -406,10 +406,19 @@ func (s *Service) loadAttemptArtifactsFromStorage(task runengine.TaskRecord, lim
 
 func (s *Service) listArtifactsPage(taskID string, limit, offset int) ([]map[string]any, int, error) {
 	task, taskFound := formalReadTask(taskID, s.runEngine, s.taskDetailFromStorage)
-	runIDFilter := ""
 	if taskFound {
-		runIDFilter = taskAttemptRunIDFilter(task)
+		items := s.artifactsForTask(task, task.Artifacts)
+		total := len(items)
+		if offset >= total {
+			return []map[string]any{}, total, nil
+		}
+		end := offset + limit
+		if limit <= 0 || end > total {
+			end = total
+		}
+		return cloneMapSlice(items[offset:end]), total, nil
 	}
+	runIDFilter := ""
 	if s.storage != nil && s.storage.ArtifactStore() != nil {
 		records, total, err := s.storage.ArtifactStore().ListArtifacts(context.Background(), taskID, runIDFilter, limit, offset)
 		if err != nil {
@@ -424,9 +433,6 @@ func (s *Service) listArtifactsPage(taskID string, limit, offset int) ([]map[str
 		}
 	}
 	items := delivery.EnsureArtifactIdentifiers(taskID, currentTaskArtifacts(s.runEngine, taskID))
-	if taskFound {
-		items = s.artifactsForTask(task, task.Artifacts)
-	}
 	total := len(items)
 	if offset >= total {
 		return []map[string]any{}, total, nil
