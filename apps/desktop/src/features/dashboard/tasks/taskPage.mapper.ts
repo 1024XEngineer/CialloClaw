@@ -75,14 +75,15 @@ export function buildTaskTowerCode(taskId: string) {
 }
 
 /**
- * Collapses formal task states into presentation tones for the dashboard scene.
+ * Collapses formal task states into one shared dashboard cluster so the
+ * overview columns, card tones, and detail semantics stay aligned.
  */
 export function getTaskRunwayTone(status: Task["status"]) {
-  if (status === "processing" || status === "confirming_intent") {
+  if (status === "processing") {
     return "departure";
   }
 
-  if (status === "waiting_auth" || status === "waiting_input" || status === "paused") {
+  if (status === "confirming_intent" || status === "waiting_auth" || status === "waiting_input" || status === "paused") {
     return "holding";
   }
 

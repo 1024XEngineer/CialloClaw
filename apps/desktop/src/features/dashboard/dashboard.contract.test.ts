@@ -446,6 +446,7 @@ function loadTaskPageMapperModule() {
   return withDesktopAliasRuntime((requireFn) =>
     requireFn(resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/tasks/taskPage.mapper.js")) as {
       canTaskAcceptSteering: (task: Task) => boolean;
+      getTaskRunwayTone: (status: Task["status"]) => "departure" | "holding" | "irregular" | "archive";
       getTaskPrimaryActions: (task: Task, detail: AgentTaskDetailGetResult) => Array<{ action: string; label: string; tooltip: string }>;
     },
   );
@@ -2128,7 +2129,7 @@ test("task context links back into mirror detail state instead of plain text dea
 });
 
 test("task page keeps waiting-auth anchors and routes follow-up steering through the detail panel", () => {
-  const { canTaskAcceptSteering, getTaskPrimaryActions } = loadTaskPageMapperModule();
+  const { canTaskAcceptSteering, getTaskPrimaryActions, getTaskRunwayTone } = loadTaskPageMapperModule();
   const confirmingIntentTask = createTask({ status: "confirming_intent", current_step: "intent_confirmation", intent: { name: "summarize", arguments: {} } });
   const waitingAuthTask = createTask({ status: "waiting_auth" });
   const waitingInputTask = createTask({ status: "waiting_input" });
@@ -2144,6 +2145,9 @@ test("task page keeps waiting-auth anchors and routes follow-up steering through
   assert.equal(canTaskAcceptSteering(waitingInputTask), false);
   assert.equal(canTaskAcceptSteering(processingPromptTask), false);
   assert.equal(canTaskAcceptSteering(processingLoopTask), true);
+  assert.equal(getTaskRunwayTone(confirmingIntentTask.status), "holding");
+  assert.equal(getTaskRunwayTone(waitingAuthTask.status), "holding");
+  assert.equal(getTaskRunwayTone(processingPromptTask.status), "departure");
   assert.deepEqual(
     getTaskPrimaryActions(confirmingIntentTask, createDetail({ approval_request: null, security_summary: { latest_restore_point: null, pending_authorizations: 0, risk_level: "yellow", security_status: "normal" }, task: confirmingIntentTask })).map((action) => action.action),
     ["cancel", "open-safety"],
@@ -2156,6 +2160,9 @@ test("task page keeps waiting-auth anchors and routes follow-up steering through
   assert.match(mapperSource, /title: "等待确认"/);
   assert.match(taskServiceSource, /等待确认当前处理方式后继续执行。/);
   assert.doesNotMatch(mapperSource, /当前任务还在等待补充输入，如需修改或补充，请到悬浮球继续处理。/);
+  assert.match(taskPageSource, /getTaskRunwayTone\(item\.task\.status\) === "departure"/);
+  assert.match(taskPageSource, /getTaskRunwayTone\(item\.task\.status\) === "holding"/);
+  assert.doesNotMatch(taskPageSource, /item\.task\.status === "confirming_intent" \|\| item\.task\.status === "processing"/);
   assert.match(taskPageSource, /onSteerTask=\{handleSteerTask\}/);
   assert.match(taskDetailPanelSource, /const canSteerTask = task \? canTaskAcceptSteering\(task\) : false;/);
   assert.match(taskDetailPanelSource, /当前任务仍在等待确认处理方式；确认后才会开放正式 `agent\.task\.steer` 追加要求。/);

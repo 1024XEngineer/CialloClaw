@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/utils/cn";
 import { formatTimestamp } from "@/utils/formatters";
-import { canTaskAcceptSteering, getTaskPreviewStatusLabel, getTaskProgress, getTaskStateVoice, getTaskStatusBadgeClass, isTaskEnded } from "../taskPage.mapper";
+import { canTaskAcceptSteering, formatTaskSourceLabel, getTaskPreviewStatusLabel, getTaskProgress, getTaskStateVoice, getTaskStatusBadgeClass, isTaskEnded } from "../taskPage.mapper";
 import type { Task } from "@cialloclaw/protocol";
 import type { TaskDetailData, TaskExperience, TaskPrimaryAction } from "../taskPage.types";
 import { TaskActionBar } from "./TaskActionBar";
@@ -594,7 +594,7 @@ export function TaskDetailPanel({
         <div className="task-detail-shell__meta-grid">
         <div className="task-detail-shell__meta-card">
           <span>来源</span>
-          <strong>{task.source_type}</strong>
+          <strong>{formatTaskSourceLabel(task.source_type)}</strong>
         </div>
         <div className="task-detail-shell__meta-card">
           <span>开始时间</span>
