@@ -54,11 +54,18 @@ func runMain(ctx context.Context, args []string) error {
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
+	debugHTTPSet := false
+	flags.Visit(func(flag *flag.Flag) {
+		if flag.Name == "debug-http" {
+			debugHTTPSet = true
+		}
+	})
 
 	loadOptions := config.LoadOptions{
-		DataDir:          *dataDir,
-		NamedPipeName:    *namedPipe,
-		DebugHTTPAddress: *debugHTTP,
+		DataDir:             *dataDir,
+		NamedPipeName:       *namedPipe,
+		DebugHTTPAddress:    *debugHTTP,
+		DebugHTTPAddressSet: debugHTTPSet,
 	}
 	cfg := loadConfigForMain(loadOptions)
 	if err := activateBootstrapRuntimeRoot(loadOptions, cfg); err != nil {

@@ -2842,6 +2842,19 @@ func TestDispatchTaskSteerReturnsUpdatedTask(t *testing.T) {
 	}
 }
 
+func TestNewServerSkipsDebugHTTPWhenDisabled(t *testing.T) {
+	seed := newTestServer()
+	server := NewServer(serviceconfig.RPCConfig{
+		Transport:        "named_pipe",
+		NamedPipeName:    `\\.\pipe\cialloclaw-rpc-disabled`,
+		DebugHTTPAddress: "",
+	}, seed.orchestrator)
+
+	if server.debugHTTPServer != nil {
+		t.Fatal("expected explicit empty debug HTTP address to disable the diagnostics server")
+	}
+}
+
 func newTestServer() *Server {
 	server, _, _ := newTestServerWithDependencies(nil)
 	return server

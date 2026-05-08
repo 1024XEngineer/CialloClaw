@@ -41,12 +41,14 @@ type RPCConfig struct {
 }
 
 // LoadOptions carries optional bootstrap overrides injected before the settings
-// store is available. Empty fields preserve the default environment-derived
-// runtime paths and transport endpoints.
+// store is available. Unset fields preserve the default environment-derived
+// runtime paths and transport endpoints, while an explicit empty debug HTTP
+// address disables the diagnostics listener.
 type LoadOptions struct {
-	DataDir          string
-	NamedPipeName    string
-	DebugHTTPAddress string
+	DataDir             string
+	NamedPipeName       string
+	DebugHTTPAddress    string
+	DebugHTTPAddressSet bool
 }
 
 // Config is the immutable bootstrap snapshot consumed by the local service.
@@ -142,7 +144,7 @@ func Load(options ...LoadOptions) Config {
 	}
 
 	debugHTTPAddress := resolveOptionalDebugHTTPAddress(loadOptions.DebugHTTPAddress)
-	if debugHTTPAddress == "" {
+	if !loadOptions.DebugHTTPAddressSet {
 		debugHTTPAddress = ":4317"
 	}
 

@@ -88,6 +88,9 @@ func TestRunMainPassesFlagsToBootstrapAndStartsApp(t *testing.T) {
 	if capturedOptions.DebugHTTPAddress != debugHTTP {
 		t.Fatalf("expected debug http %q, got %q", debugHTTP, capturedOptions.DebugHTTPAddress)
 	}
+	if !capturedOptions.DebugHTTPAddressSet {
+		t.Fatal("expected explicit --debug-http flag to mark the override as set")
+	}
 	if capturedConfig.DataDir != dataDir {
 		t.Fatalf("expected loaded config data dir %q, got %q", dataDir, capturedConfig.DataDir)
 	}
@@ -114,6 +117,41 @@ func TestRunMainPassesFlagsToBootstrapAndStartsApp(t *testing.T) {
 	}
 	if !strings.Contains(loggedMessage, pipeName) || !strings.Contains(loggedMessage, dataDir) {
 		t.Fatalf("expected startup log to include runtime paths, got %q", loggedMessage)
+	}
+}
+
+func TestRunMainAllowsDisablingDebugHTTP(t *testing.T) {
+	t.Setenv(runtimeRootEnvKey, "")
+
+	originalLoadConfig := loadConfigForMain
+	originalNewBootstrap := newBootstrapForMain
+	originalLogPrintf := logPrintfForMain
+	t.Cleanup(func() {
+		loadConfigForMain = originalLoadConfig
+		newBootstrapForMain = originalNewBootstrap
+		logPrintfForMain = originalLogPrintf
+	})
+
+	var capturedOptions config.LoadOptions
+	var capturedConfig config.Config
+	loadConfigForMain = func(options config.LoadOptions) config.Config {
+		capturedOptions = options
+		return config.Load(options)
+	}
+	newBootstrapForMain = func(cfg config.Config) (appStarter, error) {
+		capturedConfig = cfg
+		return &stubMainApp{}, nil
+	}
+	logPrintfForMain = func(string, ...any) {}
+
+	if err := runMain(context.Background(), []string{"--debug-http="}); err != nil {
+		t.Fatalf("runMain returned error: %v", err)
+	}
+	if !capturedOptions.DebugHTTPAddressSet {
+		t.Fatal("expected explicit empty --debug-http flag to mark the override as set")
+	}
+	if capturedConfig.RPC.DebugHTTPAddress != "" {
+		t.Fatalf("expected explicit empty --debug-http flag to disable the listener, got %q", capturedConfig.RPC.DebugHTTPAddress)
 	}
 }
 

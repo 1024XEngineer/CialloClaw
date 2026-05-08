@@ -90,10 +90,18 @@ func TestLoadRepairsNamedPipePathMissingLeadingSlash(t *testing.T) {
 
 func TestLoadUsesProvidedDebugHTTPOverride(t *testing.T) {
 	debugHTTPAddress := "127.0.0.1:0"
-	cfg := Load(LoadOptions{DebugHTTPAddress: debugHTTPAddress})
+	cfg := Load(LoadOptions{DebugHTTPAddress: debugHTTPAddress, DebugHTTPAddressSet: true})
 
 	if cfg.RPC.DebugHTTPAddress != debugHTTPAddress {
 		t.Fatalf("expected debug http address %q, got %q", debugHTTPAddress, cfg.RPC.DebugHTTPAddress)
+	}
+}
+
+func TestLoadAllowsExplicitlyDisablingDebugHTTP(t *testing.T) {
+	cfg := Load(LoadOptions{DebugHTTPAddress: "", DebugHTTPAddressSet: true})
+
+	if cfg.RPC.DebugHTTPAddress != "" {
+		t.Fatalf("expected explicit empty debug http override to disable the listener, got %q", cfg.RPC.DebugHTTPAddress)
 	}
 }
 
