@@ -1994,7 +1994,7 @@ func (s *Service) generateOutput(ctx context.Context, request Request, inputText
 		// Prompt-only execution does not have a live loop poller, so queued
 		// steering must be folded into this generation request before the task
 		// resumes from authorization or a session queue.
-		promptInputText = agentloopAppendSteeringInput(inputText, request.SteeringMessages)
+		promptInputText = appendPromptSteeringInput(inputText, request.SteeringMessages)
 	}
 	trace, err := s.generateOutputWithPrompt(ctx, request, promptInputText)
 	if err != nil {
@@ -2699,6 +2699,24 @@ func (noopAgentLoopHook) BeforeTool(_ context.Context, _ agentloop.PersistedRoun
 
 func (noopAgentLoopHook) AfterTool(_ context.Context, _ agentloop.PersistedRound, _ tools.ToolCallRecord, _ string) error {
 	return nil
+}
+
+func appendPromptSteeringInput(inputText string, steeringMessages []string) string {
+	if len(steeringMessages) == 0 {
+		return inputText
+	}
+	steeringLines := make([]string, 0, len(steeringMessages))
+	for _, item := range steeringMessages {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		steeringLines = append(steeringLines, "- "+trimmed)
+	}
+	if len(steeringLines) == 0 {
+		return inputText
+	}
+	return strings.TrimSpace(inputText) + "\n\nFollow-up steering:\n" + strings.Join(steeringLines, "\n")
 }
 
 func agentloopAppendSteeringInput(inputText string, steeringMessages []string) string {
