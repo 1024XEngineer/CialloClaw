@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
@@ -143,8 +145,11 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 	if !isAgentLoopIntent(request.Intent) || request.GenerateToolCalls == nil {
 		return Result{}, false, nil
 	}
-	if len(request.ToolDefinitions) == 0 || request.ExecuteTool == nil {
-		return Result{StopReason: StopReasonNoSupportedTools}, true, nil
+	availableToolDefinitions := filterAllowedToolDefinitions(request.ToolDefinitions, request.AllowedTool)
+	availableToolNames := toolDefinitionNameSet(availableToolDefinitions)
+	if request.ExecuteTool == nil {
+		availableToolDefinitions = nil
+		availableToolNames = nil
 	}
 
 	if request.MaxTurns <= 0 {
@@ -171,6 +176,11 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 	if request.Now == nil {
 		request.Now = time.Now
 	}
+	if request.BuildAuditRecord == nil {
+		request.BuildAuditRecord = func(context.Context, *model.InvocationRecord) (map[string]any, error) {
+			return nil, nil
+		}
+	}
 	if request.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, request.Timeout)
@@ -183,9 +193,13 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 	rounds := []PersistedRound{}
 	events := []LifecycleEvent{}
 	events = appendEvent(events, request, newEvent(request, "loop.started", map[string]any{"status": "processing"}))
+	lastPlannerOutputText := ""
 	var latestInvocation *model.InvocationRecord
-	repeatedToolName := ""
-	repeatedToolCount := 0
+	roundToolHistory := []string{}
+	// capabilityReminderUsed keeps the recovery heuristic bounded. Once the
+	// planner has been reminded about the exposed tool surface, later denials
+	// should surface normally instead of spinning the planner forever.
+	capabilityReminderUsed := false
 
 	for turn := 0; turn < request.MaxTurns; turn++ {
 		if request.PollSteering != nil {
@@ -200,7 +214,7 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 				}))
 			}
 		}
-		plannerInput, compactedHistory := buildPlannerInput(activeInputText, history, request.CompressChars, request.KeepRecent)
+		plannerInput, compactedHistory := buildPlannerInput(activeInputText, history, availableToolDefinitions, request.CompressChars, request.KeepRecent)
 		round := PersistedRound{
 			StepID:        fmt.Sprintf("step_loop_%02d", turn+1),
 			RunID:         request.RunID,
@@ -234,7 +248,7 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 				TaskID: request.TaskID,
 				RunID:  request.RunID,
 				Input:  plannerInput,
-				Tools:  request.ToolDefinitions,
+				Tools:  availableToolDefinitions,
 			})
 			if err == nil {
 				break
@@ -266,6 +280,11 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 				"stop_reason":   string(StopReasonPlannerError),
 				"error":         err.Error(),
 			}))
+			if request.Hook != nil {
+				if err := request.Hook.AfterRound(ctx, round); err != nil {
+					return Result{}, true, err
+				}
+			}
 			return Result{
 				ToolCalls:       allToolCalls,
 				ModelInvocation: invocationRecordMap(latestInvocation),
@@ -285,6 +304,10 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 			LatencyMS: plan.LatencyMS,
 		}
 		round.PlannerOutput = truncateText(singleLineSummary(plan.OutputText), 240)
+		plannerOutputText := strings.TrimSpace(plan.OutputText)
+		if shouldCarryPlannerOutputText(plannerOutputText) {
+			lastPlannerOutputText = plannerOutputText
+		}
 
 		if len(compactedHistory) < len(history) {
 			events = appendEvent(events, request, newEventForRound(round, "loop.compacted", map[string]any{
@@ -299,14 +322,41 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 
 		if len(plan.ToolCalls) == 0 {
 			outputText := strings.TrimSpace(plan.OutputText)
+			if !capabilityReminderUsed && turn+1 < request.MaxTurns && shouldRetryForCapabilityReminder(outputText, availableToolDefinitions) {
+				capabilityReminderUsed = true
+				round.Status = "completed"
+				round.CompletedAt = request.Now()
+				round.StopReason = StopReasonCompleted
+				round.OutputSummary = truncateText(singleLineSummary(outputText), 160)
+				rounds = append(rounds, round)
+				events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"attempt_index": round.AttemptIndex, "segment_kind": round.SegmentKind, "loop_round": round.LoopRound, "stop_reason": string(StopReasonCompleted)}))
+				if request.Hook != nil {
+					if err := request.Hook.AfterRound(ctx, round); err != nil {
+						return Result{}, true, err
+					}
+				}
+				activeInputText = appendCapabilityReminderInput(activeInputText, availableToolDefinitions)
+				// Retry this heuristic only once. Repeated denials after an explicit
+				// reminder should return to the caller so the loop stays observable.
+				events = appendEvent(events, request, newEventForRound(round, "loop.retrying", map[string]any{
+					"attempt_index": round.AttemptIndex,
+					"segment_kind":  round.SegmentKind,
+					"loop_round":    round.LoopRound,
+					"phase":         "planner",
+					"attempt":       1,
+					"reason":        "capability_reminder",
+					"output_text":   truncateText(singleLineSummary(outputText), 160),
+				}))
+				continue
+			}
 			stopReason := StopReasonCompleted
 			if outputText == "" {
-				outputText = request.FallbackOutput
-				stopReason = StopReasonNeedUserInput
-			}
-			auditRecord, err := request.BuildAuditRecord(ctx, latestInvocation)
-			if err != nil {
-				return Result{}, true, err
+				if strings.TrimSpace(lastPlannerOutputText) != "" {
+					outputText = lastPlannerOutputText
+				} else {
+					outputText = request.FallbackOutput
+					stopReason = StopReasonNeedUserInput
+				}
 			}
 			round.Status = "completed"
 			round.CompletedAt = request.Now()
@@ -314,6 +364,15 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 			round.OutputSummary = truncateText(singleLineSummary(outputText), 160)
 			rounds = append(rounds, round)
 			events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"attempt_index": round.AttemptIndex, "segment_kind": round.SegmentKind, "loop_round": round.LoopRound, "stop_reason": string(stopReason)}))
+			if request.Hook != nil {
+				if err := request.Hook.AfterRound(ctx, round); err != nil {
+					return Result{}, true, err
+				}
+			}
+			auditRecord, err := request.BuildAuditRecord(ctx, latestInvocation)
+			if err != nil {
+				return Result{}, true, err
+			}
 			events = appendEvent(events, request, newEvent(request, "loop.completed", map[string]any{"stop_reason": string(stopReason)}))
 			return Result{
 				OutputText:      outputText,
@@ -326,7 +385,67 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 			}, true, nil
 		}
 
-		observations := make([]string, 0, len(plan.ToolCalls))
+		if len(availableToolNames) == 0 {
+			if plannerOutputText != "" {
+				round.Status = "completed"
+				round.CompletedAt = request.Now()
+				round.StopReason = StopReasonCompleted
+				round.OutputSummary = truncateText(singleLineSummary(plannerOutputText), 160)
+				rounds = append(rounds, round)
+				events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"attempt_index": round.AttemptIndex, "segment_kind": round.SegmentKind, "loop_round": round.LoopRound, "stop_reason": string(StopReasonCompleted)}))
+				if request.Hook != nil {
+					if err := request.Hook.AfterRound(ctx, round); err != nil {
+						return Result{}, true, err
+					}
+				}
+				auditRecord, err := request.BuildAuditRecord(ctx, latestInvocation)
+				if err != nil {
+					return Result{}, true, err
+				}
+				events = appendEvent(events, request, newEvent(request, "loop.completed", map[string]any{"stop_reason": string(StopReasonCompleted)}))
+				return Result{
+					OutputText:      plannerOutputText,
+					ToolCalls:       allToolCalls,
+					ModelInvocation: invocationRecordMap(latestInvocation),
+					AuditRecord:     auditRecord,
+					Events:          events,
+					Rounds:          rounds,
+					StopReason:      StopReasonCompleted,
+				}, true, nil
+			}
+			round.Status = "completed"
+			round.CompletedAt = request.Now()
+			round.StopReason = StopReasonNoSupportedTools
+			round.OutputSummary = truncateText(singleLineSummary(request.FallbackOutput), 160)
+			rounds = append(rounds, round)
+			events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"attempt_index": round.AttemptIndex, "segment_kind": round.SegmentKind, "loop_round": round.LoopRound, "stop_reason": string(StopReasonNoSupportedTools)}))
+			events = appendEvent(events, request, newEvent(request, "loop.failed", map[string]any{"stop_reason": string(StopReasonNoSupportedTools)}))
+			if request.Hook != nil {
+				if err := request.Hook.AfterRound(ctx, round); err != nil {
+					return Result{}, true, err
+				}
+			}
+			auditRecord, err := request.BuildAuditRecord(ctx, latestInvocation)
+			if err != nil {
+				return Result{}, true, err
+			}
+			return Result{
+				OutputText:      request.FallbackOutput,
+				ToolCalls:       allToolCalls,
+				ModelInvocation: invocationRecordMap(latestInvocation),
+				AuditRecord:     auditRecord,
+				Events:          events,
+				Rounds:          rounds,
+				StopReason:      StopReasonNoSupportedTools,
+			}, true, nil
+		}
+
+		observations := make([]string, 0, len(plan.ToolCalls)+1)
+		roundExecutedToolSignatures := make([]string, 0, len(plan.ToolCalls))
+		executedToolCount := 0
+		if shouldCarryPlannerOutputText(plannerOutputText) {
+			observations = append(observations, "Planner note: "+plannerOutputText)
+		}
 		for _, call := range plan.ToolCalls {
 			if request.Hook != nil {
 				updatedCall, err := request.Hook.BeforeTool(ctx, round, call)
@@ -336,7 +455,7 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 				call = updatedCall
 			}
 			toolName := strings.TrimSpace(call.Name)
-			if request.AllowedTool != nil && !request.AllowedTool(toolName) {
+			if _, ok := availableToolNames[toolName]; !ok {
 				observation := fmt.Sprintf("Tool %s is not allowed in the current agent loop.", toolName)
 				observations = append(observations, observation)
 				round.ToolName = toolName
@@ -361,21 +480,32 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 				allToolCalls = append(allToolCalls, record)
 				round.ToolCallRecord = record
 				round.ToolName = record.ToolName
+				executedToolCount++
+				roundExecutedToolSignatures = append(roundExecutedToolSignatures, toolInvocationSignature(call))
 			}
 			if record.Status == tools.ToolCallStatusTimeout {
 				round.Status = "completed"
 				round.CompletedAt = request.Now()
 				round.StopReason = StopReasonToolRetryExhausted
-				round.OutputSummary = truncateText(singleLineSummary(request.FallbackOutput), 160)
+				round.Observation = truncateText(singleLineSummary(observation), 240)
+				round.OutputSummary = truncateText(singleLineSummary(bestEffortLoopOutput(request.FallbackOutput, lastPlannerOutputText)), 160)
 				rounds = append(rounds, round)
 				events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"attempt_index": round.AttemptIndex, "segment_kind": round.SegmentKind, "loop_round": round.LoopRound, "stop_reason": string(StopReasonToolRetryExhausted)}))
 				events = appendEvent(events, request, newEvent(request, "loop.failed", map[string]any{"stop_reason": string(StopReasonToolRetryExhausted), "tool_name": toolName}))
+				if request.Hook != nil {
+					if err := request.Hook.AfterTool(ctx, round, record, observation); err != nil {
+						return Result{}, true, err
+					}
+					if err := request.Hook.AfterRound(ctx, round); err != nil {
+						return Result{}, true, err
+					}
+				}
 				auditRecord, auditErr := request.BuildAuditRecord(ctx, latestInvocation)
 				if auditErr != nil {
 					return Result{}, true, auditErr
 				}
 				return Result{
-					OutputText:      request.FallbackOutput,
+					OutputText:      bestEffortLoopOutput(request.FallbackOutput, lastPlannerOutputText),
 					ToolCalls:       allToolCalls,
 					ModelInvocation: invocationRecordMap(latestInvocation),
 					AuditRecord:     auditRecord,
@@ -400,27 +530,108 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 			}
 		}
 
-		if round.ToolName != "" {
-			if round.ToolName == repeatedToolName {
-				repeatedToolCount++
-			} else {
-				repeatedToolName = round.ToolName
-				repeatedToolCount = 1
+		if executedToolCount == 0 {
+			if plannerOutputText != "" {
+				if !capabilityReminderUsed && turn+1 < request.MaxTurns && shouldRetryForCapabilityReminder(plannerOutputText, availableToolDefinitions) {
+					capabilityReminderUsed = true
+					round.Status = "completed"
+					round.CompletedAt = request.Now()
+					round.StopReason = StopReasonCompleted
+					round.OutputSummary = truncateText(singleLineSummary(plannerOutputText), 160)
+					rounds = append(rounds, round)
+					events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"attempt_index": round.AttemptIndex, "segment_kind": round.SegmentKind, "loop_round": round.LoopRound, "stop_reason": string(StopReasonCompleted)}))
+					if request.Hook != nil {
+						if err := request.Hook.AfterRound(ctx, round); err != nil {
+							return Result{}, true, err
+						}
+					}
+					activeInputText = appendCapabilityReminderInput(activeInputText, availableToolDefinitions)
+					events = appendEvent(events, request, newEventForRound(round, "loop.retrying", map[string]any{
+						"attempt_index": round.AttemptIndex,
+						"segment_kind":  round.SegmentKind,
+						"loop_round":    round.LoopRound,
+						"phase":         "planner",
+						"attempt":       1,
+						"reason":        "capability_reminder",
+						"output_text":   truncateText(singleLineSummary(plannerOutputText), 160),
+					}))
+					continue
+				}
+				round.Status = "completed"
+				round.CompletedAt = request.Now()
+				round.StopReason = StopReasonCompleted
+				round.OutputSummary = truncateText(singleLineSummary(plannerOutputText), 160)
+				rounds = append(rounds, round)
+				events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"attempt_index": round.AttemptIndex, "segment_kind": round.SegmentKind, "loop_round": round.LoopRound, "stop_reason": string(StopReasonCompleted)}))
+				if request.Hook != nil {
+					if err := request.Hook.AfterRound(ctx, round); err != nil {
+						return Result{}, true, err
+					}
+				}
+				auditRecord, err := request.BuildAuditRecord(ctx, latestInvocation)
+				if err != nil {
+					return Result{}, true, err
+				}
+				events = appendEvent(events, request, newEvent(request, "loop.completed", map[string]any{"stop_reason": string(StopReasonCompleted)}))
+				return Result{
+					OutputText:      plannerOutputText,
+					ToolCalls:       allToolCalls,
+					ModelInvocation: invocationRecordMap(latestInvocation),
+					AuditRecord:     auditRecord,
+					Events:          events,
+					Rounds:          rounds,
+					StopReason:      StopReasonCompleted,
+				}, true, nil
 			}
-			if repeatedToolCount > request.RepeatedToolBudget {
+			round.Status = "completed"
+			round.CompletedAt = request.Now()
+			round.StopReason = StopReasonNoSupportedTools
+			round.OutputSummary = truncateText(singleLineSummary(request.FallbackOutput), 160)
+			rounds = append(rounds, round)
+			events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"attempt_index": round.AttemptIndex, "segment_kind": round.SegmentKind, "loop_round": round.LoopRound, "stop_reason": string(StopReasonNoSupportedTools)}))
+			events = appendEvent(events, request, newEvent(request, "loop.failed", map[string]any{"stop_reason": string(StopReasonNoSupportedTools)}))
+			if request.Hook != nil {
+				if err := request.Hook.AfterRound(ctx, round); err != nil {
+					return Result{}, true, err
+				}
+			}
+			auditRecord, err := request.BuildAuditRecord(ctx, latestInvocation)
+			if err != nil {
+				return Result{}, true, err
+			}
+			return Result{
+				OutputText:      request.FallbackOutput,
+				ToolCalls:       allToolCalls,
+				ModelInvocation: invocationRecordMap(latestInvocation),
+				AuditRecord:     auditRecord,
+				Events:          events,
+				Rounds:          rounds,
+				StopReason:      StopReasonNoSupportedTools,
+			}, true, nil
+		}
+
+		sort.Strings(roundExecutedToolSignatures)
+		if roundToolSignature := strings.Join(roundExecutedToolSignatures, ","); roundToolSignature != "" {
+			roundToolHistory = append(roundToolHistory, roundToolSignature)
+			if repeatedToolPatternExceeded(roundToolHistory, request.RepeatedToolBudget) {
 				round.Status = "completed"
 				round.CompletedAt = request.Now()
 				round.StopReason = StopReasonRepeatedToolChoice
-				round.OutputSummary = truncateText(singleLineSummary(request.FallbackOutput), 160)
+				round.OutputSummary = truncateText(singleLineSummary(bestEffortLoopOutput(request.FallbackOutput, lastPlannerOutputText)), 160)
 				rounds = append(rounds, round)
 				events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"attempt_index": round.AttemptIndex, "segment_kind": round.SegmentKind, "loop_round": round.LoopRound, "stop_reason": string(StopReasonRepeatedToolChoice)}))
 				events = appendEvent(events, request, newEvent(request, "loop.failed", map[string]any{"stop_reason": string(StopReasonRepeatedToolChoice), "tool_name": round.ToolName}))
+				if request.Hook != nil {
+					if err := request.Hook.AfterRound(ctx, round); err != nil {
+						return Result{}, true, err
+					}
+				}
 				auditRecord, err := request.BuildAuditRecord(ctx, latestInvocation)
 				if err != nil {
 					return Result{}, true, err
 				}
 				return Result{
-					OutputText:      request.FallbackOutput,
+					OutputText:      bestEffortLoopOutput(request.FallbackOutput, lastPlannerOutputText),
 					ToolCalls:       allToolCalls,
 					ModelInvocation: invocationRecordMap(latestInvocation),
 					AuditRecord:     auditRecord,
@@ -429,6 +640,33 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 					StopReason:      StopReasonRepeatedToolChoice,
 				}, true, nil
 			}
+		}
+		if turn+1 >= request.MaxTurns && shouldCarryPlannerOutputText(plannerOutputText) {
+			round.Status = "completed"
+			round.CompletedAt = request.Now()
+			round.StopReason = StopReasonCompleted
+			round.OutputSummary = truncateText(singleLineSummary(plannerOutputText), 160)
+			rounds = append(rounds, round)
+			events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"attempt_index": round.AttemptIndex, "segment_kind": round.SegmentKind, "loop_round": round.LoopRound, "stop_reason": string(StopReasonCompleted)}))
+			if request.Hook != nil {
+				if err := request.Hook.AfterRound(ctx, round); err != nil {
+					return Result{}, true, err
+				}
+			}
+			auditRecord, err := request.BuildAuditRecord(ctx, latestInvocation)
+			if err != nil {
+				return Result{}, true, err
+			}
+			events = appendEvent(events, request, newEvent(request, "loop.completed", map[string]any{"stop_reason": string(StopReasonCompleted)}))
+			return Result{
+				OutputText:      plannerOutputText,
+				ToolCalls:       allToolCalls,
+				ModelInvocation: invocationRecordMap(latestInvocation),
+				AuditRecord:     auditRecord,
+				Events:          events,
+				Rounds:          rounds,
+				StopReason:      StopReasonCompleted,
+			}, true, nil
 		}
 
 		history = append(history, observations...)
@@ -451,7 +689,7 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 	}
 	events = appendEvent(events, request, newEvent(request, "loop.failed", map[string]any{"stop_reason": string(StopReasonMaxIterations)}))
 	return Result{
-		OutputText:      request.FallbackOutput,
+		OutputText:      bestEffortLoopOutput(request.FallbackOutput, lastPlannerOutputText),
 		ToolCalls:       allToolCalls,
 		ModelInvocation: invocationRecordMap(latestInvocation),
 		AuditRecord:     auditRecord,
@@ -465,23 +703,658 @@ func isAgentLoopIntent(taskIntent map[string]any) bool {
 	return strings.TrimSpace(stringValue(taskIntent, "name", "")) == defaultIntentName
 }
 
-func buildPlannerInput(inputText string, history []string, compressChars, keepRecent int) (string, []string) {
+func buildPlannerInput(inputText string, history []string, toolDefinitions []model.ToolDefinition, compressChars, keepRecent int) (string, []string) {
 	compressedHistory := compactHistory(history, compressChars, keepRecent)
 	sections := []string{
-		"You are the planning step of a desktop agent loop.",
-		"Decide whether to answer directly or call one of the provided tools.",
-		"Use tools only when they materially improve the answer.",
-		"Never invent file contents, directory entries, or page contents.",
-		"If the task is already clear and no tool is required, return the final answer directly.",
-		"",
-		"User context:",
-		strings.TrimSpace(inputText),
+		"你是桌面 Agent 的规划轮次。",
+		"默认使用中文回答；只有在用户明确要求其他语言时才切换。",
+		"先判断能否直接回答；只有在工具能明显提升结果时才调用工具。",
+		"如果当前已开放的工具能帮助完成任务，优先调用工具，不要先说自己做不到。",
+		"最终答复先给结论，保持精简，不要堆砌客套话。",
+		"不要编造文件内容、目录项或网页内容。",
+		"如果任务已经足够清晰且不需要工具，直接给最终答复。",
 	}
+	if capabilityLines := buildToolCapabilityLines(toolDefinitions); len(capabilityLines) > 0 {
+		sections = append(sections, "", "当前可用能力：")
+		sections = append(sections, capabilityLines...)
+	}
+	sections = append(sections, "", "用户上下文：", strings.TrimSpace(inputText))
 	if len(compressedHistory) > 0 {
-		sections = append(sections, "", "Observed tool results:")
+		sections = append(sections, "", "已观察到的工具结果：")
 		sections = append(sections, compressedHistory...)
 	}
 	return strings.Join(sections, "\n"), compressedHistory
+}
+
+func filterAllowedToolDefinitions(toolDefinitions []model.ToolDefinition, allowedTool func(string) bool) []model.ToolDefinition {
+	if len(toolDefinitions) == 0 {
+		return nil
+	}
+	if allowedTool == nil {
+		return append([]model.ToolDefinition(nil), toolDefinitions...)
+	}
+
+	allowed := make([]model.ToolDefinition, 0, len(toolDefinitions))
+	for _, definition := range toolDefinitions {
+		name := strings.TrimSpace(definition.Name)
+		if name == "" || !allowedTool(name) {
+			continue
+		}
+		allowed = append(allowed, definition)
+	}
+	return allowed
+}
+
+func toolDefinitionNameSet(toolDefinitions []model.ToolDefinition) map[string]struct{} {
+	result := make(map[string]struct{}, len(toolDefinitions))
+	for _, definition := range toolDefinitions {
+		name := strings.TrimSpace(definition.Name)
+		if name == "" {
+			continue
+		}
+		result[name] = struct{}{}
+	}
+	return result
+}
+
+func toolInvocationSignature(call model.ToolInvocation) string {
+	name := strings.TrimSpace(call.Name)
+	if name == "" {
+		return ""
+	}
+	encoded, err := json.Marshal(call.Arguments)
+	if err != nil {
+		return name
+	}
+	return name + ":" + string(encoded)
+}
+
+func repeatedToolPatternExceeded(roundToolHistory []string, budget int) bool {
+	if budget < 0 || len(roundToolHistory) < 2 {
+		return false
+	}
+	maxPatternLen := len(roundToolHistory) / 2
+	if maxPatternLen == 0 {
+		return false
+	}
+	for patternLen := 1; patternLen <= maxPatternLen; patternLen++ {
+		if trailingPatternRepeats(roundToolHistory, patternLen) > budget {
+			return true
+		}
+	}
+	return false
+}
+
+func trailingPatternRepeats(roundToolHistory []string, patternLen int) int {
+	if patternLen <= 0 || len(roundToolHistory) < patternLen {
+		return 0
+	}
+	pattern := roundToolHistory[len(roundToolHistory)-patternLen:]
+	repeats := 1
+	for start := len(roundToolHistory) - (2 * patternLen); start >= 0; start -= patternLen {
+		if !equalStringSlices(roundToolHistory[start:start+patternLen], pattern) {
+			break
+		}
+		repeats++
+	}
+	return repeats
+}
+
+func equalStringSlices(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func bestEffortLoopOutput(fallbackOutput, plannerOutputText string) string {
+	if trimmed := strings.TrimSpace(plannerOutputText); trimmed != "" {
+		return trimmed
+	}
+	return fallbackOutput
+}
+
+func shouldCarryPlannerOutputText(outputText string) bool {
+	trimmed := strings.TrimSpace(outputText)
+	if trimmed == "" {
+		return false
+	}
+	normalized := normalizeCapabilityReminderDenial(trimmed)
+	if normalized == "" || looksLikeAnalyzedCapabilityText(normalized) {
+		return true
+	}
+	if hasCapabilityDenialPrefix(normalized) {
+		return looksLikeCapabilityDenialWithAnswer(normalized)
+	}
+	return true
+}
+
+func buildToolCapabilityLines(toolDefinitions []model.ToolDefinition) []string {
+	lines := make([]string, 0, len(toolDefinitions))
+	for _, definition := range toolDefinitions {
+		name := strings.TrimSpace(definition.Name)
+		if name == "" {
+			continue
+		}
+
+		line := "- " + name
+		if description := strings.TrimSpace(definition.Description); description != "" {
+			line += ": " + description
+		}
+		if requiredFields := toolRequiredFields(definition.InputSchema); len(requiredFields) > 0 {
+			separator := "。"
+			if strings.HasSuffix(line, ".") || strings.HasSuffix(line, "!") || strings.HasSuffix(line, "?") || strings.HasSuffix(line, "。") || strings.HasSuffix(line, "！") || strings.HasSuffix(line, "？") {
+				separator = " "
+			}
+			line += separator + "必填参数：" + strings.Join(requiredFields, ", ")
+		}
+		lines = append(lines, line)
+	}
+	return lines
+}
+
+func toolRequiredFields(schema map[string]any) []string {
+	requiredValue, ok := schema["required"]
+	if !ok {
+		return nil
+	}
+
+	switch typed := requiredValue.(type) {
+	case []string:
+		result := make([]string, 0, len(typed))
+		for _, item := range typed {
+			trimmed := strings.TrimSpace(item)
+			if trimmed != "" {
+				result = append(result, trimmed)
+			}
+		}
+		return result
+	case []any:
+		result := make([]string, 0, len(typed))
+		for _, item := range typed {
+			value, ok := item.(string)
+			if !ok {
+				continue
+			}
+			trimmed := strings.TrimSpace(value)
+			if trimmed != "" {
+				result = append(result, trimmed)
+			}
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
+func shouldRetryForCapabilityReminder(outputText string, toolDefinitions []model.ToolDefinition) bool {
+	// Only plain-text capability denials should trigger the reminder retry. This
+	// keeps the recovery path narrow so a genuine refusal does not become an
+	// unbounded planner loop just because tools were available in the run.
+	if len(toolDefinitions) == 0 {
+		return false
+	}
+
+	trimmed := strings.TrimSpace(outputText)
+	if trimmed == "" {
+		return false
+	}
+	// Quoted or block-quoted text often appears in explain/analyze flows where
+	// the model is describing an error string instead of refusing the task.
+	if startsWithQuotedCapabilityText(trimmed) {
+		return false
+	}
+
+	normalized := normalizeCapabilityReminderDenial(trimmed)
+	if normalized == "" {
+		return false
+	}
+	if looksLikeAnalyzedCapabilityText(normalized) {
+		return false
+	}
+	if !capabilityReminderMatchesAvailableTools(normalized, toolDefinitions) {
+		return false
+	}
+
+	if !hasCapabilityDenialPrefix(normalized) {
+		return false
+	}
+	return !looksLikeCapabilityDenialWithAnswer(normalized)
+}
+
+func hasCapabilityDenialPrefix(normalized string) bool {
+	denialSignals := []string{
+		"i cannot access",
+		"i can't access",
+		"i am unable to access",
+		"i'm unable to access",
+		"i do not have access",
+		"i don't have access",
+		"i cannot read files",
+		"i can't read files",
+		"i cannot browse",
+		"i can't browse",
+		"i do not have the ability",
+		"i don't have the ability",
+		"i lack the ability",
+		"cannot access",
+		"can't access",
+		"unable to access",
+		"do not have access",
+		"don't have access",
+		"cannot read files",
+		"can't read files",
+		"cannot browse",
+		"can't browse",
+		"do not have the ability",
+		"don't have the ability",
+		"lack the ability",
+		"我没有这个能力",
+		"我没有这些能力",
+		"我没有能力",
+		"我无法访问",
+		"我不能访问",
+		"我无法读取",
+		"我不能读取",
+		"我无法查看",
+		"我不能查看",
+		"我做不到",
+		"没有这个能力",
+		"没有这些能力",
+		"没有能力",
+		"无法访问",
+		"不能访问",
+		"无法读取",
+		"不能读取",
+		"无法查看",
+		"不能查看",
+		"做不到",
+	}
+	for _, signal := range denialSignals {
+		if strings.HasPrefix(normalized, signal) {
+			return true
+		}
+	}
+	return false
+}
+
+func capabilityReminderMatchesAvailableTools(outputText string, toolDefinitions []model.ToolDefinition) bool {
+	hasFileTool := false
+	hasPageTool := false
+	for _, definition := range toolDefinitions {
+		switch toolDefinitionCapabilityKind(definition) {
+		case "file":
+			hasFileTool = true
+		case "page":
+			hasPageTool = true
+		}
+	}
+	switch deniedCapabilityKind(outputText) {
+	case "page":
+		return hasPageTool
+	case "file":
+		return hasFileTool
+	default:
+		return false
+	}
+}
+
+func toolDefinitionCapabilityKind(definition model.ToolDefinition) string {
+	searchable := strings.ToLower(strings.TrimSpace(definition.Name + " " + definition.Description))
+	pageKeywords := []string{"page", "web", "browser", "url", "site", "网页", "网站", "页面"}
+	for _, keyword := range pageKeywords {
+		if strings.Contains(searchable, keyword) {
+			return "page"
+		}
+	}
+	fileKeywords := []string{"file", "dir", "directory", "workspace", "repo", "repository", "文件", "目录", "工作区", "仓库"}
+	for _, keyword := range fileKeywords {
+		if strings.Contains(searchable, keyword) {
+			return "file"
+		}
+	}
+	return "generic"
+}
+
+func deniedCapabilityKind(outputText string) string {
+	pageKeywords := []string{"browse", "website", "web page", "webpage", "url", "网页", "网站", "页面"}
+	for _, keyword := range pageKeywords {
+		if strings.Contains(outputText, keyword) {
+			return "page"
+		}
+	}
+	fileKeywords := []string{"workspace", "file", "files", "directory", "repo", "repository", "working tree", "文件", "工作区", "目录", "仓库"}
+	for _, keyword := range fileKeywords {
+		if strings.Contains(outputText, keyword) {
+			return "file"
+		}
+	}
+	return "generic"
+}
+
+func looksLikeCapabilityDenialWithAnswer(outputText string) bool {
+	answerMarkers := []string{
+		", but based on",
+		" but based on",
+		", but if you",
+		" but if you",
+		", but you can",
+		" but you can",
+		" however, based on",
+		" however, if you",
+		"please paste",
+		"can you paste",
+		"could you paste",
+		"please upload",
+		"can you upload",
+		"could you upload",
+		"paste the",
+		"upload the",
+		"share the",
+		"can you share",
+		"could you share",
+		"send the",
+		"i can help analyze",
+		"i can help explain",
+		"i can still help",
+		"likely fix",
+		"the fix is",
+		"the likely fix is",
+		"the likely cause is",
+		"the root cause is",
+		"root cause is",
+		"the issue is",
+		"the problem is",
+		"check whether",
+		"check if",
+		"verify whether",
+		"verify if",
+		"look for",
+		"inspect whether",
+		"so here's",
+		"so here is",
+		"here's",
+		"here is",
+		"what to change",
+		"change is",
+		"you should",
+		"try ",
+		"但根据你提供",
+		"不过根据你提供",
+		"但基于你提供",
+		"不过基于你提供",
+		"但如果你提供",
+		"不过如果你提供",
+		"但你可以",
+		"不过你可以",
+		"但可以",
+		"不过可以",
+		"但我可以",
+		"不过我可以",
+		"根据你提供",
+		"基于你提供",
+		"请粘贴",
+		"请上传",
+		"能把",
+		"可以把",
+		"方便把",
+		"把内容贴",
+		"把文件上传",
+		"我可以帮你分析",
+		"我可以帮你解释",
+		"我可以继续帮你",
+		"可以帮你分析",
+		"可以帮你解释",
+		"你贴出来",
+		"可能的修复",
+		"修复方式",
+		"问题在于",
+		"原因是",
+		"根因是",
+		"可以尝试",
+		"建议你",
+		"检查是否",
+		"确认是否",
+		"看看是否",
+		"这里是",
+		"这里要改",
+		"需要修改",
+	}
+	for _, marker := range answerMarkers {
+		if strings.Contains(outputText, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func looksLikeAnalyzedCapabilityText(outputText string) bool {
+	analysisPrefixes := []string{
+		"the error",
+		"this error",
+		"error message",
+		"the message",
+		"this message",
+		"错误信息",
+		"这个错误",
+		"这条错误",
+		"报错",
+	}
+	for _, prefix := range analysisPrefixes {
+		if strings.HasPrefix(outputText, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func startsWithQuotedCapabilityText(outputText string) bool {
+	return strings.HasPrefix(outputText, "\"") ||
+		strings.HasPrefix(outputText, "'") ||
+		strings.HasPrefix(outputText, "`") ||
+		strings.HasPrefix(outputText, "“") ||
+		strings.HasPrefix(outputText, "‘") ||
+		strings.HasPrefix(outputText, ">")
+}
+
+func normalizeCapabilityReminderDenial(outputText string) string {
+	normalized := strings.ToLower(strings.TrimSpace(outputText))
+	if normalized == "" {
+		return ""
+	}
+	normalized = stripCapabilityRoleLeadIn(normalized)
+
+	leadIns := []string{
+		"sorry,",
+		"sorry，",
+		"sorry",
+		"sorry but",
+		"i'm sorry,",
+		"i'm sorry，",
+		"i'm sorry",
+		"i am sorry,",
+		"i am sorry，",
+		"i am sorry",
+		"unfortunately,",
+		"unfortunately，",
+		"unfortunately",
+		"抱歉，",
+		"抱歉,",
+		"抱歉",
+		"对不起，",
+		"对不起,",
+		"对不起",
+		"不好意思，",
+		"不好意思,",
+		"不好意思",
+		"as an ai,",
+		"as an ai，",
+		"as an ai",
+		"as an ai assistant\n",
+		"as an ai assistant\r\n",
+		"as an ai assistant.",
+		"作为 ai，",
+		"作为 ai,",
+		"作为 ai",
+		"作为 ai 助手\n",
+		"作为 ai 助手\r\n",
+		"作为 ai 助手。",
+		"assistant.",
+		"assistant。",
+		"assistant-",
+		"assistant -",
+		"assistant\n",
+		"assistant\r\n",
+		"assistant",
+		"assistant:",
+		"assistant：",
+		"model.",
+		"model。",
+		"model-",
+		"model -",
+		"model",
+		"model:",
+		"model：",
+		"助手.",
+		"助手。",
+		"助手-",
+		"助手 -",
+		"助手\n",
+		"助手\r\n",
+		"助手",
+		"助手:",
+		"助手：",
+		"作为ai，",
+		"作为ai,",
+		"作为ai",
+	}
+	for {
+		stripped := false
+		for _, leadIn := range leadIns {
+			if strings.HasPrefix(normalized, leadIn) {
+				normalized = strings.TrimSpace(strings.TrimPrefix(normalized, leadIn))
+				normalized = strings.TrimLeft(normalized, " \t\r\n-*•:：")
+				stripped = true
+			}
+		}
+		if !stripped {
+			break
+		}
+	}
+	normalized = stripCapabilityRoleLeadIn(normalized)
+
+	softenedPrefixes := [][2]string{
+		{"i still ", "i "},
+		{"i currently ", "i "},
+		{"i cannot currently ", "i cannot "},
+		{"i can't currently ", "i can't "},
+		{"i do not currently have access", "i do not have access"},
+		{"i don't currently have access", "i don't have access"},
+		{"i do not have direct access", "i do not have access"},
+		{"i don't have direct access", "i don't have access"},
+		{"i cannot directly ", "i cannot "},
+		{"i can't directly ", "i can't "},
+		{"but ", ""},
+		{"in this environment ", ""},
+		{"from here ", ""},
+		{"here ", ""},
+		{"cannot directly ", "cannot "},
+		{"can't directly ", "can't "},
+		{"do not have direct access", "do not have access"},
+		{"don't have direct access", "don't have access"},
+		{"still ", ""},
+		{"currently ", ""},
+		{"我现在", "我"},
+		{"我仍然", "我"},
+		{"我还是", "我"},
+		{"我无法直接", "我无法"},
+		{"我不能直接", "我不能"},
+		{"但是", ""},
+		{"但", ""},
+		{"在这个环境里", ""},
+		{"在这个环境中", ""},
+		{"当前环境下", ""},
+		{"无法直接", "无法"},
+		{"不能直接", "不能"},
+		{"没有直接", "没有"},
+		{"现在", ""},
+		{"仍然", ""},
+		{"还是", ""},
+		{"目前", ""},
+		{"暂时", ""},
+	}
+	for {
+		stripped := false
+		for _, prefix := range softenedPrefixes {
+			if strings.HasPrefix(normalized, prefix[0]) {
+				normalized = strings.TrimSpace(prefix[1] + strings.TrimPrefix(normalized, prefix[0]))
+				stripped = true
+			}
+		}
+		if !stripped {
+			break
+		}
+	}
+	return strings.TrimLeft(normalized, " \t\r\n-*•:：")
+}
+
+func stripCapabilityRoleLeadIn(normalized string) string {
+	rolePrefixes := []string{"as an ai", "as an ai assistant", "as a language model", "as an assistant", "assistant", "model", "作为 ai", "作为ai", "作为 ai 助手", "作为ai助手", "作为语言模型", "助手"}
+	for _, prefix := range rolePrefixes {
+		if !strings.HasPrefix(normalized, prefix) {
+			continue
+		}
+		rest := normalized[len(prefix):]
+		if index := strings.IndexAny(rest, ",，:：-.。"); index >= 0 && len(prefix)+index < 96 {
+			_, size := utf8.DecodeRuneInString(rest[index:])
+			candidate := strings.TrimLeft(strings.TrimSpace(rest[index+size:]), " \t\r\n-*•:：")
+			if hasCapabilityDenialPrefix(candidate) {
+				return candidate
+			}
+		}
+		if index := strings.IndexAny(rest, "\r\n"); index >= 0 && len(prefix)+index < 96 {
+			candidate := strings.TrimLeft(strings.TrimSpace(rest[index+1:]), " \t\r\n-*•:：")
+			if hasCapabilityDenialPrefix(candidate) {
+				return candidate
+			}
+		}
+		if index := strings.Index(rest, " i"); index >= 0 && len(prefix)+index < 96 {
+			candidate := strings.TrimLeft(strings.TrimSpace(rest[index+1:]), " \t\r\n-*•:：")
+			if hasCapabilityDenialPrefix(candidate) {
+				return candidate
+			}
+		}
+		if index := strings.Index(rest, "我"); index >= 0 && len(prefix)+index < 96 {
+			candidate := strings.TrimLeft(strings.TrimSpace(rest[index:]), " \t\r\n-*•:：")
+			if hasCapabilityDenialPrefix(candidate) {
+				return candidate
+			}
+		}
+	}
+	return normalized
+}
+
+func appendCapabilityReminderInput(inputText string, toolDefinitions []model.ToolDefinition) string {
+	// Append the reminder to the original user input so the next planner round
+	// keeps the task context while restating the bounded tool surface.
+	sections := []string{
+		strings.TrimSpace(inputText),
+		"",
+		"能力提醒：",
+		"- 当前这轮已经开放下列工具能力。",
+		"- 在回答“做不到”或“无法访问”之前，先判断这些工具是否适用。",
+		"- 如果工具能帮助完成任务，就调用工具；否则按用户要求的语言给出简洁答复；若用户未指定语言，默认中文。",
+	}
+	if capabilityLines := buildToolCapabilityLines(toolDefinitions); len(capabilityLines) > 0 {
+		sections = append(sections, "当前可用能力：")
+		sections = append(sections, capabilityLines...)
+	}
+	return strings.TrimSpace(strings.Join(sections, "\n"))
 }
 
 func appendSteeringInput(inputText string, steeringMessages []string) string {
@@ -499,7 +1372,7 @@ func appendSteeringInput(inputText string, steeringMessages []string) string {
 	if len(steeringLines) == 0 {
 		return inputText
 	}
-	return strings.TrimSpace(inputText) + "\n\nFollow-up steering:\n" + strings.Join(steeringLines, "\n")
+	return strings.TrimSpace(inputText) + "\n\n补充要求：\n" + strings.Join(steeringLines, "\n")
 }
 
 func compactHistory(history []string, compressChars, keepRecent int) []string {
