@@ -200,7 +200,7 @@ function matchLink(text: string): InlineMatch | null {
 }
 
 function matchAutoLink(text: string): InlineMatch | null {
-  const match = new RegExp("https?:\\/\\/[^\\s<>()\\[\\]{}\"']+", "i").exec(text);
+  const match = new RegExp("https?:\\/\\/[^\\s<>\\[\\]{}\"']+", "i").exec(text);
   if (match === null || match.index === undefined) {
     return null;
   }
@@ -220,10 +220,25 @@ function matchAutoLink(text: string): InlineMatch | null {
 
 function trimTrailingUrlPunctuation(value: string) {
   let href = value;
-  while (/[.,!?;:'"，。！？；：）】》〉」』、】【)>\]]$/.test(href)) {
+  while (/[.,!?;:'"，。！？；：】》〉」』、】【>\]]$/.test(href)) {
     href = href.slice(0, -1);
   }
+
+  while (href.endsWith(")") && countUrlCharacters(href, "(") < countUrlCharacters(href, ")")) {
+    href = href.slice(0, -1);
+  }
+
   return href;
+}
+
+function countUrlCharacters(value: string, target: string) {
+  let count = 0;
+  for (const rune of value) {
+    if (rune === target) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 function matchInlineCode(text: string): InlineMatch | null {

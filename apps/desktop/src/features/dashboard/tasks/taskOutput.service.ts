@@ -149,6 +149,19 @@ function localPathExecutionFailure(message: string, error: unknown) {
   return `${message}（${detail}）`;
 }
 
+async function copyPreparedUrl(feedback: string, url: string) {
+  if (globalThis.navigator?.clipboard?.writeText) {
+    try {
+      await globalThis.navigator.clipboard.writeText(url);
+      return `${feedback} 已复制链接。`;
+    } catch {
+      return `${feedback} 链接：${url}`;
+    }
+  }
+
+  return `${feedback} 链接：${url}`;
+}
+
 /**
  * Executes a renderer-side open plan while keeping task-detail routing and
  * copy-path fallback inside the same formal execution entry.
@@ -174,8 +187,12 @@ export async function performTaskOpenExecution(plan: TaskOpenExecutionPlan, opti
       return "已拦截不受支持的结果链接。";
     }
 
-    await openDesktopExternalUrl(plan.url);
-    return plan.feedback;
+    try {
+      await openDesktopExternalUrl(plan.url);
+      return plan.feedback;
+    } catch (error) {
+      return copyPreparedUrl(localPathExecutionFailure("无法直接打开结果链接，已准备复制地址", error), plan.url);
+    }
   }
 
   if (plan.mode === "open_local_path" && plan.path) {

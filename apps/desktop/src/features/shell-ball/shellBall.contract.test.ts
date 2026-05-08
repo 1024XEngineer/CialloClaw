@@ -5082,6 +5082,33 @@ test("shell-ball agent bubbles keep markdown links clickable", () => {
   assert.match(markup, /data-shell-ball-interactive="true"/);
 });
 
+test("shell-ball bare urls keep balanced parentheses inside the linked href", () => {
+  const markup = renderToStaticMarkup(
+    createElement(ShellBallBubbleZone, {
+      visualState: "processing",
+      bubbleItems: [
+        {
+          bubble: {
+            bubble_id: "msg-agent-paren-link-1",
+            task_id: "task-agent-paren-link-1",
+            type: "result",
+            text: "参考链接：https://en.wikipedia.org/wiki/Function_(mathematics)",
+            pinned: false,
+            hidden: false,
+            created_at: "2026-05-10T10:09:05.000Z",
+          },
+          role: "agent",
+          desktop: {
+            lifecycleState: "visible",
+          },
+        },
+      ] satisfies ShellBallBubbleItem[],
+    }),
+  );
+
+  assert.match(markup, /href="https:\/\/en\.wikipedia\.org\/wiki\/Function_\(mathematics\)"/);
+});
+
 test("shell-ball markdown links open through the desktop external-url bridge", () => {
   const markdownSource = readFileSync(
     resolve(desktopRoot, "src/features/shell-ball/components/ShellBallMarkdown.tsx"),

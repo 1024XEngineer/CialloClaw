@@ -813,6 +813,19 @@ function localPathExecutionFailure(message: string, error: unknown) {
   return `${message}（${detail}）`;
 }
 
+async function copyPreparedUrl(feedback: string, url: string) {
+  if (globalThis.navigator?.clipboard?.writeText) {
+    try {
+      await globalThis.navigator.clipboard.writeText(url);
+      return `${feedback} 已复制链接。`;
+    } catch {
+      return `${feedback} 链接：${url}`;
+    }
+  }
+
+  return `${feedback} 链接：${url}`;
+}
+
 /**
  * Executes a note resource open plan while preserving task-detail routing and
  * copy-path fallback inside the same renderer entry.
@@ -841,8 +854,12 @@ export async function performNoteResourceOpenExecution(
       return "已拦截不受支持的便签资源链接。";
     }
 
-    await openDesktopExternalUrl(plan.url);
-    return plan.feedback;
+    try {
+      await openDesktopExternalUrl(plan.url);
+      return plan.feedback;
+    } catch (error) {
+      return copyPreparedUrl(localPathExecutionFailure("无法直接打开便签资源链接，已准备复制地址", error), plan.url);
+    }
   }
 
   if (plan.mode === "open_local_path" && plan.path) {

@@ -232,8 +232,16 @@ fn normalize_external_url(raw_url: &str) -> Result<String, String> {
         return Err("external url is empty".to_string());
     }
 
-    if !(trimmed.starts_with("https://") || trimmed.starts_with("http://")) {
+    let Some((scheme, remainder)) = trimmed.split_once(':') else {
+        return Err("external url is missing a scheme".to_string());
+    };
+
+    if !scheme.eq_ignore_ascii_case("https") && !scheme.eq_ignore_ascii_case("http") {
         return Err("external url must use http or https".to_string());
+    }
+
+    if !remainder.starts_with("//") {
+        return Err("external url must include // after the scheme".to_string());
     }
 
     if trimmed.chars().any(char::is_whitespace) {
@@ -400,8 +408,8 @@ fn run_platform_command(program: &str, args: &[&Path], description: &str) -> Res
 #[cfg(test)]
 mod tests {
     use super::{
-        open_trusted_directory, prepare_trusted_directory_target, resolve_existing_local_path,
-        resolve_path_candidate, LocalPathRoots,
+        normalize_external_url, open_trusted_directory, prepare_trusted_directory_target,
+        resolve_existing_local_path, resolve_path_candidate, LocalPathRoots,
     };
     use std::env;
     use std::fs;
@@ -411,6 +419,22 @@ mod tests {
     #[test]
     fn resolve_path_candidate_rejects_empty_input() {
         assert!(resolve_path_candidate("   ", &LocalPathRoots::new(None, None, None)).is_err());
+    }
+
+    #[test]
+    fn normalize_external_url_accepts_uppercase_http_schemes() {
+        let normalized = normalize_external_url("HTTPS://example.com/path")
+            .expect("uppercase https scheme should pass validation");
+
+        assert_eq!(normalized, "HTTPS://example.com/path");
+    }
+
+    #[test]
+    fn normalize_external_url_rejects_schemes_without_double_slash() {
+        let error = normalize_external_url("https:example.com")
+            .expect_err("scheme without double slash should fail");
+
+        assert!(error.contains("include //"));
     }
 
     #[test]
