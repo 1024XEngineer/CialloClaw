@@ -335,13 +335,17 @@ func (s *Service) AssessGovernance(ctx context.Context, request Request) (Govern
 
 // requiresBrowserObservationApproval preserves the low-risk classification for
 // browser_attach_current/browser_snapshot only when the request observes the
-// currently captured browser page. Explicit selectors for other tabs must be
-// promoted back onto the approval path.
+// currently captured browser page through the default local endpoint. Explicit
+// selectors for other tabs or explicit endpoint overrides must be promoted
+// back onto the approval path.
 func requiresBrowserObservationApproval(toolName string, arguments map[string]any, toolInput map[string]any, snapshot contextsvc.TaskContextSnapshot) bool {
 	switch strings.TrimSpace(toolName) {
 	case "browser_attach_current", "browser_snapshot":
 	default:
 		return false
+	}
+	if hasExplicitBrowserObservationEndpoint(toolInput) {
+		return true
 	}
 
 	if !hasExplicitBrowserObservationTarget(arguments) {
@@ -361,6 +365,11 @@ func requiresBrowserObservationApproval(toolName string, arguments map[string]an
 		return snapshotURL == "" || snapshotURL != targetURL
 	}
 	return strings.TrimSpace(stringValue(target, "title_contains", "")) != ""
+}
+
+func hasExplicitBrowserObservationEndpoint(toolInput map[string]any) bool {
+	attach := mapValue(toolInput, "attach")
+	return strings.TrimSpace(stringValue(attach, "endpoint_url", "")) != ""
 }
 
 func hasExplicitBrowserObservationTarget(arguments map[string]any) bool {
@@ -3423,7 +3432,7 @@ func resolveBrowserToolInput(intentName string, arguments map[string]any, snapsh
 }
 
 func resolveExplicitBrowserToolInput(intentName string, arguments map[string]any) (map[string]any, bool) {
-	attach := mapValue(arguments, "attach")
+	attach := mergeExplicitBrowserAttachInput(mapValue(arguments, "attach"), arguments)
 	if len(attach) == 0 {
 		return nil, false
 	}
@@ -3452,6 +3461,30 @@ func resolveExplicitBrowserToolInput(intentName string, arguments map[string]any
 	default:
 		return nil, false
 	}
+}
+
+func mergeExplicitBrowserAttachInput(attachInput map[string]any, arguments map[string]any) map[string]any {
+	merged := cloneMap(attachInput)
+	if merged == nil {
+		merged = map[string]any{}
+	}
+	target := cloneMap(mapValue(merged, "target"))
+	if target == nil {
+		target = map[string]any{}
+	}
+	if targetURL := strings.TrimSpace(stringValue(arguments, "target_url", "")); targetURL != "" {
+		target["url"] = targetURL
+	}
+	if titleContains := strings.TrimSpace(stringValue(arguments, "title_contains", "")); titleContains != "" {
+		target["title_contains"] = titleContains
+	}
+	if pageIndex, ok := browserAttachPageIndex(arguments["page_index"]); ok {
+		target["page_index"] = pageIndex
+	}
+	if len(target) > 0 {
+		merged["target"] = target
+	}
+	return merged
 }
 
 func buildBrowserAttachInput(browserKind string, snapshot contextsvc.TaskContextSnapshot, arguments map[string]any, useSnapshotTarget, allowEmptyTarget, requireStableTarget bool) map[string]any {

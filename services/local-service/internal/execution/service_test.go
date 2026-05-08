@@ -1899,6 +1899,37 @@ func TestResolveBrowserToolInputPrefersExplicitAttachOverSnapshotHints(t *testin
 	}
 }
 
+func TestResolveBrowserToolInputMergesTopLevelSelectorsIntoExplicitAttach(t *testing.T) {
+	input, ok := resolveBrowserToolInput(
+		"browser_snapshot",
+		map[string]any{
+			"attach": map[string]any{
+				"mode":         "cdp",
+				"browser_kind": "chrome",
+				"target":       map[string]any{"url": "https://example.com/stale", "title_contains": "Old"},
+			},
+			"target_url":     "https://example.com/fresh",
+			"title_contains": "Fresh",
+			"page_index":     3,
+		},
+		contextsvc.TaskContextSnapshot{},
+	)
+	if !ok {
+		t.Fatal("expected explicit browser snapshot attach to resolve")
+	}
+	attach, ok := input["attach"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected attach block in resolved browser input, got %+v", input)
+	}
+	target, ok := attach["target"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected merged attach target, got %+v", attach)
+	}
+	if target["url"] != "https://example.com/fresh" || target["title_contains"] != "Fresh" || target["page_index"] != 3 {
+		t.Fatalf("expected top-level selectors to override explicit attach target, got %+v", target)
+	}
+}
+
 func TestResolveBrowserToolInputKeepsExplicitNavigateContract(t *testing.T) {
 	input, ok := resolveBrowserToolInput(
 		"browser_navigate",
@@ -3144,6 +3175,31 @@ func TestAssessGovernanceBrowserSnapshotRequiresApprovalForTopLevelTargetURL(t *
 	}
 	if !assessment.ApprovalRequired || assessment.RiskLevel != string(risk.RiskLevelYellow) {
 		t.Fatalf("expected browser_snapshot top-level target_url to require approval, got %+v", assessment)
+	}
+}
+
+func TestAssessGovernanceBrowserSnapshotRequiresApprovalForExplicitEndpointOverride(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_browser_snapshot_endpoint_override",
+		RunID:  "run_browser_snapshot_endpoint_override",
+		Intent: map[string]any{"name": "browser_snapshot", "arguments": map[string]any{
+			"attach": map[string]any{
+				"mode":         "cdp",
+				"browser_kind": "chrome",
+				"endpoint_url": "http://127.0.0.1:9333",
+			},
+		}},
+		Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com/docs", PageTitle: "Example Docs"},
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected browser_snapshot endpoint override governance path to be handled")
+	}
+	if !assessment.ApprovalRequired || assessment.RiskLevel != string(risk.RiskLevelYellow) {
+		t.Fatalf("expected browser_snapshot explicit endpoint override to require approval, got %+v", assessment)
 	}
 }
 
