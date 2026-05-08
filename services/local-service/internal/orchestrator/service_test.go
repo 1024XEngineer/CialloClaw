@@ -12267,6 +12267,66 @@ func TestServiceTaskArtifactOpenReturnsStableOpenPayload(t *testing.T) {
 	}
 }
 
+func TestServiceTaskArtifactOpenPrefersStoredArtifactOverRuntimeCompatibility(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "stored artifact open precedence")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	runtimeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_artifact_open_prefer",
+		Title:       "artifact open preference task",
+		SourceType:  "floating_ball",
+		Status:      "completed",
+		Intent:      map[string]any{"name": "summarize"},
+		CurrentStep: "deliver_result",
+		Timeline:    initialTimeline("completed", "deliver_result"),
+	})
+	if _, ok := service.runEngine.SetPresentation(runtimeTask.TaskID, nil, map[string]any{
+		"type":         "workspace_document",
+		"title":        "runtime result",
+		"preview_text": "runtime preview",
+		"payload":      map[string]any{"path": "workspace/runtime.md", "task_id": runtimeTask.TaskID},
+	}, []map[string]any{{
+		"artifact_id":      "art_open_prefer_stored",
+		"task_id":          runtimeTask.TaskID,
+		"artifact_type":    "generated_doc",
+		"title":            "runtime.md",
+		"path":             "workspace/runtime.md",
+		"mime_type":        "text/markdown",
+		"delivery_type":    "open_file",
+		"delivery_payload": map[string]any{"path": "workspace/runtime.md", "task_id": runtimeTask.TaskID},
+		"created_at":       "2026-04-14T10:05:00Z",
+	}}); !ok {
+		t.Fatal("expected runtime presentation to update")
+	}
+	if err := service.storage.ArtifactStore().SaveArtifacts(context.Background(), []storage.ArtifactRecord{{
+		ArtifactID:          "art_open_prefer_stored",
+		TaskID:              runtimeTask.TaskID,
+		ArtifactType:        "generated_doc",
+		Title:               "stored.md",
+		Path:                "workspace/stored.md",
+		MimeType:            "text/markdown",
+		DeliveryType:        "open_file",
+		DeliveryPayloadJSON: `{"path":"workspace/stored.md","task_id":"` + runtimeTask.TaskID + `"}`,
+		CreatedAt:           "2026-04-14T10:06:00Z",
+	}}); err != nil {
+		t.Fatalf("save stored artifact failed: %v", err)
+	}
+
+	result, err := service.TaskArtifactOpen(map[string]any{"task_id": runtimeTask.TaskID, "artifact_id": "art_open_prefer_stored"})
+	if err != nil {
+		t.Fatalf("task artifact open failed: %v", err)
+	}
+	payload := result["resolved_payload"].(map[string]any)
+	if payload["path"] != "workspace/stored.md" {
+		t.Fatalf("expected open payload to use stored artifact path, got %+v", payload)
+	}
+	artifact := result["artifact"].(map[string]any)
+	if artifact["path"] != "workspace/stored.md" || artifact["title"] != "stored.md" {
+		t.Fatalf("expected stored artifact to override runtime compatibility data, got %+v", artifact)
+	}
+}
+
 func TestServiceTaskArtifactOpenReturnsArtifactNotFoundWhenTaskExists(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "artifact not found")
 	startResult, err := service.StartTask(map[string]any{

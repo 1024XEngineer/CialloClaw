@@ -433,17 +433,13 @@ func (s *Service) findArtifactForTask(taskID, artifactID string) (map[string]any
 		return nil, ErrTaskNotFound
 	}
 	task, taskFound := formalReadTask(taskID, s.runEngine, s.taskDetailFromStorage)
-	exists := false
+	exists := taskFound
+	runIDFilter := ""
 	if taskFound {
-		exists = true
-		for _, artifact := range delivery.EnsureArtifactIdentifiers(taskID, task.Artifacts) {
-			if stringValue(artifact, "artifact_id", "") == artifactID {
-				return cloneMap(artifact), nil
-			}
-		}
+		runIDFilter = taskAttemptRunIDFilter(task)
 	}
 	if s.storage != nil && s.storage.ArtifactStore() != nil {
-		records, _, err := s.storage.ArtifactStore().ListArtifacts(context.Background(), taskID, taskAttemptRunIDFilter(task), 0, 0)
+		records, _, err := s.storage.ArtifactStore().ListArtifacts(context.Background(), taskID, runIDFilter, 0, 0)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
 		}
@@ -453,6 +449,13 @@ func (s *Service) findArtifactForTask(taskID, artifactID string) (map[string]any
 		for _, record := range records {
 			if record.ArtifactID == artifactID {
 				return artifactMapFromStorage(record), nil
+			}
+		}
+	}
+	if taskFound {
+		for _, artifact := range delivery.EnsureArtifactIdentifiers(taskID, task.Artifacts) {
+			if stringValue(artifact, "artifact_id", "") == artifactID {
+				return cloneMap(artifact), nil
 			}
 		}
 	}
