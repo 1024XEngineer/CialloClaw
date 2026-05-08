@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -55,14 +56,34 @@ func (s *streamConnState) isClosed() bool {
 }
 
 type streamEnvelopeWriter struct {
-	encoder *json.Encoder
-	writeMu sync.Mutex
+	encoder      *json.Encoder
+	onWriteError func()
+	writeMu      sync.Mutex
 }
 
 func (w *streamEnvelopeWriter) writeEnvelope(envelope any) error {
 	w.writeMu.Lock()
 	defer w.writeMu.Unlock()
-	return w.encoder.Encode(envelope)
+	err := w.encoder.Encode(envelope)
+	if err != nil && w.onWriteError != nil {
+		w.onWriteError()
+	}
+	return err
+}
+
+type streamPendingState struct {
+	blocked atomic.Bool
+}
+
+func (s *streamPendingState) setBlocked(blocked bool) {
+	if s == nil {
+		return
+	}
+	s.blocked.Store(blocked)
+}
+
+func (s *streamPendingState) isBlocked() bool {
+	return s != nil && s.blocked.Load()
 }
 
 type streamTaskCoordinator struct {
@@ -125,10 +146,14 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 
 	reader := bufio.NewReader(conn)
 	decoder := json.NewDecoder(reader)
-	writer := &streamEnvelopeWriter{encoder: json.NewEncoder(conn)}
 	connState := newStreamConnState()
 	defer connState.close()
+	writer := &streamEnvelopeWriter{
+		encoder:      json.NewEncoder(conn),
+		onWriteError: connState.close,
+	}
 	taskCoordinator := newStreamTaskCoordinator()
+	pendingState := &streamPendingState{}
 	pendingRequests := make(chan struct{}, maxPendingStreamRequests)
 	var taskStartRequestMu sync.Mutex
 
@@ -141,12 +166,23 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 		case pendingRequests <- struct{}{}:
 		default:
 			pendingAcquireBlocked = true
+			pendingState.setBlocked(true)
 			pendingRequests <- struct{}{}
+			pendingState.setBlocked(false)
+		}
+		// Once a freed pending slot lets the read loop run again, probe for EOF
+		// before the next decode so disconnected backlog can be fenced before any
+		// same-task waiter is released.
+		if pendingAcquireBlocked && streamReaderReachedEOF(reader, conn) {
+			<-pendingRequests
+			connState.close()
+			return
 		}
 
 		var request requestEnvelope
 		if err := decoder.Decode(&request); err != nil {
 			<-pendingRequests
+			connState.close()
 			if errors.Is(err, io.EOF) {
 				return
 			}
@@ -164,14 +200,21 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 		// unrelated worker frees capacity.
 		if pendingAcquireBlocked && streamReaderReachedEOF(reader, conn) {
 			<-pendingRequests
+			connState.close()
 			return
 		}
 
 		s.streamWG.Add(1)
 		go func(request requestEnvelope) {
 			defer s.streamWG.Done()
-			defer func() { <-pendingRequests }()
-			s.handleStreamRequest(request, writer, connState, taskCoordinator, &taskStartRequestMu)
+			var pendingReleaseOnce sync.Once
+			releasePending := func() {
+				pendingReleaseOnce.Do(func() {
+					<-pendingRequests
+				})
+			}
+			defer releasePending()
+			s.handleStreamRequest(request, writer, connState, reader, conn, pendingState, taskCoordinator, &taskStartRequestMu, releasePending)
 		}(request)
 	}
 }
@@ -192,17 +235,21 @@ func streamReaderReachedEOF(reader *bufio.Reader, conn net.Conn) bool {
 	if errors.Is(err, io.EOF) {
 		return true
 	}
+	if err == nil {
+		return false
+	}
 	var netErr net.Error
 	return !errors.As(err, &netErr)
 }
 
-func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnvelopeWriter, connState *streamConnState, taskCoordinator *streamTaskCoordinator, taskStartMu *sync.Mutex) {
+func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnvelopeWriter, connState *streamConnState, reader *bufio.Reader, conn net.Conn, pendingState *streamPendingState, taskCoordinator *streamTaskCoordinator, taskStartMu *sync.Mutex, releasePending func()) {
 	if connState.isClosed() {
 		return
 	}
 
 	tracker := newStreamRequestTracker(request)
 	initialTaskIDs := tracker.taskIDsSnapshot()
+	shouldProbeBlockedDisconnect := len(initialTaskIDs) > 0 || tracker.shouldSubscribeTaskStart()
 	if tracker.shouldSubscribeTaskStart() {
 		// Task-starting requests on one shared desktop stream must stay serialized.
 		// Their runtime-notification correlation temporarily learns task ids from
@@ -216,6 +263,8 @@ func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnve
 	}
 
 	taskCoordinator.withTaskLocks(initialTaskIDs, func() {
+		defer releasePending()
+
 		// Closing the stream must fence queued requests before dispatch so a dead
 		// transport does not continue mutating task state from stale backlog.
 		if connState.isClosed() {
@@ -256,6 +305,9 @@ func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnve
 		response := s.dispatch(request)
 		unsubscribeTaskStart()
 		unsubscribeRuntime()
+		if shouldProbeBlockedDisconnect && pendingState.isBlocked() && streamReaderReachedEOF(reader, conn) {
+			connState.close()
+		}
 
 		responseTaskIDs := taskIDsFromResponse(response)
 		lateTaskIDs := responseTaskIDLocks(responseTaskIDs, initialTaskIDs)

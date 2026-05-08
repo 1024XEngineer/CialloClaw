@@ -1016,6 +1016,113 @@ func TestHandleStreamConnDropsOverflowRequestAfterDisconnectWithFullPendingQueue
 	}
 }
 
+func TestHandleStreamConnDropsDecodedSameTaskBacklogAfterDisconnect(t *testing.T) {
+	server := newTestServer()
+	taskID := "task_disconnect_same_task_backlog"
+	startedSignals := make(chan int, maxPendingStreamRequests)
+	releaseFirst := make(chan struct{})
+
+	var startedMu sync.Mutex
+	startedCount := 0
+	server.handlers["test.same.task.blocking"] = func(params map[string]any) (any, *rpcError) {
+		startedMu.Lock()
+		startedCount++
+		callIndex := startedCount
+		startedMu.Unlock()
+
+		startedSignals <- callIndex
+		if callIndex == 1 {
+			<-releaseFirst
+		}
+
+		return map[string]any{
+			"task": map[string]any{
+				"task_id": stringValue(params, "task_id", ""),
+			},
+		}, nil
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen loopback: %v", err)
+	}
+	defer listener.Close()
+
+	acceptDone := make(chan error, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			acceptDone <- err
+			return
+		}
+		server.handleStreamConn(conn)
+		acceptDone <- nil
+	}()
+
+	right, err := net.Dial("tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatalf("dial loopback: %v", err)
+	}
+
+	encoder := json.NewEncoder(right)
+	for index := 0; index < maxPendingStreamRequests; index++ {
+		request := requestEnvelope{
+			JSONRPC: "2.0",
+			ID:      json.RawMessage(fmt.Sprintf(`"req-same-task-disconnect-%d"`, index)),
+			Method:  "test.same.task.blocking",
+			Params: mustMarshal(t, map[string]any{
+				"task_id": taskID,
+			}),
+		}
+		if err := encoder.Encode(request); err != nil {
+			t.Fatalf("encode same-task request %d: %v", index, err)
+		}
+	}
+
+	select {
+	case callIndex := <-startedSignals:
+		if callIndex != 1 {
+			t.Fatalf("expected the first same-task request to start first, got call %d", callIndex)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected the first same-task request to start")
+	}
+
+	select {
+	case callIndex := <-startedSignals:
+		t.Fatalf("expected same-task backlog to stay queued behind the first request, got call %d", callIndex)
+	case <-time.After(250 * time.Millisecond):
+	}
+
+	if err := right.Close(); err != nil {
+		t.Fatalf("close client stream: %v", err)
+	}
+
+	close(releaseFirst)
+
+	select {
+	case callIndex := <-startedSignals:
+		t.Fatalf("expected disconnected same-task backlog not to start after release, got call %d", callIndex)
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	startedMu.Lock()
+	if startedCount != 1 {
+		startedMu.Unlock()
+		t.Fatalf("expected only the first same-task request to dispatch before disconnect, got %d", startedCount)
+	}
+	startedMu.Unlock()
+
+	select {
+	case err := <-acceptDone:
+		if err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("accept loopback: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected loopback stream to shut down after same-task backlog release")
+	}
+}
+
 func TestHandleStreamConnSerializesTaskStartingRequestsOnSharedConnection(t *testing.T) {
 	testCases := []struct {
 		name         string
