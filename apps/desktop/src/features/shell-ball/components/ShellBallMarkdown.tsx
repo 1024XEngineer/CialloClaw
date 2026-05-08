@@ -14,6 +14,7 @@ type MarkdownBlock =
 
 type InlineMatch =
   | { kind: "link"; index: number; length: number; label: string; href: string }
+  | { kind: "auto-link"; index: number; length: number; href: string }
   | { kind: "code"; index: number; length: number; text: string }
   | { kind: "strong"; index: number; length: number; text: string }
   | { kind: "emphasis"; index: number; length: number; text: string };
@@ -112,6 +113,18 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
           </a>,
         );
         break;
+      case "auto-link":
+        nodes.push(
+          <a
+            key={matchKey}
+            href={match.href}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {match.href}
+          </a>,
+        );
+        break;
       case "code":
         nodes.push(<code key={matchKey}>{match.text}</code>);
         break;
@@ -133,6 +146,7 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
 function findFirstInlineMatch(text: string): InlineMatch | null {
   const matches = [
     matchLink(text),
+    matchAutoLink(text),
     matchInlineCode(text),
     matchStrong(text),
     matchEmphasis(text),
@@ -166,6 +180,33 @@ function matchLink(text: string): InlineMatch | null {
     label: match[1],
     href: match[2],
   };
+}
+
+function matchAutoLink(text: string): InlineMatch | null {
+  const match = new RegExp("https?:\\/\\/[^\\s<>()\\[\\]{}\"']+", "i").exec(text);
+  if (match === null || match.index === undefined) {
+    return null;
+  }
+
+  const href = trimTrailingUrlPunctuation(match[0]);
+  if (href === "") {
+    return null;
+  }
+
+  return {
+    kind: "auto-link",
+    index: match.index,
+    length: href.length,
+    href,
+  };
+}
+
+function trimTrailingUrlPunctuation(value: string) {
+  let href = value;
+  while (/[.,!?;:'"，。！？；：）】》〉」』、】【)>\]]$/.test(href)) {
+    href = href.slice(0, -1);
+  }
+  return href;
 }
 
 function matchInlineCode(text: string): InlineMatch | null {

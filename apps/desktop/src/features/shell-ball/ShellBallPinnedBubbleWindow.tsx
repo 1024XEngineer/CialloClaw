@@ -9,6 +9,7 @@ import {
   emitShellBallPinnedWindowDetached,
   useShellBallPinnedBubbleSnapshot,
 } from "./useShellBallCoordinator";
+import { ShellBallMarkdown } from "./components/ShellBallMarkdown";
 
 export function ShellBallPinnedBubbleWindow() {
   const windowLabel = getShellBallCurrentWindow().label;
@@ -70,7 +71,7 @@ export function ShellBallPinnedBubbleWindow() {
         >
           Drag
         </button>
-        <p className="shell-ball-bubble-message__text">{pinnedItem.bubble.text}</p>
+        <ShellBallMarkdown text={pinnedItem.bubble.text} />
       </div>
     </div>
   );
