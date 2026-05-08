@@ -6395,7 +6395,7 @@ test("task workspace routes formal delivery through a dedicated page and keeps l
   assert.match(taskPageSource, /const deliveryOpenMutation = useMutation\(/);
   assert.match(taskPageSource, /canOpenTaskDeliveryResult/);
   assert.match(taskPageSource, /if \(!canOpenTaskDeliveryResult\(detailData\?\.detail\.delivery_result \?\? null\)\) \{/);
-  assert.match(taskPageSource, /deliveryOpenMutation\.mutate\(selectedTaskControlTargetId\);/);
+  assert.match(taskPageSource, /deliveryOpenMutation\.mutate\(\{ taskId: selectedTaskControlTargetId \}\);/);
 
   assert.match(taskDeliveryNavigationSource, /dashboardTaskDeliveryRoutePattern = "delivery\/:taskId"/);
   assert.match(taskDeliveryNavigationSource, /encodeURIComponent\(taskId\)/);

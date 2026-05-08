@@ -56,7 +56,6 @@ import {
 import {
   canOpenTaskDeliveryResult,
   describeTaskOpenResultForCurrentTask,
-  mergeTaskArtifactItems,
   loadTaskArtifactPage,
   mergeTaskArtifactItems,
   openTaskArtifactForTask,
