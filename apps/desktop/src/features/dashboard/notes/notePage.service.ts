@@ -925,6 +925,7 @@ function localPathExecutionFailure(message: string, error: unknown) {
   return `${message}（${detail}）`;
 }
 
+<<<<<<< HEAD
 function externalUrlExecutionFailure(message: string, error: unknown) {
   const detail = error instanceof Error ? error.message.trim() : "";
   if (!detail) {
@@ -932,6 +933,19 @@ function externalUrlExecutionFailure(message: string, error: unknown) {
   }
 
   return `${message}（${detail}）`;
+=======
+async function copyPreparedUrl(feedback: string, url: string) {
+  if (globalThis.navigator?.clipboard?.writeText) {
+    try {
+      await globalThis.navigator.clipboard.writeText(url);
+      return `${feedback} 已复制链接。`;
+    } catch {
+      return `${feedback} 链接：${url}`;
+    }
+  }
+
+  return `${feedback} 链接：${url}`;
+>>>>>>> b7062f9e (fix(desktop): harden external link open flows)
 }
 
 /**
