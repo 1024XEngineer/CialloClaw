@@ -1061,6 +1061,123 @@ func TestHandleStreamConnSerializesTaskStartingRequestsOnSharedConnection(t *tes
 	}
 }
 
+func TestHandleStreamConnReplaysLateTaskNotificationsBeforeQueuedSameTaskFollowUp(t *testing.T) {
+	server := newTestServer()
+	startResult, err := server.orchestrator.StartTask(map[string]any{
+		"session_id": "sess_late_task_replay",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "queue notifications for shared stream replay",
+		},
+	})
+	if err != nil {
+		t.Fatalf("seed task.start: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	notifications, err := server.orchestrator.PendingNotifications(taskID)
+	if err != nil || len(notifications) == 0 {
+		t.Fatalf("expected seeded task to queue notifications, err=%v notifications=%+v", err, notifications)
+	}
+
+	firstReturned := make(chan struct{})
+	server.handlers["test.response.task"] = func(_ map[string]any) (any, *rpcError) {
+		select {
+		case <-firstReturned:
+		default:
+			close(firstReturned)
+		}
+		return map[string]any{
+			"task": map[string]any{
+				"task_id": taskID,
+			},
+		}, nil
+	}
+	server.handlers["test.followup.task"] = func(params map[string]any) (any, *rpcError) {
+		return map[string]any{
+			"task": map[string]any{
+				"task_id": stringValue(params, "task_id", ""),
+			},
+		}, nil
+	}
+
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+
+	go server.handleStreamConn(left)
+
+	encoder := json.NewEncoder(right)
+	decoder := json.NewDecoder(right)
+	firstRequest := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-late-task-starter"`),
+		Method:  "test.response.task",
+		Params:  mustMarshal(t, map[string]any{}),
+	}
+	if err := encoder.Encode(firstRequest); err != nil {
+		t.Fatalf("encode first late-task response request: %v", err)
+	}
+
+	select {
+	case <-firstReturned:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected first response-discovered task request to finish dispatch")
+	}
+
+	secondRequest := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-late-task-followup"`),
+		Method:  "test.followup.task",
+		Params: mustMarshal(t, map[string]any{
+			"task_id": taskID,
+		}),
+	}
+	if err := encoder.Encode(secondRequest); err != nil {
+		t.Fatalf("encode same-task follow-up request: %v", err)
+	}
+
+	if err := right.SetReadDeadline(time.Now().Add(1500 * time.Millisecond)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	defer func() {
+		if err := right.SetReadDeadline(time.Time{}); err != nil {
+			t.Fatalf("clear read deadline: %v", err)
+		}
+	}()
+
+	var firstEnvelope map[string]any
+	if err := decoder.Decode(&firstEnvelope); err != nil {
+		t.Fatalf("decode first response envelope: %v", err)
+	}
+	if firstID, _ := firstEnvelope["id"].(string); firstID != "req-late-task-starter" {
+		t.Fatalf("expected first envelope to be the starter response, got %+v", firstEnvelope)
+	}
+
+	notificationBeforeFollowUp := false
+	followUpResponseSeen := false
+	for index := 0; index < 12; index++ {
+		var envelope map[string]any
+		if err := decoder.Decode(&envelope); err != nil {
+			t.Fatalf("decode shared stream envelope: %v", err)
+		}
+		if envelopeID, _ := envelope["id"].(string); envelopeID == "req-late-task-followup" {
+			followUpResponseSeen = true
+			break
+		}
+		if method, _ := envelope["method"].(string); method != "" {
+			notificationBeforeFollowUp = true
+		}
+	}
+	if !followUpResponseSeen {
+		t.Fatal("expected follow-up response to arrive on the shared stream")
+	}
+	if !notificationBeforeFollowUp {
+		t.Fatal("expected buffered notifications for the started task to replay before the queued same-task follow-up response")
+	}
+}
+
 func TestHandleStreamConnKeepsQueuedReadsResponsiveWhileLoopTaskRuns(t *testing.T) {
 	modelClient := &selectiveWaitLoopModelClient{
 		stubLoopModelClient: stubLoopModelClient{

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -117,6 +118,7 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 
 func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnvelopeWriter, taskCoordinator *streamTaskCoordinator, taskStartMu *sync.Mutex) {
 	tracker := newStreamRequestTracker(request)
+	initialTaskIDs := tracker.taskIDsSnapshot()
 	if tracker.shouldSubscribeTaskStart() {
 		// Task-starting requests on one shared desktop stream must stay serialized.
 		// Their runtime-notification correlation temporarily learns task ids from
@@ -126,7 +128,7 @@ func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnve
 		defer taskStartMu.Unlock()
 	}
 
-	taskCoordinator.withTaskLocks(tracker.taskIDsSnapshot(), func() {
+	taskCoordinator.withTaskLocks(initialTaskIDs, func() {
 		unsubscribeRuntime := func() {}
 		if tracker.shouldSubscribeRuntime() {
 			unsubscribeRuntime = s.orchestrator.SubscribeRuntimeNotifications(func(taskID string, method string, params map[string]any) {
@@ -159,28 +161,54 @@ func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnve
 		unsubscribeTaskStart()
 		unsubscribeRuntime()
 
-		if err := writer.writeEnvelope(response); err != nil {
-			return
-		}
-
-		for _, taskID := range taskIDsFromResponse(response) {
-			notifications, err := s.orchestrator.DrainNotifications(taskID)
-			if err != nil {
-				continue
+		responseTaskIDs := taskIDsFromResponse(response)
+		lateTaskIDs := responseTaskIDLocks(responseTaskIDs, initialTaskIDs)
+		// Requests that only learn their task id from the response must claim the
+		// real task lock before writing the response and destructively replaying the
+		// buffered notification queue for that task.
+		taskCoordinator.withTaskLocks(lateTaskIDs, func() {
+			if err := writer.writeEnvelope(response); err != nil {
+				return
 			}
 
-			for _, notification := range notifications {
-				method := stringValue(notification, "method", "task.updated")
-				params := mapValue(notification, "params")
-				if tracker.shouldSkipBufferedRuntime(method, taskID, params) {
+			for _, taskID := range responseTaskIDs {
+				notifications, err := s.orchestrator.DrainNotifications(taskID)
+				if err != nil {
 					continue
 				}
-				if err := writer.writeEnvelope(newNotificationEnvelope(method, params)); err != nil {
-					return
+
+				for _, notification := range notifications {
+					method := stringValue(notification, "method", "task.updated")
+					params := mapValue(notification, "params")
+					if tracker.shouldSkipBufferedRuntime(method, taskID, params) {
+						continue
+					}
+					if err := writer.writeEnvelope(newNotificationEnvelope(method, params)); err != nil {
+						return
+					}
 				}
 			}
-		}
+		})
 	})
+}
+
+func responseTaskIDLocks(responseTaskIDs []string, initialTaskIDs map[string]bool) map[string]bool {
+	if len(responseTaskIDs) == 0 {
+		return nil
+	}
+
+	lateTaskIDs := make(map[string]bool, len(responseTaskIDs))
+	for _, taskID := range responseTaskIDs {
+		trimmed := strings.TrimSpace(taskID)
+		if trimmed == "" || initialTaskIDs[trimmed] {
+			continue
+		}
+		lateTaskIDs[trimmed] = true
+	}
+	if len(lateTaskIDs) == 0 {
+		return nil
+	}
+	return lateTaskIDs
 }
 
 // registerStreamConn binds a named-pipe stream to the current server lifetime.
