@@ -5046,6 +5046,7 @@ test("shell-ball agent bubbles auto-link bare https urls without trailing punctu
   assert.match(markup, /href="https:\/\/github\.com\/1024XEngineer\/CialloClaw"/);
   assert.doesNotMatch(markup, /href="https:\/\/github\.com\/1024XEngineer\/CialloClaw。"/);
   assert.match(markup, /target="_blank"/);
+  assert.match(markup, /data-shell-ball-interactive="true"/);
 });
 
 test("shell-ball agent bubbles keep markdown links clickable", () => {
@@ -5074,6 +5075,22 @@ test("shell-ball agent bubbles keep markdown links clickable", () => {
 
   assert.match(markup, />项目地址<\/a>/);
   assert.match(markup, /href="https:\/\/github\.com\/1024XEngineer\/CialloClaw"/);
+  assert.match(markup, /data-shell-ball-interactive="true"/);
+});
+
+test("shell-ball markdown links open through the desktop external-url bridge", () => {
+  const markdownSource = readFileSync(
+    resolve(desktopRoot, "src/features/shell-ball/components/ShellBallMarkdown.tsx"),
+    "utf8",
+  );
+  const externalUrlSource = readFileSync(
+    resolve(desktopRoot, "src/platform/desktopExternalUrl.ts"),
+    "utf8",
+  );
+
+  assert.match(markdownSource, /openDesktopExternalUrl\(href\)/);
+  assert.doesNotMatch(markdownSource, /window\.open\(/);
+  assert.match(externalUrlSource, /invoke<void>\("desktop_open_external_url", \{ url \}\)/);
 });
 
 test("shell-ball pending-approval bubbles render inline allow and deny controls", () => {

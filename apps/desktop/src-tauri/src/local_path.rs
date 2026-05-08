@@ -59,6 +59,12 @@ pub fn open_local_path(raw_path: &str, roots: &LocalPathRoots) -> Result<(), Str
     open_with_system_handler(&target)
 }
 
+/// Opens an external web url through the operating system's default browser.
+pub fn open_external_url(raw_url: &str) -> Result<(), String> {
+    let url = normalize_external_url(raw_url)?;
+    open_url_with_system_handler(&url)
+}
+
 /// Reveals a local file in the system file manager, or opens the directory
 /// directly when the target already points at a folder.
 pub fn reveal_local_path(raw_path: &str, roots: &LocalPathRoots) -> Result<(), String> {
@@ -241,6 +247,23 @@ fn ensure_path_within_allowed_roots(target: &Path, roots: &LocalPathRoots) -> Re
     ))
 }
 
+fn normalize_external_url(raw_url: &str) -> Result<String, String> {
+    let trimmed = raw_url.trim();
+    if trimmed.is_empty() {
+        return Err("external url is empty".to_string());
+    }
+
+    if !(trimmed.starts_with("https://") || trimmed.starts_with("http://")) {
+        return Err("external url must use http or https".to_string());
+    }
+
+    if trimmed.chars().any(char::is_whitespace) {
+        return Err("external url must not contain whitespace".to_string());
+    }
+
+    Ok(trimmed.to_string())
+}
+
 #[cfg(windows)]
 fn open_with_system_handler(target: &Path) -> Result<(), String> {
     let operation = encode_wide(OsStr::new("open"));
@@ -312,6 +335,20 @@ fn open_with_system_handler(target: &Path) -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
+fn open_url_with_system_handler(target: &str) -> Result<(), String> {
+    let status = Command::new("open")
+        .arg(target)
+        .status()
+        .map_err(|error| format!("failed to open external url {target}: {error}"))?;
+
+    if !status.success() {
+        return Err(format!("failed to open external url {target}: exit status {status}"));
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
 fn reveal_with_system_handler(target: &Path) -> Result<(), String> {
     run_platform_command(
         "open",
@@ -332,6 +369,20 @@ fn open_with_system_handler(target: &Path) -> Result<(), String> {
         &[target],
         &format!("open local target {}", target.display()),
     )
+}
+
+#[cfg(all(not(windows), not(target_os = "macos")))]
+fn open_url_with_system_handler(target: &str) -> Result<(), String> {
+    let status = Command::new("xdg-open")
+        .arg(target)
+        .status()
+        .map_err(|error| format!("failed to open external url {target}: {error}"))?;
+
+    if !status.success() {
+        return Err(format!("failed to open external url {target}: exit status {status}"));
+    }
+
+    Ok(())
 }
 
 #[cfg(all(not(windows), not(target_os = "macos")))]
