@@ -825,13 +825,15 @@ func (s *Service) structuredTaskRecordToRuntime(record storage.TaskRecord, inclu
 		FinishedAt:        finishedAt,
 		CurrentStepStatus: record.CurrentStepStatus,
 	}
+	if strings.TrimSpace(runtime.Title) == "" || strings.TrimSpace(runtime.SessionID) == "" || strings.TrimSpace(runtime.LoopStopReason) == "" {
+		s.hydrateStructuredTaskSessionAndRun(&runtime)
+	}
 	if !includeCompatibility {
 		return runtime, true
 	}
 
 	runtime.Timeline = s.taskTimelineFromStructuredStorage(record.TaskID)
 	s.hydrateStructuredTaskFormalArtifacts(&runtime)
-	s.hydrateStructuredTaskSessionAndRun(&runtime)
 	s.hydrateStructuredTaskGovernance(&runtime)
 
 	var snapshotCompatibility runengine.TaskRecord

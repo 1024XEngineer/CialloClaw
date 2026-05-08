@@ -5736,8 +5736,11 @@ func TestStructuredTaskRecordToRuntimeSkipsDetailHydrationForLists(t *testing.T)
 		t.Fatalf("expected list hydration to preserve top-level task fields, got %+v", listTask)
 	}
 	if len(listTask.Timeline) != 0 || len(listTask.Artifacts) != 0 || len(listTask.Citations) != 0 ||
-		len(listTask.DeliveryResult) != 0 || len(listTask.MirrorReferences) != 0 || strings.TrimSpace(listTask.LoopStopReason) != "" {
+		len(listTask.DeliveryResult) != 0 || len(listTask.MirrorReferences) != 0 {
 		t.Fatalf("expected list hydration to skip detail-only fields, got %+v", listTask)
+	}
+	if strings.TrimSpace(listTask.LoopStopReason) != "completed" {
+		t.Fatalf("expected list hydration to keep lightweight run metadata, got %+v", listTask)
 	}
 
 	detailTask, ok := service.structuredTaskRecordToRuntime(record, true)
@@ -15589,6 +15592,70 @@ func TestServiceTaskListIncludesLoopStopReason(t *testing.T) {
 	listed := result["items"].([]map[string]any)
 	if listed[0]["task_id"] != updated.TaskID || listed[0]["loop_stop_reason"] != "tool_retry_exhausted" {
 		t.Fatalf("expected task list to expose loop stop reason, got %+v", listed[0])
+	}
+}
+
+func TestServiceTaskListBackfillsStructuredLoopStopReasonFromCompatibilityStorage(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured task list compatibility")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	taskID := "task_structured_loop_stop_storage"
+	runID := "run_structured_loop_stop_storage"
+	startedAt := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
+	updatedAt := startedAt.Add(2 * time.Minute)
+	finishedAt := startedAt.Add(3 * time.Minute)
+
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_loop_stop_storage",
+		RunID:               runID,
+		PrimaryRunID:        runID,
+		Title:               "structured loop stop task",
+		SourceType:          "hover_input",
+		Status:              "failed",
+		IntentName:          "summarize",
+		IntentArgumentsJSON: `{"style":"key_points"}`,
+		PreferredDelivery:   "bubble",
+		FallbackDelivery:    "workspace_document",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "failed",
+		RiskLevel:           "yellow",
+		RequestSource:       "floating_ball",
+		RequestTrigger:      "hover_text_input",
+		StartedAt:           startedAt.Format(time.RFC3339Nano),
+		UpdatedAt:           updatedAt.Format(time.RFC3339Nano),
+		FinishedAt:          finishedAt.Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+
+	if err := service.storage.LoopRuntimeStore().SaveRun(context.Background(), storage.RunRecord{
+		RunID:      runID,
+		TaskID:     taskID,
+		SessionID:  "sess_structured_loop_stop_storage",
+		SourceType: "hover_input",
+		Status:     "failed",
+		IntentName: "summarize",
+		StartedAt:  startedAt.Format(time.RFC3339Nano),
+		UpdatedAt:  updatedAt.Format(time.RFC3339Nano),
+		FinishedAt: finishedAt.Format(time.RFC3339Nano),
+		StopReason: "tool_retry_exhausted",
+	}); err != nil {
+		t.Fatalf("write loop runtime run failed: %v", err)
+	}
+
+	result, err := service.TaskList(map[string]any{"group": "finished", "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task list failed: %v", err)
+	}
+	listed := result["items"].([]map[string]any)
+	if len(listed) != 1 {
+		t.Fatalf("expected one finished task, got %+v", listed)
+	}
+	if listed[0]["task_id"] != taskID || listed[0]["loop_stop_reason"] != "tool_retry_exhausted" {
+		t.Fatalf("expected structured storage task list to preserve compatibility stop reason, got %+v", listed[0])
 	}
 }
 
