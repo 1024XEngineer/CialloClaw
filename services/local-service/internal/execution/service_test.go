@@ -1640,7 +1640,7 @@ func TestExecutePromptPathIncludesQueuedSteeringMessages(t *testing.T) {
 	if result.Content != "Prompt runtime finished with steering." {
 		t.Fatalf("unexpected prompt result: %+v", result)
 	}
-	if !strings.Contains(modelClient.input, "Follow-up steering:") || !strings.Contains(modelClient.input, "Focus on the network impact.") {
+	if !strings.Contains(modelClient.input, "补充要求：") || !strings.Contains(modelClient.input, "Focus on the network impact.") {
 		t.Fatalf("expected prompt input to include queued steering, got %q", modelClient.input)
 	}
 }
