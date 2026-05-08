@@ -263,7 +263,68 @@ func TestBuildRiskPrecheckInputBrowserNavigateUsesDestinationURL(t *testing.T) {
 	}
 }
 
+func TestBuildRiskPrecheckInputBrowserTabsListRequiresApproval(t *testing.T) {
+	execCtx := &ToolExecuteContext{
+		WorkspacePath: "/workspace",
+		Platform:      riskPlatformStub{workspacePath: "/workspace"},
+	}
+	input := BuildRiskPrecheckInput(
+		ToolMetadata{Name: "browser_tabs_list", DisplayName: "Browser Tabs List", Source: ToolSourceSidecar},
+		"browser_tabs_list",
+		execCtx,
+		map[string]any{"attach": map[string]any{"browser_kind": "chrome"}},
+	)
+	if input.Workspace.TargetPath != "" {
+		t.Fatalf("expected browser_tabs_list without explicit target to keep empty governance target, got %+v", input.Workspace)
+	}
+	result, err := DefaultRiskPrechecker{}.Precheck(context.Background(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RiskLevel != RiskLevelYellow || !result.ApprovalRequired {
+		t.Fatalf("expected browser_tabs_list to require approval, got %+v", result)
+	}
+	apps := result.ImpactScope["apps"].([]string)
+	if len(apps) != 1 || apps[0] != "chrome" {
+		t.Fatalf("expected browser_tabs_list app scope, got %+v", result.ImpactScope)
+	}
+}
+
 func TestBuildRiskPrecheckInputBrowserInteractUsesAttachTarget(t *testing.T) {
+	execCtx := &ToolExecuteContext{
+		WorkspacePath: "/workspace",
+		Platform:      riskPlatformStub{workspacePath: "/workspace"},
+	}
+	input := BuildRiskPrecheckInput(
+		ToolMetadata{Name: "browser_interact", DisplayName: "Browser Interact", Source: ToolSourceSidecar},
+		"browser_interact",
+		execCtx,
+		map[string]any{
+			"attach":  map[string]any{"target": map[string]any{"page_index": 2}},
+			"actions": []any{map[string]any{"type": "click", "selector": "#continue"}},
+		},
+	)
+	if input.Workspace.TargetPath != "browser_tab:2" {
+		t.Fatalf("expected browser interact target to use stable attach selector, got %+v", input.Workspace)
+	}
+	if input.Workspace.Within != nil {
+		t.Fatalf("expected browser interact to skip workspace boundary checks, got %+v", input.Workspace)
+	}
+
+	result, err := DefaultRiskPrechecker{}.Precheck(context.Background(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	webpages := result.ImpactScope["webpages"].([]string)
+	if len(webpages) != 1 || webpages[0] != "browser_tab:2" {
+		t.Fatalf("expected browser interact impact scope to include stable attach target, got %+v", result.ImpactScope)
+	}
+	if result.RiskLevel != RiskLevelYellow || !result.ApprovalRequired {
+		t.Fatalf("expected browser interact to require approval, got %+v", result)
+	}
+}
+
+func TestBuildRiskPrecheckInputBrowserInteractRejectsTitleOnlyGovernanceTarget(t *testing.T) {
 	execCtx := &ToolExecuteContext{
 		WorkspacePath: "/workspace",
 		Platform:      riskPlatformStub{workspacePath: "/workspace"},
@@ -277,23 +338,8 @@ func TestBuildRiskPrecheckInputBrowserInteractUsesAttachTarget(t *testing.T) {
 			"actions": []any{map[string]any{"type": "click", "selector": "#continue"}},
 		},
 	)
-	if input.Workspace.TargetPath != "Example Docs" {
-		t.Fatalf("expected browser interact target to use attach title, got %+v", input.Workspace)
-	}
-	if input.Workspace.Within != nil {
-		t.Fatalf("expected browser interact to skip workspace boundary checks, got %+v", input.Workspace)
-	}
-
-	result, err := DefaultRiskPrechecker{}.Precheck(context.Background(), input)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	webpages := result.ImpactScope["webpages"].([]string)
-	if len(webpages) != 1 || webpages[0] != "Example Docs" {
-		t.Fatalf("expected browser interact impact scope to include attach target, got %+v", result.ImpactScope)
-	}
-	if result.RiskLevel != RiskLevelYellow || !result.ApprovalRequired {
-		t.Fatalf("expected browser interact to require approval, got %+v", result)
+	if input.Workspace.TargetPath != "" {
+		t.Fatalf("expected title-only browser interact target to stay empty, got %+v", input.Workspace)
 	}
 }
 

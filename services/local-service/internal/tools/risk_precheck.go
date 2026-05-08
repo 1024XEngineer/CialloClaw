@@ -188,7 +188,7 @@ func extractTargetPath(toolName string, input map[string]any) (string, bool) {
 		}
 	}
 	if isAttachedBrowserTool(toolName) {
-		if value := browserAttachTarget(input); value != "" {
+		if value := browserAttachTargetForTool(toolName, input); value != "" {
 			return value, true
 		}
 	}
@@ -288,13 +288,24 @@ func browserAttachTarget(input map[string]any) string {
 	if value, ok := target["url"].(string); ok && strings.TrimSpace(value) != "" {
 		return strings.TrimSpace(value)
 	}
-	if value, ok := target["title_contains"].(string); ok && strings.TrimSpace(value) != "" {
-		return strings.TrimSpace(value)
-	}
 	if pageIndex, ok := browserAttachPageIndexValue(target["page_index"]); ok {
 		return fmt.Sprintf("browser_tab:%d", pageIndex)
 	}
+	if value, ok := target["title_contains"].(string); ok && strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value)
+	}
 	return ""
+}
+
+func browserAttachTargetForTool(toolName string, input map[string]any) string {
+	target := browserAttachTarget(input)
+	if target == "" {
+		return ""
+	}
+	if requiresStableBrowserTarget(toolName) && !isStableBrowserTarget(target) {
+		return ""
+	}
+	return target
 }
 
 func browserAttachKind(input map[string]any) string {
@@ -340,6 +351,20 @@ func isAttachedBrowserTool(toolName string) bool {
 	default:
 		return false
 	}
+}
+
+func requiresStableBrowserTarget(toolName string) bool {
+	switch strings.TrimSpace(toolName) {
+	case "browser_navigate", "browser_tab_focus", "browser_interact":
+		return true
+	default:
+		return false
+	}
+}
+
+func isStableBrowserTarget(target string) bool {
+	trimmed := strings.TrimSpace(target)
+	return strings.HasPrefix(trimmed, "http://") || strings.HasPrefix(trimmed, "https://") || strings.HasPrefix(trimmed, "browser_tab:")
 }
 
 func withinWorkspacePath(workspacePath, targetPath string) *bool {

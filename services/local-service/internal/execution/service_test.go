@@ -1865,6 +1865,12 @@ func TestResolveBrowserToolInputAllowsSparseDiscoveryTargets(t *testing.T) {
 	}
 }
 
+func TestResolveBrowserToolInputRejectsSparseBrowserInteractSnapshotTarget(t *testing.T) {
+	if input, ok := resolveBrowserToolInput("browser_interact", map[string]any{"actions": []any{map[string]any{"type": "click", "selector": "button"}}}, contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageTitle: "Docs"}); ok {
+		t.Fatalf("expected browser_interact snapshot path to require a stable target, got %+v", input)
+	}
+}
+
 func TestResolveBrowserToolInputRequiresTargetHintsForSnapshotAttachCurrent(t *testing.T) {
 	if input, ok := resolveBrowserToolInput("browser_attach_current", map[string]any{}, contextsvc.TaskContextSnapshot{BrowserKind: "chrome"}); ok {
 		t.Fatalf("expected sparse browser_attach_current snapshot path to stay unresolved, got %+v", input)
@@ -1896,7 +1902,7 @@ func TestResolveBrowserToolInputPrefersExplicitAttachOverSnapshotHints(t *testin
 func TestResolveBrowserToolInputKeepsExplicitNavigateContract(t *testing.T) {
 	input, ok := resolveBrowserToolInput(
 		"browser_navigate",
-		map[string]any{"url": "https://example.com/docs", "attach": map[string]any{"mode": "cdp", "browser_kind": "chrome"}},
+		map[string]any{"url": "https://example.com/docs", "attach": map[string]any{"mode": "cdp", "browser_kind": "chrome", "target": map[string]any{"page_index": 1}}},
 		contextsvc.TaskContextSnapshot{},
 	)
 	if !ok {
@@ -1904,6 +1910,35 @@ func TestResolveBrowserToolInputKeepsExplicitNavigateContract(t *testing.T) {
 	}
 	if input["url"] != "https://example.com/docs" {
 		t.Fatalf("expected browser_navigate to preserve destination URL, got %+v", input)
+	}
+}
+
+func TestResolveBrowserToolInputRejectsExplicitTitleOnlyMutatingAttach(t *testing.T) {
+	if input, ok := resolveBrowserToolInput(
+		"browser_interact",
+		map[string]any{"attach": map[string]any{"mode": "cdp", "browser_kind": "chrome", "target": map[string]any{"title_contains": "Pinned Tab"}}, "actions": []any{map[string]any{"type": "click", "selector": "button"}}},
+		contextsvc.TaskContextSnapshot{},
+	); ok {
+		t.Fatalf("expected title-only explicit browser_interact attach to be rejected, got %+v", input)
+	}
+}
+
+func TestResolveBrowserToolInputAcceptsExplicitStableMutatingAttach(t *testing.T) {
+	input, ok := resolveBrowserToolInput(
+		"browser_tab_focus",
+		map[string]any{"attach": map[string]any{"mode": "cdp", "browser_kind": "chrome", "target": map[string]any{"page_index": 2}}},
+		contextsvc.TaskContextSnapshot{},
+	)
+	if !ok {
+		t.Fatal("expected stable explicit browser_tab_focus attach to resolve")
+	}
+	attach, ok := input["attach"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected attach block in resolved browser_tab_focus input, got %+v", input)
+	}
+	target, ok := attach["target"].(map[string]any)
+	if !ok || target["page_index"] != 2 {
+		t.Fatalf("expected stable explicit browser_tab_focus target to be preserved, got %+v", input)
 	}
 }
 

@@ -3235,8 +3235,10 @@ func governanceTargetObject(toolName string, toolInput map[string]any, execCtx *
 	case "page_read", "page_search", "page_interact", "structured_dom":
 		return stringValue(toolInput, "url", "")
 	case "browser_navigate":
-		return firstNonEmpty(strings.TrimSpace(stringValue(toolInput, "url", "")), browserTargetObject(mapValue(toolInput, "attach")))
-	case "browser_attach_current", "browser_snapshot", "browser_tabs_list", "browser_tab_focus", "browser_interact":
+		return firstNonEmpty(strings.TrimSpace(stringValue(toolInput, "url", "")), browserStableTargetObject(mapValue(toolInput, "attach")))
+	case "browser_tab_focus", "browser_interact":
+		return browserStableTargetObject(mapValue(toolInput, "attach"))
+	case "browser_attach_current", "browser_snapshot", "browser_tabs_list":
 		return browserTargetObject(mapValue(toolInput, "attach"))
 	default:
 		for _, key := range governedTargetKeys(toolName) {
@@ -3320,6 +3322,7 @@ func resolveBrowserToolInput(intentName string, arguments map[string]any, snapsh
 
 	useSnapshotTarget := true
 	allowEmptyTarget := false
+	requireStableTarget := requiresStableBrowserTarget(intentName)
 	if intentName == "browser_tabs_list" {
 		allowEmptyTarget = true
 	}
@@ -3327,7 +3330,7 @@ func resolveBrowserToolInput(intentName string, arguments map[string]any, snapsh
 		useSnapshotTarget = browserTargetOverrideMissing(arguments)
 	}
 
-	attach := buildBrowserAttachInput(browserKind, snapshot, arguments, useSnapshotTarget, allowEmptyTarget)
+	attach := buildBrowserAttachInput(browserKind, snapshot, arguments, useSnapshotTarget, allowEmptyTarget, requireStableTarget)
 	if len(attach) == 0 {
 		return nil, false
 	}
@@ -3360,6 +3363,9 @@ func resolveExplicitBrowserToolInput(intentName string, arguments map[string]any
 	if len(attach) == 0 {
 		return nil, false
 	}
+	if requiresStableBrowserTarget(intentName) && !hasStableBrowserAttachTarget(attach) {
+		return nil, false
+	}
 
 	input := map[string]any{"attach": cloneMap(attach)}
 	switch strings.TrimSpace(intentName) {
@@ -3384,7 +3390,7 @@ func resolveExplicitBrowserToolInput(intentName string, arguments map[string]any
 	}
 }
 
-func buildBrowserAttachInput(browserKind string, snapshot contextsvc.TaskContextSnapshot, arguments map[string]any, useSnapshotTarget, allowEmptyTarget bool) map[string]any {
+func buildBrowserAttachInput(browserKind string, snapshot contextsvc.TaskContextSnapshot, arguments map[string]any, useSnapshotTarget, allowEmptyTarget, requireStableTarget bool) map[string]any {
 	target := map[string]any{}
 	if pageIndex, ok := browserAttachPageIndex(arguments["page_index"]); ok {
 		target["page_index"] = pageIndex
@@ -3394,14 +3400,19 @@ func buildBrowserAttachInput(browserKind string, snapshot contextsvc.TaskContext
 	} else if useSnapshotTarget && strings.TrimSpace(snapshot.PageURL) != "" {
 		target["url"] = strings.TrimSpace(snapshot.PageURL)
 	}
-	if titleContains := strings.TrimSpace(stringValue(arguments, "title_contains", "")); titleContains != "" {
-		target["title_contains"] = titleContains
-	} else if useSnapshotTarget {
-		if pageTitle := strings.TrimSpace(snapshot.PageTitle); pageTitle != "" {
-			target["title_contains"] = pageTitle
-		} else if windowTitle := strings.TrimSpace(snapshot.WindowTitle); windowTitle != "" {
-			target["title_contains"] = windowTitle
+	if !requireStableTarget {
+		if titleContains := strings.TrimSpace(stringValue(arguments, "title_contains", "")); titleContains != "" {
+			target["title_contains"] = titleContains
+		} else if useSnapshotTarget {
+			if pageTitle := strings.TrimSpace(snapshot.PageTitle); pageTitle != "" {
+				target["title_contains"] = pageTitle
+			} else if windowTitle := strings.TrimSpace(snapshot.WindowTitle); windowTitle != "" {
+				target["title_contains"] = windowTitle
+			}
 		}
+	}
+	if requireStableTarget && !hasStableBrowserTarget(target) {
+		return nil
 	}
 	if len(target) == 0 && !allowEmptyTarget {
 		return nil
@@ -3418,6 +3429,21 @@ func buildBrowserAttachInput(browserKind string, snapshot contextsvc.TaskContext
 }
 
 func browserIntentTargetObject(intentName string, arguments map[string]any) string {
+	if requiresStableBrowserTarget(intentName) {
+		if strings.TrimSpace(intentName) == "browser_navigate" {
+			if value := strings.TrimSpace(stringValue(arguments, "url", "")); value != "" {
+				return value
+			}
+		}
+		if targetURL := strings.TrimSpace(stringValue(arguments, "target_url", "")); targetURL != "" {
+			return targetURL
+		}
+		if pageIndex, ok := browserAttachPageIndex(arguments["page_index"]); ok {
+			return fmt.Sprintf("browser_tab:%d", pageIndex)
+		}
+		return browserStableTargetObject(mapValue(arguments, "attach"))
+	}
+
 	if strings.TrimSpace(intentName) == "browser_navigate" {
 		if value := strings.TrimSpace(stringValue(arguments, "url", "")); value != "" {
 			return value
@@ -3435,6 +3461,20 @@ func browserIntentTargetObject(intentName string, arguments map[string]any) stri
 	return browserTargetObject(mapValue(arguments, "attach"))
 }
 
+func browserStableTargetObject(attach map[string]any) string {
+	if len(attach) == 0 {
+		return ""
+	}
+	target := mapValue(attach, "target")
+	if value := strings.TrimSpace(stringValue(target, "url", "")); value != "" {
+		return value
+	}
+	if pageIndex, ok := browserAttachPageIndex(target["page_index"]); ok {
+		return fmt.Sprintf("browser_tab:%d", pageIndex)
+	}
+	return ""
+}
+
 func browserTargetObject(attach map[string]any) string {
 	if len(attach) == 0 {
 		return ""
@@ -3443,13 +3483,37 @@ func browserTargetObject(attach map[string]any) string {
 	if value := strings.TrimSpace(stringValue(target, "url", "")); value != "" {
 		return value
 	}
-	if value := strings.TrimSpace(stringValue(target, "title_contains", "")); value != "" {
-		return value
-	}
 	if pageIndex, ok := browserAttachPageIndex(target["page_index"]); ok {
 		return fmt.Sprintf("browser_tab:%d", pageIndex)
 	}
+	if value := strings.TrimSpace(stringValue(target, "title_contains", "")); value != "" {
+		return value
+	}
 	return strings.TrimSpace(stringValue(attach, "browser_kind", ""))
+}
+
+func requiresStableBrowserTarget(intentName string) bool {
+	switch strings.TrimSpace(intentName) {
+	case "browser_navigate", "browser_tab_focus", "browser_interact":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasStableBrowserAttachTarget(attach map[string]any) bool {
+	return hasStableBrowserTarget(mapValue(attach, "target"))
+}
+
+func hasStableBrowserTarget(target map[string]any) bool {
+	if len(target) == 0 {
+		return false
+	}
+	if strings.TrimSpace(stringValue(target, "url", "")) != "" {
+		return true
+	}
+	_, ok := browserAttachPageIndex(target["page_index"])
+	return ok
 }
 
 func browserAttachPageIndex(rawValue any) (int, bool) {
