@@ -1646,20 +1646,16 @@ func TestHandleStreamConnTaskListDoesNotStealBufferedNotifications(t *testing.T)
 		}
 		if envelopeID, _ := envelope["id"].(string); envelopeID == "req-task-list-owned" {
 			taskListResponseSeen = true
-			continue
-		}
-		if envelopeID, _ := envelope["id"].(string); envelopeID == "req-task-list-followup" {
+		} else if envelopeID, _ := envelope["id"].(string); envelopeID == "req-task-list-followup" {
 			followUpResponseSeen = true
-			continue
-		}
-		if method, _ := envelope["method"].(string); method != "" {
+		} else if method, _ := envelope["method"].(string); method != "" {
 			if !followUpResponseSeen {
 				t.Fatalf("expected task.list not to replay %s before the follow-up response, got %+v", method, envelope)
 			}
 			notificationAfterFollowUp = true
-			if taskListResponseSeen {
-				break
-			}
+		}
+		if taskListResponseSeen && followUpResponseSeen && notificationAfterFollowUp {
+			break
 		}
 	}
 	if !taskListResponseSeen {
@@ -1670,6 +1666,19 @@ func TestHandleStreamConnTaskListDoesNotStealBufferedNotifications(t *testing.T)
 	}
 	if !notificationAfterFollowUp {
 		t.Fatal("expected the owning follow-up request to replay buffered notifications after its response")
+	}
+}
+
+func TestStreamTaskCoordinatorReleasesIdleTaskLocks(t *testing.T) {
+	coordinator := newStreamTaskCoordinator()
+	coordinator.withTaskLocks(map[string]bool{
+		"task_cleanup": true,
+	}, func() {})
+
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	if len(coordinator.locks) != 0 {
+		t.Fatalf("expected idle task locks to be released, got %+v", coordinator.locks)
 	}
 }
 

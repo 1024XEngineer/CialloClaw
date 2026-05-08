@@ -86,13 +86,18 @@ func (s *streamPendingState) isBlocked() bool {
 	return s != nil && s.blocked.Load()
 }
 
+type streamTaskLockEntry struct {
+	mu   sync.Mutex
+	refs int
+}
+
 type streamTaskCoordinator struct {
 	mu    sync.Mutex
-	locks map[string]*sync.Mutex
+	locks map[string]*streamTaskLockEntry
 }
 
 func newStreamTaskCoordinator() *streamTaskCoordinator {
-	return &streamTaskCoordinator{locks: map[string]*sync.Mutex{}}
+	return &streamTaskCoordinator{locks: map[string]*streamTaskLockEntry{}}
 }
 
 // withTaskLocks serializes concurrent requests that target the same task while
@@ -109,24 +114,36 @@ func (c *streamTaskCoordinator) withTaskLocks(taskIDs map[string]bool, fn func()
 	}
 	sort.Strings(orderedTaskIDs)
 
-	locks := make([]*sync.Mutex, 0, len(orderedTaskIDs))
+	entries := make([]*streamTaskLockEntry, 0, len(orderedTaskIDs))
 	c.mu.Lock()
 	for _, taskID := range orderedTaskIDs {
-		lock := c.locks[taskID]
-		if lock == nil {
-			lock = &sync.Mutex{}
-			c.locks[taskID] = lock
+		entry := c.locks[taskID]
+		if entry == nil {
+			entry = &streamTaskLockEntry{}
+			c.locks[taskID] = entry
 		}
-		locks = append(locks, lock)
+		entry.refs++
+		entries = append(entries, entry)
 	}
 	c.mu.Unlock()
 
-	for _, lock := range locks {
-		lock.Lock()
+	for _, entry := range entries {
+		entry.mu.Lock()
 	}
 	defer func() {
-		for index := len(locks) - 1; index >= 0; index-- {
-			locks[index].Unlock()
+		for index := len(entries) - 1; index >= 0; index-- {
+			entries[index].mu.Unlock()
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		for index, taskID := range orderedTaskIDs {
+			entry := entries[index]
+			if entry.refs > 0 {
+				entry.refs--
+			}
+			if entry.refs == 0 && c.locks[taskID] == entry {
+				delete(c.locks, taskID)
+			}
 		}
 	}()
 
