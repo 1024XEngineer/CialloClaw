@@ -3896,6 +3896,18 @@ func TestToolBubbleTextAndGovernanceHelpersSupportNewWorkerFlows(t *testing.T) {
 	if !strings.Contains(searchBubble, "关键词") {
 		t.Fatalf("expected search bubble text, got %s", searchBubble)
 	}
+	attachBubble := toolBubbleText("browser_attach_current", &tools.ToolExecutionResult{SummaryOutput: map[string]any{"title": "Docs"}})
+	if !strings.Contains(attachBubble, "Docs") {
+		t.Fatalf("expected browser attach bubble text, got %s", attachBubble)
+	}
+	focusBubble := toolBubbleText("browser_tab_focus", &tools.ToolExecutionResult{SummaryOutput: map[string]any{"title": "Release Notes"}})
+	if !strings.Contains(focusBubble, "切换") || !strings.Contains(focusBubble, "Release Notes") {
+		t.Fatalf("expected browser tab focus bubble text, got %s", focusBubble)
+	}
+	tabsBubble := toolBubbleText("browser_tabs_list", &tools.ToolExecutionResult{SummaryOutput: map[string]any{"tab_count": 2}})
+	if !strings.Contains(tabsBubble, "2") {
+		t.Fatalf("expected browser tabs bubble text, got %s", tabsBubble)
+	}
 	if governanceTargetObject("page_interact", map[string]any{"url": "https://example.com"}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "https://example.com" {
 		t.Fatalf("expected page_interact governance target url")
 	}
