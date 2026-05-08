@@ -116,6 +116,16 @@ func TestServiceAssess(t *testing.T) {
 			want: AssessmentResult{RiskLevel: RiskLevelGreen, Reason: ReasonNormal, ImpactScope: ImpactScope{Webpages: []string{"https://example.com/demo"}, Apps: []string{"chrome"}}},
 		},
 		{
+			name: "browser_tabs_list_requires_approval",
+			input: AssessmentInput{
+				OperationName:       "browser_tabs_list",
+				TargetObject:        "browser_tab:0",
+				CapabilityAvailable: true,
+				ImpactScope:         ImpactScope{Apps: []string{"chrome"}},
+			},
+			want: AssessmentResult{RiskLevel: RiskLevelYellow, ApprovalRequired: true, Reason: ReasonWebpageApproval, ImpactScope: ImpactScope{Apps: []string{"chrome"}}},
+		},
+		{
 			name: "browser_navigate_requires_approval",
 			input: AssessmentInput{
 				OperationName:       "browser_navigate",

@@ -52,10 +52,10 @@ func TestAgentLoopToolDefinitionsUseSharedCatalog(t *testing.T) {
 func TestAgentLoopToolDefinitionsExposeBrowserToolsWhenSnapshotSupportsAttach(t *testing.T) {
 	service := newAgentLoopCapabilityTestService(t, true)
 	definitions := service.agentLoopToolDefinitionsForSnapshot(contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"})
-	if len(definitions) != 8 {
-		t.Fatalf("expected browser-capable snapshot to expose eight planner-visible tools, got %+v", definitions)
+	if len(definitions) != 7 {
+		t.Fatalf("expected browser-capable snapshot to expose seven planner-visible tools, got %+v", definitions)
 	}
-	wantNames := []string{"read_file", "list_dir", "browser_attach_current", "browser_snapshot", "browser_tabs_list", "page_read", "page_search", "structured_dom"}
+	wantNames := []string{"read_file", "list_dir", "browser_attach_current", "browser_snapshot", "page_read", "page_search", "structured_dom"}
 	for index, want := range wantNames {
 		if definitions[index].Name != want {
 			t.Fatalf("unexpected browser-aware tool definition order at %d: got %q want %q", index, definitions[index].Name, want)
@@ -64,8 +64,8 @@ func TestAgentLoopToolDefinitionsExposeBrowserToolsWhenSnapshotSupportsAttach(t 
 	if !strings.Contains(definitions[2].Description, "不会隐式导航或交互页面") {
 		t.Fatalf("expected browser_attach_current description to explain attach boundary, got %q", definitions[2].Description)
 	}
-	if !strings.Contains(definitions[7].Description, "不会执行页面交互") {
-		t.Fatalf("expected structured_dom description to preserve read-only contract, got %q", definitions[7].Description)
+	if !strings.Contains(definitions[6].Description, "不会执行页面交互") {
+		t.Fatalf("expected structured_dom description to preserve read-only contract, got %q", definitions[6].Description)
 	}
 }
 
@@ -76,10 +76,10 @@ func TestAgentLoopToolDefinitionsAllowSparseBrowserContextForDiscoveryTools(t *t
 	for _, definition := range definitions {
 		names = append(names, definition.Name)
 	}
-	if !containsString(names, "browser_tabs_list") {
-		t.Fatalf("expected sparse browser context to expose discovery-safe tools, got %+v", names)
+	if !containsString(names, "read_file") || !containsString(names, "list_dir") || !containsString(names, "page_read") || !containsString(names, "page_search") || !containsString(names, "structured_dom") {
+		t.Fatalf("expected sparse browser context to preserve non-browser planner tools, got %+v", names)
 	}
-	if containsString(names, "browser_attach_current") || containsString(names, "browser_snapshot") || containsString(names, "browser_navigate") || containsString(names, "browser_tab_focus") {
+	if containsString(names, "browser_attach_current") || containsString(names, "browser_snapshot") || containsString(names, "browser_tabs_list") || containsString(names, "browser_navigate") || containsString(names, "browser_tab_focus") {
 		t.Fatalf("expected sparse browser context to keep target-dependent browser tools hidden, got %+v", names)
 	}
 }
@@ -119,8 +119,8 @@ func TestAgentLoopToolAllowlistRequiresCatalogMembershipAndRegistryPresence(t *t
 	if withPlaywright.isAllowedAgentLoopToolForSnapshot("browser_attach_current", contextsvc.TaskContextSnapshot{BrowserKind: "chrome"}) {
 		t.Fatal("expected browser_attach_current to stay hidden for sparse browser context without target hints")
 	}
-	if !withPlaywright.isAllowedAgentLoopToolForSnapshot("browser_tabs_list", contextsvc.TaskContextSnapshot{BrowserKind: "chrome"}) {
-		t.Fatal("expected browser_tabs_list to stay allowed with sparse browser context")
+	if withPlaywright.isAllowedAgentLoopToolForSnapshot("browser_tabs_list", contextsvc.TaskContextSnapshot{BrowserKind: "chrome"}) {
+		t.Fatal("expected browser_tabs_list to stay hidden until loop governance can pause for approval")
 	}
 	if withPlaywright.isAllowedAgentLoopToolForSnapshot("browser_navigate", contextsvc.TaskContextSnapshot{BrowserKind: "edge", PageURL: "https://example.com", WindowTitle: "Example"}) {
 		t.Fatal("expected browser_navigate to stay hidden until loop governance can pause for approval")

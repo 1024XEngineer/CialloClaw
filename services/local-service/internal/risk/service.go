@@ -141,7 +141,7 @@ func isApprovalCommand(commandPreview string) bool {
 
 func isApprovalBrowserOperation(operationName string) bool {
 	switch strings.TrimSpace(operationName) {
-	case "page_read", "page_search", "page_interact", "structured_dom", "browser_navigate", "browser_tab_focus", "browser_interact":
+	case "page_read", "page_search", "page_interact", "structured_dom", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact":
 		return true
 	default:
 		return false
@@ -150,7 +150,7 @@ func isApprovalBrowserOperation(operationName string) bool {
 
 func isLowRiskBrowserObservationOperation(operationName string) bool {
 	switch strings.TrimSpace(operationName) {
-	case "browser_attach_current", "browser_snapshot", "browser_tabs_list":
+	case "browser_attach_current", "browser_snapshot":
 		return true
 	default:
 		return false
