@@ -817,25 +817,25 @@ func TestRunUsesFallbackWhenToolRoundOnlyHasPlannerChatter(t *testing.T) {
 	}
 }
 
-func TestRunPreservesPlannerAnswerAcrossToolRoundFallback(t *testing.T) {
+func TestRunUsesFallbackForToolRoundPlannerTextWithoutFinalRound(t *testing.T) {
 	runtime := NewRuntime()
 	request := testRuntimeRequest()
 	request.MaxTurns = 1
 	request.GenerateToolCalls = func(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
 		return model.ToolCallResult{
-			RequestID:  "req_tool_round_with_answer",
+			RequestID:  "req_tool_round_with_planner_text",
 			Provider:   "openai_responses",
 			ModelID:    "gpt-5.4",
-			OutputText: "Here is what to change: nil-check the pointer before use.",
+			OutputText: "Use strings.TrimSpace before the nil check.",
 			ToolCalls:  []model.ToolInvocation{{Name: "read_file", Arguments: map[string]any{"path": "notes/source.txt"}}},
 		}, nil
 	}
 	request.ExecuteTool = func(_ context.Context, call model.ToolInvocation, round int) (string, tools.ToolCallRecord) {
 		return "Observed " + call.Name, tools.ToolCallRecord{
-			ToolCallID: "tool_call_round_with_answer",
+			ToolCallID: "tool_call_round_with_planner_text",
 			TaskID:     request.TaskID,
 			RunID:      request.RunID,
-			StepID:     "step_loop_tool_round_with_answer",
+			StepID:     "step_loop_tool_round_with_planner_text",
 			ToolName:   call.Name,
 			Status:     tools.ToolCallStatusSucceeded,
 			Output:     map[string]any{"loop_round": round},
@@ -849,11 +849,11 @@ func TestRunPreservesPlannerAnswerAcrossToolRoundFallback(t *testing.T) {
 	if !handled {
 		t.Fatal("expected request to be handled")
 	}
-	if result.StopReason != StopReasonCompleted {
-		t.Fatalf("expected completed stop reason when last tool round already includes a usable answer, got %s", result.StopReason)
+	if result.StopReason != StopReasonMaxIterations {
+		t.Fatalf("expected max_iterations_reached when tool-round planner text lacks a no-tool final round, got %s", result.StopReason)
 	}
-	if result.OutputText != "Here is what to change: nil-check the pointer before use." {
-		t.Fatalf("expected best-effort planner answer to survive fallback, got %+v", result)
+	if result.OutputText != request.FallbackOutput {
+		t.Fatalf("expected fallback output instead of tool-round planner text, got %+v", result)
 	}
 }
 
@@ -908,7 +908,7 @@ func TestRunUsesFallbackWhenOnlyPriorToolRoundHadPlannerChatter(t *testing.T) {
 	}
 }
 
-func TestRunPreservesPriorPlannerAnswerWhenFinalRoundIsEmpty(t *testing.T) {
+func TestRunUsesFallbackWhenPriorToolRoundHadPlannerText(t *testing.T) {
 	runtime := NewRuntime()
 	request := testRuntimeRequest()
 	plannerCalls := 0
@@ -920,7 +920,7 @@ func TestRunPreservesPriorPlannerAnswerWhenFinalRoundIsEmpty(t *testing.T) {
 				RequestID:  "req_tool_round_answer_then_empty_1",
 				Provider:   "openai_responses",
 				ModelID:    "gpt-5.4",
-				OutputText: "Here is the likely fix: nil-check the pointer before use.",
+				OutputText: "Use strings.TrimSpace before the nil check.",
 				ToolCalls:  []model.ToolInvocation{{Name: "read_file", Arguments: map[string]any{"path": "notes/source.txt"}}},
 			}, nil
 		default:
@@ -951,11 +951,11 @@ func TestRunPreservesPriorPlannerAnswerWhenFinalRoundIsEmpty(t *testing.T) {
 	if !handled {
 		t.Fatal("expected request to be handled")
 	}
-	if result.OutputText != "Here is the likely fix: nil-check the pointer before use." {
-		t.Fatalf("expected prior planner answer to survive empty final round, got %+v", result)
+	if result.OutputText != request.FallbackOutput {
+		t.Fatalf("expected fallback output when only a prior tool round had planner text, got %+v", result)
 	}
-	if result.StopReason != StopReasonCompleted {
-		t.Fatalf("expected completed stop reason when prior planner answer is preserved, got %s", result.StopReason)
+	if result.StopReason != StopReasonNeedUserInput {
+		t.Fatalf("expected need_user_input when final round has no answer, got %s", result.StopReason)
 	}
 }
 

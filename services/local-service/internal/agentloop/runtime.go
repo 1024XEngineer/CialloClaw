@@ -306,7 +306,9 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 		}
 		round.PlannerOutput = truncateText(singleLineSummary(plan.OutputText), 240)
 		plannerOutputText := strings.TrimSpace(plan.OutputText)
-		if shouldCarryPlannerOutputTextForRound(plannerOutputText, len(plan.ToolCalls) > 0) {
+		// Planner text from a tool-call round is a note for the next round. It is
+		// only a final answer when the planner returns without tool calls.
+		if len(plan.ToolCalls) == 0 && shouldCarryPlannerOutputText(plannerOutputText) {
 			lastPlannerOutputText = plannerOutputText
 		}
 
@@ -642,33 +644,6 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 				}, true, nil
 			}
 		}
-		if turn+1 >= request.MaxTurns && shouldCarryToolRoundPlannerOutputText(plannerOutputText) {
-			round.Status = "completed"
-			round.CompletedAt = request.Now()
-			round.StopReason = StopReasonCompleted
-			round.OutputSummary = truncateText(singleLineSummary(plannerOutputText), 160)
-			rounds = append(rounds, round)
-			events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"attempt_index": round.AttemptIndex, "segment_kind": round.SegmentKind, "loop_round": round.LoopRound, "stop_reason": string(StopReasonCompleted)}))
-			if request.Hook != nil {
-				if err := request.Hook.AfterRound(ctx, round); err != nil {
-					return Result{}, true, err
-				}
-			}
-			auditRecord, err := request.BuildAuditRecord(ctx, latestInvocation)
-			if err != nil {
-				return Result{}, true, err
-			}
-			events = appendEvent(events, request, newEvent(request, "loop.completed", map[string]any{"stop_reason": string(StopReasonCompleted)}))
-			return Result{
-				OutputText:      plannerOutputText,
-				ToolCalls:       allToolCalls,
-				ModelInvocation: invocationRecordMap(latestInvocation),
-				AuditRecord:     auditRecord,
-				Events:          events,
-				Rounds:          rounds,
-				StopReason:      StopReasonCompleted,
-			}, true, nil
-		}
 		history = append(history, observations...)
 		round.Status = "completed"
 		round.CompletedAt = request.Now()
@@ -817,83 +792,6 @@ func bestEffortLoopOutput(fallbackOutput, plannerOutputText string) string {
 		return trimmed
 	}
 	return fallbackOutput
-}
-
-func shouldCarryPlannerOutputTextForRound(outputText string, hasToolCalls bool) bool {
-	if !shouldCarryPlannerOutputText(outputText) {
-		return false
-	}
-	if !hasToolCalls {
-		return true
-	}
-	return shouldCarryToolRoundPlannerOutputText(outputText)
-}
-
-func shouldCarryToolRoundPlannerOutputText(outputText string) bool {
-	trimmed := strings.TrimSpace(outputText)
-	if trimmed == "" {
-		return false
-	}
-	// Tool-call rounds often include planning narration before the tool result is
-	// known. Only carry text that looks like a final answer; otherwise failure
-	// exits must use the caller-provided fallback.
-	return looksLikeFinalPlannerAnswer(trimmed) && !looksLikeToolRoundPlannerChatter(trimmed)
-}
-
-func looksLikeFinalPlannerAnswer(outputText string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(outputText))
-	finalAnswerSignals := []string{
-		"here is",
-		"here's",
-		"the answer",
-		"answer:",
-		"the fix",
-		"likely fix",
-		"what to change",
-		"you should",
-		"recommend",
-		"in summary",
-		"summary:",
-		"结论",
-		"答案",
-		"建议",
-		"原因",
-		"修复",
-	}
-	for _, signal := range finalAnswerSignals {
-		if strings.Contains(normalized, signal) {
-			return true
-		}
-	}
-	return false
-}
-
-func looksLikeToolRoundPlannerChatter(outputText string) bool {
-	normalized := strings.ToLower(strings.TrimSpace(outputText))
-	chatterPrefixes := []string{
-		"i will ",
-		"i'll ",
-		"i am going to ",
-		"i'm going to ",
-		"let me ",
-		"first, i will ",
-		"first i'll ",
-		"i need to ",
-		"i should ",
-		"i'll inspect",
-		"i will inspect",
-		"我会先",
-		"我将先",
-		"我先",
-		"先",
-		"让我先",
-	}
-	for _, prefix := range chatterPrefixes {
-		if strings.HasPrefix(normalized, prefix) {
-			return true
-		}
-	}
-	return false
 }
 
 func shouldCarryPlannerOutputText(outputText string) bool {
