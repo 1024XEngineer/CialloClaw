@@ -1677,7 +1677,7 @@ flowchart TB
 补充约束：`exec_command` 默认优先路由到 Docker sandbox；仅对 `cmd` / `powershell` / `pwsh` 这类 Windows shell 入口保留受控宿主执行路径，避免在 Windows 主目标上把本地命令误送入 Linux 容器。
 
 - 真实浏览器附着线索只允许来自桌面快照承接的 `browser_kind / page_url / page_title / window_title`，执行层不得信任模型直接覆盖 CDP 端点或浏览器类型；
-- agent loop 默认只暴露无需审批的浏览器能力（如 `browser_attach_current / browser_snapshot / browser_tabs_list`），`browser_navigate / browser_tab_focus / browser_interact` 在具备 loop 内授权暂停前不得进入默认目录。
+- agent loop 默认只暴露无需审批的浏览器能力（如 `browser_attach_current / browser_snapshot`）；`browser_tabs_list / browser_navigate / browser_tab_focus / browser_interact` 仍受审批边界约束，在具备 loop 内授权暂停前不得进入默认目录。
 - 当前桌面 Agent Loop 的 planner-visible capability catalog 必须由执行层单一真源生成，同一份定义同时派生工具描述、参数 schema 和运行态 allowlist，避免出现“Prompt 里可用但执行层拒绝”或反向漂移。
 - 当前默认冻结的只读规划能力面为 `read_file / list_dir / page_read / page_search`；`page_interact / structured_dom` 虽已是 Playwright sidecar 正式能力，但不进入当前桌面 Agent Loop 的默认规划目录。
 - 每个能力条目都必须同时声明适用场景、不适用场景和约束；网页只读能力还必须保留“可能触发审批”的治理边界。
