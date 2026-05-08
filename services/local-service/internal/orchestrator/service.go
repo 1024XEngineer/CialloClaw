@@ -13,7 +13,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/agentloop"
@@ -33,31 +32,8 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/traceeval"
-)
-
-// ErrTaskNotFound indicates that the provided task_id does not exist in the
-// current runtime or hydrated query state.
-var (
-	ErrTaskNotFound           = errors.New("task not found")
-	ErrArtifactNotFound       = errors.New("artifact not found")
-	ErrTaskStatusInvalid      = errors.New("task status invalid")
-	ErrTaskAlreadyFinished    = errors.New("task already finished")
-	ErrStorageQueryFailed     = errors.New("storage query failed")
-	ErrStrongholdAccessFailed = errors.New("stronghold access failed")
-	ErrRecoveryPointNotFound  = errors.New("recovery point not found")
-	persistedToolCallEventSeq atomic.Uint64
-)
-
-const (
-	executionSegmentInitial     = "initial"
-	executionSegmentResume      = "resume"
-	executionSegmentRestart     = "restart"
-	defaultTaskExecutionTimeout = 95 * time.Second
-	subjectPreviewMaxLength     = 24
-	resultPreviewMaxLength      = 120
 )
 
 // Service is the task-centric orchestration entrypoint for the local-service
@@ -5023,41 +4999,6 @@ func (s *Service) taskTimelineFromStructuredStorage(taskID string) []runengine.T
 	return result
 }
 
-func storageTaskRunRecordFromSnapshotJSON(payload string) (storage.TaskRunRecord, error) {
-	var record storage.TaskRunRecord
-	if err := json.Unmarshal([]byte(payload), &record); err != nil {
-		return storage.TaskRunRecord{}, err
-	}
-	return record, nil
-}
-
-func timelineFromStorage(timeline []storage.TaskStepSnapshot) []runengine.TaskStepRecord {
-	if len(timeline) == 0 {
-		return nil
-	}
-	result := make([]runengine.TaskStepRecord, len(timeline))
-	for index, step := range timeline {
-		result[index] = runengine.TaskStepRecord{
-			StepID:        step.StepID,
-			TaskID:        step.TaskID,
-			Name:          step.Name,
-			Status:        step.Status,
-			OrderIndex:    step.OrderIndex,
-			InputSummary:  step.InputSummary,
-			OutputSummary: step.OutputSummary,
-		}
-	}
-	return result
-}
-
-func cloneTimePointer(value *time.Time) *time.Time {
-	if value == nil {
-		return nil
-	}
-	cloned := *value
-	return &cloned
-}
-
 // taskStatusForSuggestion derives the initial task_status from the suggestion
 // confirmation requirement.
 func taskStatusForSuggestion(requiresConfirm bool) string {
@@ -5176,29 +5117,6 @@ func isSupportedTaskControlAction(action string) bool {
 	}
 }
 
-// currentTimeFromTask returns the latest task update time formatted for bubble
-// payloads.
-func currentTimeFromTask(engine *runengine.Engine, taskID string) string {
-	task, ok := engine.GetTask(taskID)
-	if !ok {
-		return ""
-	}
-	return task.UpdatedAt.Format(dateTimeLayout)
-}
-
-// currentRuntimeWorkspaceRoot returns the workspace root that the currently
-// running local-service instance is actually using. This avoids displaying or
-// evaluating against a pending settings value before the required restart
-// rebuilds bootstrap-scoped dependencies.
-func currentRuntimeWorkspaceRoot(executorService *execution.Service) string {
-	if executorService != nil {
-		if workspaceRoot := strings.TrimSpace(executorService.WorkspaceRoot()); workspaceRoot != "" {
-			return filepath.ToSlash(filepath.Clean(workspaceRoot))
-		}
-	}
-	return filepath.ToSlash(filepath.Clean(serviceconfig.DefaultWorkspaceRoot()))
-}
-
 // defaultIntentMap creates a minimal default intent payload for notepad
 // conversions.
 func defaultIntentMap(name string) map[string]any {
@@ -5229,16 +5147,6 @@ func notepadIntent(item map[string]any) map[string]any {
 		return defaultIntentMap("explain")
 	default:
 		return defaultIntentMap("summarize")
-	}
-}
-
-func notepadSnapshot(item map[string]any) contextsvc.TaskContextSnapshot {
-	return contextsvc.TaskContextSnapshot{
-		Source:    "dashboard",
-		InputType: "text",
-		Text:      stringValue(item, "title", ""),
-		PageTitle: "notepad",
-		AppName:   "dashboard",
 	}
 }
 
@@ -5995,23 +5903,6 @@ func normalizeTaskDetailAuditRecord(taskID string, auditRecord map[string]any) m
 	}
 }
 
-func latestOutputPathFromTasks(tasks []runengine.TaskRecord) string {
-	for _, task := range tasks {
-		for _, artifact := range task.Artifacts {
-			if outputPath := stringValue(artifact, "path", ""); outputPath != "" {
-				return outputPath
-			}
-		}
-		if outputPath := pathFromDeliveryResult(task.DeliveryResult); outputPath != "" {
-			return outputPath
-		}
-		if outputPath := stringValue(task.StorageWritePlan, "target_path", ""); outputPath != "" {
-			return outputPath
-		}
-	}
-	return ""
-}
-
 func (s *Service) refreshMirrorReferences(taskID string) {
 	task, ok := s.runEngine.GetTask(taskID)
 	if !ok {
@@ -6431,72 +6322,6 @@ func (s *Service) buildImpactScope(task runengine.TaskRecord, pendingExecution m
 	}
 }
 
-// snapshotFromTask rebuilds the minimum context snapshot needed for resume and
-// other post-creation flows.
-func snapshotFromTask(task runengine.TaskRecord) contextsvc.TaskContextSnapshot {
-	if !isEmptySnapshot(task.Snapshot) {
-		return cloneTaskSnapshot(task.Snapshot)
-	}
-	return contextsvc.TaskContextSnapshot{
-		Trigger:   task.SourceType,
-		InputType: "text",
-		Text:      originalTextFromTaskTitle(task.Title),
-	}
-}
-
-func cloneTaskSnapshot(snapshot contextsvc.TaskContextSnapshot) contextsvc.TaskContextSnapshot {
-	cloned := snapshot
-	if len(snapshot.Files) > 0 {
-		cloned.Files = append([]string(nil), snapshot.Files...)
-	}
-	return cloned
-}
-
-func isEmptySnapshot(snapshot contextsvc.TaskContextSnapshot) bool {
-	return strings.TrimSpace(snapshot.Source) == "" &&
-		strings.TrimSpace(snapshot.Trigger) == "" &&
-		strings.TrimSpace(snapshot.InputType) == "" &&
-		strings.TrimSpace(snapshot.InputMode) == "" &&
-		strings.TrimSpace(snapshot.Text) == "" &&
-		strings.TrimSpace(snapshot.SelectionText) == "" &&
-		strings.TrimSpace(snapshot.ErrorText) == "" &&
-		len(snapshot.Files) == 0 &&
-		strings.TrimSpace(snapshot.PageTitle) == "" &&
-		strings.TrimSpace(snapshot.PageURL) == "" &&
-		strings.TrimSpace(snapshot.AppName) == "" &&
-		strings.TrimSpace(snapshot.BrowserKind) == "" &&
-		strings.TrimSpace(snapshot.ProcessPath) == "" &&
-		snapshot.ProcessID == 0 &&
-		strings.TrimSpace(snapshot.WindowTitle) == "" &&
-		strings.TrimSpace(snapshot.VisibleText) == "" &&
-		strings.TrimSpace(snapshot.ScreenSummary) == "" &&
-		strings.TrimSpace(snapshot.ClipboardText) == "" &&
-		strings.TrimSpace(snapshot.HoverTarget) == "" &&
-		strings.TrimSpace(snapshot.LastAction) == "" &&
-		snapshot.DwellMillis == 0 &&
-		snapshot.CopyCount == 0 &&
-		snapshot.WindowSwitches == 0 &&
-		snapshot.PageSwitches == 0
-}
-
-func originalTextFromTaskTitle(title string) string {
-	trimmed := strings.TrimSpace(title)
-	for _, prefix := range []string{"确认处理方式：", "改写：", "翻译：", "解释错误：", "解释：", "总结文件：", "总结：", "处理："} {
-		if strings.HasPrefix(trimmed, prefix) {
-			return strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
-		}
-	}
-	return trimmed
-}
-
-func confirmationTitleFromTask(task runengine.TaskRecord) string {
-	subject := strings.TrimSpace(originalTextFromTaskTitle(task.Title))
-	if subject == "" {
-		subject = "当前任务"
-	}
-	return "确认处理方式：" + subject
-}
-
 // memoryQueryFromSnapshot selects the most representative retrieval query from
 // the current context snapshot. The fallback order intentionally prefers direct
 // user focus, then file context, then broader perception signals so memory
@@ -6596,26 +6421,6 @@ func deliveryPreferenceFromSubmit(params map[string]any) (string, string) {
 func deliveryPreferenceFromStart(params map[string]any) (string, string) {
 	deliveryOptions := mapValue(params, "delivery")
 	return stringValue(deliveryOptions, "preferred", ""), stringValue(deliveryOptions, "fallback", "")
-}
-
-// mergeSuggestedDeliveryPreference preserves explicit caller preferences and only
-// falls back to the intent layer's suggested delivery when the caller left the
-// preferred delivery unset.
-func mergeSuggestedDeliveryPreference(preferredDelivery, fallbackDelivery, suggestedDelivery string) (string, string) {
-	if strings.TrimSpace(preferredDelivery) == "" && strings.TrimSpace(suggestedDelivery) != "" {
-		preferredDelivery = suggestedDelivery
-	}
-	return preferredDelivery, fallbackDelivery
-}
-
-// buildPendingExecution creates the minimum delivery plan required to resume a
-// task after authorization. The stored plan must be deterministic and task-
-// centric because waiting_auth can outlive the original request and later needs
-// to restart execution without recomputing delivery intent from transport-only
-// inputs.
-func (s *Service) buildPendingExecution(task runengine.TaskRecord, taskIntent map[string]any) map[string]any {
-	plan := s.delivery.BuildApprovalExecutionPlan(task.TaskID, taskIntent)
-	return s.applyResolvedDeliveryToPlan(task, plan, taskIntent)
 }
 
 func (s *Service) applyGovernanceAssessment(plan map[string]any, assessment execution.GovernanceAssessment) map[string]any {
@@ -7253,196 +7058,6 @@ func firstNonEmptyString(primary, fallback string) string {
 		return primary
 	}
 	return fallback
-}
-
-func compactAuditRecords(records ...map[string]any) []map[string]any {
-	if len(records) == 0 {
-		return nil
-	}
-
-	items := make([]map[string]any, 0, len(records))
-	for _, record := range records {
-		if len(record) == 0 {
-			continue
-		}
-		items = append(items, cloneMap(record))
-	}
-	if len(items) == 0 {
-		return nil
-	}
-	return items
-}
-
-func sameDay(left, right time.Time) bool {
-	left = left.In(right.Location())
-	return left.Year() == right.Year() && left.YearDay() == right.YearDay()
-}
-
-func intValueFromAny(value any) int {
-	switch typed := value.(type) {
-	case int:
-		return typed
-	case int64:
-		return int(typed)
-	case float64:
-		return int(typed)
-	default:
-		return 0
-	}
-}
-
-func floatValueFromAny(value any) float64 {
-	switch typed := value.(type) {
-	case float64:
-		return typed
-	case int:
-		return float64(typed)
-	case int64:
-		return float64(typed)
-	default:
-		return 0.0
-	}
-}
-
-// firstMapOrNil returns a copy of the first item in a list, or nil when empty.
-func firstMapOrNil(items []map[string]any) map[string]any {
-	if len(items) == 0 {
-		return nil
-	}
-	return cloneMap(items[0])
-}
-
-// cloneMap recursively copies a map[string]any payload.
-func cloneMap(values map[string]any) map[string]any {
-	if len(values) == 0 {
-		return nil
-	}
-	result := make(map[string]any, len(values))
-	for key, value := range values {
-		switch typed := value.(type) {
-		case map[string]any:
-			result[key] = cloneMap(typed)
-		case []map[string]any:
-			result[key] = cloneMapSlice(typed)
-		case []string:
-			result[key] = append([]string(nil), typed...)
-		default:
-			result[key] = value
-		}
-	}
-	return result
-}
-
-func optionalFormalDeliveryResult(deliveryResult map[string]any) any {
-	if len(deliveryResult) == 0 {
-		return nil
-	}
-	return deliveryResult
-}
-
-// cloneMapSlice recursively copies a []map[string]any payload.
-func cloneMapSlice(values []map[string]any) []map[string]any {
-	if len(values) == 0 {
-		return nil
-	}
-	result := make([]map[string]any, 0, len(values))
-	for _, value := range values {
-		result = append(result, cloneMap(value))
-	}
-	return result
-}
-
-func extensionAssetReferencesFromMaps(values []map[string]any) []storage.ExtensionAssetReference {
-	if len(values) == 0 {
-		return nil
-	}
-	items := make([]storage.ExtensionAssetReference, 0, len(values))
-	for _, value := range values {
-		items = append(items, storage.ExtensionAssetReference{
-			AssetKind:    stringValue(value, "asset_kind", ""),
-			AssetID:      stringValue(value, "asset_id", ""),
-			Name:         stringValue(value, "name", ""),
-			Version:      stringValue(value, "version", ""),
-			Source:       stringValue(value, "source", ""),
-			Summary:      stringValue(value, "summary", ""),
-			Entry:        stringValue(value, "entry", ""),
-			Capabilities: stringSliceValue(value["capabilities"]),
-			Permissions:  stringSliceValue(value["permissions"]),
-			RuntimeNames: stringSliceValue(value["runtime_names"]),
-		})
-	}
-	return items
-}
-
-// mapValue safely reads a nested object field.
-func mapValue(values map[string]any, key string) map[string]any {
-	rawValue, ok := values[key]
-	if !ok {
-		return map[string]any{}
-	}
-	value, ok := rawValue.(map[string]any)
-	if !ok {
-		return map[string]any{}
-	}
-	return value
-}
-
-// stringValue safely reads a string field and falls back when empty.
-func stringValue(values map[string]any, key, fallback string) string {
-	rawValue, ok := values[key]
-	if !ok {
-		return fallback
-	}
-	value, ok := rawValue.(string)
-	if !ok || value == "" {
-		return fallback
-	}
-	return value
-}
-
-func requestTraceID(values map[string]any) string {
-	return stringValue(mapValue(values, "request_meta"), "trace_id", "")
-}
-
-// boolValue safely reads a boolean field.
-func boolValue(values map[string]any, key string, fallback bool) bool {
-	rawValue, ok := values[key]
-	if !ok {
-		return fallback
-	}
-	value, ok := rawValue.(bool)
-	if !ok {
-		return fallback
-	}
-	return value
-}
-
-// intValue safely reads a JSON-decoded numeric field.
-func intValue(values map[string]any, key string, fallback int) int {
-	rawValue, ok := values[key]
-	if !ok {
-		return fallback
-	}
-	switch value := rawValue.(type) {
-	case int:
-		return value
-	case int32:
-		return int(value)
-	case int64:
-		return int(value)
-	case float32:
-		return int(value)
-	case float64:
-		return int(value)
-	default:
-		return fallback
-	}
-}
-
-// truncateText trims text to a fixed length for recommendation and memory
-// query surfaces.
-func truncateText(value string, maxLength int) string {
-	return textutil.TruncateGraphemes(value, maxLength)
 }
 
 // dateTimeLayout is the shared timestamp layout exposed by orchestrator RPC
@@ -8493,29 +8108,3 @@ func (s *Service) recordBudgetDowngradeEvent(task runengine.TaskRecord, decision
 // dateTimeLayout is the shared timestamp layout exposed by orchestrator RPC
 // payloads.
 const dateTimeLayout = time.RFC3339
-
-func stringSliceValue(rawValue any) []string {
-	values, ok := rawValue.([]string)
-	if ok {
-		return append([]string(nil), values...)
-	}
-
-	anyValues, ok := rawValue.([]any)
-	if !ok {
-		return nil
-	}
-
-	result := make([]string, 0, len(anyValues))
-	for _, rawItem := range anyValues {
-		item, ok := rawItem.(string)
-		if ok && strings.TrimSpace(item) != "" {
-			result = append(result, item)
-		}
-	}
-
-	if len(result) == 0 {
-		return nil
-	}
-
-	return result
-}
