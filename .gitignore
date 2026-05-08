@@ -9,6 +9,7 @@ node_modules/
 dist/
 build/
 coverage/
+coverage.out
 .turbo/
 
 target/
