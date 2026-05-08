@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -172,6 +173,48 @@ index 2222222..3333333 100644
 	}
 	if violations[1].line != 5 || violations[1].text != "// 中文 working tree comment." {
 		t.Fatalf("unexpected working tree violation: %#v", violations[1])
+	}
+}
+
+func TestFindFileSizeViolationsRejectsLargeImplementationFiles(t *testing.T) {
+	root := writeTestFile(t, "package demo\n")
+	path := filepath.Join(root, localServicePath, "internal", "demo", "large.go")
+	if err := os.WriteFile(path, []byte(strings.Repeat("package_line\n", maxGoFileLines+1)), 0o644); err != nil {
+		t.Fatalf("write large file: %v", err)
+	}
+
+	violations, err := findFileSizeViolations(root, []string{
+		"services/local-service/internal/demo/large.go",
+		"services/local-service/internal/demo/large_test.go",
+		"scripts/ci/local-service-style/main.go",
+	})
+	if err != nil {
+		t.Fatalf("findFileSizeViolations returned error: %v", err)
+	}
+	if len(violations) != 1 {
+		t.Fatalf("expected one size violation, got %d: %#v", len(violations), violations)
+	}
+	if violations[0].file != "services/local-service/internal/demo/large.go" {
+		t.Fatalf("unexpected violation file: %#v", violations[0])
+	}
+}
+
+func TestCountLinesHandlesEmptyAndTrailingNewline(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		text string
+		want int
+	}{
+		{name: "empty", text: "", want: 0},
+		{name: "one unterminated", text: "a", want: 1},
+		{name: "one terminated", text: "a\n", want: 1},
+		{name: "two terminated", text: "a\nb\n", want: 2},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := countLines([]byte(tt.text)); got != tt.want {
+				t.Fatalf("countLines(%q) = %d, want %d", tt.text, got, tt.want)
+			}
+		})
 	}
 }
 

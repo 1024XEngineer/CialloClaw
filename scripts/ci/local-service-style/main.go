@@ -21,6 +21,7 @@ const (
 	styleToolPath    = "scripts/ci/local-service-style"
 	goimportsTool    = "golang.org/x/tools/cmd/goimports"
 	goimportsRunCmd  = "go run " + goimportsTool
+	maxGoFileLines   = 2000
 )
 
 var hunkHeaderPattern = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
@@ -34,6 +35,12 @@ type violation struct {
 type addedLine struct {
 	file string
 	line int
+}
+
+type fileSizeViolation struct {
+	file     string
+	lines    int
+	maxLines int
 }
 
 type diffChunk struct {
@@ -75,6 +82,9 @@ func run() error {
 		if err := checkAddedComments(root, baseRef); err != nil {
 			return err
 		}
+	}
+	if err := checkChangedFileSizes(root, baseRef); err != nil {
+		return err
 	}
 	return nil
 }
@@ -154,6 +164,28 @@ func checkAddedComments(root, baseRef string) error {
 	builder.WriteString("Chinese characters are not allowed in added Go comments:\n")
 	for _, item := range violations {
 		fmt.Fprintf(&builder, "%s:%d: %s\n", item.file, item.line, strings.TrimSpace(item.text))
+	}
+	return errors.New(strings.TrimRight(builder.String(), "\n"))
+}
+
+func checkChangedFileSizes(root, baseRef string) error {
+	files, err := changedGoFiles(root, strings.TrimSpace(baseRef))
+	if err != nil {
+		return err
+	}
+
+	violations, err := findFileSizeViolations(root, files)
+	if err != nil {
+		return err
+	}
+	if len(violations) == 0 {
+		return nil
+	}
+
+	var builder strings.Builder
+	builder.WriteString("changed local-service Go files are too large:\n")
+	for _, item := range violations {
+		fmt.Fprintf(&builder, "%s: %d lines exceeds %d\n", item.file, item.lines, item.maxLines)
 	}
 	return errors.New(strings.TrimRight(builder.String(), "\n"))
 }
@@ -296,6 +328,51 @@ func findCommentViolations(root string, diffChunks []diffChunk) ([]violation, er
 	}
 
 	return violations, nil
+}
+
+func findFileSizeViolations(root string, files []string) ([]fileSizeViolation, error) {
+	var violations []fileSizeViolation
+	for _, file := range files {
+		if !shouldCheckGoFileSize(file) {
+			continue
+		}
+
+		source, err := os.ReadFile(filepath.Join(root, file))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read %s for size check: %w", file, err)
+		}
+
+		lineCount := countLines(source)
+		if lineCount > maxGoFileLines {
+			violations = append(violations, fileSizeViolation{
+				file:     file,
+				lines:    lineCount,
+				maxLines: maxGoFileLines,
+			})
+		}
+	}
+	return violations, nil
+}
+
+func shouldCheckGoFileSize(file string) bool {
+	return strings.HasPrefix(file, localServicePath+"/") &&
+		strings.HasSuffix(file, ".go") &&
+		!strings.HasSuffix(file, "_test.go")
+}
+
+func countLines(source []byte) int {
+	if len(source) == 0 {
+		return 0
+	}
+
+	lines := bytes.Count(source, []byte{'\n'})
+	if source[len(source)-1] != '\n' {
+		lines++
+	}
+	return lines
 }
 
 func collectAddedLines(diff string) []addedLine {
