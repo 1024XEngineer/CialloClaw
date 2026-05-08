@@ -491,6 +491,140 @@ func TestPlaywrightSidecarRuntimeClientSupportsAttachedBrowserActions(t *testing
 	}
 }
 
+func TestPlaywrightSidecarRuntimeClientSupportsAttachedPageActions(t *testing.T) {
+	osCapability := platform.NewLocalOSCapabilityAdapter()
+	runtime, err := NewPlaywrightSidecarRuntime(plugin.NewService(), osCapability)
+	if err != nil {
+		t.Fatalf("NewPlaywrightSidecarRuntime returned error: %v", err)
+	}
+	invoker := &stubWorkerInvoker{response: sidecarResponse{OK: true, Result: map[string]any{"status": "ok"}}}
+	runtime.invoker = invoker
+	if err := runtime.Start(); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	pageIndex := 1
+	attach := tools.BrowserAttachConfig{
+		Mode:        tools.BrowserAttachModeCDP,
+		BrowserKind: "chrome",
+		EndpointURL: "http://127.0.0.1:9222",
+		Target: tools.BrowserAttachTarget{
+			URL:           "https://example.com/docs",
+			TitleContains: "docs",
+			PageIndex:     &pageIndex,
+		},
+	}
+
+	invoker.response = sidecarResponse{OK: true, Result: map[string]any{
+		"attached":          true,
+		"browser_kind":      "chrome",
+		"browser_transport": "cdp",
+		"endpoint_url":      "http://127.0.0.1:9222",
+		"url":               "https://example.com/docs",
+		"title":             "Docs",
+		"text_content":      "Installation guide",
+		"mime_type":         "text/html",
+		"text_type":         "text/html",
+		"source":            "playwright_worker_cdp",
+	}}
+	if _, err := runtime.Client().ReadPageAttached(t.Context(), "https://example.com/docs", attach); err != nil {
+		t.Fatalf("ReadPageAttached returned error: %v", err)
+	}
+
+	invoker.response = sidecarResponse{OK: true, Result: map[string]any{
+		"attached":          true,
+		"browser_kind":      "chrome",
+		"browser_transport": "cdp",
+		"endpoint_url":      "http://127.0.0.1:9222",
+		"url":               "https://example.com/docs",
+		"query":             "install",
+		"match_count":       1,
+		"matches":           []any{"install guide"},
+		"source":            "playwright_worker_cdp",
+	}}
+	if _, err := runtime.Client().SearchPageAttached(t.Context(), "https://example.com/docs", "install", 2, attach); err != nil {
+		t.Fatalf("SearchPageAttached returned error: %v", err)
+	}
+
+	invoker.response = sidecarResponse{OK: true, Result: map[string]any{
+		"attached":          true,
+		"browser_kind":      "chrome",
+		"browser_transport": "cdp",
+		"endpoint_url":      "http://127.0.0.1:9222",
+		"url":               "https://example.com/docs",
+		"title":             "Docs",
+		"text_content":      "Action applied",
+		"actions_applied":   1,
+		"source":            "playwright_worker_cdp",
+	}}
+	if _, err := runtime.Client().InteractPageAttached(t.Context(), "https://example.com/docs", []map[string]any{{"type": "click", "selector": "a.next"}}, attach); err != nil {
+		t.Fatalf("InteractPageAttached returned error: %v", err)
+	}
+
+	invoker.response = sidecarResponse{OK: true, Result: map[string]any{
+		"attached":          true,
+		"browser_kind":      "chrome",
+		"browser_transport": "cdp",
+		"endpoint_url":      "http://127.0.0.1:9222",
+		"url":               "https://example.com/docs",
+		"title":             "Docs",
+		"headings":          []any{"Install"},
+		"links":             []any{"Guide"},
+		"buttons":           []any{"Next"},
+		"inputs":            []any{"search"},
+		"source":            "playwright_worker_cdp",
+	}}
+	if _, err := runtime.Client().StructuredDOMAttached(t.Context(), "https://example.com/docs", attach); err != nil {
+		t.Fatalf("StructuredDOMAttached returned error: %v", err)
+	}
+
+	if len(invoker.requests) != 5 {
+		t.Fatalf("expected health plus four attached page requests, got %+v", invoker.requests)
+	}
+	for _, request := range invoker.requests[1:] {
+		if request.Attach == nil || request.Attach.EndpointURL != "http://127.0.0.1:9222" {
+			t.Fatalf("expected attached page request metadata, got %+v", request)
+		}
+	}
+	if invoker.requests[1].Action != "page_read" || invoker.requests[2].Action != "page_search" || invoker.requests[3].Action != "page_interact" || invoker.requests[4].Action != "structured_dom" {
+		t.Fatalf("unexpected attached page request sequence: %+v", invoker.requests)
+	}
+}
+
+func TestPlaywrightSidecarRuntimeClientSupportsAttachWithoutBrowserKind(t *testing.T) {
+	osCapability := platform.NewLocalOSCapabilityAdapter()
+	runtime, err := NewPlaywrightSidecarRuntime(plugin.NewService(), osCapability)
+	if err != nil {
+		t.Fatalf("NewPlaywrightSidecarRuntime returned error: %v", err)
+	}
+	invoker := &stubWorkerInvoker{response: sidecarResponse{OK: true, Result: map[string]any{"status": "ok"}}}
+	runtime.invoker = invoker
+	if err := runtime.Start(); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	attach := tools.BrowserAttachConfig{
+		Mode:        tools.BrowserAttachModeCDP,
+		EndpointURL: "http://127.0.0.1:9222",
+		Target: tools.BrowserAttachTarget{
+			URL: "https://example.com/docs",
+		},
+	}
+	invoker.response = sidecarResponse{OK: true, Result: map[string]any{
+		"attached":          true,
+		"browser_transport": "cdp",
+		"url":               "https://example.com/docs",
+		"title":             "Docs",
+		"text_content":      "Installation guide",
+		"mime_type":         "text/html",
+		"text_type":         "text/html",
+		"source":            "playwright_worker_cdp",
+	}}
+	if _, err := runtime.Client().ReadPageAttached(t.Context(), "https://example.com/docs", attach); err != nil {
+		t.Fatalf("ReadPageAttached returned error: %v", err)
+	}
+	if got := invoker.requests[1].Attach.BrowserKind; got != "" {
+		t.Fatalf("expected empty browser kind to pass through unchanged, got %q", got)
+	}
+}
 func TestResolveRelativePathFromRootsFindsWorkerEntry(t *testing.T) {
 	root := t.TempDir()
 	entryPath := filepath.Join(root, "workers", "playwright-worker", "src", "index.js")

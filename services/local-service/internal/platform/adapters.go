@@ -1,4 +1,4 @@
-// 该文件负责跨平台抽象接口或平台适配实现。
+// This file implements cross-platform abstraction interfaces and local adapters.
 package platform
 
 import (
@@ -16,7 +16,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
-// FileSystemAdapter 定义当前模块的接口约束。
+// FileSystemAdapter defines the workspace file-system boundary used by local services.
 type FileSystemAdapter interface {
 	fs.FS
 	fs.ReadDirFS
@@ -35,13 +35,13 @@ type FileSystemAdapter interface {
 	MkdirAll(path string) error
 }
 
-// PathPolicy 定义当前模块的接口约束。
+// PathPolicy defines path normalization and workspace containment checks.
 type PathPolicy interface {
 	Normalize(path string) string
 	EnsureWithinWorkspace(path string) (string, error)
 }
 
-// OSCapabilityAdapter 定义当前模块的接口约束。
+// OSCapabilityAdapter defines the minimal host OS capability boundary.
 type OSCapabilityAdapter interface {
 	Notify(title, body string) error
 	OpenExternal(target string) error
@@ -49,192 +49,271 @@ type OSCapabilityAdapter interface {
 	CloseNamedPipe(pipeName string) error
 }
 
-// ExecutionBackendAdapter 定义当前模块的接口约束。
+// ExecutionBackendAdapter defines the command execution backend boundary.
 type ExecutionBackendAdapter interface {
 	Name() string
 	RunCommand(ctx context.Context, command string, args []string, workingDir string) (tools.CommandExecutionResult, error)
 }
 
-// StorageAdapter 定义当前模块的接口约束。
+// StorageAdapter defines storage path accessors for local persistence.
 type StorageAdapter interface {
 	DatabasePath() string
 	SecretStorePath() string
 }
 
-// LocalPathPolicy 定义当前模块的数据结构。
+// LocalPathPolicy validates workspace paths against lexical and real-path escapes.
 type LocalPathPolicy struct {
-	workspaceRoot string
+	workspaceRoot     string
+	realWorkspaceRoot string
 }
 
-// NewLocalPathPolicy 创建并返回LocalPathPolicy。
+// NewLocalPathPolicy creates a local path policy for the provided workspace root.
 func NewLocalPathPolicy(workspaceRoot string) (*LocalPathPolicy, error) {
 	absRoot, err := filepath.Abs(workspaceRoot)
 	if err != nil {
 		return nil, err
 	}
 
-	return &LocalPathPolicy{workspaceRoot: filepath.Clean(absRoot)}, nil
+	cleanRoot := filepath.Clean(absRoot)
+	realRoot, err := filepath.EvalSymlinks(cleanRoot)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
+		}
+		realRoot = cleanRoot
+	}
+
+	return &LocalPathPolicy{workspaceRoot: cleanRoot, realWorkspaceRoot: filepath.Clean(realRoot)}, nil
 }
 
-// Normalize 处理当前模块的相关逻辑。
+// Normalize returns a slash-separated clean path.
 func (p *LocalPathPolicy) Normalize(path string) string {
 	return filepath.ToSlash(filepath.Clean(path))
 }
 
-// EnsureWithinWorkspace 处理当前模块的相关逻辑。
-func (p *LocalPathPolicy) EnsureWithinWorkspace(path string) (string, error) {
-	candidates := make([]string, 0, 2)
-	if filepath.IsAbs(path) {
-		absPath, err := filepath.Abs(path)
-		if err != nil {
-			return "", err
-		}
-		candidates = append(candidates, absPath)
-	} else {
-		absPath, err := filepath.Abs(path)
-		if err != nil {
-			return "", err
-		}
-		candidates = append(candidates, absPath)
-		candidates = append(candidates, filepath.Join(p.workspaceRoot, path))
-	}
+// ErrPathOutsideWorkspace marks paths that escape the configured workspace boundary.
+var ErrPathOutsideWorkspace = errors.New("path outside workspace")
 
-	for _, candidate := range candidates {
-		if safePath, ok := p.ensureCandidateWithinWorkspace(candidate); ok {
+// EnsureWithinWorkspace resolves path against the workspace and rejects symlink escapes.
+func (p *LocalPathPolicy) EnsureWithinWorkspace(path string) (string, error) {
+	return p.resolveWorkspacePath(path, false)
+}
+
+// ResolveExisting confirms an existing path remains inside the workspace after symlink evaluation.
+func (p *LocalPathPolicy) ResolveExisting(path string) (string, error) {
+	return p.resolveWorkspacePath(path, true)
+}
+
+func (p *LocalPathPolicy) resolveWorkspacePath(path string, requireExisting bool) (string, error) {
+	var lastErr error
+	for _, candidate := range p.workspaceCandidates(path) {
+		safePath, err := p.ensureCandidateWithinWorkspace(candidate, requireExisting)
+		if err == nil {
 			return safePath, nil
 		}
+		lastErr = err
 	}
-
-	return "", errors.New("path outside workspace")
+	if lastErr != nil && !errors.Is(lastErr, ErrPathOutsideWorkspace) {
+		return "", lastErr
+	}
+	return "", ErrPathOutsideWorkspace
 }
 
-func (p *LocalPathPolicy) ensureCandidateWithinWorkspace(candidate string) (string, bool) {
+func (p *LocalPathPolicy) workspaceCandidates(path string) []string {
+	candidates := make([]string, 0, 2)
+	if filepath.IsAbs(path) {
+		candidates = append(candidates, filepath.Clean(path))
+		return candidates
+	}
+
+	if absPath, err := filepath.Abs(path); err == nil {
+		candidates = append(candidates, filepath.Clean(absPath))
+	}
+	candidates = append(candidates, filepath.Clean(filepath.Join(p.workspaceRoot, path)))
+	return candidates
+}
+
+func (p *LocalPathPolicy) ensureCandidateWithinWorkspace(candidate string, requireExisting bool) (string, error) {
 	cleanTarget := filepath.Clean(candidate)
-	rootWithSeparator := p.workspaceRoot + string(os.PathSeparator)
-
-	if cleanTarget == p.workspaceRoot || strings.HasPrefix(cleanTarget, rootWithSeparator) {
-		return cleanTarget, true
+	if !pathWithinRoot(cleanTarget, p.workspaceRoot) {
+		return "", ErrPathOutsideWorkspace
 	}
 
-	return "", false
+	realProbe, err := p.realPathForBoundaryCheck(cleanTarget, requireExisting)
+	if err != nil {
+		return "", err
+	}
+	if !pathWithinRoot(realProbe, p.realWorkspaceRoot) {
+		return "", ErrPathOutsideWorkspace
+	}
+
+	return cleanTarget, nil
 }
 
-// LocalFileSystemAdapter 定义当前模块的数据结构。
+func (p *LocalPathPolicy) realPathForBoundaryCheck(cleanTarget string, requireExisting bool) (string, error) {
+	realTarget, err := filepath.EvalSymlinks(cleanTarget)
+	if err == nil {
+		return filepath.Clean(realTarget), nil
+	}
+	if requireExisting || !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
+	if cleanTarget == p.workspaceRoot {
+		return p.realWorkspaceRoot, nil
+	}
+
+	probe := filepath.Dir(cleanTarget)
+	for {
+		realProbe, probeErr := filepath.EvalSymlinks(probe)
+		if probeErr == nil {
+			return filepath.Clean(realProbe), nil
+		}
+		if !errors.Is(probeErr, fs.ErrNotExist) {
+			return "", probeErr
+		}
+		if filepath.Clean(probe) == p.workspaceRoot {
+			return p.realWorkspaceRoot, nil
+		}
+
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			return "", ErrPathOutsideWorkspace
+		}
+		probe = parent
+	}
+}
+
+func pathWithinRoot(target, root string) bool {
+	cleanTarget := filepath.Clean(target)
+	cleanRoot := filepath.Clean(root)
+	rootWithSeparator := cleanRoot + string(os.PathSeparator)
+	return cleanTarget == cleanRoot || strings.HasPrefix(cleanTarget, rootWithSeparator)
+}
+
+// LocalFileSystemAdapter implements workspace-bounded filesystem operations.
 type LocalFileSystemAdapter struct {
 	policy *LocalPathPolicy
 }
 
-// NewLocalFileSystemAdapter 创建并返回LocalFileSystemAdapter。
+// NewLocalFileSystemAdapter creates a filesystem adapter backed by the path policy.
 func NewLocalFileSystemAdapter(policy *LocalPathPolicy) *LocalFileSystemAdapter {
 	return &LocalFileSystemAdapter{policy: policy}
 }
 
-// Open 处理当前模块的相关逻辑。
+// Open validates and opens an existing workspace path without following symlinks outside the boundary.
 func (a *LocalFileSystemAdapter) Open(name string) (fs.File, error) {
-	fsPath, err := a.resolveFSPath("open", name)
+	safePath, err := a.resolveExistingWorkspacePath("open", name)
 	if err != nil {
 		return nil, err
 	}
 
-	return a.workspaceFS().Open(fsPath)
+	return os.Open(safePath)
 }
 
-// Join 处理当前模块的相关逻辑。
+// Join combines path components using the host path separator.
 func (a *LocalFileSystemAdapter) Join(parts ...string) string {
 	return filepath.Join(parts...)
 }
 
-// Clean 处理当前模块的相关逻辑。
+// Clean normalizes a host path without resolving symlinks.
 func (a *LocalFileSystemAdapter) Clean(path string) string {
 	return filepath.Clean(path)
 }
 
-// Abs 处理当前模块的相关逻辑。
+// Abs returns the absolute host path for the input.
 func (a *LocalFileSystemAdapter) Abs(path string) (string, error) {
 	return filepath.Abs(path)
 }
 
-// Rel 处理当前模块的相关逻辑。
+// Rel returns a relative path from base to target.
 func (a *LocalFileSystemAdapter) Rel(base, target string) (string, error) {
 	return filepath.Rel(base, target)
 }
 
-// Normalize 处理当前模块的相关逻辑。
+// Normalize returns a slash-separated clean path.
 func (a *LocalFileSystemAdapter) Normalize(path string) string {
 	return a.policy.Normalize(path)
 }
 
-// EnsureWithinWorkspace 处理当前模块的相关逻辑。
+// EnsureWithinWorkspace applies the adapter path policy.
 func (a *LocalFileSystemAdapter) EnsureWithinWorkspace(path string) (string, error) {
 	return a.policy.EnsureWithinWorkspace(path)
 }
 
-// ReadFile 处理当前模块的相关逻辑。
+// ReadFile validates the real target path before reading workspace content.
 func (a *LocalFileSystemAdapter) ReadFile(path string) ([]byte, error) {
-	fsPath, err := a.resolveFSPath("read", path)
+	safePath, err := a.resolveExistingWorkspacePath("read", path)
 	if err != nil {
 		return nil, err
 	}
 
-	return fs.ReadFile(a.workspaceFS(), fsPath)
+	return os.ReadFile(safePath)
 }
 
-// ReadDir 处理当前模块的相关逻辑。
+// ReadDir validates the real directory path before listing workspace entries.
 func (a *LocalFileSystemAdapter) ReadDir(path string) ([]fs.DirEntry, error) {
-	fsPath, err := a.resolveFSPath("readdir", path)
+	safePath, err := a.resolveExistingWorkspacePath("readdir", path)
 	if err != nil {
 		return nil, err
 	}
 
-	return fs.ReadDir(a.workspaceFS(), fsPath)
+	return os.ReadDir(safePath)
 }
 
-// Stat 处理当前模块的相关逻辑。
+// Stat validates the real target path before returning workspace metadata.
 func (a *LocalFileSystemAdapter) Stat(path string) (fs.FileInfo, error) {
-	fsPath, err := a.resolveFSPath("stat", path)
+	safePath, err := a.resolveExistingWorkspacePath("stat", path)
 	if err != nil {
 		return nil, err
 	}
 
-	return fs.Stat(a.workspaceFS(), fsPath)
+	return os.Stat(safePath)
 }
 
-// Sub 处理当前模块的相关逻辑。
+// Sub creates a bounded adapter rooted at an existing workspace subdirectory.
 func (a *LocalFileSystemAdapter) Sub(dir string) (fs.FS, error) {
-	fsPath, err := a.resolveFSPath("sub", dir)
+	safePath, err := a.resolveExistingWorkspacePath("sub", dir)
 	if err != nil {
 		return nil, err
 	}
 
-	return fs.Sub(a.workspaceFS(), fsPath)
+	policy, err := NewLocalPathPolicy(safePath)
+	if err != nil {
+		return nil, err
+	}
+	return NewLocalFileSystemAdapter(policy), nil
 }
 
-// WriteFile 处理当前模块的相关逻辑。
+// WriteFile validates the destination and existing parent chain before writing content.
 func (a *LocalFileSystemAdapter) WriteFile(path string, content []byte) error {
 	safePath, err := a.policy.EnsureWithinWorkspace(path)
 	if err != nil {
 		return err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(safePath), 0o755); err != nil {
+	safeDir, err := a.policy.EnsureWithinWorkspace(filepath.Dir(safePath))
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(safeDir, 0o755); err != nil {
 		return err
 	}
 
 	return os.WriteFile(safePath, content, 0o644)
 }
 
-// Remove 删除工作区内的目标文件。
+// Remove validates the existing real target before deleting workspace content.
 func (a *LocalFileSystemAdapter) Remove(path string) error {
-	safePath, err := a.policy.EnsureWithinWorkspace(path)
+	safePath, err := a.policy.ResolveExisting(path)
 	if err != nil {
 		return err
 	}
 	return os.Remove(safePath)
 }
 
-// Move 处理当前模块的相关逻辑。
+// Move validates both the existing source and destination parent chain before renaming.
 func (a *LocalFileSystemAdapter) Move(src, dst string) error {
-	safeSrc, err := a.policy.EnsureWithinWorkspace(src)
+	safeSrc, err := a.policy.ResolveExisting(src)
 	if err != nil {
 		return err
 	}
@@ -244,14 +323,18 @@ func (a *LocalFileSystemAdapter) Move(src, dst string) error {
 		return err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(safeDst), 0o755); err != nil {
+	safeDir, err := a.policy.EnsureWithinWorkspace(filepath.Dir(safeDst))
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(safeDir, 0o755); err != nil {
 		return err
 	}
 
 	return os.Rename(safeSrc, safeDst)
 }
 
-// MkdirAll 处理当前模块的相关逻辑。
+// MkdirAll validates the requested directory and existing parent chain before creating directories.
 func (a *LocalFileSystemAdapter) MkdirAll(path string) error {
 	safePath, err := a.policy.EnsureWithinWorkspace(path)
 	if err != nil {
@@ -261,25 +344,19 @@ func (a *LocalFileSystemAdapter) MkdirAll(path string) error {
 	return os.MkdirAll(safePath, 0o755)
 }
 
-func (a *LocalFileSystemAdapter) workspaceFS() fs.FS {
-	return os.DirFS(a.policy.workspaceRoot)
-}
-
-func (a *LocalFileSystemAdapter) resolveFSPath(op, name string) (string, error) {
+func (a *LocalFileSystemAdapter) resolveExistingWorkspacePath(op, name string) (string, error) {
 	if filepath.IsAbs(name) {
-		relPath, err := filepath.Rel(a.policy.workspaceRoot, name)
-		if err == nil {
-			cleanRel := filepath.Clean(relPath)
-			if cleanRel == "." {
-				return ".", nil
-			}
-			if cleanRel != ".." && !strings.HasPrefix(cleanRel, ".."+string(os.PathSeparator)) {
-				name = filepath.ToSlash(cleanRel)
-			}
+		if !pathWithinRoot(name, a.policy.workspaceRoot) {
+			return "", &fs.PathError{Op: op, Path: name, Err: fs.ErrInvalid}
 		}
+		return a.policy.ResolveExisting(name)
 	}
 
-	return normalizeFSPath(op, filepath.ToSlash(name))
+	fsPath, err := normalizeFSPath(op, filepath.ToSlash(name))
+	if err != nil {
+		return "", err
+	}
+	return a.policy.ResolveExisting(filepath.FromSlash(fsPath))
 }
 
 func normalizeFSPath(op, name string) (string, error) {
@@ -302,15 +379,15 @@ func normalizeFSPath(op, name string) (string, error) {
 	return normalized, nil
 }
 
-// LocalExecutionBackend 定义当前模块的数据结构。
+// LocalExecutionBackend runs commands on the local host.
 type LocalExecutionBackend struct{}
 
-// Name 处理当前模块的相关逻辑。
+// Name returns the execution backend identifier.
 func (LocalExecutionBackend) Name() string {
 	return "local_host"
 }
 
-// RunCommand 执行最小受控命令。
+// RunCommand executes a minimally controlled local command.
 func (LocalExecutionBackend) RunCommand(ctx context.Context, command string, args []string, workingDir string) (tools.CommandExecutionResult, error) {
 	cmd := exec.CommandContext(ctx, command, args...)
 	if strings.TrimSpace(workingDir) != "" {
@@ -335,30 +412,30 @@ func (LocalExecutionBackend) RunCommand(ctx context.Context, command string, arg
 	return result, nil
 }
 
-// LocalOSCapabilityAdapter 是当前阶段的最小本地 OS 能力骨架实现。
+// LocalOSCapabilityAdapter is the current minimal local OS capability implementation.
 //
-// 该实现当前不承担完整 sidecar 生命周期管理，只提供：
-// - 非空命名管道名校验
-// - 进程内最小状态记忆
-// - 本地 no-op/最小化的宿主行为占位
+// It does not manage a complete sidecar lifecycle yet and only provides:
+// - non-empty named pipe validation
+// - minimal in-process state tracking
+// - local no-op or minimized host behavior placeholders
 type LocalOSCapabilityAdapter struct {
 	mu          sync.Mutex
 	openedPipes map[string]struct{}
 }
 
-// NewLocalOSCapabilityAdapter 创建并返回最小 OS capability adapter。
+// NewLocalOSCapabilityAdapter creates the minimal OS capability adapter.
 func NewLocalOSCapabilityAdapter() *LocalOSCapabilityAdapter {
 	return &LocalOSCapabilityAdapter{openedPipes: make(map[string]struct{})}
 }
 
-// Notify 是当前阶段的最小 no-op 实现。
+// Notify is the current minimal no-op implementation.
 func (a *LocalOSCapabilityAdapter) Notify(title, body string) error {
 	_ = title
 	_ = body
 	return nil
 }
 
-// OpenExternal 是当前阶段的最小 no-op 实现。
+// OpenExternal is the current minimal no-op implementation.
 func (a *LocalOSCapabilityAdapter) OpenExternal(target string) error {
 	if strings.TrimSpace(target) == "" {
 		return errors.New("target is required")
@@ -366,7 +443,7 @@ func (a *LocalOSCapabilityAdapter) OpenExternal(target string) error {
 	return nil
 }
 
-// EnsureNamedPipe 记录一个命名管道已被声明可用。
+// EnsureNamedPipe records a named pipe as declared available.
 func (a *LocalOSCapabilityAdapter) EnsureNamedPipe(pipeName string) error {
 	if strings.TrimSpace(pipeName) == "" {
 		return errors.New("pipe name is required")
@@ -377,7 +454,7 @@ func (a *LocalOSCapabilityAdapter) EnsureNamedPipe(pipeName string) error {
 	return nil
 }
 
-// CloseNamedPipe 从当前最小状态里移除命名管道记录。
+// CloseNamedPipe removes a named pipe from the minimal local state.
 func (a *LocalOSCapabilityAdapter) CloseNamedPipe(pipeName string) error {
 	if strings.TrimSpace(pipeName) == "" {
 		return errors.New("pipe name is required")
@@ -388,7 +465,7 @@ func (a *LocalOSCapabilityAdapter) CloseNamedPipe(pipeName string) error {
 	return nil
 }
 
-// HasNamedPipe 用于测试或上层最小探测。
+// HasNamedPipe supports tests and minimal upper-layer probes.
 func (a *LocalOSCapabilityAdapter) HasNamedPipe(pipeName string) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -396,17 +473,17 @@ func (a *LocalOSCapabilityAdapter) HasNamedPipe(pipeName string) bool {
 	return ok
 }
 
-// LocalStorageAdapter 定义当前模块的数据结构。
+// LocalStorageAdapter stores local persistence paths.
 type LocalStorageAdapter struct {
 	databasePath string
 }
 
-// NewLocalStorageAdapter 创建并返回LocalStorageAdapter。
+// NewLocalStorageAdapter creates a local storage adapter.
 func NewLocalStorageAdapter(databasePath string) *LocalStorageAdapter {
 	return &LocalStorageAdapter{databasePath: databasePath}
 }
 
-// DatabasePath 处理当前模块的相关逻辑。
+// DatabasePath returns the configured database path.
 func (a *LocalStorageAdapter) DatabasePath() string {
 	return a.databasePath
 }

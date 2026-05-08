@@ -29,20 +29,37 @@ func attachedBrowserInputWithoutTarget() map[string]any {
 	}
 }
 
+func attachedBrowserInputWithoutBrowserKind() map[string]any {
+	return map[string]any{
+		"attach": map[string]any{
+			"mode": "cdp",
+			"target": map[string]any{
+				"url": "https://example.com/docs",
+			},
+		},
+	}
+}
+
+func attachedBrowserInputWithEndpoint(endpointURL string) map[string]any {
+	input := attachedBrowserInputWithoutTarget()
+	input["attach"].(map[string]any)["endpoint_url"] = endpointURL
+	return input
+}
+
 type stubPlaywrightClient struct {
-	readResult       tools.BrowserPageReadResult
-	searchResult     tools.BrowserPageSearchResult
-	interactResult   tools.BrowserPageInteractResult
-	structuredResult tools.BrowserStructuredDOMResult
-	attachedRead     tools.BrowserPageReadResult
-	attachedSearch   tools.BrowserPageSearchResult
-	attachedInteract tools.BrowserPageInteractResult
-	attachedDOM      tools.BrowserStructuredDOMResult
-	attachResult     tools.BrowserAttachedPageResult
-	snapshotResult   tools.BrowserSnapshotResult
-	navigateResult   tools.BrowserNavigationResult
-	tabsResult       tools.BrowserTabsListResult
-	err              error
+	readResult               tools.BrowserPageReadResult
+	readAttachedResult       tools.BrowserPageReadResult
+	searchResult             tools.BrowserPageSearchResult
+	searchAttachedResult     tools.BrowserPageSearchResult
+	interactResult           tools.BrowserPageInteractResult
+	interactAttachedResult   tools.BrowserPageInteractResult
+	structuredResult         tools.BrowserStructuredDOMResult
+	structuredAttachedResult tools.BrowserStructuredDOMResult
+	attachResult             tools.BrowserAttachedPageResult
+	snapshotResult           tools.BrowserSnapshotResult
+	navigateResult           tools.BrowserNavigationResult
+	tabsResult               tools.BrowserTabsListResult
+	err                      error
 }
 
 func (s stubPlaywrightClient) ReadPage(_ context.Context, url string) (tools.BrowserPageReadResult, error) {
@@ -52,6 +69,21 @@ func (s stubPlaywrightClient) ReadPage(_ context.Context, url string) (tools.Bro
 	result := s.readResult
 	if result.URL == "" {
 		result.URL = url
+	}
+	return result, nil
+}
+
+func (s stubPlaywrightClient) ReadPageAttached(_ context.Context, url string, attach tools.BrowserAttachConfig) (tools.BrowserPageReadResult, error) {
+	if s.err != nil {
+		return tools.BrowserPageReadResult{}, s.err
+	}
+	result := s.readAttachedResult
+	if result.URL == "" {
+		result.URL = url
+	}
+	result.Attached = true
+	if result.BrowserKind == "" {
+		result.BrowserKind = attach.BrowserKind
 	}
 	return result, nil
 }
@@ -74,48 +106,11 @@ func (s stubPlaywrightClient) SearchPage(_ context.Context, url, query string, l
 	return result, nil
 }
 
-func (s stubPlaywrightClient) InteractPage(_ context.Context, url string, _ []map[string]any) (tools.BrowserPageInteractResult, error) {
-	if s.err != nil {
-		return tools.BrowserPageInteractResult{}, s.err
-	}
-	result := s.interactResult
-	if result.URL == "" {
-		result.URL = url
-	}
-	return result, nil
-}
-
-func (s stubPlaywrightClient) StructuredDOM(_ context.Context, url string) (tools.BrowserStructuredDOMResult, error) {
-	if s.err != nil {
-		return tools.BrowserStructuredDOMResult{}, s.err
-	}
-	result := s.structuredResult
-	if result.URL == "" {
-		result.URL = url
-	}
-	return result, nil
-}
-
-func (s stubPlaywrightClient) ReadPageAttached(_ context.Context, url string, attach tools.BrowserAttachConfig) (tools.BrowserPageReadResult, error) {
-	if s.err != nil {
-		return tools.BrowserPageReadResult{}, s.err
-	}
-	result := s.attachedRead
-	if result.URL == "" {
-		result.URL = url
-	}
-	result.Attached = true
-	if result.BrowserKind == "" {
-		result.BrowserKind = attach.BrowserKind
-	}
-	return result, nil
-}
-
 func (s stubPlaywrightClient) SearchPageAttached(_ context.Context, url, query string, limit int, attach tools.BrowserAttachConfig) (tools.BrowserPageSearchResult, error) {
 	if s.err != nil {
 		return tools.BrowserPageSearchResult{}, s.err
 	}
-	result := s.attachedSearch
+	result := s.searchAttachedResult
 	if result.URL == "" {
 		result.URL = url
 	}
@@ -133,11 +128,22 @@ func (s stubPlaywrightClient) SearchPageAttached(_ context.Context, url, query s
 	return result, nil
 }
 
+func (s stubPlaywrightClient) InteractPage(_ context.Context, url string, _ []map[string]any) (tools.BrowserPageInteractResult, error) {
+	if s.err != nil {
+		return tools.BrowserPageInteractResult{}, s.err
+	}
+	result := s.interactResult
+	if result.URL == "" {
+		result.URL = url
+	}
+	return result, nil
+}
+
 func (s stubPlaywrightClient) InteractPageAttached(_ context.Context, url string, _ []map[string]any, attach tools.BrowserAttachConfig) (tools.BrowserPageInteractResult, error) {
 	if s.err != nil {
 		return tools.BrowserPageInteractResult{}, s.err
 	}
-	result := s.attachedInteract
+	result := s.interactAttachedResult
 	if result.URL == "" {
 		result.URL = url
 	}
@@ -148,11 +154,22 @@ func (s stubPlaywrightClient) InteractPageAttached(_ context.Context, url string
 	return result, nil
 }
 
+func (s stubPlaywrightClient) StructuredDOM(_ context.Context, url string) (tools.BrowserStructuredDOMResult, error) {
+	if s.err != nil {
+		return tools.BrowserStructuredDOMResult{}, s.err
+	}
+	result := s.structuredResult
+	if result.URL == "" {
+		result.URL = url
+	}
+	return result, nil
+}
+
 func (s stubPlaywrightClient) StructuredDOMAttached(_ context.Context, url string, attach tools.BrowserAttachConfig) (tools.BrowserStructuredDOMResult, error) {
 	if s.err != nil {
 		return tools.BrowserStructuredDOMResult{}, s.err
 	}
-	result := s.attachedDOM
+	result := s.structuredAttachedResult
 	if result.URL == "" {
 		result.URL = url
 	}
@@ -255,6 +272,9 @@ func TestPlaywrightNoopClientAndValidators(t *testing.T) {
 	if err := NewStructuredDOMTool().Validate(map[string]any{"url": "https://example.com"}); err != nil {
 		t.Fatalf("expected structured_dom validate to pass, got %v", err)
 	}
+	if err := NewPageReadTool().Validate(map[string]any{"url": "https://example.com", "attach": map[string]any{"mode": "cdp", "browser_kind": "chrome", "endpoint_url": "http://example.com:9222"}}); err == nil {
+		t.Fatal("expected page_read validate to reject non-loopback attach endpoint")
+	}
 }
 
 func TestPageSearchToolExecuteSuccess(t *testing.T) {
@@ -313,29 +333,61 @@ func TestStructuredDOMToolExecuteSuccess(t *testing.T) {
 }
 
 func TestPageToolsExecuteAttachedBrowserSuccess(t *testing.T) {
-	client := stubPlaywrightClient{
-		attachedRead:     tools.BrowserPageReadResult{Title: "Attached Read", TextContent: "attached text", Source: "playwright_worker_cdp"},
-		attachedSearch:   tools.BrowserPageSearchResult{Matches: []string{"attached match"}, MatchCount: 1, Source: "playwright_worker_cdp"},
-		attachedInteract: tools.BrowserPageInteractResult{Title: "Attached Interact", TextContent: "clicked", ActionsApplied: 1, Source: "playwright_worker_cdp"},
-		attachedDOM:      tools.BrowserStructuredDOMResult{Title: "Attached DOM", Headings: []string{"Heading"}, Links: []string{"Docs"}, Buttons: []string{"Submit"}, Inputs: []string{"search"}, Source: "playwright_worker_cdp"},
-	}
-	execCtx := &tools.ToolExecuteContext{Playwright: client}
+	execCtx := &tools.ToolExecuteContext{Playwright: stubPlaywrightClient{
+		readAttachedResult: tools.BrowserPageReadResult{
+			BrowserExecutionMetadata: tools.BrowserExecutionMetadata{Attached: true, BrowserKind: "chrome"},
+			Title:                    "Attached Read",
+			TextContent:              "attached text",
+			MIMEType:                 "text/html",
+			TextType:                 "text/html",
+			Source:                   "playwright_worker_cdp",
+		},
+		searchAttachedResult: tools.BrowserPageSearchResult{
+			BrowserExecutionMetadata: tools.BrowserExecutionMetadata{Attached: true, BrowserKind: "chrome"},
+			Matches:                  []string{"attached match"},
+			MatchCount:               1,
+			Source:                   "playwright_worker_cdp",
+		},
+		interactAttachedResult: tools.BrowserPageInteractResult{
+			BrowserExecutionMetadata: tools.BrowserExecutionMetadata{Attached: true, BrowserKind: "chrome"},
+			Title:                    "Attached Interact",
+			TextContent:              "clicked",
+			ActionsApplied:           1,
+			Source:                   "playwright_worker_cdp",
+		},
+		structuredAttachedResult: tools.BrowserStructuredDOMResult{
+			BrowserExecutionMetadata: tools.BrowserExecutionMetadata{Attached: true, BrowserKind: "chrome"},
+			Title:                    "Attached DOM",
+			Headings:                 []string{"Heading"},
+			Links:                    []string{"Docs"},
+			Buttons:                  []string{"Submit"},
+			Inputs:                   []string{"search"},
+			Source:                   "playwright_worker_cdp",
+		},
+	}}
 
-	readResult, err := NewPageReadTool().Execute(context.Background(), execCtx, map[string]any{"url": "https://example.com/docs", "attach": attachedBrowserInput()["attach"]})
-	if err != nil || readResult.RawOutput["attached"] != true {
-		t.Fatalf("expected attached page_read result, got result=%+v err=%v", readResult, err)
+	readInput := map[string]any{"url": "https://example.com/docs", "attach": attachedBrowserInput()["attach"]}
+	readResult, err := NewPageReadTool().Execute(context.Background(), execCtx, readInput)
+	if err != nil || readResult.SummaryOutput["title"] != "Attached Read" {
+		t.Fatalf("unexpected attached page_read result=%+v err=%v", readResult, err)
 	}
-	searchResult, err := NewPageSearchTool().Execute(context.Background(), execCtx, map[string]any{"url": "https://example.com/docs", "query": "attached", "attach": attachedBrowserInput()["attach"]})
-	if err != nil || searchResult.RawOutput["attached"] != true {
-		t.Fatalf("expected attached page_search result, got result=%+v err=%v", searchResult, err)
+
+	searchInput := map[string]any{"url": "https://example.com/docs", "query": "attached", "attach": attachedBrowserInput()["attach"]}
+	searchResult, err := NewPageSearchTool().Execute(context.Background(), execCtx, searchInput)
+	if err != nil || searchResult.RawOutput["match_count"] != 1 {
+		t.Fatalf("unexpected attached page_search result=%+v err=%v", searchResult, err)
 	}
-	interactResult, err := NewPageInteractTool().Execute(context.Background(), execCtx, map[string]any{"url": "https://example.com/docs", "actions": []any{map[string]any{"type": "click", "selector": "button"}}, "attach": attachedBrowserInput()["attach"]})
-	if err != nil || interactResult.RawOutput["attached"] != true {
-		t.Fatalf("expected attached page_interact result, got result=%+v err=%v", interactResult, err)
+
+	interactInput := map[string]any{"url": "https://example.com/docs", "actions": []any{map[string]any{"type": "click", "selector": "button"}}, "attach": attachedBrowserInput()["attach"]}
+	interactResult, err := NewPageInteractTool().Execute(context.Background(), execCtx, interactInput)
+	if err != nil || interactResult.RawOutput["actions_applied"] != 1 {
+		t.Fatalf("unexpected attached page_interact result=%+v err=%v", interactResult, err)
 	}
-	domResult, err := NewStructuredDOMTool().Execute(context.Background(), execCtx, map[string]any{"url": "https://example.com/docs", "attach": attachedBrowserInput()["attach"]})
-	if err != nil || domResult.RawOutput["attached"] != true {
-		t.Fatalf("expected attached structured_dom result, got result=%+v err=%v", domResult, err)
+
+	domInput := map[string]any{"url": "https://example.com/docs", "attach": attachedBrowserInput()["attach"]}
+	domResult, err := NewStructuredDOMTool().Execute(context.Background(), execCtx, domInput)
+	if err != nil || domResult.SummaryOutput["heading_count"] != 1 {
+		t.Fatalf("unexpected attached structured_dom result=%+v err=%v", domResult, err)
 	}
 }
 
@@ -431,6 +483,9 @@ func TestBrowserAttachToolsValidateAttachContract(t *testing.T) {
 	if err := NewBrowserAttachCurrentTool().Validate(map[string]any{}); err == nil {
 		t.Fatal("expected browser_attach_current validate to fail without attach")
 	}
+	if err := NewBrowserAttachCurrentTool().Validate(attachedBrowserInputWithoutBrowserKind()); err != nil {
+		t.Fatalf("expected browser_attach_current validate to allow omitted browser_kind, got %v", err)
+	}
 	if err := NewBrowserSnapshotTool().Validate(attachedBrowserInputWithoutTarget()); err != nil {
 		t.Fatalf("expected browser_snapshot validate to allow attach without target filters, got %v", err)
 	}
@@ -444,6 +499,42 @@ func TestBrowserAttachToolsValidateAttachContract(t *testing.T) {
 	interactInput["actions"] = []any{map[string]any{"selector": "a.next"}}
 	if err := NewBrowserInteractTool().Validate(interactInput); err == nil {
 		t.Fatal("expected browser_interact validate to require action type")
+	}
+}
+
+func TestAttachConfigFromInputAllowsLoopbackEndpointsOnly(t *testing.T) {
+	tests := []struct {
+		name        string
+		endpointURL string
+		wantErr     bool
+	}{
+		{name: "empty endpoint", endpointURL: "", wantErr: false},
+		{name: "localhost endpoint", endpointURL: "http://localhost:9222", wantErr: false},
+		{name: "ipv4 loopback endpoint", endpointURL: "http://127.0.0.1:9222", wantErr: false},
+		{name: "ipv4 loopback range endpoint", endpointURL: "http://127.1.2.3:9222", wantErr: false},
+		{name: "ipv6 loopback endpoint", endpointURL: "http://[::1]:9222", wantErr: false},
+		{name: "websocket loopback endpoint", endpointURL: "ws://127.0.0.1:9222/devtools/browser/demo", wantErr: false},
+		{name: "private network endpoint", endpointURL: "http://192.168.1.10:9222", wantErr: true},
+		{name: "public hostname endpoint", endpointURL: "http://example.com:9222", wantErr: true},
+		{name: "unsupported scheme endpoint", endpointURL: "ftp://127.0.0.1:9222", wantErr: true},
+		{name: "missing host endpoint", endpointURL: "http:///devtools/browser/demo", wantErr: true},
+		{name: "invalid endpoint", endpointURL: "://bad", wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := attachedBrowserInputWithEndpoint(test.endpointURL)
+			if test.endpointURL == "" {
+				input = attachedBrowserInputWithoutTarget()
+			}
+			_, err := attachConfigFromInput(input)
+			if test.wantErr && err == nil {
+				t.Fatalf("expected endpoint %q to be rejected", test.endpointURL)
+			}
+			if !test.wantErr && err != nil {
+				t.Fatalf("expected endpoint %q to be allowed, got %v", test.endpointURL, err)
+			}
+		})
 	}
 }
 

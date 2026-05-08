@@ -38,24 +38,6 @@ export type ShellBallTransitionResult =
       autoAdvanceMs?: never;
     };
 
-export type ShellBallPanelMode = "hidden" | "peek" | "compact" | "full";
-
-export type ShellBallBadgeTone = "status" | "intent_confirm" | "processing" | "waiting_auth";
-
-export type ShellBallDemoViewModel = {
-  badgeTone: ShellBallBadgeTone;
-  badgeLabel: string;
-  title: string;
-  subtitle: string;
-  helperText: string;
-  panelMode: ShellBallPanelMode;
-  showRiskBlock: boolean;
-  riskTitle?: string;
-  riskText?: string;
-  showVoiceHint: boolean;
-  voiceHintText?: string;
-};
-
 export type ShellBallPanelSection = "badge" | "title" | "subtitle" | "helperText" | "risk" | "voiceHint";
 
 export type ShellBallAccentTone = "slate" | "sky" | "teal" | "amber";

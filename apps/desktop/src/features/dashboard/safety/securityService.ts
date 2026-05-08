@@ -1,6 +1,5 @@
 import type {
   AgentSecurityAuditListParams,
-  AgentSecurityAuditListResult,
   AgentSecurityApprovalRespondResult,
   AgentSecurityPendingListParams,
   AgentSecurityPendingListResult,
@@ -8,7 +7,6 @@ import type {
   AgentSecurityRestoreApplyResult,
   AgentSecurityRestorePointsListParams,
   AgentSecurityRestoreRespondResult,
-  AgentSecurityRestorePointsListResult,
   AgentSecurityRespondParams,
   AgentSecurityRespondResult,
   AgentSecuritySummaryGetParams,
@@ -31,16 +29,8 @@ import {
   respondSecurityDetailed,
 } from "@/rpc/methods";
 import { loadTaskDetailData } from "../tasks/taskPage.service";
-import {
-  buildMockRespondResult,
-  buildMockRestoreApplyResult,
-  securityAuditMock,
-  securityPendingMock,
-  securityRestorePointsMock,
-  securitySummaryMock,
-} from "./securityModuleMock";
 
-export type SecurityModuleSource = "rpc" | "mock";
+export type SecurityModuleSource = "rpc";
 
 export type SecurityRpcContext = {
   serverTime: string | null;
@@ -92,7 +82,7 @@ export async function loadSecurityFocusedTaskDetail(taskId: string, source: Secu
   if (!normalizedTaskId) {
     return null;
   }
-  const detail = await loadTaskDetailData(normalizedTaskId, source === "mock" ? "mock" : "rpc");
+  const detail = await loadTaskDetailData(normalizedTaskId, source);
   return detail.detail;
 }
 
@@ -115,71 +105,45 @@ function createRequestMeta(): RequestMeta {
   };
 }
 
-export function getInitialSecurityModuleData(): SecurityModuleData {
-  return {
-    summary: securitySummaryMock.summary,
-    pending: securityPendingMock.items,
-    pendingPage: securityPendingMock.page,
-    rpcContext: {
-      serverTime: null,
-      warnings: [],
-    },
-    source: "mock",
-  };
-}
-
-export async function loadSecurityModuleData(source: SecurityModuleSource = "rpc"): Promise<SecurityModuleData> {
-  if (source === "mock") {
-    return getInitialSecurityModuleData();
-  }
-
+export async function loadSecurityModuleData(_source: SecurityModuleSource = "rpc"): Promise<SecurityModuleData> {
   return loadSecurityModuleRpcData();
 }
 
 export async function loadSecurityModuleRpcData(): Promise<SecurityModuleData> {
-  try {
-    const summaryParams: AgentSecuritySummaryGetParams = {
-      request_meta: createRequestMeta(),
-    };
+  const summaryParams: AgentSecuritySummaryGetParams = {
+    request_meta: createRequestMeta(),
+  };
 
-    const pendingParams: AgentSecurityPendingListParams = {
-      request_meta: createRequestMeta(),
-      limit: 20,
-      offset: 0,
-    };
+  const pendingParams: AgentSecurityPendingListParams = {
+    request_meta: createRequestMeta(),
+    limit: 20,
+    offset: 0,
+  };
 
-    const [summaryResult, pendingResult] = await Promise.all([
-      getSecuritySummaryDetailed(summaryParams),
-      listSecurityPendingDetailed(pendingParams),
-    ]);
+  const [summaryResult, pendingResult] = await Promise.all([
+    getSecuritySummaryDetailed(summaryParams),
+    listSecurityPendingDetailed(pendingParams),
+  ]);
 
-    const serverTime = pendingResult.meta?.server_time ?? summaryResult.meta?.server_time ?? null;
+  const serverTime = pendingResult.meta?.server_time ?? summaryResult.meta?.server_time ?? null;
 
-    return {
-      summary: summaryResult.data.summary,
-      pending: pendingResult.data.items,
-      pendingPage: pendingResult.data.page,
-      rpcContext: {
-        serverTime,
-        warnings: [...summaryResult.warnings, ...pendingResult.warnings],
-      },
-      source: "rpc",
-    };
-  } catch (error) {
-    if (isRpcChannelUnavailable(error)) {
-      logRpcMockFallback("security module", error);
-      return getInitialSecurityModuleData();
-    }
-
-    throw error;
-  }
+  return {
+    summary: summaryResult.data.summary,
+    pending: pendingResult.data.items,
+    pendingPage: pendingResult.data.page,
+    rpcContext: {
+      serverTime,
+      warnings: [...summaryResult.warnings, ...pendingResult.warnings],
+    },
+    source: "rpc",
+  };
 }
 
 export async function respondToApproval(
   approval: ApprovalRequest,
   decision: ApprovalDecision,
   rememberRule: boolean,
-  source: SecurityModuleSource,
+  _source: SecurityModuleSource,
 ): Promise<SecurityRespondOutcome> {
   const params: AgentSecurityRespondParams = {
     request_meta: createRequestMeta(),
@@ -188,16 +152,6 @@ export async function respondToApproval(
     decision,
     remember_rule: rememberRule,
   };
-
-  if (source === "mock") {
-    return {
-      response: buildMockRespondResult(approval.approval_id, approval.task_id, decision, rememberRule),
-      rpcContext: {
-        serverTime: null,
-        warnings: [],
-      },
-    };
-  }
 
   try {
     const response = await respondSecurityDetailed(params);
@@ -220,7 +174,7 @@ export async function respondToApproval(
 }
 
 export async function loadSecurityPendingApprovals(
-  source: SecurityModuleSource,
+  _source: SecurityModuleSource,
   options?: {
     limit?: number;
     offset?: number;
@@ -229,69 +183,26 @@ export async function loadSecurityPendingApprovals(
   const limit = options?.limit ?? 20;
   const offset = options?.offset ?? 0;
 
-  if (source === "mock") {
-    const pagedItems = securityPendingMock.items.slice(offset, offset + limit);
+  const params: AgentSecurityPendingListParams = {
+    request_meta: createRequestMeta(),
+    limit,
+    offset,
+  };
+  const response = await listSecurityPendingDetailed(params);
 
-    return {
-      items: pagedItems,
-      page: {
-        has_more: offset + pagedItems.length < securityPendingMock.items.length,
-        limit,
-        offset,
-        total: securityPendingMock.items.length,
-      },
-      rpcContext: {
-        serverTime: null,
-        warnings: [],
-      },
-      source: "mock",
-    };
-  }
-
-  try {
-    const params: AgentSecurityPendingListParams = {
-      request_meta: createRequestMeta(),
-      limit,
-      offset,
-    };
-    const response = await listSecurityPendingDetailed(params);
-
-    return {
-      items: response.data.items,
-      page: response.data.page,
-      rpcContext: {
-        serverTime: response.meta?.server_time ?? null,
-        warnings: response.warnings,
-      },
-      source: "rpc",
-    };
-  } catch (error) {
-    if (isRpcChannelUnavailable(error)) {
-      logRpcMockFallback("security pending list", error);
-      const pagedItems = securityPendingMock.items.slice(offset, offset + limit);
-
-      return {
-        items: pagedItems,
-        page: {
-          has_more: offset + pagedItems.length < securityPendingMock.items.length,
-          limit,
-          offset,
-          total: securityPendingMock.items.length,
-        },
-        rpcContext: {
-          serverTime: null,
-          warnings: [],
-        },
-        source: "mock",
-      };
-    }
-
-    throw error;
-  }
+  return {
+    items: response.data.items,
+    page: response.data.page,
+    rpcContext: {
+      serverTime: response.meta?.server_time ?? null,
+      warnings: response.warnings,
+    },
+    source: "rpc",
+  };
 }
 
 export async function loadSecurityRestorePoints(
-  source: SecurityModuleSource,
+  _source: SecurityModuleSource,
   options?: {
     limit?: number;
     offset?: number;
@@ -302,72 +213,27 @@ export async function loadSecurityRestorePoints(
   const offset = options?.offset ?? 0;
   const taskId = options?.taskId?.trim() || undefined;
 
-  if (source === "mock") {
-    const filteredItems = securityRestorePointsMock.items.filter((item) => !taskId || item.task_id === taskId);
-    const pagedItems = filteredItems.slice(offset, offset + limit);
+  const params: AgentSecurityRestorePointsListParams = {
+    request_meta: createRequestMeta(),
+    limit,
+    offset,
+    ...(taskId ? { task_id: taskId } : {}),
+  };
+  const response = await listSecurityRestorePointsDetailed(params);
 
-    return {
-      items: pagedItems,
-      page: {
-        has_more: offset + pagedItems.length < filteredItems.length,
-        limit,
-        offset,
-        total: filteredItems.length,
-      },
-      rpcContext: {
-        serverTime: null,
-        warnings: [],
-      },
-      source: "mock",
-    };
-  }
-
-  try {
-    const params: AgentSecurityRestorePointsListParams = {
-      request_meta: createRequestMeta(),
-      limit,
-      offset,
-      ...(taskId ? { task_id: taskId } : {}),
-    };
-    const response = await listSecurityRestorePointsDetailed(params);
-
-    return {
-      items: response.data.items,
-      page: response.data.page,
-      rpcContext: {
-        serverTime: response.meta?.server_time ?? null,
-        warnings: response.warnings,
-      },
-      source: "rpc",
-    };
-  } catch (error) {
-    if (isRpcChannelUnavailable(error)) {
-      logRpcMockFallback("security restore points", error);
-      const filteredItems = securityRestorePointsMock.items.filter((item) => !taskId || item.task_id === taskId);
-      const pagedItems = filteredItems.slice(offset, offset + limit);
-
-      return {
-        items: pagedItems,
-        page: {
-          has_more: offset + pagedItems.length < filteredItems.length,
-          limit,
-          offset,
-          total: filteredItems.length,
-        },
-        rpcContext: {
-          serverTime: null,
-          warnings: [],
-        },
-        source: "mock",
-      };
-    }
-
-    throw error;
-  }
+  return {
+    items: response.data.items,
+    page: response.data.page,
+    rpcContext: {
+      serverTime: response.meta?.server_time ?? null,
+      warnings: response.warnings,
+    },
+    source: "rpc",
+  };
 }
 
 export async function loadSecurityAuditRecords(
-  source: SecurityModuleSource,
+  _source: SecurityModuleSource,
   taskId?: string | null,
   options?: {
     limit?: number;
@@ -378,100 +244,39 @@ export async function loadSecurityAuditRecords(
   const offset = options?.offset ?? 0;
   const normalizedTaskId = taskId?.trim() || null;
 
-  if (source === "mock") {
-    const filteredItems = normalizedTaskId
-      ? securityAuditMock.items.filter((item) => item.task_id === normalizedTaskId)
-      : securityAuditMock.items;
-    const pagedItems = filteredItems.slice(offset, offset + limit);
-
-    return {
-      items: pagedItems,
-      page: {
-        has_more: offset + pagedItems.length < filteredItems.length,
-        limit,
-        offset,
-        total: filteredItems.length,
-      },
-      rpcContext: {
-        serverTime: null,
-        warnings: [],
-      },
-      source: "mock",
-      taskId: normalizedTaskId,
-    };
+  if (!normalizedTaskId) {
+    throw new Error("Security audit list requires task context in RPC mode.");
   }
 
-  try {
-    if (!normalizedTaskId) {
-      throw new Error("Security audit list requires task context in RPC mode.");
-    }
+  const params: AgentSecurityAuditListParams = {
+    request_meta: createRequestMeta(),
+    task_id: normalizedTaskId,
+    limit,
+    offset,
+  };
+  const response = await listSecurityAuditDetailed(params);
 
-    const params: AgentSecurityAuditListParams = {
-      request_meta: createRequestMeta(),
-      task_id: normalizedTaskId,
-      limit,
-      offset,
-    };
-    const response = await listSecurityAuditDetailed(params);
-
-    return {
-      items: response.data.items,
-      page: response.data.page,
-      rpcContext: {
-        serverTime: response.meta?.server_time ?? null,
-        warnings: response.warnings,
-      },
-      source: "rpc",
-      taskId: normalizedTaskId,
-    };
-  } catch (error) {
-    if (isRpcChannelUnavailable(error)) {
-      logRpcMockFallback("security audit list", error);
-      const filteredItems = normalizedTaskId
-        ? securityAuditMock.items.filter((item) => item.task_id === normalizedTaskId)
-        : securityAuditMock.items;
-      const pagedItems = filteredItems.slice(offset, offset + limit);
-
-      return {
-        items: pagedItems,
-        page: {
-          has_more: offset + pagedItems.length < filteredItems.length,
-          limit,
-          offset,
-          total: filteredItems.length,
-        },
-        rpcContext: {
-          serverTime: null,
-          warnings: [],
-        },
-        source: "mock",
-        taskId: normalizedTaskId,
-      };
-    }
-
-    throw error;
-  }
+  return {
+    items: response.data.items,
+    page: response.data.page,
+    rpcContext: {
+      serverTime: response.meta?.server_time ?? null,
+      warnings: response.warnings,
+    },
+    source: "rpc",
+    taskId: normalizedTaskId,
+  };
 }
 
 export async function applySecurityRestorePoint(
   restorePoint: RecoveryPoint,
-  source: SecurityModuleSource,
+  _source: SecurityModuleSource,
 ): Promise<SecurityRestoreApplyOutcome> {
   const params: AgentSecurityRestoreApplyParams = {
     request_meta: createRequestMeta(),
     task_id: restorePoint.task_id,
     recovery_point_id: restorePoint.recovery_point_id,
   };
-
-  if (source === "mock") {
-    return {
-      response: buildMockRestoreApplyResult(restorePoint.recovery_point_id, restorePoint.task_id),
-      rpcContext: {
-        serverTime: null,
-        warnings: [],
-      },
-    };
-  }
 
   try {
     const response = await applySecurityRestoreDetailed(params);

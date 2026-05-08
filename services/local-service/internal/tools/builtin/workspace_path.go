@@ -20,9 +20,7 @@ func normalizeWorkspaceToolPath(pathValue string) string {
 	if normalized == "workspace" {
 		return "."
 	}
-	if strings.HasPrefix(normalized, "workspace/") {
-		normalized = strings.TrimPrefix(normalized, "workspace/")
-	}
+	normalized = strings.TrimPrefix(normalized, "workspace/")
 
 	cleaned := path.Clean(normalized)
 	if cleaned == "." {

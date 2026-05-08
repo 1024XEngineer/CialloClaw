@@ -1,4 +1,5 @@
 use super::types::{SelectionPageContextPayload, SelectionSnapshotPayload};
+use crate::internal_windows::{INTERNAL_PINNED_WINDOW_PREFIX, INTERNAL_WINDOW_LABELS};
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
 use std::thread;
@@ -17,8 +18,8 @@ use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTextPattern, UIA_TextPatternId,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetAsyncKeyState, VK_CONTROL, VK_DOWN, VK_END, VK_HOME, VK_LEFT, VK_NEXT, VK_PRIOR, VK_RIGHT,
-    VK_SHIFT, VK_UP,
+    GetAsyncKeyState, VK_BACK, VK_CONTROL, VK_DELETE, VK_DOWN, VK_END, VK_HOME, VK_LEFT,
+    VK_NEXT, VK_PRIOR, VK_RIGHT, VK_SHIFT, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetAncestor, GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW,
@@ -33,14 +34,6 @@ const BROWSER_KIND_EDGE: &str = "edge";
 const BROWSER_KIND_OTHER_BROWSER: &str = "other_browser";
 const BROWSER_KIND_NON_BROWSER: &str = "non_browser";
 const SHELL_BALL_SELECTION_SNAPSHOT_EVENT: &str = "desktop-shell-ball:selection-snapshot";
-const SHELL_BALL_WINDOW_LABELS: [&str; 5] = [
-    "shell-ball",
-    "shell-ball-bubble",
-    "shell-ball-input",
-    "shell-ball-voice",
-    "onboarding",
-];
-const SHELL_BALL_PINNED_WINDOW_PREFIX: &str = "shell-ball-bubble-pinned-";
 const SHELL_BALL_SELECTION_MOUSE_DELAY_MS: u64 = 100;
 const SHELL_BALL_SELECTION_KEYBOARD_DELAY_MS: u64 = 80;
 
@@ -186,6 +179,9 @@ unsafe extern "system" fn shell_ball_selection_mouse_hook(
     w_param: WPARAM,
     l_param: LPARAM,
 ) -> LRESULT {
+    // Right click should keep the current selection affordance alive. The next
+    // left click will re-probe the selection and clear shell-ball alert state
+    // if the user no longer has a live selection.
     if n_code >= 0 && w_param.0 as u32 == WM_LBUTTONUP {
         schedule_selection_probe(SHELL_BALL_SELECTION_MOUSE_DELAY_MS);
     }
@@ -211,6 +207,10 @@ unsafe extern "system" fn shell_ball_selection_keyboard_hook(
 fn should_probe_selection_from_key_event(vk_code: u32) -> bool {
     let ctrl_down = unsafe { (GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0 };
     let shift_down = unsafe { (GetAsyncKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0 };
+
+    if vk_code == VK_BACK.0 as u32 || vk_code == VK_DELETE.0 as u32 {
+        return true;
+    }
 
     if ctrl_down && vk_code == b'A' as u32 {
         return true;
@@ -371,7 +371,7 @@ fn read_text_selection(element: &IUIAutomationElement) -> Result<String, String>
 fn is_shell_ball_cluster_window(app: &AppHandle, hwnd: HWND) -> bool {
     let root_window = get_root_window(hwnd);
 
-    for label in SHELL_BALL_WINDOW_LABELS {
+    for label in INTERNAL_WINDOW_LABELS {
         let Some(window) = app.get_webview_window(label) else {
             continue;
         };
@@ -386,7 +386,7 @@ fn is_shell_ball_cluster_window(app: &AppHandle, hwnd: HWND) -> bool {
     }
 
     for window in app.webview_windows().values() {
-        if !window.label().starts_with(SHELL_BALL_PINNED_WINDOW_PREFIX) {
+        if !window.label().starts_with(INTERNAL_PINNED_WINDOW_PREFIX) {
             continue;
         }
 

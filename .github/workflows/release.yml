@@ -1,0 +1,139 @@
+name: Desktop Release
+
+run-name: >-
+  ${{
+    github.ref_type == 'tag'
+      && format('Release {0}', github.ref_name)
+      || 'Tip Build'
+  }}
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/main' }}
+
+jobs:
+  release-windows:
+    if: github.ref_type == 'tag' || github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out the target commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python ./.github/scripts/desktop_release.py resolve-metadata
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.6.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Restore Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri -> target
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.0"
+          cache-dependency-path: go.sum
+
+      - name: Install workspace dependencies
+        shell: bash
+        run: pnpm install --frozen-lockfile
+
+      - name: Rewrite version manifests
+        if: steps.meta.outputs.manifest_version != ''
+        shell: bash
+        env:
+          MANIFEST_VERSION: ${{ steps.meta.outputs.manifest_version }}
+        run: python ./.github/scripts/desktop_release.py rewrite-version-manifests
+
+      - name: Verify version rewrite
+        if: steps.meta.outputs.manifest_version != ''
+        shell: bash
+        env:
+          MANIFEST_VERSION: ${{ steps.meta.outputs.manifest_version }}
+        run: python ./.github/scripts/desktop_release.py verify-version-manifests
+
+      - name: Run release checks
+        shell: bash
+        run: |
+          pnpm --dir apps/desktop lint
+          pnpm --dir apps/desktop typecheck
+          pnpm --dir apps/desktop test:dashboard
+          pnpm --dir apps/desktop test:memory
+
+      - name: Publish release (tag)
+        if: steps.meta.outputs.release_mode == 'tag'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          tauriScript: pnpm exec tauri
+          tagName: ${{ github.ref_name }}
+          releaseName: ${{ github.ref_name }}
+          prerelease: ${{ steps.meta.outputs.release_is_prerelease == 'true' }}
+          releaseAssetNamePattern: ${{ steps.meta.outputs.release_asset_name_pattern }}
+          generateReleaseNotes: true
+          retryAttempts: 4
+          args: --bundles ${{ steps.meta.outputs.release_bundles }}
+
+      - name: Publish release (tip)
+        if: steps.meta.outputs.release_mode == 'tip'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop
+          tauriScript: pnpm exec tauri
+          tagName: tip
+          releaseName: tip
+          releaseAssetNamePattern: ${{ steps.meta.outputs.release_asset_name_pattern }}
+          prerelease: true
+          retryAttempts: 4
+          args: --bundles ${{ steps.meta.outputs.release_bundles }}
+
+      - name: Repoint tip tag to the published commit
+        if: steps.meta.outputs.release_mode == 'tip'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG_NAME: tip
+          RELEASE_TARGET_SHA: ${{ github.sha }}
+        run: python ./.github/scripts/desktop_release.py repoint-release-tag

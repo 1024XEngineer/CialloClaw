@@ -172,7 +172,7 @@ func builtinCatalogEntries() []CatalogEntry {
 			Source:       "builtin",
 			Entry:        "builtin://plugin/playwright",
 			Enabled:      true,
-			Capabilities: []string{"page_read", "page_search", "page_interact", "structured_dom"},
+			Capabilities: []string{"page_read", "page_search", "page_interact", "structured_dom", "browser_attach_current", "browser_snapshot", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact"},
 			Permissions:  []string{"webpage_read", "webpage_interact"},
 			RuntimeRefs: []RuntimeRef{
 				{Name: "playwright_worker", Kind: RuntimeKindWorker, Transport: "worker_process"},
@@ -364,10 +364,7 @@ func cloneMetricSnapshots(items []MetricSnapshot) []MetricSnapshot {
 	if len(items) == 0 {
 		return nil
 	}
-	result := make([]MetricSnapshot, 0, len(items))
-	for _, item := range items {
-		result = append(result, item)
-	}
+	result := append([]MetricSnapshot(nil), items...)
 	return result
 }
 

@@ -3,6 +3,8 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -42,6 +44,146 @@ type flushRecorder struct {
 func (r *flushRecorder) Flush() {
 	if r.onFlush != nil {
 		r.onFlush()
+	}
+}
+
+func TestHandleStreamConnServesJSONRPCSuccess(t *testing.T) {
+	server := newTestServer()
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+
+	go server.handleStreamConn(left)
+
+	request := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-stream-success"`),
+		Method:  "agent.settings.get",
+		Params:  mustMarshal(t, map[string]any{"scope": "all"}),
+	}
+	if err := json.NewEncoder(right).Encode(request); err != nil {
+		t.Fatalf("encode stream request: %v", err)
+	}
+
+	var response successEnvelope
+	if err := json.NewDecoder(right).Decode(&response); err != nil {
+		t.Fatalf("decode stream response: %v", err)
+	}
+	if string(response.ID) != `"req-stream-success"` || response.Result.Meta.ServerTime == "" {
+		t.Fatalf("expected stream success envelope with request id and server time, got %+v", response)
+	}
+	if response.Result.Data == nil {
+		t.Fatalf("expected settings payload in stream response, got %+v", response)
+	}
+}
+
+func TestHandleStreamConnSkipsBufferedLiveRuntimeReplay(t *testing.T) {
+	modelClient := &stubLoopModelClient{
+		generateToolWait: make(chan struct{}),
+		generateToolSeen: make(chan struct{}),
+	}
+	server := newTestServerWithModelClient(modelClient)
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+
+	go server.handleStreamConn(left)
+
+	encoder := json.NewEncoder(right)
+	decoder := json.NewDecoder(right)
+	request := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-stream-runtime-no-replay"`),
+		Method:  "agent.input.submit",
+		Params: mustMarshal(t, map[string]any{
+			"session_id": "sess_stream_runtime_no_replay",
+			"input": map[string]any{
+				"type": "text",
+				"text": "inspect this workspace and answer directly",
+			},
+			"options": map[string]any{
+				"confirm_required": false,
+			},
+		}),
+	}
+
+	if err := encoder.Encode(request); err != nil {
+		t.Fatalf("encode stream request: %v", err)
+	}
+	if err := right.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("set live notification deadline: %v", err)
+	}
+
+	var liveNotification notificationEnvelope
+	if err := decoder.Decode(&liveNotification); err != nil {
+		t.Fatalf("decode live runtime notification: %v", err)
+	}
+	if !isLiveRuntimeMethod(liveNotification.Method) {
+		t.Fatalf("expected live runtime notification before response, got %+v", liveNotification)
+	}
+	if err := right.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear live notification deadline: %v", err)
+	}
+
+	close(modelClient.generateToolWait)
+
+	if err := right.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("set response deadline: %v", err)
+	}
+	responseSeen := false
+	for index := 0; index < 8; index++ {
+		var envelope map[string]any
+		if err := decoder.Decode(&envelope); err != nil {
+			t.Fatalf("decode response envelope: %v", err)
+		}
+		if envelope["id"] == nil {
+			continue
+		}
+		responseSeen = true
+		break
+	}
+	if !responseSeen {
+		t.Fatal("expected final response after live runtime notification")
+	}
+
+	if err := right.SetReadDeadline(time.Now().Add(250 * time.Millisecond)); err != nil {
+		t.Fatalf("set replay deadline: %v", err)
+	}
+	for {
+		var replayed notificationEnvelope
+		if err := decoder.Decode(&replayed); err != nil {
+			break
+		}
+		if isLiveRuntimeMethod(replayed.Method) {
+			t.Fatalf("expected drain replay to skip already streamed runtime notification, got %+v", replayed)
+		}
+	}
+	if err := right.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear replay deadline: %v", err)
+	}
+}
+
+func TestHandleStreamConnReturnsDecodeErrorForMalformedPayload(t *testing.T) {
+	server := newTestServer()
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+
+	go server.handleStreamConn(left)
+
+	if _, err := right.Write([]byte("{bad json\n")); err != nil {
+		t.Fatalf("write malformed stream payload: %v", err)
+	}
+
+	var response errorEnvelope
+	if err := json.NewDecoder(right).Decode(&response); err != nil {
+		t.Fatalf("decode stream error response: %v", err)
+	}
+	if response.Error.Code != errInvalidParams || response.Error.Message != "INVALID_PARAMS" {
+		t.Fatalf("expected invalid params error envelope, got %+v", response)
+	}
+	if response.Error.Data.TraceID != "trace_rpc_decode" {
+		t.Fatalf("expected decode trace id, got %+v", response.Error.Data)
 	}
 }
 
@@ -244,6 +386,488 @@ func TestServerStartHandlesShutdownAndImmediateListenErrors(t *testing.T) {
 	defer errorCancel()
 	if err := errorServer.Start(errorCtx); err == nil {
 		t.Fatal("expected invalid listen address to surface start error")
+	}
+}
+
+func TestServerShutdownClosesActiveStreamHandlers(t *testing.T) {
+	server := newTestServer()
+	left, right := net.Pipe()
+	defer right.Close()
+
+	done := make(chan struct{})
+	go func() {
+		server.handleStreamConn(left)
+		close(done)
+	}()
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for {
+		server.streamMu.Lock()
+		tracked := len(server.streamConns)
+		server.streamMu.Unlock()
+		if tracked == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("expected stream handler to register active connection")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := server.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown active stream handler: %v", err)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected shutdown to wait for active stream handler exit")
+	}
+}
+
+func TestServerShutdownCancelsNamedPipeRunWithoutParentContextCancellation(t *testing.T) {
+	server := newTestServer()
+	server.transport = "named_pipe"
+	server.debugHTTPServer = nil
+
+	listenerStarted := make(chan struct{})
+	listenerStopped := make(chan struct{})
+	server.serveNamedPipe = func(ctx context.Context, pipeName string, handler func(net.Conn)) error {
+		close(listenerStarted)
+		<-ctx.Done()
+		close(listenerStopped)
+		return nil
+	}
+
+	startErr := make(chan error, 1)
+	go func() {
+		startErr <- server.Start(context.Background())
+	}()
+
+	select {
+	case <-listenerStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected named-pipe listener to start")
+	}
+
+	if err := server.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown named-pipe listener: %v", err)
+	}
+
+	select {
+	case <-listenerStopped:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected shutdown to cancel the named-pipe listener context")
+	}
+
+	select {
+	case err := <-startErr:
+		if err != nil {
+			t.Fatalf("expected Start to return cleanly after direct shutdown, got %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected Start to return after direct shutdown")
+	}
+}
+
+func TestServerShutdownStopsStreamsBeforeDebugHTTPDrainCompletes(t *testing.T) {
+	server := newTestServer()
+
+	requestStarted := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	server.debugHTTPServer = &http.Server{
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			close(requestStarted)
+			<-releaseRequest
+			w.WriteHeader(http.StatusNoContent)
+		}),
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen debug http test server: %v", err)
+	}
+	defer listener.Close()
+
+	serveDone := make(chan error, 1)
+	go func() {
+		serveDone <- server.debugHTTPServer.Serve(listener)
+	}()
+
+	httpErr := make(chan error, 1)
+	go func() {
+		response, err := http.Get("http://" + listener.Addr().String())
+		if response != nil {
+			response.Body.Close()
+		}
+		httpErr <- err
+	}()
+
+	select {
+	case <-requestStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected blocking debug HTTP request to start")
+	}
+
+	left, right := net.Pipe()
+	defer right.Close()
+
+	streamDone := make(chan struct{})
+	go func() {
+		server.handleStreamConn(left)
+		close(streamDone)
+	}()
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for {
+		server.streamMu.Lock()
+		tracked := len(server.streamConns)
+		server.streamMu.Unlock()
+		if tracked == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("expected stream handler to register active connection")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	shutdownDone := make(chan error, 1)
+	go func() {
+		shutdownDone <- server.Shutdown(context.Background())
+	}()
+
+	select {
+	case <-streamDone:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected shutdown to stop active streams before debug HTTP drain completes")
+	}
+
+	close(releaseRequest)
+
+	select {
+	case err := <-shutdownDone:
+		if err != nil {
+			t.Fatalf("shutdown with blocking debug HTTP request: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected shutdown to finish after debug HTTP drain releases")
+	}
+
+	select {
+	case err := <-serveDone:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			t.Fatalf("serve debug http test server: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected debug HTTP server to stop after shutdown")
+	}
+
+	select {
+	case err := <-httpErr:
+		if err != nil {
+			t.Fatalf("debug HTTP request after shutdown: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected debug HTTP client to finish after shutdown")
+	}
+}
+
+func TestHandleStreamConnRejectsNewHandlersDuringShutdown(t *testing.T) {
+	server := newTestServer()
+	server.shuttingDown = true
+	left, right := net.Pipe()
+	defer right.Close()
+
+	done := make(chan struct{})
+	go func() {
+		server.handleStreamConn(left)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected handler to exit immediately once shutdown begins")
+	}
+}
+
+func TestTransportSupervisorCancelsShutdownAndJoinsWorkers(t *testing.T) {
+	transportErr := errors.New("listen failed")
+	supervisor := newTransportSupervisor(context.Background(), 2)
+	workerExited := make(chan struct{})
+
+	supervisor.Go(func(ctx context.Context) error {
+		<-ctx.Done()
+		close(workerExited)
+		return nil
+	})
+	supervisor.Go(func(context.Context) error {
+		return transportErr
+	})
+
+	shutdownCalled := false
+	err := supervisor.Wait(time.Second, func(context.Context) error {
+		shutdownCalled = true
+		return nil
+	})
+	if !errors.Is(err, transportErr) {
+		t.Fatalf("expected transport error to win, got %v", err)
+	}
+	if !shutdownCalled {
+		t.Fatal("expected shutdown to run before Wait returns")
+	}
+	select {
+	case <-workerExited:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected sibling worker to exit before Wait returns")
+	}
+}
+
+func TestTransportSupervisorReturnsTimeoutWhenWorkerDoesNotExit(t *testing.T) {
+	supervisor := newTransportSupervisor(context.Background(), 2)
+	releaseWorker := make(chan struct{})
+	workerExited := make(chan struct{})
+
+	supervisor.Go(func(context.Context) error {
+		<-releaseWorker
+		close(workerExited)
+		return nil
+	})
+	supervisor.Go(func(context.Context) error {
+		return errors.New("listen failed")
+	})
+
+	err := supervisor.Wait(25*time.Millisecond, func(context.Context) error {
+		return nil
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected bounded shutdown timeout, got %v", err)
+	}
+
+	close(releaseWorker)
+	select {
+	case <-workerExited:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected stalled worker to exit once released")
+	}
+}
+
+func TestServerStartFencesReuseAfterTransportTimeout(t *testing.T) {
+	server := newTestServer()
+	server.transport = "named_pipe"
+	server.debugHTTPServer = nil
+	server.transportShutdownTimeout = 25 * time.Millisecond
+
+	startCalls := make(chan struct{}, 2)
+	releaseListener := make(chan struct{})
+	defer close(releaseListener)
+	server.serveNamedPipe = func(context.Context, string, func(net.Conn)) error {
+		startCalls <- struct{}{}
+		<-releaseListener
+		return nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	startErr := make(chan error, 1)
+	go func() {
+		startErr <- server.Start(ctx)
+	}()
+
+	select {
+	case <-startCalls:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected named-pipe listener to start")
+	}
+	cancel()
+
+	select {
+	case err := <-startErr:
+		if !errors.Is(err, errTransportShutdownIncomplete) || !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("expected incomplete shutdown timeout to fence server reuse, got %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected Start to return once transport shutdown times out")
+	}
+
+	reuseErr := make(chan error, 1)
+	go func() {
+		reuseErr <- server.Start(context.Background())
+	}()
+	select {
+	case err := <-reuseErr:
+		if !errors.Is(err, errTransportShutdownIncomplete) {
+			t.Fatalf("expected terminal server reuse to fail, got %v", err)
+		}
+	case <-startCalls:
+		t.Fatal("expected terminal server to reject reuse before starting transports")
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected terminal server reuse to return without blocking")
+	}
+}
+
+func TestServerStartRejectsConcurrentServeRun(t *testing.T) {
+	server := newTestServer()
+	server.transport = "named_pipe"
+	server.debugHTTPServer = nil
+
+	started := make(chan struct{}, 1)
+	listenerReleased := make(chan struct{})
+	server.serveNamedPipe = func(ctx context.Context, pipeName string, handler func(net.Conn)) error {
+		started <- struct{}{}
+		<-ctx.Done()
+		<-listenerReleased
+		return nil
+	}
+
+	firstStartErr := make(chan error, 1)
+	go func() {
+		firstStartErr <- server.Start(context.Background())
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected first serve run to start")
+	}
+
+	secondStartErr := make(chan error, 1)
+	go func() {
+		secondStartErr <- server.Start(context.Background())
+	}()
+
+	select {
+	case err := <-secondStartErr:
+		if !errors.Is(err, errServerAlreadyRunning) {
+			t.Fatalf("expected concurrent Start to be rejected, got %v", err)
+		}
+	case <-started:
+		t.Fatal("expected second Start to fail before opening another listener")
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected concurrent Start to return without blocking")
+	}
+
+	close(listenerReleased)
+	if err := server.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown first serve run: %v", err)
+	}
+
+	select {
+	case err := <-firstStartErr:
+		if err != nil {
+			t.Fatalf("expected first serve run to stop cleanly, got %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected first serve run to exit after shutdown")
+	}
+}
+
+func TestServerStartAllowsReuseAfterCleanShutdown(t *testing.T) {
+	server := newTestServer()
+	server.transport = "named_pipe"
+	server.debugHTTPServer = nil
+
+	started := make(chan struct{}, 2)
+	listenerReleased := make(chan struct{}, 2)
+	server.serveNamedPipe = func(ctx context.Context, pipeName string, handler func(net.Conn)) error {
+		started <- struct{}{}
+		<-ctx.Done()
+		<-listenerReleased
+		return nil
+	}
+
+	firstStartErr := make(chan error, 1)
+	go func() {
+		firstStartErr <- server.Start(context.Background())
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected first serve run to start")
+	}
+
+	listenerReleased <- struct{}{}
+	if err := server.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown first serve run: %v", err)
+	}
+
+	select {
+	case err := <-firstStartErr:
+		if err != nil {
+			t.Fatalf("expected first serve run to stop cleanly, got %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected first serve run to exit after shutdown")
+	}
+
+	secondStartErr := make(chan error, 1)
+	go func() {
+		secondStartErr <- server.Start(context.Background())
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected cleanly stopped server to allow a second serve run")
+	}
+
+	listenerReleased <- struct{}{}
+	if err := server.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown second serve run: %v", err)
+	}
+
+	select {
+	case err := <-secondStartErr:
+		if err != nil {
+			t.Fatalf("expected second serve run to stop cleanly, got %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected second serve run to exit after shutdown")
+	}
+}
+
+func TestServerShutdownBeforeStartDoesNotPoisonFutureServeRun(t *testing.T) {
+	server := newTestServer()
+	server.transport = "named_pipe"
+	server.debugHTTPServer = nil
+
+	if err := server.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown idle server: %v", err)
+	}
+
+	started := make(chan struct{}, 1)
+	listenerReleased := make(chan struct{}, 1)
+	server.serveNamedPipe = func(ctx context.Context, pipeName string, handler func(net.Conn)) error {
+		started <- struct{}{}
+		<-ctx.Done()
+		<-listenerReleased
+		return nil
+	}
+
+	startErr := make(chan error, 1)
+	go func() {
+		startErr <- server.Start(context.Background())
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected idle shutdown not to block a later serve run")
+	}
+
+	listenerReleased <- struct{}{}
+	if err := server.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown later serve run: %v", err)
+	}
+
+	select {
+	case err := <-startErr:
+		if err != nil {
+			t.Fatalf("expected later serve run to stop cleanly, got %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected later serve run to exit after shutdown")
 	}
 }
 

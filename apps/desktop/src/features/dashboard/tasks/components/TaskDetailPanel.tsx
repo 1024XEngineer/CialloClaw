@@ -6,8 +6,9 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/utils/cn";
 import { formatTimestamp } from "@/utils/formatters";
-import { canTaskAcceptSteering, getTaskPreviewStatusLabel, getTaskProgress, getTaskStateVoice, getTaskStatusBadgeClass, isTaskEnded } from "../taskPage.mapper";
-import type { TaskDetailData } from "../taskPage.types";
+import { getTaskPreviewStatusLabel, getTaskProgress, getTaskStateVoice, getTaskStatusBadgeClass, isTaskEnded } from "../taskPage.mapper";
+import type { Task } from "@cialloclaw/protocol";
+import type { TaskDetailData, TaskExperience, TaskPrimaryAction } from "../taskPage.types";
 import { TaskActionBar } from "./TaskActionBar";
 import { TaskContextBlock } from "./TaskContextBlock";
 import { TaskProgressTimeline } from "./TaskProgressTimeline";
@@ -19,8 +20,9 @@ type TaskDetailPanelProps = {
   artifactErrorMessage: string | null;
   artifactItems: TaskDetailData["detail"]["artifacts"];
   artifactLoading: boolean;
+  fallbackOutputAccess?: boolean;
   detailWarningMessage: string | null;
-  detailData: TaskDetailData;
+  detailData: TaskDetailData | null;
   detailErrorMessage: string | null;
   eventErrorMessage: string | null;
   eventFilters: TaskEventFilters;
@@ -29,22 +31,31 @@ type TaskDetailPanelProps = {
   detailState: "loading" | "error" | "ready";
   deliveryActionPending: boolean;
   feedback: string | null;
+  fallbackActions?: TaskPrimaryAction[] | null;
   onAction: (action: "pause" | "resume" | "cancel" | "restart" | "open-safety") => void;
   onClose: () => void;
   onOpenArtifact: (artifactId: string) => void;
   onOpenLatestDelivery: () => void;
   onApplyEventFilters: (filters: TaskEventFilters) => void;
+  previewExperience: TaskExperience | null;
+  previewTask: Task | null;
   onResetEventFilters: () => void;
   onRetryDetail: (() => void) | null;
   onSteerTask: (message: string) => void;
   steeringPending: boolean;
+  steeringSuccessVersion: number;
 };
 
+/**
+ * Shows the full task detail panel, including progress, evidence, and the
+ * dedicated jump into the formal delivery page.
+ */
 export function TaskDetailPanel({
   artifactActionPendingId,
   artifactErrorMessage,
   artifactItems,
   artifactLoading,
+  fallbackOutputAccess = false,
   detailWarningMessage,
   detailData,
   detailErrorMessage,
@@ -55,23 +66,40 @@ export function TaskDetailPanel({
   detailState,
   deliveryActionPending,
   feedback,
+  fallbackActions = null,
   onAction,
   onClose,
   onOpenArtifact,
   onOpenLatestDelivery,
   onApplyEventFilters,
+  previewExperience,
+  previewTask,
   onResetEventFilters,
   onRetryDetail,
   onSteerTask,
   steeringPending,
+  steeringSuccessVersion,
 }: TaskDetailPanelProps) {
-  const { detail, experience, task } = detailData;
+  const detail = detailData?.detail ?? null;
+  const experience = detailData?.experience ?? previewExperience;
+  const task = detailData?.task ?? previewTask;
   const [steeringMessage, setSteeringMessage] = useState("");
   const [eventFilterDraft, setEventFilterDraft] = useState(eventFilters);
-  const progress = getTaskProgress(detail.timeline);
-  const stateVoice = getTaskStateVoice(task, experience, detail.timeline);
-  const ended = isTaskEnded(task);
-  const waitingCopy = task.status === "waiting_auth" || task.status === "waiting_input" || task.status === "paused" ? experience.waitingReason : task.status === "failed" || task.status === "blocked" ? experience.blockedReason : null;
+  const progress = getTaskProgress(detail?.timeline ?? []);
+  const stateVoice = task && experience
+    ? getTaskStateVoice(task, experience, detail?.timeline ?? [])
+    : {
+        body: "正在从本地服务同步当前任务详情。",
+        title: "正在打开任务详情",
+      };
+  const ended = task ? isTaskEnded(task) : false;
+  const waitingCopy = task && experience
+    ? task.status === "waiting_auth" || task.status === "waiting_input" || task.status === "paused"
+      ? experience.waitingReason
+      : task.status === "failed" || task.status === "blocked"
+        ? experience.blockedReason
+        : null
+    : null;
   const isDetailLoading = detailState === "loading";
   const isDetailError = detailState === "error";
   const progressLabel = progress.total > 0 ? `${progress.completedCount}/${progress.total}` : "无";
@@ -79,12 +107,11 @@ export function TaskDetailPanel({
   const detailNoticeBody = isDetailLoading
     ? "当前先展示基础任务信息，时间线、产出和安全摘要正在从本地服务拉取。"
     : `${detailErrorMessage ?? "任务详情请求失败"}。当前先展示基础任务信息，你可以稍后重试。`;
-  const shouldDeferSecuritySummary = detailData.source === "fallback" || detailState !== "ready";
-  const canSteerTask = canTaskAcceptSteering(task);
-  const steeringPlaceholder = canSteerTask ? "例如：保留现有结果，再额外补一份简短结论。" : ended ? "当前任务已结束，不能继续补充要求。" : "当前阶段不能直接追加要求，请通过悬浮球重新提交。";
-  const formalDeliveryResult = detail.delivery_result;
-  const runtimeSummary = detail.runtime_summary;
-  const evidenceItems = detail.citations;
+  const shouldDeferSecuritySummary = detailState !== "ready" || detail === null;
+  const canSteerTask = task ? !ended && task.status !== "cancelled" : false;
+  const formalDeliveryResult = detail?.delivery_result ?? null;
+  const runtimeSummary = detail?.runtime_summary ?? null;
+  const evidenceItems = detail?.citations ?? [];
   // Evidence artifacts stay task-centric by following the formal citation links
   // instead of treating every task artifact as screen evidence.
   const evidenceArtifactRefs = new Set(evidenceItems.map((citation) => citation.source_ref));
@@ -97,25 +124,105 @@ export function TaskDetailPanel({
       return sourceRef.length > 0 ? sourceRef : citation.citation_id;
     }),
   ).size;
-  const isScreenTask = task.source_type === "screen_capture" || detail.task.intent?.name === "screen_analyze";
+  const isScreenTask = task?.source_type === "screen_capture" || detail?.task.intent?.name === "screen_analyze";
 
   useEffect(() => {
-    if (steeringPending) {
+    if (steeringPending || steeringSuccessVersion === 0) {
       return;
     }
 
-    if (!feedback || !/已记录新的补充要求/.test(feedback)) {
-      return;
-    }
-
+    // Clear the local follow-up draft only after the parent mutation confirms a
+    // successful steer, so backend wording changes cannot leave stale input behind.
     setSteeringMessage("");
-  }, [feedback, steeringPending]);
+  }, [steeringPending, steeringSuccessVersion]);
 
   useEffect(() => {
     // Keep runtime event filters as local draft state so typing does not trigger
     // one RPC refetch per keystroke before the user explicitly applies changes.
     setEventFilterDraft(eventFilters);
   }, [eventFilters]);
+
+  if (!task) {
+    return (
+      <motion.section animate={{ opacity: 1, x: 0 }} className="task-detail-shell" initial={{ opacity: 0, x: 18 }} transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}>
+        <div className="task-detail-shell__header">
+          <div>
+            <p className="task-detail-shell__eyebrow">任务详情</p>
+            <h2 className="task-detail-shell__title">正在打开任务详情</h2>
+            <p className="task-detail-shell__subtitle">正在等待正式任务详情返回。</p>
+          </div>
+
+          <div className="task-detail-shell__status-wrap">
+            <Button className="task-detail-shell__close" onClick={onClose} size="icon-sm" variant="ghost">
+              <X className="h-4 w-4" />
+              <span className="sr-only">关闭任务详情</span>
+            </Button>
+          </div>
+        </div>
+
+        <ScrollArea className="task-detail-shell__scroll">
+          <div className="task-detail-shell__body">
+            <section className="task-detail-card task-detail-card--notice">
+              <div className="task-detail-card__header task-detail-card__header--actionable">
+                <div>
+                  <p className="task-detail-card__eyebrow">详情状态</p>
+                  <h3 className="task-detail-card__title">{detailNoticeTitle}</h3>
+                </div>
+                {isDetailError && onRetryDetail ? (
+                  <button className="task-detail-card__action" onClick={onRetryDetail} type="button">
+                    <RefreshCcw className="h-4 w-4" />
+                    重试
+                  </button>
+                ) : null}
+              </div>
+              <p className="task-detail-ended-copy">{detailNoticeBody}</p>
+            </section>
+            {fallbackActions && fallbackActions.length > 0 ? <TaskActionBar actionsOverride={fallbackActions} detail={null} onAction={onAction} task={null} /> : null}
+            {fallbackOutputAccess ? (
+              <section className="task-detail-card">
+                <div className="task-detail-card__header task-detail-card__header--actionable">
+                  <div>
+                    <p className="task-detail-card__eyebrow">产出内容</p>
+                    <h3 className="task-detail-card__title">已生成的结果</h3>
+                  </div>
+                  <button className="task-detail-card__action" disabled={deliveryActionPending} onClick={onOpenLatestDelivery} type="button">
+                    <ArrowUpRight className="h-4 w-4" />
+                    {deliveryActionPending ? "打开中..." : "打开结果"}
+                  </button>
+                </div>
+                <div className="task-detail-output-list">
+                  {artifactErrorMessage ? <p className="task-detail-card__hint">{artifactErrorMessage}</p> : null}
+                  {artifactLoading && artifactItems.length === 0 ? <p className="task-detail-card__empty">正在同步成果列表...</p> : null}
+                  {artifactItems.length > 0 ? (
+                    artifactItems.map((artifact) => (
+                      <article key={artifact.artifact_id} className="task-detail-output-item">
+                        <FolderOutput className="h-4 w-4" />
+                        <div>
+                          <p className="task-detail-output-item__title">{artifact.title}</p>
+                          <p className="task-detail-output-item__path">{artifact.path}</p>
+                        </div>
+                        <button
+                          className="task-detail-card__action"
+                          disabled={artifactActionPendingId === artifact.artifact_id}
+                          onClick={() => onOpenArtifact(artifact.artifact_id)}
+                          type="button"
+                        >
+                          <ArrowUpRight className="h-4 w-4" />
+                          {artifactActionPendingId === artifact.artifact_id ? "打开中..." : "打开"}
+                        </button>
+                      </article>
+                    ))
+                  ) : !artifactLoading && !artifactErrorMessage ? (
+                    <p className="task-detail-card__empty">结果详情仍在同步，稍后可重试详情或直接尝试打开最新结果。</p>
+                  ) : null}
+                </div>
+              </section>
+            ) : null}
+          </div>
+        </ScrollArea>
+      </motion.section>
+    );
+  }
 
   function handleSubmitSteering() {
     if (!steeringMessage.trim()) {
@@ -198,6 +305,10 @@ export function TaskDetailPanel({
   }
 
   function renderRuntimeSummarySection() {
+    if (!runtimeSummary) {
+      return null;
+    }
+
     return (
       <section className="task-detail-card">
         <div className="task-detail-card__header">
@@ -260,7 +371,7 @@ export function TaskDetailPanel({
           </div>
           <button className="task-detail-card__action" disabled={deliveryActionPending} onClick={onOpenLatestDelivery} type="button">
             <ArrowUpRight className="h-4 w-4" />
-            {deliveryActionPending ? "打开中..." : "打开交付"}
+            {deliveryActionPending ? "打开中..." : "查看结果页"}
           </button>
         </div>
         <p className="task-detail-card__hint">该区域只消费正式 `delivery_result`，用于回看模型结论与最终交付出口。</p>
@@ -279,6 +390,10 @@ export function TaskDetailPanel({
   }
 
   function renderEvidenceSection() {
+    if (detail === null) {
+      return null;
+    }
+
     return (
       <section className="task-detail-card">
         <div className="task-detail-card__header">
@@ -332,7 +447,7 @@ export function TaskDetailPanel({
   }
 
   function renderScreenGovernanceSection() {
-    if (!isScreenTask || shouldDeferSecuritySummary) {
+    if (!isScreenTask || shouldDeferSecuritySummary || !runtimeSummary || detail === null) {
       return null;
     }
 
@@ -406,6 +521,10 @@ export function TaskDetailPanel({
   }
 
   function renderRuntimeEventsSection() {
+    if (detail === null) {
+      return null;
+    }
+
     return (
       <section className="task-detail-card">
         <div className="task-detail-card__header">
@@ -513,6 +632,8 @@ export function TaskDetailPanel({
 
           {!ended ? (
             <>
+              {detail ? (
+                <>
               {waitingCopy ? (
                 <section className="task-detail-card task-detail-card--notice">
                   <div className="task-detail-card__header">
@@ -548,7 +669,7 @@ export function TaskDetailPanel({
                     <ShieldAlert className="h-4 w-4" />
                     <div>
                       <p className="task-detail-current-card__label">当前提醒</p>
-                      <p className="task-detail-current-card__text">{experience.nextAction}</p>
+                      <p className="task-detail-current-card__text">{experience?.nextAction ?? "正式详情返回后补充下一步建议。"}</p>
                     </div>
                   </article>
                 </div>
@@ -562,31 +683,7 @@ export function TaskDetailPanel({
 
               {renderScreenGovernanceSection()}
 
-              <TaskContextBlock detailData={detailData} />
-
-              <section className="task-detail-card">
-                <div className="task-detail-card__header task-detail-card__header--actionable">
-                  <div>
-                    <p className="task-detail-card__eyebrow">任务引导</p>
-                    <h3 className="task-detail-card__title">补充新的执行要求</h3>
-                  </div>
-                </div>
-                <p className="task-detail-card__hint">这会调用正式 `agent.task.steer`，把补充说明排入当前任务后续执行。</p>
-                <div className="task-detail-steer-box">
-                  <textarea
-                    className="task-detail-steer-box__input"
-                    disabled={!canSteerTask || steeringPending}
-                    onChange={(event) => setSteeringMessage(event.target.value)}
-                    placeholder={steeringPlaceholder}
-                    rows={3}
-                    value={steeringMessage}
-                  />
-                  <button className="task-detail-card__action" disabled={!canSteerTask || steeringPending || !steeringMessage.trim()} onClick={handleSubmitSteering} type="button">
-                    <SendHorizonal className="h-4 w-4" />
-                    {steeringPending ? "提交中..." : "追加要求"}
-                  </button>
-                </div>
-              </section>
+              {detailData ? <TaskContextBlock detailData={detailData} /> : null}
 
               {renderRuntimeEventsSection()}
 
@@ -598,7 +695,7 @@ export function TaskDetailPanel({
                   </div>
                   <button className="task-detail-card__action" disabled={deliveryActionPending} onClick={onOpenLatestDelivery} type="button">
                     <ArrowUpRight className="h-4 w-4" />
-                    {deliveryActionPending ? "打开中..." : "打开最新结果"}
+                    {deliveryActionPending ? "打开中..." : "查看结果页"}
                   </button>
                 </div>
                 <div className="task-detail-output-list">
@@ -679,6 +776,32 @@ export function TaskDetailPanel({
                   </div>
                 </section>
               )}
+                </>
+              ) : null}
+
+              <section className="task-detail-card">
+                <div className="task-detail-card__header task-detail-card__header--actionable">
+                  <div>
+                    <p className="task-detail-card__eyebrow">任务引导</p>
+                    <h3 className="task-detail-card__title">补充新的执行要求</h3>
+                  </div>
+                </div>
+                <p className="task-detail-card__hint">这会调用正式 `agent.task.steer`，把补充说明排入当前任务后续执行。</p>
+                <div className="task-detail-steer-box">
+                  <textarea
+                    className="task-detail-steer-box__input"
+                    disabled={!canSteerTask || steeringPending}
+                    onChange={(event) => setSteeringMessage(event.target.value)}
+                    placeholder={canSteerTask ? "例如：保留现有结果，再额外补一份简短结论。" : "当前任务已结束，不能继续补充要求。"}
+                    rows={3}
+                    value={steeringMessage}
+                  />
+                  <button className="task-detail-card__action" disabled={!canSteerTask || steeringPending || !steeringMessage.trim()} onClick={handleSubmitSteering} type="button">
+                    <SendHorizonal className="h-4 w-4" />
+                    {steeringPending ? "提交中..." : "追加要求"}
+                  </button>
+                </div>
+              </section>
             </>
           ) : (
             <>
@@ -690,22 +813,12 @@ export function TaskDetailPanel({
                   </div>
                   <button className="task-detail-card__action" disabled={deliveryActionPending} onClick={onOpenLatestDelivery} type="button">
                     <ArrowUpRight className="h-4 w-4" />
-                    {deliveryActionPending ? "打开中..." : "打开结果"}
+                    {deliveryActionPending ? "打开中..." : "查看结果页"}
                   </button>
                 </div>
-                <p className="task-detail-ended-copy">{experience.endedSummary ?? stateVoice.body}</p>
+                <p className="task-detail-ended-copy">{experience?.endedSummary ?? stateVoice.body}</p>
                 <p className="task-detail-ended-time">结束时间：{formatTimestamp(task.finished_at)}</p>
               </section>
-
-              {renderRuntimeSummarySection()}
-
-              {renderFormalDeliverySection()}
-
-              {renderEvidenceSection()}
-
-              {renderScreenGovernanceSection()}
-
-              {renderRuntimeEventsSection()}
 
               <section className="task-detail-card">
                 <div className="task-detail-card__header task-detail-card__header--actionable">
@@ -715,7 +828,7 @@ export function TaskDetailPanel({
                   </div>
                   <button className="task-detail-card__action" disabled={deliveryActionPending} onClick={onOpenLatestDelivery} type="button">
                     <ArrowUpRight className="h-4 w-4" />
-                    {deliveryActionPending ? "打开中..." : "打开结果"}
+                    {deliveryActionPending ? "打开中..." : "查看结果页"}
                   </button>
                 </div>
                 <div className="task-detail-output-list">
@@ -740,17 +853,31 @@ export function TaskDetailPanel({
                         </button>
                       </article>
                     ))
-                  ) : !artifactLoading ? (
+                  ) : !artifactLoading && !artifactErrorMessage ? (
                     <p className="task-detail-card__empty">无</p>
                   ) : null}
                 </div>
               </section>
+
+              {detail ? (
+                <>
+                  {renderRuntimeSummarySection()}
+
+                  {renderFormalDeliverySection()}
+
+                  {renderEvidenceSection()}
+
+                  {renderScreenGovernanceSection()}
+
+                  {renderRuntimeEventsSection()}
+                </>
+              ) : null}
             </>
           )}
         </div>
       </ScrollArea>
 
-      <TaskActionBar detailData={detailData} onAction={onAction} />
+      {task ? <TaskActionBar detail={detail} onAction={onAction} task={task} /> : null}
     </motion.section>
   );
 }

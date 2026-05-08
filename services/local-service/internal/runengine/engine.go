@@ -2178,11 +2178,6 @@ func (e *Engine) buildEventWithPayload(record *TaskRecord, eventType string, pay
 	}
 }
 
-// buildToolCall creates one compatibility-layer tool_call record for the task.
-func (e *Engine) buildToolCall(record *TaskRecord, toolName string) map[string]any {
-	return e.buildToolCallRecord(record, toolName, "succeeded", map[string]any{}, map[string]any{}, 120, nil)
-}
-
 func (e *Engine) buildToolCallRecord(record *TaskRecord, toolName, status string, input, output map[string]any, durationMS int64, errorCode any) map[string]any {
 	if durationMS <= 0 {
 		durationMS = 1

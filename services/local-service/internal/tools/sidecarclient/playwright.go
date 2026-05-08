@@ -21,7 +21,15 @@ func (noopPlaywrightSidecarClient) ReadPage(_ context.Context, _ string) (tools.
 	return tools.BrowserPageReadResult{}, tools.ErrPlaywrightSidecarFailed
 }
 
+func (noopPlaywrightSidecarClient) ReadPageAttached(_ context.Context, _ string, _ tools.BrowserAttachConfig) (tools.BrowserPageReadResult, error) {
+	return tools.BrowserPageReadResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
 func (noopPlaywrightSidecarClient) SearchPage(_ context.Context, _, _ string, _ int) (tools.BrowserPageSearchResult, error) {
+	return tools.BrowserPageSearchResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (noopPlaywrightSidecarClient) SearchPageAttached(_ context.Context, _, _ string, _ int, _ tools.BrowserAttachConfig) (tools.BrowserPageSearchResult, error) {
 	return tools.BrowserPageSearchResult{}, tools.ErrPlaywrightSidecarFailed
 }
 
@@ -29,7 +37,15 @@ func (noopPlaywrightSidecarClient) InteractPage(_ context.Context, _ string, _ [
 	return tools.BrowserPageInteractResult{}, tools.ErrPlaywrightSidecarFailed
 }
 
+func (noopPlaywrightSidecarClient) InteractPageAttached(_ context.Context, _ string, _ []map[string]any, _ tools.BrowserAttachConfig) (tools.BrowserPageInteractResult, error) {
+	return tools.BrowserPageInteractResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
 func (noopPlaywrightSidecarClient) StructuredDOM(_ context.Context, _ string) (tools.BrowserStructuredDOMResult, error) {
+	return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (noopPlaywrightSidecarClient) StructuredDOMAttached(_ context.Context, _ string, _ tools.BrowserAttachConfig) (tools.BrowserStructuredDOMResult, error) {
 	return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
 }
 
@@ -57,13 +73,6 @@ func (noopPlaywrightSidecarClient) InteractBrowser(_ context.Context, _ tools.Br
 	return tools.BrowserPageInteractResult{}, tools.ErrPlaywrightSidecarFailed
 }
 
-type attachAwarePageClient interface {
-	ReadPageAttached(ctx context.Context, url string, attach tools.BrowserAttachConfig) (tools.BrowserPageReadResult, error)
-	SearchPageAttached(ctx context.Context, url, query string, limit int, attach tools.BrowserAttachConfig) (tools.BrowserPageSearchResult, error)
-	InteractPageAttached(ctx context.Context, url string, actions []map[string]any, attach tools.BrowserAttachConfig) (tools.BrowserPageInteractResult, error)
-	StructuredDOMAttached(ctx context.Context, url string, attach tools.BrowserAttachConfig) (tools.BrowserStructuredDOMResult, error)
-}
-
 type PageReadTool struct {
 	meta tools.ToolMetadata
 }
@@ -89,6 +98,9 @@ func (t *PageReadTool) Validate(input map[string]any) error {
 	if !ok || strings.TrimSpace(url) == "" {
 		return fmt.Errorf("input field 'url' must be a non-empty string")
 	}
+	if _, _, err := optionalAttachConfigFromInput(input); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -97,7 +109,16 @@ func (t *PageReadTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteCo
 		return nil, tools.ErrPlaywrightSidecarFailed
 	}
 	url := strings.TrimSpace(input["url"].(string))
-	result, err := pageReadResult(ctx, execCtx.Playwright, url, input)
+	attach, attached, err := optionalAttachConfigFromInput(input)
+	if err != nil {
+		return nil, err
+	}
+	var result tools.BrowserPageReadResult
+	if attached {
+		result, err = execCtx.Playwright.ReadPageAttached(ctx, url, attach)
+	} else {
+		result, err = execCtx.Playwright.ReadPage(ctx, url)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -114,8 +135,8 @@ func (t *PageReadTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteCo
 		SummaryOutput: map[string]any{
 			"url":             result.URL,
 			"title":           result.Title,
-			"browser_kind":    result.BrowserKind,
 			"attached":        result.Attached,
+			"browser_kind":    result.BrowserKind,
 			"content_preview": previewPageText(result.TextContent),
 			"source":          firstNonEmptyString(result.Source, "playwright_sidecar"),
 		},
@@ -165,6 +186,9 @@ func (t *PageInteractTool) Validate(input map[string]any) error {
 	if !ok || strings.TrimSpace(url) == "" {
 		return fmt.Errorf("input field 'url' must be a non-empty string")
 	}
+	if _, _, err := optionalAttachConfigFromInput(input); err != nil {
+		return err
+	}
 	actions := mapSliceValue(input, "actions")
 	if len(actions) == 0 {
 		return fmt.Errorf("input field 'actions' must be a non-empty array")
@@ -183,7 +207,16 @@ func (t *PageInteractTool) Execute(ctx context.Context, execCtx *tools.ToolExecu
 	}
 	url := strings.TrimSpace(input["url"].(string))
 	actions := mapSliceValue(input, "actions")
-	result, err := pageInteractResult(ctx, execCtx.Playwright, url, actions, input)
+	attach, attached, err := optionalAttachConfigFromInput(input)
+	if err != nil {
+		return nil, err
+	}
+	var result tools.BrowserPageInteractResult
+	if attached {
+		result, err = execCtx.Playwright.InteractPageAttached(ctx, url, actions, attach)
+	} else {
+		result, err = execCtx.Playwright.InteractPage(ctx, url, actions)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -199,8 +232,8 @@ func (t *PageInteractTool) Execute(ctx context.Context, execCtx *tools.ToolExecu
 		SummaryOutput: map[string]any{
 			"url":             result.URL,
 			"title":           result.Title,
-			"browser_kind":    result.BrowserKind,
 			"attached":        result.Attached,
+			"browser_kind":    result.BrowserKind,
 			"content_preview": previewPageText(result.TextContent),
 			"actions_applied": result.ActionsApplied,
 			"source":          firstNonEmptyString(result.Source, "playwright_sidecar"),
@@ -233,6 +266,9 @@ func (t *StructuredDOMTool) Validate(input map[string]any) error {
 	if !ok || strings.TrimSpace(url) == "" {
 		return fmt.Errorf("input field 'url' must be a non-empty string")
 	}
+	if _, _, err := optionalAttachConfigFromInput(input); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -241,7 +277,16 @@ func (t *StructuredDOMTool) Execute(ctx context.Context, execCtx *tools.ToolExec
 		return nil, tools.ErrPlaywrightSidecarFailed
 	}
 	url := strings.TrimSpace(input["url"].(string))
-	result, err := structuredDOMResult(ctx, execCtx.Playwright, url, input)
+	attach, attached, err := optionalAttachConfigFromInput(input)
+	if err != nil {
+		return nil, err
+	}
+	var result tools.BrowserStructuredDOMResult
+	if attached {
+		result, err = execCtx.Playwright.StructuredDOMAttached(ctx, url, attach)
+	} else {
+		result, err = execCtx.Playwright.StructuredDOM(ctx, url)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -256,7 +301,7 @@ func (t *StructuredDOMTool) Execute(ctx context.Context, execCtx *tools.ToolExec
 	return &tools.ToolResult{
 		ToolName:      t.meta.Name,
 		RawOutput:     rawOutput,
-		SummaryOutput: map[string]any{"url": result.URL, "title": result.Title, "browser_kind": result.BrowserKind, "attached": result.Attached, "heading_count": len(result.Headings), "link_count": len(result.Links), "button_count": len(result.Buttons), "input_count": len(result.Inputs), "source": firstNonEmptyString(result.Source, "playwright_sidecar")},
+		SummaryOutput: map[string]any{"url": result.URL, "title": result.Title, "attached": result.Attached, "browser_kind": result.BrowserKind, "heading_count": len(result.Headings), "link_count": len(result.Links), "button_count": len(result.Buttons), "input_count": len(result.Inputs), "source": firstNonEmptyString(result.Source, "playwright_sidecar")},
 	}, nil
 }
 
@@ -270,6 +315,9 @@ func (t *PageSearchTool) Validate(input map[string]any) error {
 	query, ok := input["query"].(string)
 	if !ok || strings.TrimSpace(query) == "" {
 		return fmt.Errorf("input field 'query' must be a non-empty string")
+	}
+	if _, _, err := optionalAttachConfigFromInput(input); err != nil {
+		return err
 	}
 	return nil
 }
@@ -293,7 +341,16 @@ func (t *PageSearchTool) Execute(ctx context.Context, execCtx *tools.ToolExecute
 			}
 		}
 	}
-	result, err := pageSearchResult(ctx, execCtx.Playwright, url, query, limit, input)
+	attach, attached, err := optionalAttachConfigFromInput(input)
+	if err != nil {
+		return nil, err
+	}
+	var result tools.BrowserPageSearchResult
+	if attached {
+		result, err = execCtx.Playwright.SearchPageAttached(ctx, url, query, limit, attach)
+	} else {
+		result, err = execCtx.Playwright.SearchPage(ctx, url, query, limit)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -306,7 +363,7 @@ func (t *PageSearchTool) Execute(ctx context.Context, execCtx *tools.ToolExecute
 	return &tools.ToolResult{
 		ToolName:      t.meta.Name,
 		RawOutput:     rawOutput,
-		SummaryOutput: map[string]any{"url": result.URL, "query": result.Query, "browser_kind": result.BrowserKind, "attached": result.Attached, "match_count": result.MatchCount, "source": firstNonEmptyString(result.Source, "playwright_sidecar")},
+		SummaryOutput: map[string]any{"url": result.URL, "query": result.Query, "attached": result.Attached, "browser_kind": result.BrowserKind, "match_count": result.MatchCount, "source": firstNonEmptyString(result.Source, "playwright_sidecar")},
 	}, nil
 }
 
@@ -328,77 +385,6 @@ func RegisterPlaywrightTools(registry *tools.Registry) error {
 		}
 	}
 	return nil
-}
-
-func pageReadResult(ctx context.Context, client tools.PlaywrightSidecarClient, url string, input map[string]any) (tools.BrowserPageReadResult, error) {
-	attach, ok, err := optionalAttachConfigFromInput(input)
-	if err != nil {
-		return tools.BrowserPageReadResult{}, err
-	}
-	if !ok {
-		return client.ReadPage(ctx, url)
-	}
-	attachClient, ok := client.(attachAwarePageClient)
-	if !ok {
-		return tools.BrowserPageReadResult{}, tools.ErrPlaywrightSidecarFailed
-	}
-	return attachClient.ReadPageAttached(ctx, url, attach)
-}
-
-func pageSearchResult(ctx context.Context, client tools.PlaywrightSidecarClient, url, query string, limit int, input map[string]any) (tools.BrowserPageSearchResult, error) {
-	attach, ok, err := optionalAttachConfigFromInput(input)
-	if err != nil {
-		return tools.BrowserPageSearchResult{}, err
-	}
-	if !ok {
-		return client.SearchPage(ctx, url, query, limit)
-	}
-	attachClient, ok := client.(attachAwarePageClient)
-	if !ok {
-		return tools.BrowserPageSearchResult{}, tools.ErrPlaywrightSidecarFailed
-	}
-	return attachClient.SearchPageAttached(ctx, url, query, limit, attach)
-}
-
-func pageInteractResult(ctx context.Context, client tools.PlaywrightSidecarClient, url string, actions []map[string]any, input map[string]any) (tools.BrowserPageInteractResult, error) {
-	attach, ok, err := optionalAttachConfigFromInput(input)
-	if err != nil {
-		return tools.BrowserPageInteractResult{}, err
-	}
-	if !ok {
-		return client.InteractPage(ctx, url, actions)
-	}
-	attachClient, ok := client.(attachAwarePageClient)
-	if !ok {
-		return tools.BrowserPageInteractResult{}, tools.ErrPlaywrightSidecarFailed
-	}
-	return attachClient.InteractPageAttached(ctx, url, actions, attach)
-}
-
-func structuredDOMResult(ctx context.Context, client tools.PlaywrightSidecarClient, url string, input map[string]any) (tools.BrowserStructuredDOMResult, error) {
-	attach, ok, err := optionalAttachConfigFromInput(input)
-	if err != nil {
-		return tools.BrowserStructuredDOMResult{}, err
-	}
-	if !ok {
-		return client.StructuredDOM(ctx, url)
-	}
-	attachClient, ok := client.(attachAwarePageClient)
-	if !ok {
-		return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
-	}
-	return attachClient.StructuredDOMAttached(ctx, url, attach)
-}
-
-func optionalAttachConfigFromInput(input map[string]any) (tools.BrowserAttachConfig, bool, error) {
-	if _, ok := input["attach"]; !ok {
-		return tools.BrowserAttachConfig{}, false, nil
-	}
-	attach, err := attachConfigFromInput(input)
-	if err != nil {
-		return tools.BrowserAttachConfig{}, false, err
-	}
-	return attach, true, nil
 }
 
 func mapSliceValue(values map[string]any, key string) []map[string]any {
@@ -463,4 +449,15 @@ func firstNonEmptyString(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func optionalAttachConfigFromInput(input map[string]any) (tools.BrowserAttachConfig, bool, error) {
+	if _, ok := input["attach"]; !ok {
+		return tools.BrowserAttachConfig{}, false, nil
+	}
+	attach, err := attachConfigFromInput(input)
+	if err != nil {
+		return tools.BrowserAttachConfig{}, false, err
+	}
+	return attach, true, nil
 }

@@ -35,6 +35,7 @@
 * Editing `useShellBallInteraction` when a safer, smaller change in the coordinator or helper window suffices.
 * Introducing desktop shortcuts that silently trigger backend processes.
 * Forgetting **Tauri capability permissions** when adding official plugins.
+* For bone-driven PNG animation, keep **visual rest rotation** separate from **bone rest rotation**. Do not assume `bone.rotation + layer.rotation` is always the final static angle, and prefer explicit SVG transform attributes over `motion.g` rotate shorthands when pivot accuracy matters.
 
 ---
 

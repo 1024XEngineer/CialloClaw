@@ -83,22 +83,6 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 		},
 	},
 	{
-		Name:                   "browser_tabs_list",
-		RequiresCurrentBrowser: true,
-		UseWhen:                "需要查看当前真实浏览器里有哪些标签页可供后续切换",
-		AvoidWhen:              "用户已经明确指定当前页就足够，不需要切换其它标签页",
-		Constraints: []string{
-			"仅返回标签页摘要",
-			"执行层会自动注入附着线索",
-			"不会切换或关闭标签页",
-		},
-		InputSchema: map[string]any{
-			"type":                 "object",
-			"properties":           map[string]any{},
-			"additionalProperties": false,
-		},
-	},
-	{
 		Name:      "page_read",
 		UseWhen:   "需要读取某个网页的标题或主要可见文本",
 		AvoidWhen: "用户只需要确认关键词是否出现，而不需要通读页面内容",
@@ -280,9 +264,6 @@ func (c agentLoopCapabilitySpec) allowedForSnapshot(snapshot contextsvc.TaskCont
 	browserKind := strings.ToLower(strings.TrimSpace(snapshot.BrowserKind))
 	if browserKind != "chrome" && browserKind != "edge" {
 		return false
-	}
-	if c.Name == "browser_attach_current" || c.Name == "browser_tabs_list" {
-		return true
 	}
 	if strings.TrimSpace(snapshot.PageURL) != "" {
 		return true
