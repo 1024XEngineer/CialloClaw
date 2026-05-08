@@ -24,6 +24,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
+	risksvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textdecode"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
@@ -302,6 +303,15 @@ func (s *Service) AssessGovernance(ctx context.Context, request Request) (Govern
 	if reason == "" {
 		reason = precheck.DenyReason
 	}
+	if requiresBrowserObservationApproval(toolName, mapValue(request.Intent, "arguments"), request.Snapshot) && !precheck.Deny {
+		precheck.ApprovalRequired = true
+		if precheck.RiskLevel == "" || precheck.RiskLevel == tools.RiskLevelGreen {
+			precheck.RiskLevel = tools.RiskLevelYellow
+		}
+		if reason == "" {
+			reason = risksvc.ReasonWebpageApproval
+		}
+	}
 	if requireAuthorizationFlag(request.Intent) && !precheck.Deny {
 		precheck.ApprovalRequired = true
 		if precheck.RiskLevel == "" || precheck.RiskLevel == tools.RiskLevelGreen {
@@ -321,6 +331,35 @@ func (s *Service) AssessGovernance(ctx context.Context, request Request) (Govern
 		Reason:             reason,
 		ImpactScope:        cloneMap(precheck.ImpactScope),
 	}, true, nil
+}
+
+// requiresBrowserObservationApproval preserves the low-risk classification for
+// browser_attach_current/browser_snapshot only when the request observes the
+// currently captured browser page. Explicit selectors for other tabs must be
+// promoted back onto the approval path.
+func requiresBrowserObservationApproval(toolName string, arguments map[string]any, snapshot contextsvc.TaskContextSnapshot) bool {
+	switch strings.TrimSpace(toolName) {
+	case "browser_attach_current", "browser_snapshot":
+	default:
+		return false
+	}
+
+	attach := mapValue(arguments, "attach")
+	if len(attach) == 0 {
+		return false
+	}
+	target := mapValue(attach, "target")
+	if len(target) == 0 {
+		return false
+	}
+	if _, ok := browserAttachPageIndex(target["page_index"]); ok {
+		return true
+	}
+	if targetURL := comparablePageURL(stringValue(target, "url", "")); targetURL != "" {
+		snapshotURL := comparablePageURL(snapshot.PageURL)
+		return snapshotURL == "" || snapshotURL != targetURL
+	}
+	return strings.TrimSpace(stringValue(target, "title_contains", "")) != ""
 }
 
 // Execute runs the minimum content-generation and persistence flow for one task.

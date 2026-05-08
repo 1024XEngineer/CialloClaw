@@ -3076,6 +3076,81 @@ func TestAssessGovernanceBrowserSnapshotUsesAttachedPageTarget(t *testing.T) {
 	}
 }
 
+func TestAssessGovernanceBrowserSnapshotKeepsCurrentExplicitTargetGreen(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_browser_snapshot_current_explicit",
+		RunID:  "run_browser_snapshot_current_explicit",
+		Intent: map[string]any{"name": "browser_snapshot", "arguments": map[string]any{
+			"attach": map[string]any{
+				"mode":         "cdp",
+				"browser_kind": "chrome",
+				"target":       map[string]any{"url": "https://example.com/docs"},
+			},
+		}},
+		Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com/docs", PageTitle: "Example Docs"},
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected browser_snapshot explicit current-page governance path to be handled")
+	}
+	if assessment.ApprovalRequired || assessment.RiskLevel != string(risk.RiskLevelGreen) {
+		t.Fatalf("expected browser_snapshot explicit current-page target to stay green, got %+v", assessment)
+	}
+}
+
+func TestAssessGovernanceBrowserSnapshotRequiresApprovalForNonCurrentExplicitTarget(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_browser_snapshot_other_tab",
+		RunID:  "run_browser_snapshot_other_tab",
+		Intent: map[string]any{"name": "browser_snapshot", "arguments": map[string]any{
+			"attach": map[string]any{
+				"mode":         "cdp",
+				"browser_kind": "chrome",
+				"target":       map[string]any{"url": "https://example.com/other"},
+			},
+		}},
+		Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com/docs", PageTitle: "Example Docs"},
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected browser_snapshot explicit off-page governance path to be handled")
+	}
+	if !assessment.ApprovalRequired || assessment.RiskLevel != string(risk.RiskLevelYellow) {
+		t.Fatalf("expected browser_snapshot explicit off-page target to require approval, got %+v", assessment)
+	}
+}
+
+func TestAssessGovernanceBrowserAttachCurrentRequiresApprovalForTitleOnlyExplicitTarget(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_browser_attach_title_only",
+		RunID:  "run_browser_attach_title_only",
+		Intent: map[string]any{"name": "browser_attach_current", "arguments": map[string]any{
+			"attach": map[string]any{
+				"mode":         "cdp",
+				"browser_kind": "chrome",
+				"target":       map[string]any{"title_contains": "Pinned Tab"},
+			},
+		}},
+		Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com/docs", PageTitle: "Example Docs"},
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected browser_attach_current explicit title-only governance path to be handled")
+	}
+	if !assessment.ApprovalRequired || assessment.RiskLevel != string(risk.RiskLevelYellow) {
+		t.Fatalf("expected browser_attach_current title-only target to require approval, got %+v", assessment)
+	}
+}
+
 func TestAssessGovernanceBrowserNavigateUsesDestinationURL(t *testing.T) {
 	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
 	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
