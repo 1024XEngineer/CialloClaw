@@ -663,7 +663,7 @@ func TestRunStopsWithNoSupportedToolsWhenPlannerCallsToolWithoutExecutor(t *test
 	}
 }
 
-func TestRunReturnsPlannerAnswerWhenExecutorMissingAndPlannerAlsoAnswers(t *testing.T) {
+func TestRunUsesFallbackWhenExecutorMissingAndPlannerAlsoCallsTool(t *testing.T) {
 	runtime := NewRuntime()
 	request := testRuntimeRequest()
 	request.ExecuteTool = nil
@@ -687,11 +687,11 @@ func TestRunReturnsPlannerAnswerWhenExecutorMissingAndPlannerAlsoAnswers(t *test
 	if !handled {
 		t.Fatal("expected request to be handled")
 	}
-	if result.OutputText != "You should nil-check the pointer before use." {
-		t.Fatalf("expected planner direct answer to win when executor is missing, got %+v", result)
+	if result.OutputText != request.FallbackOutput {
+		t.Fatalf("expected fallback output when planner calls tools without executor, got %+v", result)
 	}
-	if result.StopReason != StopReasonCompleted {
-		t.Fatalf("expected completed stop reason when planner already answered, got %s", result.StopReason)
+	if result.StopReason != StopReasonNoSupportedTools {
+		t.Fatalf("expected no_supported_tools stop reason when planner still calls tools without executor, got %s", result.StopReason)
 	}
 }
 
@@ -736,7 +736,7 @@ func TestRunStopsWithNoSupportedToolsOnLastDisallowedToolRound(t *testing.T) {
 	}
 }
 
-func TestRunReturnsPlannerAnswerWhenAllChosenToolsAreDisallowed(t *testing.T) {
+func TestRunUsesFallbackWhenAllChosenToolsAreDisallowed(t *testing.T) {
 	runtime := NewRuntime()
 	request := testRuntimeRequest()
 	request.ToolDefinitions = []model.ToolDefinition{{Name: "read_file"}}
@@ -769,11 +769,11 @@ func TestRunReturnsPlannerAnswerWhenAllChosenToolsAreDisallowed(t *testing.T) {
 	if !handled {
 		t.Fatal("expected request to be handled")
 	}
-	if result.OutputText != "Here is what to change: nil-check the pointer before use." {
-		t.Fatalf("expected planner answer to be preserved when all chosen tools are disallowed, got %+v", result)
+	if result.OutputText != request.FallbackOutput {
+		t.Fatalf("expected fallback output when all chosen tools are disallowed, got %+v", result)
 	}
-	if result.StopReason != StopReasonCompleted {
-		t.Fatalf("expected completed stop reason when planner already answered, got %s", result.StopReason)
+	if result.StopReason != StopReasonNoSupportedTools {
+		t.Fatalf("expected no_supported_tools stop reason when all chosen tools are disallowed, got %s", result.StopReason)
 	}
 }
 
