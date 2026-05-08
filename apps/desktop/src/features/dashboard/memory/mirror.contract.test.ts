@@ -3,7 +3,6 @@ import test from "node:test";
 import type { AgentInputSubmitParams, AgentMirrorOverviewGetResult, ApprovalRequest, Task, TokenCostSummary } from "@cialloclaw/protocol";
 import {
   buildMirrorConversationDateOptions,
-  buildMirrorConversationSummary,
   buildMirrorConversationTaskMoments,
   buildMirrorDailyDigest,
   buildMirrorProfileBaseItems,

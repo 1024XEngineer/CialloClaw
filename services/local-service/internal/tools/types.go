@@ -246,8 +246,45 @@ type CommandExecutionResult struct {
 	Interrupted      bool
 }
 
+// BrowserAttachMode classifies how one real-browser request attaches to a
+// user-owned browser session.
+type BrowserAttachMode string
+
+const (
+	// BrowserAttachModeCDP routes browser control through a local Chromium CDP
+	// endpoint that the user has already enabled.
+	BrowserAttachModeCDP BrowserAttachMode = "cdp"
+)
+
+// BrowserAttachTarget describes the minimum target filters that keep one
+// attach request scoped to the user's current browser state.
+type BrowserAttachTarget struct {
+	URL           string `json:"url,omitempty"`
+	TitleContains string `json:"title_contains,omitempty"`
+	PageIndex     *int   `json:"page_index,omitempty"`
+}
+
+// BrowserAttachConfig carries the normalized attach contract shared by page_*
+// attach flows and browser_* actions.
+type BrowserAttachConfig struct {
+	Mode        BrowserAttachMode   `json:"mode,omitempty"`
+	BrowserKind string              `json:"browser_kind,omitempty"`
+	EndpointURL string              `json:"endpoint_url,omitempty"`
+	Target      BrowserAttachTarget `json:"target,omitempty"`
+}
+
+// BrowserExecutionMetadata captures the transport details that explain whether
+// a browser result came from a fresh launch or a user-owned attached session.
+type BrowserExecutionMetadata struct {
+	Attached         bool
+	BrowserKind      string
+	BrowserTransport string
+	EndpointURL      string
+}
+
 // BrowserPageReadResult 描述浏览器页面读取的最小结果。
 type BrowserPageReadResult struct {
+	BrowserExecutionMetadata
 	URL         string
 	Title       string
 	TextContent string
@@ -258,6 +295,7 @@ type BrowserPageReadResult struct {
 
 // BrowserPageSearchResult 描述页面内基础搜索的最小结果。
 type BrowserPageSearchResult struct {
+	BrowserExecutionMetadata
 	URL        string
 	Query      string
 	MatchCount int
@@ -267,6 +305,7 @@ type BrowserPageSearchResult struct {
 
 // BrowserPageInteractResult describes one page interaction run.
 type BrowserPageInteractResult struct {
+	BrowserExecutionMetadata
 	URL            string
 	Title          string
 	TextContent    string
@@ -276,6 +315,7 @@ type BrowserPageInteractResult struct {
 
 // BrowserStructuredDOMResult describes a structured DOM snapshot.
 type BrowserStructuredDOMResult struct {
+	BrowserExecutionMetadata
 	URL      string
 	Title    string
 	Headings []string
@@ -283,6 +323,64 @@ type BrowserStructuredDOMResult struct {
 	Buttons  []string
 	Inputs   []string
 	Source   string
+}
+
+// BrowserAttachedPageResult identifies one attached browser tab selection.
+type BrowserAttachedPageResult struct {
+	BrowserExecutionMetadata
+	PageIndex int
+	Title     string
+	URL       string
+	Source    string
+}
+
+// BrowserTabInfo is the minimal attached tab summary returned by list calls.
+type BrowserTabInfo struct {
+	PageIndex int
+	Title     string
+	URL       string
+}
+
+// BrowserTabsListResult describes the visible tabs on one attached browser.
+type BrowserTabsListResult struct {
+	BrowserExecutionMetadata
+	TabCount int
+	Tabs     []BrowserTabInfo
+	Source   string
+}
+
+// BrowserSnapshotResult describes a text-rich snapshot of the currently
+// attached browser tab.
+type BrowserSnapshotResult struct {
+	BrowserAttachedPageResult
+	TextContent string
+	Headings    []string
+	Links       []string
+	Buttons     []string
+	Inputs      []string
+}
+
+// BrowserNavigateRequest is the normalized request shape for attached browser
+// navigation.
+type BrowserNavigateRequest struct {
+	Attach BrowserAttachConfig
+	URL    string
+}
+
+// BrowserNavigationResult describes the loaded page after an attached browser
+// navigation succeeds.
+type BrowserNavigationResult struct {
+	BrowserAttachedPageResult
+	TextContent string
+	MIMEType    string
+	TextType    string
+}
+
+// BrowserInteractRequest is the normalized request shape for attached browser
+// interactions.
+type BrowserInteractRequest struct {
+	Attach  BrowserAttachConfig
+	Actions []map[string]any
 }
 
 // OCRTextResult describes OCR or plain text extraction output.
@@ -428,12 +526,23 @@ type ScreenCleanupResult struct {
 	SkippedCount    int
 }
 
-// PlaywrightSidecarClient 是 Playwright sidecar 的最小客户端边界。
+// PlaywrightSidecarClient defines the minimal browser-facing boundary exposed
+// by the Playwright sidecar runtime.
 type PlaywrightSidecarClient interface {
 	ReadPage(ctx context.Context, url string) (BrowserPageReadResult, error)
+	ReadPageAttached(ctx context.Context, url string, attach BrowserAttachConfig) (BrowserPageReadResult, error)
 	SearchPage(ctx context.Context, url, query string, limit int) (BrowserPageSearchResult, error)
+	SearchPageAttached(ctx context.Context, url, query string, limit int, attach BrowserAttachConfig) (BrowserPageSearchResult, error)
 	InteractPage(ctx context.Context, url string, actions []map[string]any) (BrowserPageInteractResult, error)
+	InteractPageAttached(ctx context.Context, url string, actions []map[string]any, attach BrowserAttachConfig) (BrowserPageInteractResult, error)
 	StructuredDOM(ctx context.Context, url string) (BrowserStructuredDOMResult, error)
+	StructuredDOMAttached(ctx context.Context, url string, attach BrowserAttachConfig) (BrowserStructuredDOMResult, error)
+	AttachCurrentPage(ctx context.Context, attach BrowserAttachConfig) (BrowserAttachedPageResult, error)
+	SnapshotBrowser(ctx context.Context, attach BrowserAttachConfig) (BrowserSnapshotResult, error)
+	NavigateBrowser(ctx context.Context, request BrowserNavigateRequest) (BrowserNavigationResult, error)
+	ListBrowserTabs(ctx context.Context, attach BrowserAttachConfig) (BrowserTabsListResult, error)
+	FocusBrowserTab(ctx context.Context, attach BrowserAttachConfig) (BrowserAttachedPageResult, error)
+	InteractBrowser(ctx context.Context, request BrowserInteractRequest) (BrowserPageInteractResult, error)
 }
 
 // OCRWorkerClient is the minimal OCR worker client boundary.

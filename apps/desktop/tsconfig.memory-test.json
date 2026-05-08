@@ -9,6 +9,7 @@
   },
   "include": [
     "src/platform/storage.ts",
+    "src/platform/storage.contract.test.ts",
     "src/services/mirrorMemoryService.ts",
     "src/features/dashboard/memory/mirrorViewModel.ts",
     "src/features/dashboard/memory/mirror.contract.test.ts"

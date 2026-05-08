@@ -3,11 +3,15 @@
   "private": true,
   "packageManager": "pnpm@10.6.1",
   "scripts": {
+    "build:service": "node scripts/ci/build-service.mjs",
+    "build:desktop": "pnpm --dir apps/desktop exec tauri build --target x86_64-pc-windows-msvc --bundles nsis msi",
+    "build:bundle": "pnpm build:service && pnpm build:desktop",
     "dev": "pnpm --dir apps/desktop dev",
     "dev:desktop": "pnpm --dir apps/desktop dev",
     "dev:service": "go run ./services/local-service/cmd/server",
     "lint": "pnpm --dir apps/desktop lint",
     "lint:fix": "pnpm --dir apps/desktop lint:fix",
+    "lint:service": "go run ./scripts/ci/local-service-style && go vet ./services/local-service/... && go run honnef.co/go/tools/cmd/staticcheck ./services/local-service/...",
     "test:service": "go test ./services/local-service/...",
     "typecheck": "pnpm --dir apps/desktop typecheck"
   }

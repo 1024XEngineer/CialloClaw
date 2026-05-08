@@ -175,10 +175,7 @@ func (s *inMemoryLoopRuntimeStore) ListDeliveryResults(_ context.Context, taskID
 func (s *inMemoryLoopRuntimeStore) ReplaceTaskCitations(_ context.Context, taskID string, records []CitationRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cloned := make([]CitationRecord, 0, len(records))
-	for _, record := range records {
-		cloned = append(cloned, record)
-	}
+	cloned := append([]CitationRecord(nil), records...)
 	s.citations[taskID] = cloned
 	return nil
 }

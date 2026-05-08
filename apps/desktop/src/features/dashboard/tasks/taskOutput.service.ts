@@ -5,15 +5,13 @@ import type {
   AgentTaskArtifactListResult,
   AgentTaskArtifactOpenParams,
   AgentTaskArtifactOpenResult,
-  Artifact,
   DeliveryPayload,
   RequestMeta,
 } from "@cialloclaw/protocol";
 import { openDesktopLocalPath, revealDesktopLocalPath } from "@/platform/desktopLocalPath";
 import { listTaskArtifacts, openDelivery, openTaskArtifact } from "@/rpc/methods";
-import { getMockTaskDetail } from "./taskPage.mock";
 
-export type TaskOutputDataMode = "rpc" | "mock";
+export type TaskOutputDataMode = "rpc";
 
 export type TaskOpenExecutionPlan = {
   mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
@@ -55,58 +53,6 @@ async function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
       window.setTimeout(() => reject(new Error(`${label} request timed out`)), TASK_OUTPUT_RPC_TIMEOUT_MS);
     }),
   ]);
-}
-
-function buildMockArtifactPage(taskId: string): AgentTaskArtifactListResult {
-  const detail = getMockTaskDetail(taskId).detail;
-
-  return {
-    items: detail.artifacts,
-    page: {
-      has_more: false,
-      limit: detail.artifacts.length,
-      offset: 0,
-      total: detail.artifacts.length,
-    },
-  };
-}
-
-function buildMockDeliveryPayload(taskId: string, artifact: Artifact | null): DeliveryPayload {
-  return {
-    path: artifact?.path ?? null,
-    task_id: taskId,
-    url: null,
-  };
-}
-
-function inferMockOpenAction(artifact: Artifact | null) {
-  if (!artifact) {
-    return "task_detail" as const;
-  }
-
-  if (artifact.artifact_type === "reveal_in_folder") {
-    return "reveal_in_folder" as const;
-  }
-
-  return "open_file" as const;
-}
-
-function buildMockOpenResult(taskId: string, artifact: Artifact | null): AgentTaskArtifactOpenResult | AgentDeliveryOpenResult {
-  const openAction = inferMockOpenAction(artifact);
-  const payload = buildMockDeliveryPayload(taskId, artifact);
-  const title = artifact?.title ?? "任务结果";
-
-  return {
-    ...(artifact ? { artifact } : {}),
-    delivery_result: {
-      payload,
-      preview_text: title,
-      title,
-      type: openAction,
-    },
-    open_action: openAction,
-    resolved_payload: payload,
-  };
 }
 
 function resolveTaskId(payload: DeliveryPayload, result: AgentTaskArtifactOpenResult | AgentDeliveryOpenResult) {
@@ -264,11 +210,7 @@ export function describeTaskOpenResultForCurrentTask(plan: TaskOpenExecutionPlan
   return null;
 }
 
-export async function loadTaskArtifactPage(taskId: string, source: TaskOutputDataMode = "rpc"): Promise<AgentTaskArtifactListResult> {
-  if (source === "mock") {
-    return buildMockArtifactPage(taskId);
-  }
-
+export async function loadTaskArtifactPage(taskId: string, _source: TaskOutputDataMode = "rpc"): Promise<AgentTaskArtifactListResult> {
   const params: AgentTaskArtifactListParams = {
     limit: 50,
     offset: 0,
@@ -279,15 +221,7 @@ export async function loadTaskArtifactPage(taskId: string, source: TaskOutputDat
   return withTimeout(listTaskArtifacts(params), `task artifacts ${taskId}`);
 }
 
-export async function openTaskArtifactForTask(taskId: string, artifactId: string, source: TaskOutputDataMode = "rpc"): Promise<AgentTaskArtifactOpenResult> {
-  if (source === "mock") {
-    const artifact = getMockTaskDetail(taskId).detail.artifacts.find((item) => item.artifact_id === artifactId);
-    if (!artifact) {
-      throw new Error(`mock artifact not found: ${artifactId}`);
-    }
-    return buildMockOpenResult(taskId, artifact) as AgentTaskArtifactOpenResult;
-  }
-
+export async function openTaskArtifactForTask(taskId: string, artifactId: string, _source: TaskOutputDataMode = "rpc"): Promise<AgentTaskArtifactOpenResult> {
   const params: AgentTaskArtifactOpenParams = {
     artifact_id: artifactId,
     request_meta: createRequestMeta(`task_artifact_open_${artifactId}`),
@@ -297,12 +231,7 @@ export async function openTaskArtifactForTask(taskId: string, artifactId: string
   return withTimeout(openTaskArtifact(params), `task artifact open ${artifactId}`);
 }
 
-export async function openTaskDeliveryForTask(taskId: string, artifactId: string | undefined, source: TaskOutputDataMode = "rpc"): Promise<AgentDeliveryOpenResult> {
-  if (source === "mock") {
-    const artifact = artifactId ? getMockTaskDetail(taskId).detail.artifacts.find((item) => item.artifact_id === artifactId) ?? null : null;
-    return buildMockOpenResult(taskId, artifact) as AgentDeliveryOpenResult;
-  }
-
+export async function openTaskDeliveryForTask(taskId: string, artifactId: string | undefined, _source: TaskOutputDataMode = "rpc"): Promise<AgentDeliveryOpenResult> {
   const params: AgentDeliveryOpenParams = {
     ...(artifactId ? { artifact_id: artifactId } : {}),
     request_meta: createRequestMeta(`task_delivery_open_${taskId}`),

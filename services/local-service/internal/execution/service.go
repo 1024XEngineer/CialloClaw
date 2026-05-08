@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
+	"net/url"
 	"path"
 	"path/filepath"
 	"strings"
@@ -22,6 +24,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
+	risksvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textdecode"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
@@ -300,6 +303,15 @@ func (s *Service) AssessGovernance(ctx context.Context, request Request) (Govern
 	if reason == "" {
 		reason = precheck.DenyReason
 	}
+	if requiresBrowserObservationApproval(toolName, mapValue(request.Intent, "arguments"), toolInput, request.Snapshot) && !precheck.Deny {
+		precheck.ApprovalRequired = true
+		if precheck.RiskLevel == "" || precheck.RiskLevel == tools.RiskLevelGreen {
+			precheck.RiskLevel = tools.RiskLevelYellow
+		}
+		if reason == "" {
+			reason = risksvc.ReasonWebpageApproval
+		}
+	}
 	if requireAuthorizationFlag(request.Intent) && !precheck.Deny {
 		precheck.ApprovalRequired = true
 		if precheck.RiskLevel == "" || precheck.RiskLevel == tools.RiskLevelGreen {
@@ -319,6 +331,69 @@ func (s *Service) AssessGovernance(ctx context.Context, request Request) (Govern
 		Reason:             reason,
 		ImpactScope:        cloneMap(precheck.ImpactScope),
 	}, true, nil
+}
+
+// requiresBrowserObservationApproval preserves the low-risk classification for
+// browser_attach_current/browser_snapshot only when the request observes the
+// currently captured browser page through the default local endpoint. Explicit
+// selectors for other tabs or explicit endpoint overrides must be promoted
+// back onto the approval path.
+func requiresBrowserObservationApproval(toolName string, arguments map[string]any, toolInput map[string]any, snapshot contextsvc.TaskContextSnapshot) bool {
+	switch strings.TrimSpace(toolName) {
+	case "browser_attach_current", "browser_snapshot":
+	default:
+		return false
+	}
+	if hasExplicitBrowserObservationEndpoint(toolInput) {
+		return true
+	}
+
+	if !hasExplicitBrowserObservationTarget(arguments) {
+		return false
+	}
+
+	attach := mapValue(toolInput, "attach")
+	target := mapValue(attach, "target")
+	if len(target) == 0 {
+		return false
+	}
+	if _, ok := browserAttachPageIndex(target["page_index"]); ok {
+		return true
+	}
+	if targetURL := comparablePageURL(stringValue(target, "url", "")); targetURL != "" {
+		snapshotURL := comparablePageURL(snapshot.PageURL)
+		return snapshotURL == "" || snapshotURL != targetURL
+	}
+	return strings.TrimSpace(stringValue(target, "title_contains", "")) != ""
+}
+
+func hasExplicitBrowserObservationEndpoint(toolInput map[string]any) bool {
+	attach := mapValue(toolInput, "attach")
+	return strings.TrimSpace(stringValue(attach, "endpoint_url", "")) != ""
+}
+
+func hasExplicitBrowserObservationTarget(arguments map[string]any) bool {
+	if targetURL := strings.TrimSpace(stringValue(arguments, "target_url", "")); targetURL != "" {
+		return true
+	}
+	if titleContains := strings.TrimSpace(stringValue(arguments, "title_contains", "")); titleContains != "" {
+		return true
+	}
+	if _, ok := browserAttachPageIndex(arguments["page_index"]); ok {
+		return true
+	}
+	attachTarget := mapValue(mapValue(arguments, "attach"), "target")
+	if len(attachTarget) == 0 {
+		return false
+	}
+	if strings.TrimSpace(stringValue(attachTarget, "url", "")) != "" {
+		return true
+	}
+	if strings.TrimSpace(stringValue(attachTarget, "title_contains", "")) != "" {
+		return true
+	}
+	_, ok := browserAttachPageIndex(attachTarget["page_index"])
+	return ok
 }
 
 // Execute runs the minimum content-generation and persistence flow for one task.
@@ -978,40 +1053,50 @@ func (s *Service) executeDirectBuiltinTool(ctx context.Context, request Request)
 		return Result{}, false, nil
 	}
 	args := mapValue(request.Intent, "arguments")
-	toolResult, recoveryPoint, err := s.executeTool(ctx, request, s.workspace, intentName, args)
+	// Browser intents must stay on the direct execution path so attach-only
+	// requests do not fall back to model generation before the tool runs.
+	toolInput, ok := resolveBrowserToolInput(intentName, args, request.Snapshot)
+	if !ok {
+		toolInput, ok = resolveDirectToolInput(intentName, args, request.Snapshot)
+	}
+	if !ok {
+		return Result{}, false, nil
+	}
+	toolName := intentName
+	toolResult, recoveryPoint, err := s.executeTool(ctx, request, s.workspace, toolName, toolInput)
 	if err != nil {
 		failedResult := Result{
 			RecoveryPoint: cloneMap(recoveryPoint),
 		}
 		if toolResult != nil {
-			failedResult.ToolCalls = []tools.ToolCallRecord{normalizeFilesystemToolCall(toolResult.ToolCall, map[string]any{"path": stringValue(args, "path", "")})}
-			failedResult.ToolName = intentName
-			failedResult.ToolInput = mergeToolInputs(args, map[string]any{
-				"intent_name":     intentName,
+			failedResult.ToolCalls = []tools.ToolCallRecord{normalizeFilesystemToolCall(toolResult.ToolCall, toolInput)}
+			failedResult.ToolName = toolName
+			failedResult.ToolInput = mergeToolInputs(toolInput, map[string]any{
+				"intent_name":     toolName,
 				"delivery_type":   "bubble",
 				"available_tools": s.availableToolNames(),
 				"workers":         s.availableWorkers(),
 			})
-			failedResult.ToolOutput = normalizeFilesystemToolOutput(intentName, mergeToolOutputs(toolResult.RawOutput, toolResult.SummaryOutput), args)
+			failedResult.ToolOutput = normalizeFilesystemToolOutput(toolName, mergeToolOutputs(toolResult.RawOutput, toolResult.SummaryOutput), toolInput)
 		}
-		return failedResult, false, fmt.Errorf("execute builtin tool %s: %w", intentName, err)
+		return failedResult, false, fmt.Errorf("execute builtin tool %s: %w", toolName, err)
 	}
-	bubbleText := toolBubbleText(intentName, toolResult)
+	bubbleText := toolBubbleText(toolName, toolResult)
 	return Result{
 		Content:        bubbleText,
 		DeliveryResult: s.delivery.BuildDeliveryResultWithTargetPath(request.TaskID, "bubble", request.ResultTitle, bubbleText, ""),
 		Artifacts:      toolArtifactsFromResult(request.TaskID, toolResult),
 		BubbleText:     bubbleText,
 		RecoveryPoint:  cloneMap(recoveryPoint),
-		ToolCalls:      []tools.ToolCallRecord{normalizeFilesystemToolCall(toolResult.ToolCall, map[string]any{"path": stringValue(args, "path", "")})},
-		ToolName:       intentName,
-		ToolInput: mergeToolInputs(args, map[string]any{
-			"intent_name":     intentName,
+		ToolCalls:      []tools.ToolCallRecord{normalizeFilesystemToolCall(toolResult.ToolCall, toolInput)},
+		ToolName:       toolName,
+		ToolInput: mergeToolInputs(toolInput, map[string]any{
+			"intent_name":     toolName,
 			"delivery_type":   "bubble",
 			"available_tools": s.availableToolNames(),
 			"workers":         s.availableWorkers(),
 		}),
-		ToolOutput: normalizeFilesystemToolOutput(intentName, mergeToolOutputs(toolResult.RawOutput, toolResult.SummaryOutput), args),
+		ToolOutput: normalizeFilesystemToolOutput(toolName, mergeToolOutputs(toolResult.RawOutput, toolResult.SummaryOutput), toolInput),
 	}, true, nil
 }
 
@@ -1100,24 +1185,35 @@ func (s *Service) resolveToolExecution(request Request, deliveryResult map[strin
 	if _, err := s.tools.Get(intentName); err != nil {
 		return "", nil, false
 	}
+	if browserInput, ok := resolveBrowserToolInput(intentName, args, request.Snapshot); ok {
+		return intentName, browserInput, true
+	}
 
+	input, ok := resolveDirectToolInput(intentName, args, request.Snapshot)
+	if !ok {
+		return "", nil, false
+	}
+	return intentName, input, true
+}
+
+func resolveDirectToolInput(intentName string, args map[string]any, snapshot contextsvc.TaskContextSnapshot) (map[string]any, bool) {
 	switch intentName {
 	case "read_file":
 		pathValue := stringValue(args, "path", stringValue(args, "target_path", ""))
 		if pathValue == "" {
-			return "", nil, false
+			return nil, false
 		}
-		return intentName, map[string]any{"path": pathValue}, true
+		return map[string]any{"path": pathValue}, true
 	case "list_dir":
 		pathValue := stringValue(args, "path", stringValue(args, "target_path", ""))
 		if pathValue == "" {
-			return "", nil, false
+			return nil, false
 		}
 		input := map[string]any{"path": pathValue}
 		if limit, ok := args["limit"]; ok {
 			input["limit"] = limit
 		}
-		return intentName, input, true
+		return input, true
 	case "exec_command":
 		input := map[string]any{}
 		for _, key := range []string{"command", "args", "working_dir"} {
@@ -1126,68 +1222,43 @@ func (s *Service) resolveToolExecution(request Request, deliveryResult map[strin
 			}
 		}
 		if len(input) == 0 {
-			return "", nil, false
+			return nil, false
 		}
-		return intentName, input, true
+		return input, true
 	case "page_read":
-		urlValue := stringValue(args, "url", "")
-		if urlValue == "" {
-			return "", nil, false
-		}
-		return intentName, map[string]any{"url": urlValue}, true
+		return resolvePageToolInput(intentName, args, snapshot)
 	case "page_search":
-		urlValue := stringValue(args, "url", "")
-		queryValue := stringValue(args, "query", "")
-		if urlValue == "" || queryValue == "" {
-			return "", nil, false
-		}
-		input := map[string]any{"url": urlValue, "query": queryValue}
-		if limit, ok := args["limit"]; ok {
-			input["limit"] = limit
-		}
-		return intentName, input, true
+		return resolvePageToolInput(intentName, args, snapshot)
 	case "page_interact":
-		urlValue := stringValue(args, "url", "")
-		if urlValue == "" {
-			return "", nil, false
-		}
-		input := map[string]any{"url": urlValue}
-		if actions, ok := args["actions"]; ok {
-			input["actions"] = actions
-		}
-		return intentName, input, true
+		return resolvePageToolInput(intentName, args, snapshot)
 	case "structured_dom":
-		urlValue := stringValue(args, "url", "")
-		if urlValue == "" {
-			return "", nil, false
-		}
-		return intentName, map[string]any{"url": urlValue}, true
+		return resolvePageToolInput(intentName, args, snapshot)
 	case "extract_text", "ocr_image", "ocr_pdf":
 		pathValue := stringValue(args, "path", stringValue(args, "file_path", ""))
 		if pathValue == "" {
-			return "", nil, false
+			return nil, false
 		}
 		input := map[string]any{"path": pathValue}
 		if language, ok := args["language"]; ok {
 			input["language"] = language
 		}
-		return intentName, input, true
+		return input, true
 	case "transcode_media", "normalize_recording":
 		pathValue := stringValue(args, "path", stringValue(args, "file_path", ""))
 		outputPath := stringValue(args, "output_path", "")
 		if pathValue == "" || outputPath == "" {
-			return "", nil, false
+			return nil, false
 		}
 		input := map[string]any{"path": pathValue, "output_path": outputPath}
 		if format, ok := args["format"]; ok {
 			input["format"] = format
 		}
-		return intentName, input, true
+		return input, true
 	case "extract_frames":
 		pathValue := stringValue(args, "path", stringValue(args, "file_path", ""))
 		outputDir := stringValue(args, "output_dir", "")
 		if pathValue == "" || outputDir == "" {
-			return "", nil, false
+			return nil, false
 		}
 		input := map[string]any{"path": pathValue, "output_dir": outputDir}
 		if everySeconds, ok := args["every_seconds"]; ok {
@@ -1196,9 +1267,9 @@ func (s *Service) resolveToolExecution(request Request, deliveryResult map[strin
 		if limit, ok := args["limit"]; ok {
 			input["limit"] = limit
 		}
-		return intentName, input, true
+		return input, true
 	default:
-		return "", nil, false
+		return nil, false
 	}
 }
 
@@ -1967,7 +2038,7 @@ func (s *Service) generateOutput(ctx context.Context, request Request, inputText
 		// Prompt-only execution does not have a live loop poller, so queued
 		// steering must be folded into this generation request before the task
 		// resumes from authorization or a session queue.
-		promptInputText = agentloopAppendSteeringInput(inputText, request.SteeringMessages)
+		promptInputText = appendPromptSteeringInput(inputText, request.SteeringMessages)
 	}
 	trace, err := s.generateOutputWithPrompt(ctx, request, promptInputText)
 	if err != nil {
@@ -2061,9 +2132,9 @@ func (s *Service) generateOutputWithAgentLoop(ctx context.Context, request Reque
 		InputText:       runtimeInput,
 		ResultTitle:     request.ResultTitle,
 		FallbackOutput:  fallbackOutput(request, inputText),
-		ToolDefinitions: s.agentLoopToolDefinitions(),
+		ToolDefinitions: s.agentLoopToolDefinitionsForSnapshot(request.Snapshot),
 		AllowedTool: func(name string) bool {
-			return s.isAllowedAgentLoopTool(name) && !budgetDowngradeDisallowsDirectTool(request, name)
+			return s.isAllowedAgentLoopToolForSnapshot(name, request.Snapshot) && !budgetDowngradeDisallowsDirectTool(request, name)
 		},
 		PollSteering: func(_ context.Context, taskID string) []string {
 			if s.steeringPoller == nil {
@@ -2442,9 +2513,7 @@ func workspaceFSPath(filePath string) string {
 	if normalized == "workspace" {
 		return "."
 	}
-	if strings.HasPrefix(normalized, "workspace/") {
-		normalized = strings.TrimPrefix(normalized, "workspace/")
-	}
+	normalized = strings.TrimPrefix(normalized, "workspace/")
 	cleaned := path.Clean(normalized)
 	if cleaned == "." {
 		return "."
@@ -2676,7 +2745,7 @@ func (noopAgentLoopHook) AfterTool(_ context.Context, _ agentloop.PersistedRound
 	return nil
 }
 
-func agentloopAppendSteeringInput(inputText string, steeringMessages []string) string {
+func appendPromptSteeringInput(inputText string, steeringMessages []string) string {
 	if len(steeringMessages) == 0 {
 		return inputText
 	}
@@ -2694,81 +2763,28 @@ func agentloopAppendSteeringInput(inputText string, steeringMessages []string) s
 	return strings.TrimSpace(inputText) + "\n\nFollow-up steering:\n" + strings.Join(steeringLines, "\n")
 }
 
+func agentloopAppendSteeringInput(inputText string, steeringMessages []string) string {
+	if len(steeringMessages) == 0 {
+		return inputText
+	}
+	steeringLines := make([]string, 0, len(steeringMessages))
+	for _, item := range steeringMessages {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			continue
+		}
+		steeringLines = append(steeringLines, "- "+trimmed)
+	}
+	if len(steeringLines) == 0 {
+		return inputText
+	}
+	return strings.TrimSpace(inputText) + "\n\n补充要求：\n" + strings.Join(steeringLines, "\n")
+}
+
 // isAgentLoopIntent reports whether the current task should execute through the
 // generic agent loop instead of the legacy single-shot prompt path.
 func isAgentLoopIntent(taskIntent map[string]any) bool {
 	return effectiveIntentName(taskIntent) == defaultAgentLoopIntentName
-}
-
-// agentLoopToolDefinitions exposes the minimal safe tool set that the model can
-// use inside the current loop. The allowlist is intentionally narrow so the
-// first integrated flow stays bounded and auditable.
-func (s *Service) agentLoopToolDefinitions() []model.ToolDefinition {
-	if s.tools == nil {
-		return nil
-	}
-
-	definitions := make([]model.ToolDefinition, 0, 4)
-	for _, metadata := range s.tools.List() {
-		switch metadata.Name {
-		case "read_file":
-			definitions = append(definitions, model.ToolDefinition{
-				Name:        metadata.Name,
-				Description: metadata.Description,
-				InputSchema: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"path": map[string]any{"type": "string", "description": "Workspace-relative path to a file."},
-					},
-					"required":             []string{"path"},
-					"additionalProperties": false,
-				},
-			})
-		case "list_dir":
-			definitions = append(definitions, model.ToolDefinition{
-				Name:        metadata.Name,
-				Description: metadata.Description,
-				InputSchema: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"path":  map[string]any{"type": "string", "description": "Workspace-relative path to a directory."},
-						"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 50},
-					},
-					"required":             []string{"path"},
-					"additionalProperties": false,
-				},
-			})
-		case "page_read":
-			definitions = append(definitions, model.ToolDefinition{
-				Name:        metadata.Name,
-				Description: metadata.Description,
-				InputSchema: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"url": map[string]any{"type": "string", "description": "Absolute URL to read."},
-					},
-					"required":             []string{"url"},
-					"additionalProperties": false,
-				},
-			})
-		case "page_search":
-			definitions = append(definitions, model.ToolDefinition{
-				Name:        metadata.Name,
-				Description: metadata.Description,
-				InputSchema: map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"url":   map[string]any{"type": "string", "description": "Absolute URL to search."},
-						"query": map[string]any{"type": "string", "description": "Query to search within the page."},
-						"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 20},
-					},
-					"required":             []string{"url", "query"},
-					"additionalProperties": false,
-				},
-			})
-		}
-	}
-	return definitions
 }
 
 // buildAgentLoopPlannerInput assembles the textual context seen by the planner
@@ -2777,17 +2793,17 @@ func (s *Service) agentLoopToolDefinitions() []model.ToolDefinition {
 func buildAgentLoopPlannerInput(inputText string, history []string, compressChars, keepRecent int) string {
 	compressedHistory := compactAgentLoopHistory(history, compressChars, keepRecent)
 	sections := []string{
-		"You are the planning step of a desktop agent loop.",
-		"Decide whether to answer directly or call one of the provided tools.",
-		"Use tools only when they materially improve the answer.",
-		"Never invent file contents, directory entries, or page contents.",
-		"If the task is already clear and no tool is required, return the final answer directly.",
+		"你是桌面 Agent 的规划轮次。",
+		"先判断能否直接回答；只有在工具能明显提升结果时才调用工具。",
+		"最终答复先给结论，保持精简，不要堆砌客套话。",
+		"不要编造文件内容、目录项或网页内容。",
+		"如果任务已经足够清晰且不需要工具，直接给最终答复。",
 		"",
-		"User context:",
+		"用户上下文：",
 		strings.TrimSpace(inputText),
 	}
 	if len(compressedHistory) > 0 {
-		sections = append(sections, "", "Observed tool results:")
+		sections = append(sections, "", "已观察到的工具结果：")
 		sections = append(sections, compressedHistory...)
 	}
 	return strings.Join(sections, "\n")
@@ -2874,11 +2890,14 @@ func annotateLoopRound(record tools.ToolCallRecord, loopRound int) tools.ToolCal
 // turn. The returned tool record is also preserved for audit and task history.
 func (s *Service) executeAgentLoopTool(ctx context.Context, request Request, call model.ToolInvocation, loopRound int) (string, tools.ToolCallRecord) {
 	toolName := strings.TrimSpace(call.Name)
-	if !s.isAllowedAgentLoopTool(toolName) {
+	if !s.isAllowedAgentLoopToolForSnapshot(toolName, request.Snapshot) {
 		return fmt.Sprintf("Tool %s is not allowed in the current agent loop.", toolName), tools.ToolCallRecord{}
 	}
 
-	toolInput := cloneMap(call.Arguments)
+	toolInput, ok := resolveAgentLoopToolInput(toolName, cloneMap(call.Arguments), request.Snapshot)
+	if !ok {
+		return fmt.Sprintf("Tool %s is missing required inputs for the current context.", toolName), tools.ToolCallRecord{}
+	}
 	toolResult, _, err := s.executeTool(ctx, request, s.workspace, toolName, toolInput)
 	if err != nil {
 		if toolResult != nil {
@@ -2915,7 +2934,7 @@ func (s *Service) persistAgentLoopRuntime(request Request, result agentloop.Resu
 		UpdatedAt:  updatedAt,
 		StopReason: string(result.StopReason),
 	}
-	if result.StopReason == agentloop.StopReasonCompleted || result.StopReason == agentloop.StopReasonMaxIterations || result.StopReason == agentloop.StopReasonRepeatedToolChoice || result.StopReason == agentloop.StopReasonToolRetryExhausted || result.StopReason == agentloop.StopReasonPlannerError {
+	if result.StopReason == agentloop.StopReasonCompleted || result.StopReason == agentloop.StopReasonMaxIterations || result.StopReason == agentloop.StopReasonRepeatedToolChoice || result.StopReason == agentloop.StopReasonToolRetryExhausted || result.StopReason == agentloop.StopReasonPlannerError || result.StopReason == agentloop.StopReasonNoSupportedTools {
 		runRecord.FinishedAt = updatedAt
 	}
 	if s.loopStore != nil {
@@ -2998,7 +3017,7 @@ func runStatusFromStopReason(reason agentloop.StopReason) string {
 		return "waiting_auth"
 	case agentloop.StopReasonNeedUserInput:
 		return "waiting_input"
-	case agentloop.StopReasonPlannerError, agentloop.StopReasonRepeatedToolChoice, agentloop.StopReasonMaxIterations, agentloop.StopReasonToolRetryExhausted:
+	case agentloop.StopReasonPlannerError, agentloop.StopReasonRepeatedToolChoice, agentloop.StopReasonMaxIterations, agentloop.StopReasonToolRetryExhausted, agentloop.StopReasonNoSupportedTools:
 		return "failed"
 	default:
 		return "processing"
@@ -3100,17 +3119,6 @@ func marshalEventPayload(value map[string]any) string {
 	return string(payload)
 }
 
-// isAllowedAgentLoopTool guards the first loop implementation so only
-// read-oriented tools participate in the autonomous planning cycle.
-func (s *Service) isAllowedAgentLoopTool(name string) bool {
-	switch name {
-	case "read_file", "list_dir", "page_read", "page_search":
-		return true
-	default:
-		return false
-	}
-}
-
 func (s *Service) availableToolNames() []string {
 	if s.tools == nil {
 		return nil
@@ -3161,6 +3169,9 @@ func (s *Service) resolveGovernanceToolExecution(request Request) (string, map[s
 			if budgetDowngradeDisallowsDirectTool(request, intentName) {
 				return "", nil, nil, false, nil
 			}
+			if input, ok := resolveBrowserToolInput(intentName, args, request.Snapshot); ok {
+				return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
+			}
 			switch intentName {
 			case "read_file":
 				pathValue := stringValue(args, "path", stringValue(args, "target_path", ""))
@@ -3187,33 +3198,20 @@ func (s *Service) resolveGovernanceToolExecution(request Request) (string, map[s
 					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
 				}
 			case "page_read":
-				urlValue := stringValue(args, "url", "")
-				if urlValue != "" {
-					return intentName, map[string]any{"url": urlValue}, s.toolExecutionContext(s.workspace, request), true, nil
+				if input, ok := resolvePageToolInput(intentName, args, request.Snapshot); ok {
+					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
 				}
 			case "page_search":
-				urlValue := stringValue(args, "url", "")
-				queryValue := stringValue(args, "query", "")
-				if urlValue != "" && queryValue != "" {
-					input := map[string]any{"url": urlValue, "query": queryValue}
-					if limit, ok := args["limit"]; ok {
-						input["limit"] = limit
-					}
+				if input, ok := resolvePageToolInput(intentName, args, request.Snapshot); ok {
 					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
 				}
 			case "page_interact":
-				urlValue := stringValue(args, "url", "")
-				if urlValue != "" {
-					input := map[string]any{"url": urlValue}
-					if actions, ok := args["actions"]; ok {
-						input["actions"] = actions
-					}
+				if input, ok := resolvePageToolInput(intentName, args, request.Snapshot); ok {
 					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
 				}
 			case "structured_dom":
-				urlValue := stringValue(args, "url", "")
-				if urlValue != "" {
-					return intentName, map[string]any{"url": urlValue}, s.toolExecutionContext(s.workspace, request), true, nil
+				if input, ok := resolvePageToolInput(intentName, args, request.Snapshot); ok {
+					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
 				}
 			case "extract_text", "ocr_image", "ocr_pdf":
 				pathValue := stringValue(args, "path", stringValue(args, "file_path", ""))
@@ -3327,6 +3325,12 @@ func governanceTargetObject(toolName string, toolInput map[string]any, execCtx *
 		return firstNonEmpty(stringValue(toolInput, "working_dir", ""), execCtx.WorkspacePath)
 	case "page_read", "page_search", "page_interact", "structured_dom":
 		return stringValue(toolInput, "url", "")
+	case "browser_navigate":
+		return firstNonEmpty(strings.TrimSpace(stringValue(toolInput, "url", "")), browserStableTargetObject(mapValue(toolInput, "attach")))
+	case "browser_tab_focus", "browser_interact":
+		return browserStableTargetObject(mapValue(toolInput, "attach"))
+	case "browser_attach_current", "browser_snapshot", "browser_tabs_list":
+		return browserTargetObject(mapValue(toolInput, "attach"))
 	default:
 		for _, key := range governedTargetKeys(toolName) {
 			if value := stringValue(toolInput, key, ""); value != "" {
@@ -3340,6 +3344,9 @@ func governanceTargetObject(toolName string, toolInput map[string]any, execCtx *
 func approvedTargetObject(intent map[string]any, workspacePath string) string {
 	intentName := stringValue(intent, "name", "")
 	arguments := mapValue(intent, "arguments")
+	if browserTarget := browserIntentTargetObject(intentName, arguments); browserTarget != "" {
+		return browserTarget
+	}
 	for _, key := range approvedTargetKeys(intentName) {
 		if value := strings.TrimSpace(stringValue(arguments, key, "")); value != "" {
 			normalized := strings.ReplaceAll(value, "\\", "/")
@@ -3357,6 +3364,14 @@ func approvedTargetObject(intent map[string]any, workspacePath string) string {
 	}
 	if intentName == "exec_command" {
 		return workspacePath
+	}
+	if intentName == "browser_navigate" {
+		if url := strings.TrimSpace(stringValue(arguments, "url", "")); url != "" {
+			return url
+		}
+	}
+	if target := browserIntentTargetObject(intentName, arguments); target != "" {
+		return target
 	}
 	if url := strings.TrimSpace(stringValue(arguments, "url", "")); url != "" {
 		return url
@@ -3384,6 +3399,343 @@ func approvedTargetKeys(intentName string) []string {
 	default:
 		return []string{"target_path", "path", "working_dir"}
 	}
+}
+
+func resolveBrowserToolInput(intentName string, arguments map[string]any, snapshot contextsvc.TaskContextSnapshot) (map[string]any, bool) {
+	if explicitInput, ok := resolveExplicitBrowserToolInput(intentName, arguments); ok {
+		return explicitInput, true
+	}
+
+	browserKind := strings.ToLower(strings.TrimSpace(snapshot.BrowserKind))
+	if browserKind != "chrome" && browserKind != "edge" {
+		return nil, false
+	}
+
+	useSnapshotTarget := true
+	allowEmptyTarget := false
+	requireStableTarget := requiresStableBrowserTarget(intentName)
+	if intentName == "browser_tabs_list" {
+		allowEmptyTarget = true
+	}
+	if intentName == "browser_tab_focus" {
+		useSnapshotTarget = browserTargetOverrideMissing(arguments)
+	}
+
+	attach := buildBrowserAttachInput(browserKind, snapshot, arguments, useSnapshotTarget, allowEmptyTarget, requireStableTarget)
+	if len(attach) == 0 {
+		return nil, false
+	}
+
+	input := map[string]any{"attach": attach}
+	switch strings.TrimSpace(intentName) {
+	case "browser_attach_current", "browser_snapshot", "browser_tabs_list", "browser_tab_focus":
+		return input, true
+	case "browser_navigate":
+		urlValue := strings.TrimSpace(stringValue(arguments, "url", ""))
+		if urlValue == "" {
+			return nil, false
+		}
+		input["url"] = urlValue
+		return input, true
+	case "browser_interact":
+		actions, ok := arguments["actions"]
+		if !ok {
+			return nil, false
+		}
+		input["actions"] = actions
+		return input, true
+	default:
+		return nil, false
+	}
+}
+
+func resolveExplicitBrowserToolInput(intentName string, arguments map[string]any) (map[string]any, bool) {
+	attach := mergeExplicitBrowserAttachInput(mapValue(arguments, "attach"), arguments)
+	if len(attach) == 0 {
+		return nil, false
+	}
+	if requiresStableBrowserTarget(intentName) && !hasStableBrowserAttachTarget(attach) {
+		return nil, false
+	}
+
+	input := map[string]any{"attach": cloneMap(attach)}
+	switch strings.TrimSpace(intentName) {
+	case "browser_attach_current", "browser_snapshot", "browser_tabs_list", "browser_tab_focus":
+		return input, true
+	case "browser_navigate":
+		urlValue := strings.TrimSpace(stringValue(arguments, "url", ""))
+		if urlValue == "" {
+			return nil, false
+		}
+		input["url"] = urlValue
+		return input, true
+	case "browser_interact":
+		actions, ok := arguments["actions"]
+		if !ok {
+			return nil, false
+		}
+		input["actions"] = actions
+		return input, true
+	default:
+		return nil, false
+	}
+}
+
+func mergeExplicitBrowserAttachInput(attachInput map[string]any, arguments map[string]any) map[string]any {
+	merged := cloneMap(attachInput)
+	if merged == nil {
+		merged = map[string]any{}
+	}
+	target := cloneMap(mapValue(merged, "target"))
+	if target == nil {
+		target = map[string]any{}
+	}
+	if targetURL := strings.TrimSpace(stringValue(arguments, "target_url", "")); targetURL != "" {
+		target["url"] = targetURL
+	}
+	if titleContains := strings.TrimSpace(stringValue(arguments, "title_contains", "")); titleContains != "" {
+		target["title_contains"] = titleContains
+	}
+	if pageIndex, ok := browserAttachPageIndex(arguments["page_index"]); ok {
+		target["page_index"] = pageIndex
+	}
+	if len(target) > 0 {
+		merged["target"] = target
+	}
+	return merged
+}
+
+func buildBrowserAttachInput(browserKind string, snapshot contextsvc.TaskContextSnapshot, arguments map[string]any, useSnapshotTarget, allowEmptyTarget, requireStableTarget bool) map[string]any {
+	target := map[string]any{}
+	if pageIndex, ok := browserAttachPageIndex(arguments["page_index"]); ok {
+		target["page_index"] = pageIndex
+	}
+	if targetURL := strings.TrimSpace(stringValue(arguments, "target_url", "")); targetURL != "" {
+		target["url"] = targetURL
+	} else if useSnapshotTarget && strings.TrimSpace(snapshot.PageURL) != "" {
+		target["url"] = strings.TrimSpace(snapshot.PageURL)
+	}
+	if !requireStableTarget {
+		if titleContains := strings.TrimSpace(stringValue(arguments, "title_contains", "")); titleContains != "" {
+			target["title_contains"] = titleContains
+		} else if useSnapshotTarget {
+			if pageTitle := strings.TrimSpace(snapshot.PageTitle); pageTitle != "" {
+				target["title_contains"] = pageTitle
+			} else if windowTitle := strings.TrimSpace(snapshot.WindowTitle); windowTitle != "" {
+				target["title_contains"] = windowTitle
+			}
+		}
+	}
+	if requireStableTarget && !hasStableBrowserTarget(target) {
+		return nil
+	}
+	if len(target) == 0 && !allowEmptyTarget {
+		return nil
+	}
+
+	attach := map[string]any{
+		"mode":         string(tools.BrowserAttachModeCDP),
+		"browser_kind": browserKind,
+	}
+	if len(target) > 0 {
+		attach["target"] = target
+	}
+	return attach
+}
+
+func browserIntentTargetObject(intentName string, arguments map[string]any) string {
+	if requiresStableBrowserTarget(intentName) {
+		if strings.TrimSpace(intentName) == "browser_navigate" {
+			if value := strings.TrimSpace(stringValue(arguments, "url", "")); value != "" {
+				return value
+			}
+		}
+		if targetURL := strings.TrimSpace(stringValue(arguments, "target_url", "")); targetURL != "" {
+			return targetURL
+		}
+		if pageIndex, ok := browserAttachPageIndex(arguments["page_index"]); ok {
+			return fmt.Sprintf("browser_tab:%d", pageIndex)
+		}
+		return browserStableTargetObject(mapValue(arguments, "attach"))
+	}
+
+	if strings.TrimSpace(intentName) == "browser_navigate" {
+		if value := strings.TrimSpace(stringValue(arguments, "url", "")); value != "" {
+			return value
+		}
+	}
+	if targetURL := strings.TrimSpace(stringValue(arguments, "target_url", "")); targetURL != "" {
+		return targetURL
+	}
+	if titleContains := strings.TrimSpace(stringValue(arguments, "title_contains", "")); titleContains != "" {
+		return titleContains
+	}
+	if pageIndex, ok := browserAttachPageIndex(arguments["page_index"]); ok {
+		return fmt.Sprintf("browser_tab:%d", pageIndex)
+	}
+	return browserTargetObject(mapValue(arguments, "attach"))
+}
+
+func browserStableTargetObject(attach map[string]any) string {
+	if len(attach) == 0 {
+		return ""
+	}
+	target := mapValue(attach, "target")
+	if value := strings.TrimSpace(stringValue(target, "url", "")); value != "" {
+		return value
+	}
+	if pageIndex, ok := browserAttachPageIndex(target["page_index"]); ok {
+		return fmt.Sprintf("browser_tab:%d", pageIndex)
+	}
+	return ""
+}
+
+func browserTargetObject(attach map[string]any) string {
+	if len(attach) == 0 {
+		return ""
+	}
+	target := mapValue(attach, "target")
+	if value := strings.TrimSpace(stringValue(target, "url", "")); value != "" {
+		return value
+	}
+	if pageIndex, ok := browserAttachPageIndex(target["page_index"]); ok {
+		return fmt.Sprintf("browser_tab:%d", pageIndex)
+	}
+	if value := strings.TrimSpace(stringValue(target, "title_contains", "")); value != "" {
+		return value
+	}
+	return strings.TrimSpace(stringValue(attach, "browser_kind", ""))
+}
+
+func requiresStableBrowserTarget(intentName string) bool {
+	switch strings.TrimSpace(intentName) {
+	case "browser_navigate", "browser_tab_focus", "browser_interact":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasStableBrowserAttachTarget(attach map[string]any) bool {
+	return hasStableBrowserTarget(mapValue(attach, "target"))
+}
+
+func hasStableBrowserTarget(target map[string]any) bool {
+	if len(target) == 0 {
+		return false
+	}
+	if strings.TrimSpace(stringValue(target, "url", "")) != "" {
+		return true
+	}
+	_, ok := browserAttachPageIndex(target["page_index"])
+	return ok
+}
+
+func browserAttachPageIndex(rawValue any) (int, bool) {
+	switch typed := rawValue.(type) {
+	case int:
+		if typed >= 0 {
+			return typed, true
+		}
+	case float64:
+		if typed >= 0 && typed == float64(int(typed)) {
+			return int(typed), true
+		}
+	}
+	return 0, false
+}
+
+func browserTargetOverrideMissing(arguments map[string]any) bool {
+	if _, ok := browserAttachPageIndex(arguments["page_index"]); ok {
+		return false
+	}
+	if strings.TrimSpace(stringValue(arguments, "target_url", "")) != "" {
+		return false
+	}
+	return strings.TrimSpace(stringValue(arguments, "title_contains", "")) == ""
+}
+
+func resolvePageToolInput(intentName string, arguments map[string]any, snapshot contextsvc.TaskContextSnapshot) (map[string]any, bool) {
+	urlValue := strings.TrimSpace(stringValue(arguments, "url", ""))
+	if urlValue == "" {
+		return nil, false
+	}
+	input := map[string]any{"url": urlValue}
+	switch intentName {
+	case "page_search":
+		queryValue := strings.TrimSpace(stringValue(arguments, "query", ""))
+		if queryValue == "" {
+			return nil, false
+		}
+		input["query"] = queryValue
+		if limit, ok := arguments["limit"]; ok {
+			input["limit"] = limit
+		}
+	case "page_interact":
+		if actions, ok := arguments["actions"]; ok {
+			input["actions"] = actions
+		}
+	}
+	if attach := pageAttachInput(urlValue, arguments, snapshot); len(attach) > 0 {
+		input["attach"] = attach
+	}
+	return input, true
+}
+
+func pageAttachInput(urlValue string, arguments map[string]any, snapshot contextsvc.TaskContextSnapshot) map[string]any {
+	// Page-level attach hints must come from trusted desktop context. The planner
+	// can request a page tool, but it must not steer browser kind or CDP endpoint
+	// away from the observed foreground session.
+	browserKind := strings.ToLower(strings.TrimSpace(snapshot.BrowserKind))
+	if browserKind != "chrome" && browserKind != "edge" {
+		return nil
+	}
+	pageURL := comparablePageURL(snapshot.PageURL)
+	requestURL := comparablePageURL(urlValue)
+	if pageURL == "" || requestURL == "" || pageURL != requestURL {
+		return nil
+	}
+	target := map[string]any{"url": pageURL}
+	if pageTitle := strings.TrimSpace(snapshot.PageTitle); pageTitle != "" {
+		target["title_contains"] = pageTitle
+	}
+	attach := map[string]any{
+		"mode":         string(tools.BrowserAttachModeCDP),
+		"browser_kind": browserKind,
+		"target":       target,
+	}
+	return attach
+}
+
+func comparablePageURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return trimmed
+	}
+	parsed.Scheme = strings.ToLower(strings.TrimSpace(parsed.Scheme))
+	hostname := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	port := strings.TrimSpace(parsed.Port())
+	switch {
+	case hostname == "":
+		parsed.Host = ""
+	case port == "":
+		parsed.Host = hostname
+	case parsed.Scheme == "http" && port == "80":
+		parsed.Host = hostname
+	case parsed.Scheme == "https" && port == "443":
+		parsed.Host = hostname
+	default:
+		parsed.Host = net.JoinHostPort(hostname, port)
+	}
+	if parsed.Path == "" {
+		parsed.Path = "/"
+	}
+	parsed.Fragment = ""
+	return parsed.String()
 }
 
 func requireAuthorizationFlag(intent map[string]any) bool {

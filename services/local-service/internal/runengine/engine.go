@@ -2178,11 +2178,6 @@ func (e *Engine) buildEventWithPayload(record *TaskRecord, eventType string, pay
 	}
 }
 
-// buildToolCall creates one compatibility-layer tool_call record for the task.
-func (e *Engine) buildToolCall(record *TaskRecord, toolName string) map[string]any {
-	return e.buildToolCallRecord(record, toolName, "succeeded", map[string]any{}, map[string]any{}, 120, nil)
-}
-
 func (e *Engine) buildToolCallRecord(record *TaskRecord, toolName, status string, input, output map[string]any, durationMS int64, errorCode any) map[string]any {
 	if durationMS <= 0 {
 		durationMS = 1
@@ -2439,6 +2434,11 @@ func mergeTaskSnapshot(base, update contextsvc.TaskContextSnapshot) contextsvc.T
 	merged.PageTitle = pickLastNonEmpty(base.PageTitle, update.PageTitle)
 	merged.PageURL = pickLastNonEmpty(base.PageURL, update.PageURL)
 	merged.AppName = pickLastNonEmpty(base.AppName, update.AppName)
+	merged.BrowserKind = pickLastNonEmpty(base.BrowserKind, update.BrowserKind)
+	merged.ProcessPath = pickLastNonEmpty(base.ProcessPath, update.ProcessPath)
+	if update.ProcessID > 0 {
+		merged.ProcessID = update.ProcessID
+	}
 	merged.WindowTitle = pickLastNonEmpty(base.WindowTitle, update.WindowTitle)
 	merged.VisibleText = mergeSnapshotText(base.VisibleText, update.VisibleText)
 	merged.ScreenSummary = mergeSnapshotText(base.ScreenSummary, update.ScreenSummary)

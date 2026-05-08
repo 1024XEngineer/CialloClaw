@@ -70,6 +70,12 @@ type runtimeMigrationPlan struct {
 	targetSecretPath    string
 }
 
+type sidecarRuntimes struct {
+	playwright *sidecarclient.PlaywrightSidecarRuntime
+	ocr        *sidecarclient.OCRWorkerRuntime
+	media      *sidecarclient.MediaWorkerRuntime
+}
+
 // New assembles a fully wired local-service application.
 func New(cfg config.Config) (*App, error) {
 	if strings.ContainsRune(cfg.WorkspaceRoot, '\x00') {
@@ -108,21 +114,10 @@ func New(cfg config.Config) (*App, error) {
 		_ = storageService.Close()
 		return nil, err
 	}
-	playwrightRuntime, err := sidecarclient.NewPlaywrightSidecarRuntime(pluginService, osCapability)
-	playwrightRuntime = chooseRuntimeOnStart(playwrightRuntime, err, func() *sidecarclient.PlaywrightSidecarRuntime {
-		return sidecarclient.NewUnavailablePlaywrightSidecarRuntime(pluginService, osCapability)
-	})
-	playwrightClient := playwrightRuntime.Client()
-	ocrRuntime, err := sidecarclient.NewOCRWorkerRuntime(pluginService, osCapability)
-	ocrRuntime = chooseRuntimeOnStart(ocrRuntime, err, func() *sidecarclient.OCRWorkerRuntime {
-		return sidecarclient.NewUnavailableOCRWorkerRuntime(pluginService, osCapability)
-	})
-	ocrClient := ocrRuntime.Client()
-	mediaRuntime, err := sidecarclient.NewMediaWorkerRuntime(pluginService, osCapability)
-	mediaRuntime = chooseRuntimeOnStart(mediaRuntime, err, func() *sidecarclient.MediaWorkerRuntime {
-		return sidecarclient.NewUnavailableMediaWorkerRuntime(pluginService, osCapability)
-	})
-	mediaClient := mediaRuntime.Client()
+	sidecars := buildSidecarRuntimes(pluginService, osCapability)
+	playwrightClient := sidecars.playwright.Client()
+	ocrClient := sidecars.ocr.Client()
+	mediaClient := sidecars.media.Client()
 	screenClient := sidecarclient.NewLocalScreenCaptureClient(fileSystem)
 	toolRegistry := tools.NewRegistry()
 	if err := registerBuiltinToolsForBootstrap(toolRegistry); err != nil {
@@ -201,10 +196,33 @@ func New(cfg config.Config) (*App, error) {
 		storage:      storageService,
 		toolRegistry: toolRegistry,
 		toolExecutor: toolExecutor,
-		playwright:   playwrightRuntime,
-		ocr:          ocrRuntime,
-		media:        mediaRuntime,
+		playwright:   sidecars.playwright,
+		ocr:          sidecars.ocr,
+		media:        sidecars.media,
 	}, nil
+}
+
+// buildSidecarRuntimes keeps worker startup policy in one bootstrap phase. A
+// runtime may start in an unavailable state, but callers still receive a stable
+// client facade so tool wiring can preserve the formal tool_call flow.
+func buildSidecarRuntimes(pluginService *plugin.Service, osCapability platform.OSCapabilityAdapter) sidecarRuntimes {
+	playwrightRuntime, err := sidecarclient.NewPlaywrightSidecarRuntime(pluginService, osCapability)
+	playwrightRuntime = chooseRuntimeOnStart(playwrightRuntime, err, func() *sidecarclient.PlaywrightSidecarRuntime {
+		return sidecarclient.NewUnavailablePlaywrightSidecarRuntime(pluginService, osCapability)
+	})
+	ocrRuntime, err := sidecarclient.NewOCRWorkerRuntime(pluginService, osCapability)
+	ocrRuntime = chooseRuntimeOnStart(ocrRuntime, err, func() *sidecarclient.OCRWorkerRuntime {
+		return sidecarclient.NewUnavailableOCRWorkerRuntime(pluginService, osCapability)
+	})
+	mediaRuntime, err := sidecarclient.NewMediaWorkerRuntime(pluginService, osCapability)
+	mediaRuntime = chooseRuntimeOnStart(mediaRuntime, err, func() *sidecarclient.MediaWorkerRuntime {
+		return sidecarclient.NewUnavailableMediaWorkerRuntime(pluginService, osCapability)
+	})
+	return sidecarRuntimes{
+		playwright: playwrightRuntime,
+		ocr:        ocrRuntime,
+		media:      mediaRuntime,
+	}
 }
 
 // migrateLegacyRuntimeDefaultsIfNeeded copies data from the legacy repo-relative
