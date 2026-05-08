@@ -5019,6 +5019,63 @@ test("shell-ball bubble zone renders per-bubble pin and delete controls", () => 
   assert.doesNotMatch(markup, /data-tooltip=/);
 });
 
+test("shell-ball agent bubbles auto-link bare https urls without trailing punctuation", () => {
+  const markup = renderToStaticMarkup(
+    createElement(ShellBallBubbleZone, {
+      visualState: "processing",
+      bubbleItems: [
+        {
+          bubble: {
+            bubble_id: "msg-agent-link-1",
+            task_id: "task-agent-link-1",
+            type: "result",
+            text: "项目地址是 https://github.com/1024XEngineer/CialloClaw。",
+            pinned: false,
+            hidden: false,
+            created_at: "2026-05-08T10:09:00.000Z",
+          },
+          role: "agent",
+          desktop: {
+            lifecycleState: "visible",
+          },
+        },
+      ] satisfies ShellBallBubbleItem[],
+    }),
+  );
+
+  assert.match(markup, /href="https:\/\/github\.com\/1024XEngineer\/CialloClaw"/);
+  assert.doesNotMatch(markup, /href="https:\/\/github\.com\/1024XEngineer\/CialloClaw。"/);
+  assert.match(markup, /target="_blank"/);
+});
+
+test("shell-ball agent bubbles keep markdown links clickable", () => {
+  const markup = renderToStaticMarkup(
+    createElement(ShellBallBubbleZone, {
+      visualState: "processing",
+      bubbleItems: [
+        {
+          bubble: {
+            bubble_id: "msg-agent-markdown-link-1",
+            task_id: "task-agent-markdown-link-1",
+            type: "result",
+            text: "[项目地址](https://github.com/1024XEngineer/CialloClaw)",
+            pinned: false,
+            hidden: false,
+            created_at: "2026-05-08T10:09:05.000Z",
+          },
+          role: "agent",
+          desktop: {
+            lifecycleState: "visible",
+          },
+        },
+      ] satisfies ShellBallBubbleItem[],
+    }),
+  );
+
+  assert.match(markup, />项目地址<\/a>/);
+  assert.match(markup, /href="https:\/\/github\.com\/1024XEngineer\/CialloClaw"/);
+});
+
 test("shell-ball pending-approval bubbles render inline allow and deny controls", () => {
   const markup = renderToStaticMarkup(
     createElement(ShellBallBubbleZone, {
@@ -7758,7 +7815,7 @@ test("shell-ball pinned bubble windows render one coordinator-owned pinned item 
           bubble_id: "msg-pinned-1",
           task_id: "task-pinned-1",
           type: "status",
-          text: "Keep this pinned.",
+          text: "Keep this pinned. https://github.com/1024XEngineer/CialloClaw",
           pinned: true,
           hidden: false,
           created_at: "2026-04-11T10:12:00.000Z",
@@ -7792,7 +7849,7 @@ test("shell-ball pinned bubble windows render one coordinator-owned pinned item 
     {
       react: require("react"),
       "./useShellBallCoordinator": {
-        useShellBallHelperWindowSnapshot() {
+        useShellBallPinnedBubbleSnapshot() {
           return helperSnapshot;
         },
         emitShellBallBubbleAction(action: string, bubbleId: string, source?: string) {
@@ -7821,6 +7878,7 @@ test("shell-ball pinned bubble windows render one coordinator-owned pinned item 
   const markup = renderToStaticMarkup(createElement(RuntimeShellBallPinnedBubbleWindow, null));
 
   assert.match(markup, /Keep this pinned\./);
+  assert.match(markup, /href="https:\/\/github\.com\/1024XEngineer\/CialloClaw"/);
   assert.doesNotMatch(markup, /Leave this in the region\./);
   assert.match(markup, /Unpin/);
   assert.match(markup, /Delete/);
