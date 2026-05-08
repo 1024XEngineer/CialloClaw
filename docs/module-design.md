@@ -1676,10 +1676,6 @@ flowchart TB
 
 补充约束：`exec_command` 默认优先路由到 Docker sandbox；仅对 `cmd` / `powershell` / `pwsh` 这类 Windows shell 入口保留受控宿主执行路径，避免在 Windows 主目标上把本地命令误送入 Linux 容器。
 
-- 当前桌面 Agent Loop 的 planner-visible capability catalog 必须由执行层单一真源生成，同一份定义同时派生工具描述、参数 schema 和运行态 allowlist，避免出现“Prompt 里可用但执行层拒绝”或反向漂移。
-- 当前默认冻结的只读规划能力面为 `read_file / list_dir / page_read / page_search`；`page_interact / structured_dom` 虽已是 Playwright sidecar 正式能力，但不进入当前桌面 Agent Loop 的默认规划目录。
-- 每个能力条目都必须同时声明适用场景、不适用场景和约束；网页只读能力还必须保留“可能触发审批”的治理边界。
-
 #### 处理主线
 1. 根据 `Intent` 和 arguments 解析目标工具及目标对象。
 2. 在真正执行前先生成治理评估，判断是否需要授权、是否越界、是否需要恢复点。
@@ -2115,7 +2111,6 @@ flowchart TB
 #### 实现约束
 - `budget_auto_downgrade` 已进入 Harness 主链路：编排层在执行前依据 token/cost、provider 可用性和 failure signal window 评估预算策略。
 - 执行层在模型或 provider 失败后会转入 lightweight delivery fallback，并对高成本工具类别执行阻断。
-- budget downgrade 可以保留只读 Agent Loop 能力，但不得扩大默认规划目录；浏览器交互、命令执行和媒体重工具仍按高成本类别阻断。
 - 命中结果统一回流到 audit / event / trace 链路，而不是只停留在设置项展示。
 
 #### 处理主线
@@ -2373,10 +2368,6 @@ flowchart TB
 - `TaskContextSnapshot` 是入口阶段的统一上下文快照，不等同于最终 Prompt。
 - `Suggestion` 只决定“怎样入链”，例如 `Intent`、`RequiresConfirm`、`TaskTitle` 和交付偏好，不直接替代执行期 Planner。
 - 真正的 ReAct / Agent Loop 发生在 `execution.Request` 已经成形并进入受控执行循环之后。
-- 进入 Planning Loop 后，planner prompt 默认使用中文，并固定要求“先判断能否直答；最终答复先给结论并保持精简”，避免把交付口径交给模型自由发挥。
-- 规划输入至少由 `当前可用能力 / 用户上下文 / 已观察到的工具结果 / 补充要求` 这些受控片段组成，避免把运行时能力、steering message 和历史观察分散注入。
-- 当模型以纯文本误判“做不到 / 无法访问”，但当前目录中确有可用能力时，运行时允许追加一次 `能力提醒` 并重试一轮；第二次仍拒绝时必须直接回流结果，避免形成 Doom Loop。
-- `能力提醒` 只针对显式 capability denial，不针对普通直答、无工具场景或本来就不该调用工具的回答。
 
 ### 5.3 风险执行与回滚图
 
