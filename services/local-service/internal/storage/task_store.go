@@ -119,6 +119,22 @@ func (s *inMemoryTaskStore) ListTasks(_ context.Context, limit, offset int) ([]T
 	return pageTasks(items, limit, offset), len(items), nil
 }
 
+func (s *inMemoryTaskStore) ListTasksForTaskList(_ context.Context, statusGroup, sortBy, sortOrder string, limit, offset int) ([]TaskRecord, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	items := make([]TaskRecord, 0, len(s.records))
+	for _, record := range s.records {
+		if !taskRecordMatchesStatusGroup(record.Status, statusGroup) {
+			continue
+		}
+		items = append(items, record)
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		return compareTaskRecordsForList(items[i], items[j], sortBy, sortOrder)
+	})
+	return pageTasks(items, limit, offset), len(items), nil
+}
+
 func (s *inMemoryTaskStore) ListTasksBySession(_ context.Context, sessionID string, limit, offset int) ([]TaskRecord, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -251,6 +267,39 @@ func (s *SQLiteTaskStore) ListTasks(ctx context.Context, limit, offset int) ([]T
 	return items, total, nil
 }
 
+func (s *SQLiteTaskStore) ListTasksForTaskList(ctx context.Context, statusGroup, sortBy, sortOrder string, limit, offset int) ([]TaskRecord, int, error) {
+	whereClause, whereArgs := sqliteTaskListStatusClause(statusGroup)
+	orderClause := sqliteTaskListOrderClause(sortBy, sortOrder)
+	query := `SELECT ` + structuredTaskSelectColumns + ` FROM tasks` + whereClause + ` ORDER BY ` + orderClause
+	countQuery := `SELECT COUNT(1) FROM tasks` + whereClause
+	args := append([]any{}, whereArgs...)
+	if limit > 0 {
+		query += ` LIMIT ? OFFSET ?`
+		args = append(args, limit, offset)
+	}
+	var total int
+	if err := s.db.QueryRowContext(ctx, countQuery, whereArgs...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count task-list rows: %w", err)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list task-list rows: %w", err)
+	}
+	defer rows.Close()
+	items := make([]TaskRecord, 0)
+	for rows.Next() {
+		var record TaskRecord
+		if err := scanStructuredTask(rows, &record); err != nil {
+			return nil, 0, fmt.Errorf("scan task-list row: %w", err)
+		}
+		items = append(items, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate task-list rows: %w", err)
+	}
+	return items, total, nil
+}
+
 func (s *SQLiteTaskStore) ListTasksBySession(ctx context.Context, sessionID string, limit, offset int) ([]TaskRecord, int, error) {
 	query := `SELECT ` + structuredTaskSelectColumns + ` FROM tasks WHERE session_id = ? ORDER BY started_at DESC, task_id DESC`
 	countQuery := `SELECT COUNT(1) FROM tasks WHERE session_id = ?`
@@ -346,6 +395,75 @@ func (s *SQLiteTaskStore) initialize(ctx context.Context) error {
 		return fmt.Errorf("create tasks primary run index: %w", err)
 	}
 	return nil
+}
+
+func sqliteTaskListStatusClause(statusGroup string) (string, []any) {
+	finishedStatuses := []any{"completed", "cancelled", "ended_unfinished", "failed"}
+	switch strings.TrimSpace(statusGroup) {
+	case "finished":
+		return ` WHERE status IN (?, ?, ?, ?)`, finishedStatuses
+	default:
+		return ` WHERE status NOT IN (?, ?, ?, ?)`, finishedStatuses
+	}
+}
+
+func sqliteTaskListOrderClause(sortBy, sortOrder string) string {
+	column := "updated_at"
+	switch strings.TrimSpace(sortBy) {
+	case "started_at":
+		column = "started_at"
+	case "finished_at":
+		column = "finished_at"
+	}
+	direction := "DESC"
+	if strings.TrimSpace(sortOrder) == "asc" {
+		direction = "ASC"
+	}
+	return column + ` ` + direction + `, updated_at ` + direction + `, task_id ` + direction
+}
+
+func taskRecordMatchesStatusGroup(status, statusGroup string) bool {
+	switch strings.TrimSpace(statusGroup) {
+	case "finished":
+		return status == "completed" || status == "cancelled" || status == "ended_unfinished" || status == "failed"
+	default:
+		return !(status == "completed" || status == "cancelled" || status == "ended_unfinished" || status == "failed")
+	}
+}
+
+func compareTaskRecordsForList(left, right TaskRecord, sortBy, sortOrder string) bool {
+	leftTime := parseGovernanceTime(taskRecordListSortTime(left, sortBy))
+	rightTime := parseGovernanceTime(taskRecordListSortTime(right, sortBy))
+	ascending := strings.TrimSpace(sortOrder) == "asc"
+	if leftTime.Equal(rightTime) {
+		leftUpdated := parseGovernanceTime(left.UpdatedAt)
+		rightUpdated := parseGovernanceTime(right.UpdatedAt)
+		if leftUpdated.Equal(rightUpdated) {
+			if ascending {
+				return left.TaskID < right.TaskID
+			}
+			return left.TaskID > right.TaskID
+		}
+		if ascending {
+			return leftUpdated.Before(rightUpdated)
+		}
+		return leftUpdated.After(rightUpdated)
+	}
+	if ascending {
+		return leftTime.Before(rightTime)
+	}
+	return leftTime.After(rightTime)
+}
+
+func taskRecordListSortTime(record TaskRecord, sortBy string) string {
+	switch strings.TrimSpace(sortBy) {
+	case "started_at":
+		return record.StartedAt
+	case "finished_at":
+		return record.FinishedAt
+	default:
+		return record.UpdatedAt
+	}
 }
 
 type SQLiteTaskStepStore struct {

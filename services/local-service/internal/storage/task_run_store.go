@@ -160,6 +160,83 @@ func (s *InMemoryTaskRunStore) LoadLegacyTaskRuns(_ context.Context, structuredT
 	return records, nil
 }
 
+func (s *InMemoryTaskRunStore) ListLegacyTaskRunsForTaskList(_ context.Context, statusGroup, sortBy, sortOrder string, limit, offset int) ([]TaskRunRecord, int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	records := make([]TaskRunRecord, 0, len(s.records))
+	for taskID, record := range s.records {
+		if s.taskStore != nil {
+			if _, err := s.taskStore.GetTask(context.Background(), taskID); err == nil {
+				continue
+			}
+		}
+		if !taskRecordMatchesStatusGroup(record.Status, statusGroup) {
+			continue
+		}
+		records = append(records, cloneTaskRunRecord(record))
+	}
+
+	sort.SliceStable(records, func(i, j int) bool {
+		return compareTaskRunRecordsForList(records[i], records[j], sortBy, sortOrder)
+	})
+
+	return pageTaskRuns(records, limit, offset), len(records), nil
+}
+
+func pageTaskRuns(items []TaskRunRecord, limit, offset int) []TaskRunRecord {
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		return append([]TaskRunRecord(nil), items...)
+	}
+	if offset >= len(items) {
+		return []TaskRunRecord{}
+	}
+	end := offset + limit
+	if end > len(items) {
+		end = len(items)
+	}
+	return append([]TaskRunRecord(nil), items[offset:end]...)
+}
+
+func compareTaskRunRecordsForList(left, right TaskRunRecord, sortBy, sortOrder string) bool {
+	leftTime := parseGovernanceTime(taskRunRecordListSortTime(left, sortBy))
+	rightTime := parseGovernanceTime(taskRunRecordListSortTime(right, sortBy))
+	ascending := strings.TrimSpace(sortOrder) == "asc"
+	if leftTime.Equal(rightTime) {
+		if left.UpdatedAt.Equal(right.UpdatedAt) {
+			if ascending {
+				return left.TaskID < right.TaskID
+			}
+			return left.TaskID > right.TaskID
+		}
+		if ascending {
+			return left.UpdatedAt.Before(right.UpdatedAt)
+		}
+		return left.UpdatedAt.After(right.UpdatedAt)
+	}
+	if ascending {
+		return leftTime.Before(rightTime)
+	}
+	return leftTime.After(rightTime)
+}
+
+func taskRunRecordListSortTime(record TaskRunRecord, sortBy string) string {
+	switch strings.TrimSpace(sortBy) {
+	case "started_at":
+		return record.StartedAt.Format(time.RFC3339Nano)
+	case "finished_at":
+		if record.FinishedAt == nil {
+			return ""
+		}
+		return record.FinishedAt.Format(time.RFC3339Nano)
+	default:
+		return record.UpdatedAt.Format(time.RFC3339Nano)
+	}
+}
+
 // writeStructuredTaskState keeps the new product-facing tasks/task_steps tables
 // in sync with the legacy task_runs snapshot so the migration can stay dual-write
 // until all read paths fully leave the compatibility record_json layer.

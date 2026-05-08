@@ -22,16 +22,7 @@ func (s *Service) TaskList(params map[string]any) (map[string]any, error) {
 	offset := clampListOffset(intValue(params, "offset", 0))
 	sortBy := stringValue(params, "sort_by", "updated_at")
 	sortOrder := stringValue(params, "sort_order", "desc")
-	allTasks := s.taskListRecords(group, sortBy, sortOrder)
-	total := len(allTasks)
-	tasks := []runengine.TaskRecord{}
-	if offset < total {
-		end := offset + limit
-		if limit <= 0 || end > total {
-			end = total
-		}
-		tasks = allTasks[offset:end]
-	}
+	tasks, total := s.taskListRecords(group, sortBy, sortOrder, limit, offset)
 
 	items := make([]map[string]any, 0, len(tasks))
 	for _, task := range tasks {

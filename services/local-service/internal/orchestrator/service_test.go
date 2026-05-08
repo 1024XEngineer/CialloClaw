@@ -525,8 +525,14 @@ type stubStrongholdProvider struct {
 }
 
 type countingTaskStore struct {
-	base      storage.TaskStore
-	listCalls int
+	base                 storage.TaskStore
+	listCalls            int
+	listForTaskListCalls int
+	lastTaskListLimit    int
+	lastTaskListOffset   int
+	lastTaskListGroup    string
+	lastTaskListSortBy   string
+	lastTaskListOrder    string
 }
 
 func (s failingTodoStore) ReplaceTodoState(ctx context.Context, items []storage.TodoItemRecord, rules []storage.RecurringRuleRecord) error {
@@ -576,6 +582,12 @@ func (s *countingTaskRunStore) LoadLegacyTaskRuns(ctx context.Context, structure
 	return s.base.LoadLegacyTaskRuns(ctx, structuredTaskIDs)
 }
 
+func (s *countingTaskRunStore) ListLegacyTaskRunsForTaskList(ctx context.Context, statusGroup, sortBy, sortOrder string, limit, offset int) ([]storage.TaskRunRecord, int, error) {
+	s.loadCalls++
+	s.legacyLoadCalls++
+	return s.base.ListLegacyTaskRunsForTaskList(ctx, statusGroup, sortBy, sortOrder, limit, offset)
+}
+
 func (s *stubStrongholdProvider) Open(context.Context) (storage.SecretStore, error) {
 	if s.err != nil {
 		return nil, s.err
@@ -604,6 +616,16 @@ func (s *countingTaskStore) GetTask(ctx context.Context, taskID string) (storage
 func (s *countingTaskStore) ListTasks(ctx context.Context, limit, offset int) ([]storage.TaskRecord, int, error) {
 	s.listCalls++
 	return s.base.ListTasks(ctx, limit, offset)
+}
+
+func (s *countingTaskStore) ListTasksForTaskList(ctx context.Context, statusGroup, sortBy, sortOrder string, limit, offset int) ([]storage.TaskRecord, int, error) {
+	s.listForTaskListCalls++
+	s.lastTaskListGroup = statusGroup
+	s.lastTaskListSortBy = sortBy
+	s.lastTaskListOrder = sortOrder
+	s.lastTaskListLimit = limit
+	s.lastTaskListOffset = offset
+	return s.base.ListTasksForTaskList(ctx, statusGroup, sortBy, sortOrder, limit, offset)
 }
 
 func (s *countingTaskStore) ListTasksBySession(ctx context.Context, sessionID string, limit, offset int) ([]storage.TaskRecord, int, error) {
@@ -15727,6 +15749,150 @@ func TestServiceTaskListBackfillsStructuredLoopStopReasonFromCompatibilityStorag
 	}
 	if listed[0]["task_id"] != taskID || listed[0]["loop_stop_reason"] != "tool_retry_exhausted" {
 		t.Fatalf("expected structured storage task list to preserve compatibility stop reason, got %+v", listed[0])
+	}
+}
+
+func TestServiceTaskListBoundsStructuredStoragePagingWindow(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured task list paging window")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	originalStore := service.storage.TaskStore()
+	defer replaceTaskStore(t, service.storage, originalStore)
+	countingStore := &countingTaskStore{base: originalStore}
+	replaceTaskStore(t, service.storage, countingStore)
+
+	baseTime := time.Date(2026, 5, 2, 10, 0, 0, 0, time.UTC)
+	for index := 0; index < 6; index++ {
+		taskID := fmt.Sprintf("task_structured_page_%02d", index)
+		timestamp := baseTime.Add(time.Duration(index) * time.Minute)
+		if err := countingStore.WriteTask(context.Background(), storage.TaskRecord{
+			TaskID:              taskID,
+			SessionID:           fmt.Sprintf("sess_structured_page_%02d", index),
+			RunID:               fmt.Sprintf("run_structured_page_%02d", index),
+			PrimaryRunID:        fmt.Sprintf("run_structured_page_%02d", index),
+			Title:               fmt.Sprintf("structured page task %02d", index),
+			SourceType:          "hover_input",
+			Status:              "completed",
+			IntentName:          "summarize",
+			IntentArgumentsJSON: `{"style":"key_points"}`,
+			PreferredDelivery:   "workspace_document",
+			FallbackDelivery:    "bubble",
+			CurrentStep:         "deliver_result",
+			CurrentStepStatus:   "completed",
+			RiskLevel:           "green",
+			RequestSource:       "floating_ball",
+			RequestTrigger:      "hover_text_input",
+			StartedAt:           timestamp.Format(time.RFC3339Nano),
+			UpdatedAt:           timestamp.Format(time.RFC3339Nano),
+			FinishedAt:          timestamp.Add(time.Minute).Format(time.RFC3339Nano),
+		}); err != nil {
+			t.Fatalf("write structured task %d failed: %v", index, err)
+		}
+	}
+
+	result, err := service.TaskList(map[string]any{
+		"group":      "finished",
+		"sort_by":    "updated_at",
+		"sort_order": "desc",
+		"limit":      2,
+		"offset":     2,
+	})
+	if err != nil {
+		t.Fatalf("task list failed: %v", err)
+	}
+	if countingStore.listForTaskListCalls != 1 {
+		t.Fatalf("expected one bounded task-list query, got %d", countingStore.listForTaskListCalls)
+	}
+	if countingStore.lastTaskListLimit != 4 || countingStore.lastTaskListOffset != 0 {
+		t.Fatalf("expected task-list storage query to request a bounded merge window, got limit=%d offset=%d", countingStore.lastTaskListLimit, countingStore.lastTaskListOffset)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 2 || items[0]["task_id"] != "task_structured_page_03" || items[1]["task_id"] != "task_structured_page_02" {
+		t.Fatalf("expected second page from structured storage, got %+v", items)
+	}
+}
+
+func TestServiceTaskListKeepsRuntimeOnlyTasksInPagedMerge(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "runtime merge into paged task list")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	originalStore := service.storage.TaskStore()
+	defer replaceTaskStore(t, service.storage, originalStore)
+	countingStore := &countingTaskStore{base: originalStore}
+	replaceTaskStore(t, service.storage, countingStore)
+
+	baseTime := time.Date(2026, 5, 2, 9, 0, 0, 0, time.UTC)
+	for index := 0; index < 4; index++ {
+		taskID := fmt.Sprintf("task_unfinished_page_%02d", index)
+		timestamp := baseTime.Add(time.Duration(index) * time.Minute)
+		if err := countingStore.WriteTask(context.Background(), storage.TaskRecord{
+			TaskID:              taskID,
+			SessionID:           fmt.Sprintf("sess_unfinished_page_%02d", index),
+			RunID:               fmt.Sprintf("run_unfinished_page_%02d", index),
+			PrimaryRunID:        fmt.Sprintf("run_unfinished_page_%02d", index),
+			Title:               fmt.Sprintf("unfinished page task %02d", index),
+			SourceType:          "hover_input",
+			Status:              "processing",
+			IntentName:          "summarize",
+			IntentArgumentsJSON: `{"style":"key_points"}`,
+			PreferredDelivery:   "workspace_document",
+			FallbackDelivery:    "bubble",
+			CurrentStep:         "generate_output",
+			CurrentStepStatus:   "processing",
+			RiskLevel:           "green",
+			RequestSource:       "floating_ball",
+			RequestTrigger:      "hover_text_input",
+			StartedAt:           timestamp.Format(time.RFC3339Nano),
+			UpdatedAt:           timestamp.Format(time.RFC3339Nano),
+		}); err != nil {
+			t.Fatalf("write structured unfinished task %d failed: %v", index, err)
+		}
+	}
+
+	runtimeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:      "sess_runtime_only_page",
+		RequestSource:  "floating_ball",
+		RequestTrigger: "hover_text_input",
+		Title:          "runtime-only task",
+		SourceType:     "hover_input",
+		Status:         "processing",
+		Intent:         map[string]any{"name": "summarize", "arguments": map[string]any{"style": "key_points"}},
+		CurrentStep:    "generate_output",
+		RiskLevel:      "green",
+	})
+	updatedRuntimeTask, ok := service.runEngine.RecordLoopLifecycle(runtimeTask.TaskID, "loop.round.completed", "paused_by_session", map[string]any{"stop_reason": "paused_by_session"})
+	if !ok {
+		t.Fatal("expected runtime task to update successfully")
+	}
+
+	result, err := service.TaskList(map[string]any{
+		"group":      "unfinished",
+		"sort_by":    "updated_at",
+		"sort_order": "desc",
+		"limit":      2,
+		"offset":     1,
+	})
+	if err != nil {
+		t.Fatalf("task list failed: %v", err)
+	}
+	if countingStore.listForTaskListCalls != 1 {
+		t.Fatalf("expected one structured paging query, got %d", countingStore.listForTaskListCalls)
+	}
+	if countingStore.lastTaskListLimit != 4 || countingStore.lastTaskListOffset != 0 {
+		t.Fatalf("expected runtime merge to expand only the bounded storage window, got limit=%d offset=%d", countingStore.lastTaskListLimit, countingStore.lastTaskListOffset)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 2 {
+		t.Fatalf("expected two unfinished tasks on the second page, got %+v", items)
+	}
+	if items[0]["task_id"] != "task_unfinished_page_03" || items[1]["task_id"] != "task_unfinished_page_02" {
+		t.Fatalf("expected runtime-only task to occupy page one without corrupting later pages, got %+v (runtime task %s)", items, updatedRuntimeTask.TaskID)
+	}
+	page := result["page"].(map[string]any)
+	if page["total"] != 5 {
+		t.Fatalf("expected merged total to include the runtime-only task, got %+v", page)
 	}
 }
 

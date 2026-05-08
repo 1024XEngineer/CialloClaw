@@ -71,9 +71,12 @@ func pageMap(limit, offset, total int) map[string]any {
 }
 
 func (s *Service) listTasksFromStructuredStorage(group, sortBy, sortOrder string, limit, offset int) ([]runengine.TaskRecord, int, bool) {
-	records, _, err := s.storage.TaskStore().ListTasks(context.Background(), 0, 0)
-	if err != nil || len(records) == 0 {
+	records, total, err := s.storage.TaskStore().ListTasksForTaskList(context.Background(), group, sortBy, sortOrder, limit, offset)
+	if err != nil {
 		return nil, 0, false
+	}
+	if len(records) == 0 {
+		return []runengine.TaskRecord{}, total, total > 0
 	}
 	tasks := make([]runengine.TaskRecord, 0, len(records))
 	for _, record := range records {
@@ -81,34 +84,38 @@ func (s *Service) listTasksFromStructuredStorage(group, sortBy, sortOrder string
 		if !ok {
 			continue
 		}
-		if !matchesTaskGroup(task, group) {
-			continue
-		}
 		tasks = append(tasks, task)
 	}
-	if len(tasks) == 0 {
-		return nil, 0, false
-	}
-	runengineSortTaskRecords(tasks, sortBy, sortOrder)
-	total := len(tasks)
-	if offset >= total {
-		return []runengine.TaskRecord{}, total, true
-	}
-	end := offset + limit
-	if limit <= 0 || end > total {
-		end = total
-	}
-	return tasks[offset:end], total, true
+	return tasks, total, true
 }
 
-func (s *Service) taskListRecords(group, sortBy, sortOrder string) []runengine.TaskRecord {
+func (s *Service) taskListRecords(group, sortBy, sortOrder string, limit, offset int) ([]runengine.TaskRecord, int) {
 	runtimeTasks, _ := s.runEngine.ListTasks(group, sortBy, sortOrder, 0, 0)
-	storageTasks := filterAndSortTasks(s.loadAllTaskListFromStorage(), group, sortBy, sortOrder)
+	storageTasks, storageTotal, storageReady := s.listTaskPageFromStorage(group, sortBy, sortOrder, limit, offset, runtimeTasks)
+	if !storageReady {
+		total := len(runtimeTasks)
+		if offset >= total {
+			return []runengine.TaskRecord{}, total
+		}
+		end := offset + limit
+		if limit <= 0 || end > total {
+			end = total
+		}
+		return runtimeTasks[offset:end], total
+	}
 	merged := mergeTaskLists(runtimeTasks, storageTasks)
 	if len(merged) > 0 {
 		runengineSortTaskRecords(merged, sortBy, sortOrder)
 	}
-	return merged
+	total := storageTotal + s.countRuntimeOnlyTasksForList(group, runtimeTasks)
+	if offset >= len(merged) {
+		return []runengine.TaskRecord{}, total
+	}
+	end := offset + limit
+	if limit <= 0 || end > len(merged) {
+		end = len(merged)
+	}
+	return merged[offset:end], total
 }
 
 func (s *Service) loadAllTaskListFromStorage() []runengine.TaskRecord {
@@ -127,6 +134,46 @@ func (s *Service) loadAllTaskListFromStorage() []runengine.TaskRecord {
 		return structuredTasks
 	}
 	return mergeStructuredTaskListCompatibility(structuredTasks, legacyTasks)
+}
+
+func (s *Service) listTaskPageFromStorage(group, sortBy, sortOrder string, limit, offset int, runtimeTasks []runengine.TaskRecord) ([]runengine.TaskRecord, int, bool) {
+	if s.storage == nil {
+		return nil, 0, false
+	}
+	window := offset + limit + len(runtimeTasks)
+	if limit <= 0 {
+		window = 0
+	}
+	structuredTasks := []runengine.TaskRecord(nil)
+	structuredTotal := 0
+	structuredReady := false
+	if s.storage.TaskStore() != nil {
+		tasks, total, ok := s.listTasksFromStructuredStorage(group, sortBy, sortOrder, window, 0)
+		if ok {
+			structuredTasks = tasks
+			structuredTotal = total
+			structuredReady = true
+		}
+	}
+	legacyTasks := []runengine.TaskRecord(nil)
+	legacyTotal := 0
+	legacyReady := false
+	if s.storage.TaskRunStore() != nil {
+		records, total, err := s.storage.TaskRunStore().ListLegacyTaskRunsForTaskList(context.Background(), group, sortBy, sortOrder, window, 0)
+		if err == nil {
+			legacyTasks = make([]runengine.TaskRecord, 0, len(records))
+			for _, record := range records {
+				legacyTasks = append(legacyTasks, taskRecordFromStorage(record))
+			}
+			legacyTotal = total
+			legacyReady = true
+		}
+	}
+	if structuredReady || legacyReady {
+		return mergeStructuredTaskListCompatibility(structuredTasks, legacyTasks), structuredTotal + legacyTotal, true
+	}
+	storageTasks := filterAndSortTasks(s.loadAllTaskListFromStorage(), group, sortBy, sortOrder)
+	return storageTasks, len(storageTasks), len(storageTasks) != 0
 }
 
 func (s *Service) loadAllTasksFromStorage() []runengine.TaskRecord {
@@ -223,6 +270,27 @@ func (s *Service) loadAllTasksFromStructuredStorage(includeCompatibility bool) [
 		tasks = append(tasks, task)
 	}
 	return tasks
+}
+
+func (s *Service) countRuntimeOnlyTasksForList(group string, runtimeTasks []runengine.TaskRecord) int {
+	if s == nil || s.storage == nil || s.storage.TaskStore() == nil {
+		return len(runtimeTasks)
+	}
+	count := 0
+	for _, runtimeTask := range runtimeTasks {
+		record, err := s.storage.TaskStore().GetTask(context.Background(), runtimeTask.TaskID)
+		if err != nil {
+			if storage.IsTaskRecordNotFound(err) {
+				count++
+			}
+			continue
+		}
+		storedTask, ok := s.structuredTaskRecordToRuntime(record, false)
+		if !ok || !matchesTaskGroup(storedTask, group) {
+			count++
+		}
+	}
+	return count
 }
 
 // taskQueryViews caches runtime and storage-backed task snapshots for one
