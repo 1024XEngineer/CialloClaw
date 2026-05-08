@@ -1454,7 +1454,7 @@ test("shell-ball helper window sync maps visual states into visibility and snaps
 
   assert.deepEqual(getShellBallHelperWindowVisibility("idle"), {
     bubble: false,
-    input: false,
+    input: true,
     voice: false,
   });
 
@@ -8988,7 +8988,7 @@ test("shell-ball inline input preserves readonly snapshots and only upgrades hid
 });
 
 test("shell-ball input bar mode stays aligned with visual states", () => {
-  assert.equal(getShellBallInputBarMode("idle"), "hidden");
+  assert.equal(getShellBallInputBarMode("idle"), "interactive");
   assert.equal(getShellBallInputBarMode("hover_input"), "interactive");
   assert.equal(getShellBallInputBarMode("confirming_intent"), "readonly");
   assert.equal(getShellBallInputBarMode("waiting_auth"), "readonly");
