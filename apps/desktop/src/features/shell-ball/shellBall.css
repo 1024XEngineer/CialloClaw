@@ -358,10 +358,17 @@ body[data-app-window="shell-ball"],
 }
 
 .shell-ball-bubble-message {
-  border: 0;
+  -webkit-backdrop-filter: blur(10px) saturate(112%);
+  backdrop-filter: blur(10px) saturate(112%);
+  border: 1px solid transparent;
+  background-clip: padding-box;
   border-radius: 0.8rem;
-  box-shadow: none;
+  box-shadow:
+    0 16px 28px -24px rgba(71, 78, 90, 0.16),
+    0 6px 14px -12px rgba(71, 78, 90, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.42);
   max-width: min(31rem, calc(100% - 0.25rem));
+  overflow: visible;
   padding: 0.5rem;
   position: relative;
 }
@@ -387,16 +394,24 @@ body[data-app-window="shell-ball"],
 }
 
 .shell-ball-bubble-message--agent {
-  background: linear-gradient(90deg, #8AC4E2 0%, #d3e9ee 100%);
+  background:
+    radial-gradient(circle at 18% 18%, rgba(255, 255, 255, 0.56) 0%, rgba(255, 255, 255, 0) 36%),
+    radial-gradient(circle at 82% 84%, rgba(124, 172, 206, 0.18) 0%, rgba(124, 172, 206, 0) 42%),
+    linear-gradient(135deg, rgba(138, 196, 226, 0.98) 0%, rgba(196, 226, 237, 0.95) 58%, rgba(233, 245, 248, 0.92) 100%);
   border-bottom-left-radius: 0.3rem;
-  color: #2f241c;
+  border-color: rgba(132, 177, 209, 0.42);
+  color: rgba(42, 65, 88, 0.94);
   margin-inline-end: 20px;
 }
 
 .shell-ball-bubble-message--user {
-  background: linear-gradient(90deg, #fff1e1 0%, #ffe7ca 100%);
+  background:
+    radial-gradient(circle at 20% 16%, rgba(255, 255, 255, 0.48) 0%, rgba(255, 255, 255, 0) 38%),
+    radial-gradient(circle at 84% 86%, rgba(247, 202, 146, 0.2) 0%, rgba(247, 202, 146, 0) 44%),
+    linear-gradient(135deg, rgba(255, 241, 225, 0.98) 0%, rgba(255, 231, 202, 0.95) 56%, rgba(255, 245, 232, 0.92) 100%);
   border-bottom-right-radius: 0.3rem;
-  color: #2f241c;
+  border-color: rgba(219, 190, 151, 0.4);
+  color: rgba(98, 69, 43, 0.92);
   margin-inline-start: 20px;
 }
 
@@ -411,6 +426,7 @@ body[data-app-window="shell-ball"],
 
 .shell-ball-bubble-message--pinned {
   background: linear-gradient(180deg, var(--shell-ball-bubble-shell-pinned) 0%, #f2e1c7 100%);
+  border-color: rgba(210, 178, 131, 0.32);
   border-radius: 1.35rem;
   color: #2f241c;
   max-width: min(32rem, calc(100vw - 0.5rem));
@@ -481,16 +497,40 @@ body[data-app-window="shell-ball"],
 
 .shell-ball-bubble-message__body {
   margin-top: 0;
+  position: relative;
+}
+
+.shell-ball-bubble-message__body--collapsed {
+  padding-bottom: 0.1rem;
+}
+
+.shell-ball-bubble-message__measure {
+  inset-inline: 0;
+  opacity: 0;
+  pointer-events: none;
+  position: absolute;
+  top: 0;
+  visibility: hidden;
+  z-index: -1;
 }
 
 .shell-ball-bubble-message__text {
-  font-size: 0.84rem;
+  font-size: 0.86rem;
+  font-weight: 500;
   letter-spacing: 0.01em;
-  line-height: 1.45;
+  line-height: 1.52;
   margin: 0;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.shell-ball-bubble-message__text--collapsed {
+  display: -webkit-box;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .shell-ball-bubble-message__loading {
@@ -540,7 +580,7 @@ body[data-app-window="shell-ball"],
   border: 0;
   border-radius: 0;
   box-shadow: none;
-  color: rgba(77, 100, 133, 0.82);
+  color: rgba(88, 109, 136, 0.76);
   cursor: pointer;
   display: inline-flex;
   height: 1.15rem;
@@ -573,6 +613,49 @@ body[data-app-window="shell-ball"],
 .shell-ball-bubble-message__delete-control:hover,
 .shell-ball-bubble-message__delete-control:focus-visible {
   color: rgba(210, 70, 70, 0.98);
+}
+
+.shell-ball-bubble-message__collapse-control {
+  align-items: center;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  bottom: 0.16rem;
+  color: rgba(101, 116, 136, 0.76);
+  cursor: pointer;
+  display: inline-flex;
+  height: 1rem;
+  justify-content: center;
+  opacity: 0;
+  padding: 0;
+  pointer-events: none;
+  position: absolute;
+  right: 0.18rem;
+  transition:
+    color 160ms ease,
+    opacity 160ms ease,
+    transform 160ms ease;
+  width: 1rem;
+}
+
+.shell-ball-bubble-zone__message-entry:hover .shell-ball-bubble-message__collapse-control,
+.shell-ball-bubble-zone__message-entry:focus-within .shell-ball-bubble-message__collapse-control,
+.shell-ball-bubble-message:focus-within .shell-ball-bubble-message__collapse-control,
+.shell-ball-bubble-message__collapse-control:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.shell-ball-bubble-message__collapse-control:hover,
+.shell-ball-bubble-message__collapse-control:focus-visible {
+  color: rgba(64, 88, 124, 0.96);
+  outline: 0;
+  transform: translateY(-1px);
+}
+
+.shell-ball-bubble-message__collapse-control-icon {
+  height: 0.72rem;
+  width: 0.72rem;
 }
 
 .shell-ball-bubble-message__markdown {
