@@ -6373,6 +6373,8 @@ test("task workspace routes formal delivery through a dedicated page and keeps l
   assert.match(taskDeliverySource, /mergeTaskArtifactItems/);
   assert.match(taskDeliverySource, /const artifactItems = useMemo\([\s\S]*mergeTaskArtifactItems\(artifactListQuery\.data\?\.items \?\? \[\], taskDetailArtifacts\)/);
   assert.doesNotMatch(taskDeliverySource, /const artifactItems = artifactListQuery\.data\?\.items \?\? detailData\?\.detail\.artifacts \?\? \[\];/);
+  assert.match(taskDeliverySource, /canOpenTaskDeliveryResult/);
+  assert.match(taskDeliverySource, /const canOpenFormalDelivery = canOpenTaskDeliveryResult\(formalDeliveryResult\);/);
   assert.match(taskDeliverySource, /getTaskDeliveryOpenLabel/);
   assert.match(taskDeliverySource, /buildDashboardTaskDetailRouteState/);
   assert.match(taskDeliverySource, /navigateToDashboardResultPage/);

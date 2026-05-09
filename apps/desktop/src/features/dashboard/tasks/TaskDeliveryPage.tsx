@@ -16,6 +16,7 @@ import { getTaskPreviewStatusLabel, getTaskStatusBadgeClass } from "./taskPage.m
 import { buildDashboardTaskArtifactQueryKey, buildDashboardTaskDetailQueryKey } from "./taskPage.query";
 import { loadTaskDetailData, type TaskPageDataMode } from "./taskPage.service";
 import {
+  canOpenTaskDeliveryResult,
   getTaskDeliveryOpenLabel,
   isAllowedTaskOpenUrl,
   loadTaskArtifactPage,
@@ -113,9 +114,7 @@ export function TaskDeliveryPage() {
   );
   const evidenceArtifacts = artifactItems.filter((artifact) => evidenceArtifactRefs.has(artifact.artifact_id) || evidenceArtifactRefs.has(artifact.path));
   const outputArtifacts = artifactItems.filter((artifact) => !evidenceArtifactRefs.has(artifact.artifact_id) && !evidenceArtifactRefs.has(artifact.path));
-  const canOpenFormalDelivery =
-    formalDeliveryResult !== null &&
-    (formalDeliveryResult.type !== "task_detail" || Boolean(formalDeliveryResult.payload.path) || Boolean(formalDeliveryResult.payload.url));
+  const canOpenFormalDelivery = canOpenTaskDeliveryResult(formalDeliveryResult);
 
   useEffect(() => {
     return () => {
