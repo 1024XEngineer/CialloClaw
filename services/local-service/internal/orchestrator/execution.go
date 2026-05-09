@@ -312,7 +312,9 @@ func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, sn
 			"trace":           cloneMap(budgetDecision.Trace),
 		},
 	})
-	executionResult = s.normalizeExecutionFormalDeliveryResult(processingTask.TaskID, deliveryType, resultTitle, executionResult)
+	if err == nil {
+		executionResult = s.normalizeExecutionFormalDeliveryResult(processingTask.TaskID, deliveryType, resultTitle, executionResult)
+	}
 	processingTask = s.recordExecutionToolCalls(processingTask, executionResult.ToolCalls)
 	s.persistExecutionToolCallEvents(processingTask, taskIntent, executionResult.ToolCalls)
 	auditDeliveryResult := executionResult.DeliveryResult

@@ -17006,6 +17006,9 @@ func TestServiceStartTaskWithExecutorPageReadFailureUsesUnifiedError(t *testing.
 		t.Fatalf("security respond should surface task-centric failure result, got %v", err)
 	}
 	taskID := result["task"].(map[string]any)["task_id"].(string)
+	if result["delivery_result"] != nil {
+		t.Fatalf("expected failed page_read response not to expose delivery_result, got %+v", result["delivery_result"])
+	}
 	record, ok := service.runEngine.GetTask(taskID)
 	if !ok {
 		t.Fatal("expected failed task to remain in runtime")
@@ -17018,6 +17021,20 @@ func TestServiceStartTaskWithExecutorPageReadFailureUsesUnifiedError(t *testing.
 	}
 	if record.LatestToolCall["error_code"] != tools.ToolErrorCodePlaywrightSidecarFail {
 		t.Fatalf("expected unified sidecar error code, got %+v", record.LatestToolCall)
+	}
+	traces, total, err := service.storage.TraceStore().ListTraceRecords(context.Background(), taskID, 10, 0)
+	if err != nil || total != 1 || len(traces) != 1 {
+		t.Fatalf("expected one persisted trace for failed page_read, total=%d len=%d err=%v", total, len(traces), err)
+	}
+	if strings.Contains(traces[0].RuleHitsJSON, "delivery_type=result_page") {
+		t.Fatalf("expected failed page_read trace not to claim result_page delivery, got %+v", traces[0])
+	}
+	evals, total, err := service.storage.EvalStore().ListEvalSnapshots(context.Background(), taskID, 10, 0)
+	if err != nil || total != 1 || len(evals) != 1 {
+		t.Fatalf("expected one eval snapshot for failed page_read, total=%d len=%d err=%v", total, len(evals), err)
+	}
+	if strings.Contains(evals[0].MetricsJSON, `"delivery_type":"result_page"`) {
+		t.Fatalf("expected failed page_read eval metrics not to claim result_page delivery, got %+v", evals[0])
 	}
 }
 
