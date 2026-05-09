@@ -89,13 +89,14 @@ func (s *Service) applyBudgetAutoDowngrade(task runengine.TaskRecord, snapshot c
 	updatedTask.FallbackDelivery = "bubble"
 	updatedIntent := cloneMap(taskIntent)
 	arguments := cloneMap(mapValue(updatedIntent, "arguments"))
-	if len(arguments) > 0 {
-		if containsString(decision.DegradeActions, "skip_expensive_tools") {
-			arguments["disable_tool_calls"] = true
-		}
-		arguments["budget_auto_downgrade_applied"] = true
-		updatedIntent["arguments"] = arguments
+	if arguments == nil {
+		arguments = map[string]any{}
 	}
+	if containsString(decision.DegradeActions, "skip_expensive_tools") {
+		arguments["disable_tool_calls"] = true
+	}
+	arguments["budget_auto_downgrade_applied"] = true
+	updatedIntent["arguments"] = arguments
 	updatedSnapshot := snapshot
 	if containsString(decision.DegradeActions, "shrink_context") {
 		updatedSnapshot.Text = truncateText(updatedSnapshot.Text, 160)
@@ -654,6 +655,7 @@ func (s *Service) resumeHumanLoopTask(task runengine.TaskRecord, reviewDecision 
 	if correctedIntent := mapValue(reviewDecision, "corrected_intent"); len(correctedIntent) > 0 {
 		escalation["corrected_intent"] = cloneMap(correctedIntent)
 	}
+	task = s.appendAuditData(task, compactAuditRecords(s.buildHumanLoopReviewAudit(task, escalation, reviewDecision)), nil)
 	suggestedAction := firstNonEmptyString(stringValue(escalation, "suggested_action", ""), "review_and_replan")
 	if suggestedAction != "review_and_replan" {
 		return runengine.TaskRecord{}, nil, nil, false, nil
@@ -703,6 +705,39 @@ func humanReviewDecisionFromParams(arguments map[string]any) (map[string]any, er
 		}
 	}
 	return cloneMap(decision), nil
+}
+
+func (s *Service) buildHumanLoopReviewAudit(task runengine.TaskRecord, escalation, reviewDecision map[string]any) map[string]any {
+	decision := stringValue(escalation, "review_result", stringValue(reviewDecision, "decision", ""))
+	if decision == "" {
+		return nil
+	}
+	reviewedAt := stringValue(escalation, "reviewed_at", currentTimeFromTask(s.runEngine, task.TaskID))
+	details := map[string]any{
+		"escalation_id":    stringValue(escalation, "escalation_id", ""),
+		"suggested_action": stringValue(escalation, "suggested_action", ""),
+		"review_result":    decision,
+	}
+	if reviewerID := stringValue(escalation, "reviewer_id", ""); reviewerID != "" {
+		details["reviewer_id"] = reviewerID
+	}
+	if notes := stringValue(escalation, "review_notes", ""); notes != "" {
+		details["review_notes"] = notes
+	}
+	if correctedIntent := mapValue(escalation, "corrected_intent"); len(correctedIntent) > 0 {
+		details["corrected_intent"] = cloneMap(correctedIntent)
+	}
+	return map[string]any{
+		"audit_record_id": fmt.Sprintf("audit_human_loop_%s_%d", task.TaskID, time.Now().UnixNano()),
+		"task_id":         task.TaskID,
+		"run_id":          task.RunID,
+		"category":        "human_in_loop",
+		"action":          "human_in_loop.review",
+		"result":          decision,
+		"reason":          stringValue(escalation, "reason", "human_review"),
+		"created_at":      reviewedAt,
+		"details":         details,
+	}
 }
 
 func (s *Service) maybeEscalateHumanLoop(task runengine.TaskRecord, capture traceeval.CaptureResult, executionResult ...execution.Result) (runengine.TaskRecord, map[string]any, bool) {
@@ -1206,7 +1241,8 @@ func (s *Service) buildBudgetFailureAudit(task runengine.TaskRecord, executionEr
 	if executionErr == nil {
 		return nil
 	}
-	if !errors.Is(executionErr, model.ErrClientNotConfigured) && !errors.Is(executionErr, model.ErrToolCallingNotSupported) && !errors.Is(executionErr, model.ErrModelProviderUnsupported) && !errors.Is(executionErr, model.ErrSecretNotFound) && !errors.Is(executionErr, model.ErrSecretSourceFailed) {
+	reason := budgetFailureAuditReason(executionErr)
+	if reason == "" {
 		return nil
 	}
 	return map[string]any{
@@ -1216,8 +1252,25 @@ func (s *Service) buildBudgetFailureAudit(task runengine.TaskRecord, executionEr
 		"category":        "budget_auto_downgrade",
 		"action":          "budget_auto_downgrade.failure_signal",
 		"result":          "failed",
-		"reason":          executionErr.Error(),
+		"reason":          reason,
 		"created_at":      time.Now().Format(dateTimeLayout),
+	}
+}
+
+func budgetFailureAuditReason(executionErr error) string {
+	switch {
+	case errors.Is(executionErr, model.ErrClientNotConfigured):
+		return "client_not_configured"
+	case errors.Is(executionErr, model.ErrToolCallingNotSupported):
+		return "tool_calling_not_supported"
+	case errors.Is(executionErr, model.ErrModelProviderUnsupported):
+		return "model_provider_unsupported"
+	case errors.Is(executionErr, model.ErrSecretNotFound):
+		return "secret_not_found"
+	case errors.Is(executionErr, model.ErrSecretSourceFailed):
+		return "secret_source_failed"
+	default:
+		return ""
 	}
 }
 

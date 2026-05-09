@@ -2968,6 +2968,24 @@ func TestServiceTaskControlResumeExecutesHumanLoopTask(t *testing.T) {
 	if !ok || record.PendingExecution != nil {
 		t.Fatalf("expected resumed task to clear pending execution, got %+v", record)
 	}
+	foundReviewAudit := false
+	for _, auditRecord := range record.AuditRecords {
+		if auditRecord["action"] != "human_in_loop.review" {
+			continue
+		}
+		if auditRecord["result"] != "approve" {
+			t.Fatalf("expected approved human review audit, got %+v", auditRecord)
+		}
+		details := mapValue(auditRecord, "details")
+		if details["reviewer_id"] != "reviewer_001" || details["review_notes"] != "looks safe to continue" {
+			t.Fatalf("expected human review audit to preserve reviewer metadata, got %+v", auditRecord)
+		}
+		foundReviewAudit = true
+		break
+	}
+	if !foundReviewAudit {
+		t.Fatalf("expected completed task to retain human review audit metadata, got %+v", record.AuditRecords)
+	}
 }
 
 func TestExecutionSegmentKindClassifiesInitialResumeAndRestart(t *testing.T) {
@@ -3120,6 +3138,24 @@ func TestServiceTaskControlResumeHumanLoopReplanReturnsToIntentConfirmation(t *t
 	}
 	if stringValue(record.Intent, "name", "") != "translate" {
 		t.Fatalf("expected corrected intent to be stored for replan, got %+v", record.Intent)
+	}
+	foundReviewAudit := false
+	for _, auditRecord := range record.AuditRecords {
+		if auditRecord["action"] != "human_in_loop.review" {
+			continue
+		}
+		if auditRecord["result"] != "replan" {
+			t.Fatalf("expected replan human review audit, got %+v", auditRecord)
+		}
+		correctedIntent := mapValue(mapValue(auditRecord, "details"), "corrected_intent")
+		if stringValue(correctedIntent, "name", "") != "translate" {
+			t.Fatalf("expected human review audit to preserve corrected intent, got %+v", auditRecord)
+		}
+		foundReviewAudit = true
+		break
+	}
+	if !foundReviewAudit {
+		t.Fatalf("expected replanned task to retain human review audit metadata, got %+v", record.AuditRecords)
 	}
 }
 
@@ -8589,6 +8625,40 @@ func TestServiceBudgetAutoDowngradeSwitchesWorkspaceDeliveryToBubble(t *testing.
 	}
 }
 
+func TestApplyBudgetAutoDowngradeCreatesArgumentsForSkipTools(t *testing.T) {
+	service := newTestService()
+	task := runengine.TaskRecord{
+		TaskID:            "task_budget_empty_args",
+		RunID:             "run_budget_empty_args",
+		PreferredDelivery: "workspace_document",
+		FallbackDelivery:  "workspace_document",
+	}
+	snapshot := contextsvc.TaskContextSnapshot{
+		Text:          strings.Repeat("context ", 40),
+		SelectionText: strings.Repeat("selection ", 40),
+	}
+	intentValue := map[string]any{"name": "summarize"}
+	decision := budgetDowngradeDecision{
+		Applied:        true,
+		TriggerReason:  "failure_pressure",
+		DegradeActions: []string{"skip_expensive_tools", "shrink_context"},
+		Summary:        "fallback",
+	}
+
+	updatedTask, updatedSnapshot, updatedIntent := service.applyBudgetAutoDowngrade(task, snapshot, intentValue, decision)
+
+	if updatedTask.PreferredDelivery != "bubble" || updatedTask.FallbackDelivery != "bubble" {
+		t.Fatalf("expected budget downgrade to force bubble delivery, got %+v", updatedTask)
+	}
+	arguments := mapValue(updatedIntent, "arguments")
+	if arguments["disable_tool_calls"] != true || arguments["budget_auto_downgrade_applied"] != true {
+		t.Fatalf("expected empty arguments to receive downgrade markers, got %+v", updatedIntent)
+	}
+	if len(updatedSnapshot.Text) >= len(snapshot.Text) || len(updatedSnapshot.SelectionText) >= len(snapshot.SelectionText) {
+		t.Fatalf("expected shrink_context action to trim snapshot text, got %+v", updatedSnapshot)
+	}
+}
+
 func TestServiceBudgetAutoDowngradeNoLongerFlagsArbitraryProviderAliasesUnavailable(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "executor-backed provider unavailable")
 	if _, err := service.SettingsUpdate(map[string]any{
@@ -8726,6 +8796,27 @@ func TestServiceFailExecutionTaskAppendsBudgetFailureSignal(t *testing.T) {
 	}
 	if !foundBudgetFailure {
 		t.Fatalf("expected failExecutionTask to append budget failure signal, got %+v", updatedTask.AuditRecords)
+	}
+}
+
+func TestBuildBudgetFailureAuditStoresSanitizedReason(t *testing.T) {
+	service := newTestService()
+	task := runengine.TaskRecord{
+		TaskID: "task_budget_safe_reason",
+		RunID:  "run_budget_safe_reason",
+	}
+	auditRecord := service.buildBudgetFailureAudit(task, errors.Join(
+		model.ErrSecretSourceFailed,
+		errors.New("Authorization: Bearer sk-secret-value invalid in backend vault path"),
+	))
+	if auditRecord == nil {
+		t.Fatal("expected budget failure audit record")
+	}
+	if auditRecord["reason"] != "secret_source_failed" {
+		t.Fatalf("expected classified budget failure reason, got %+v", auditRecord)
+	}
+	if strings.Contains(fmt.Sprint(auditRecord["reason"]), "sk-secret") || strings.Contains(fmt.Sprint(auditRecord["reason"]), "Authorization") {
+		t.Fatalf("expected budget failure reason to avoid raw secret-bearing error details, got %+v", auditRecord)
 	}
 }
 
