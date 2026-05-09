@@ -5583,6 +5583,7 @@ test("dashboard escape fallback is coordinated at route level before the desktop
   const dashboardMainSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/main.tsx"), "utf8");
   const dashboardHomeSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/DashboardHome.tsx"), "utf8");
   const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
   const mirrorAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/MirrorApp.tsx"), "utf8");
   const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
   const escapeCoordinatorSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/shared/dashboardEscapeCoordinator.tsx"), "utf8");
@@ -5602,6 +5603,8 @@ test("dashboard escape fallback is coordinated at route level before the desktop
 
   assert.match(dashboardHomeSource, /useDashboardEscapeHandler\(\{[\s\S]*activeStateKey !== null,[\s\S]*priority: 200,/);
   assert.match(taskPageSource, /useDashboardEscapeHandler\(\{[\s\S]*enabled: detailOpen,[\s\S]*priority: 220,/);
+  assert.match(notePageSource, /useDashboardEscapeHandler\(\{[\s\S]*enabled: sourceStudioOpen,[\s\S]*priority: 240,/);
+  assert.match(notePageSource, /useDashboardEscapeHandler\(\{[\s\S]*enabled: detailOpen,[\s\S]*priority: 220,/);
   assert.match(mirrorAppSource, /useDashboardEscapeHandler\(\{[\s\S]*activeDetailKey !== null,[\s\S]*handleEscape: closeDetail,[\s\S]*priority: 220,/);
   assert.match(securityAppSource, /useDashboardEscapeHandler\(\{[\s\S]*activeDetailKey !== null,[\s\S]*priority: 220,/);
 
