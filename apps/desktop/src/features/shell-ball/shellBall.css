@@ -906,6 +906,7 @@ body[data-app-window="shell-ball"],
 }
 
 .shell-ball-surface__mascot-shell {
+  --shell-ball-edge-dock-scale: 1;
   align-items: center;
   display: flex;
   height: var(--shell-ball-mascot-shell-height);
@@ -913,9 +914,15 @@ body[data-app-window="shell-ball"],
   left: var(--shell-ball-stage-anchor-x);
   position: absolute;
   top: var(--shell-ball-stage-anchor-y);
-  transform: translate(-50%, -50%);
+  transform: translate(-50%, -50%) scale(var(--shell-ball-edge-dock-scale));
+  transform-origin: center center;
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
   width: var(--shell-ball-mascot-shell-width);
   z-index: 4;
+}
+
+.shell-ball-surface__mascot-shell:not([data-dock-target="none"])[data-edge-dock-revealed="false"] {
+  --shell-ball-edge-dock-scale: 0.7;
 }
 
 .shell-ball-surface__overlay {
@@ -1119,6 +1126,7 @@ body[data-app-window="shell-ball"],
 }
 
 .shell-ball-mascot {
+  --shell-ball-dock-mirror-x: 1;
   --shell-ball-mascot-visual-scale: 1;
   --shell-ball-orbital-scale: 1;
   --shell-ball-shadow-offset-y: 0px;
@@ -1129,10 +1137,16 @@ body[data-app-window="shell-ball"],
   height: clamp(16.2rem, 30.6vw, 21.6rem);
   justify-content: center;
   position: relative;
-  transform: scale(var(--shell-ball-mascot-scale)) scale(var(--shell-ball-mascot-visual-scale));
+  transform: scale(var(--shell-ball-mascot-scale)) scale(var(--shell-ball-mascot-visual-scale)) scaleX(var(--shell-ball-dock-mirror-x));
   transform-origin: center center;
   width: clamp(14.86rem, 27.9vw, 17.1rem);
   will-change: filter, transform;
+}
+
+.shell-ball-mascot[data-edge-dock-side="left"][data-edge-dock-revealed="false"],
+.shell-ball-mascot[data-edge-dock-side="top_left"][data-edge-dock-revealed="false"],
+.shell-ball-mascot[data-edge-dock-side="bottom_left"][data-edge-dock-revealed="false"] {
+  --shell-ball-dock-mirror-x: -1;
 }
 
 .shell-ball-mascot[data-voice-hints="true"] {
