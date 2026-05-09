@@ -9,6 +9,12 @@ type NoteActionBarProps = {
   onAction: (action: NoteDetailAction) => void;
 };
 
+type NoteActionDescriptor = {
+  action: NoteDetailAction;
+  label: string;
+  tooltip: string;
+};
+
 const actionIcons: Record<NoteDetailAction, ComponentType<{ className?: string }>> = {
   cancel: XCircle,
   "cancel-recurring": XCircle,
@@ -17,54 +23,126 @@ const actionIcons: Record<NoteDetailAction, ComponentType<{ className?: string }
   delete: Trash2,
   edit: Pencil,
   "move-upcoming": CalendarClock,
+  "open-linked-task": ArrowUpRight,
   "open-resource": ArrowUpRight,
   restore: RotateCcw,
   "skip-once": Clock3,
   "toggle-recurring": Repeat,
 };
 
-function getActions(item: NoteListItem) {
+function createResourceActions(item: NoteListItem): NoteActionDescriptor[] {
+  const resourceCount = item.experience.relatedResources.length;
+  if (resourceCount === 0) {
+    return [];
+  }
+
   if (item.sourceNote?.localOnly) {
     return [
-      { action: "edit" as const, label: "编辑源便签", tooltip: "继续编辑任务来源目录里的 markdown 便签。" },
-      { action: "open-resource" as const, label: "打开源文件", tooltip: "直接打开这张源便签对应的 markdown 文件。" },
+      {
+        action: "open-resource",
+        label: "打开源文件",
+        tooltip: "直接打开这张源便签所在的 markdown 文件。",
+      },
+    ];
+  }
+
+  if (resourceCount === 1) {
+    return [
+      {
+        action: "open-resource",
+        label: "打开相关资料",
+        tooltip: "直接打开这条便签当前关联的资料入口。",
+      },
+    ];
+  }
+
+  return [
+    {
+      action: "open-resource",
+      label: "查看资料列表",
+      tooltip: "在这条便签关联的多份资料里选择要打开的目标。",
+    },
+  ];
+}
+
+function createTaskActions(item: NoteListItem): NoteActionDescriptor[] {
+  if (item.item.linked_task_id) {
+    return [
+      {
+        action: "open-linked-task",
+        label: "打开关联任务",
+        tooltip: "跳转到这条便签已经关联的正式任务详情。",
+      },
+    ];
+  }
+
+  if (!item.experience.canConvertToTask) {
+    return [];
+  }
+
+  return [
+    {
+      action: "convert-to-task",
+      label: "转交给 Agent",
+      tooltip: "会直接生成任务并跳转到任务页。",
+    },
+  ];
+}
+
+function getActions(item: NoteListItem): NoteActionDescriptor[] {
+  const resourceActions = createResourceActions(item);
+  const taskActions = createTaskActions(item);
+
+  if (item.sourceNote?.localOnly) {
+    return [
+      {
+        action: "edit",
+        label: "编辑源便签",
+        tooltip: "继续修改这条源 markdown 便签的正文内容。",
+      },
+      ...resourceActions,
     ];
   }
 
   if (item.item.bucket === "upcoming") {
     return [
-      { action: "complete" as const, label: "标记完成", tooltip: "把这条事项标记为已完成。" },
-      { action: "cancel" as const, label: "取消/跳过", tooltip: "取消或跳过本次事项。" },
-      { action: "edit" as const, label: "编辑", tooltip: "编辑能力稍后接入。" },
-      { action: "open-resource" as const, label: "相关资料", tooltip: "先展示资料入口，暂不直接打开。" },
-      ...(item.experience.canConvertToTask ? [{ action: "convert-to-task" as const, label: "转交给 Agent", tooltip: "确认后会直接生成任务并跳转到任务页。" }] : []),
+      { action: "complete", label: "标记完成", tooltip: "把这条事项标记为已完成。" },
+      { action: "cancel", label: "取消/跳过", tooltip: "取消或跳过本次事项。" },
+      { action: "edit", label: "编辑源便签", tooltip: "打开源便签编辑器并修改正文内容。" },
+      ...resourceActions,
+      ...taskActions,
     ];
   }
 
   if (item.item.bucket === "later") {
     return [
-      { action: "move-upcoming" as const, label: "提前到近期", tooltip: "将这条事项提前到近期要做。" },
-      { action: "edit" as const, label: "编辑", tooltip: "编辑能力稍后接入。" },
-      { action: "cancel" as const, label: "取消", tooltip: "取消这条后续安排。" },
-      { action: "open-resource" as const, label: "相关资料", tooltip: "先展示资料入口，暂不直接打开。" },
-      ...(item.experience.canConvertToTask ? [{ action: "convert-to-task" as const, label: "转交给 Agent", tooltip: "确认后会直接生成任务并跳转到任务页。" }] : []),
+      { action: "move-upcoming", label: "提前到近期", tooltip: "把这条后续安排提前到近期执行。" },
+      { action: "edit", label: "编辑源便签", tooltip: "打开源便签编辑器并修改正文内容。" },
+      { action: "cancel", label: "取消", tooltip: "取消这条后续安排。" },
+      ...resourceActions,
+      ...taskActions,
     ];
   }
 
   if (item.item.bucket === "recurring_rule") {
     return [
-      { action: "toggle-recurring" as const, label: item.experience.isRecurringEnabled ? "暂停重复" : "开启重复", tooltip: "开关重复规则的真实动作稍后接入。" },
-      { action: "edit" as const, label: "修改规则", tooltip: "规则编辑能力稍后接入。" },
-      { action: "cancel-recurring" as const, label: "取消规则", tooltip: "取消整个重复事项。" },
-      { action: "open-resource" as const, label: "相关资料", tooltip: "先展示资料入口，暂不直接打开。" },
+      {
+        action: "toggle-recurring",
+        label: item.experience.isRecurringEnabled ? "暂停重复" : "开启重复",
+        tooltip: "暂停或重新开启这条重复规则。",
+      },
+      { action: "edit", label: "修改规则", tooltip: "打开源便签编辑器并修改时间或重复规则。" },
+      { action: "cancel-recurring", label: "取消规则", tooltip: "取消整条重复规则。" },
+      ...resourceActions,
+      ...taskActions,
     ];
   }
 
   return [
-    { action: "restore" as const, label: "恢复未完成", tooltip: "把这条事项恢复到未完成列表。" },
-    { action: "delete" as const, label: "删除记录", tooltip: "删除记录能力稍后接入。" },
-    { action: "open-resource" as const, label: "相关资料", tooltip: "先展示资料入口，暂不直接打开。" },
-    ...(item.experience.canConvertToTask ? [{ action: "convert-to-task" as const, label: "转交给 Agent", tooltip: "确认后会直接生成任务并跳转到任务页。" }] : []),
+    { action: "restore", label: "恢复未完成", tooltip: "把这条事项恢复到未完成列表。" },
+    { action: "delete", label: "删除记录", tooltip: "删除这条记录并从便签页移除。" },
+    ...resourceActions,
+    ...taskActions,
   ];
 }
 

@@ -56,8 +56,8 @@ export function SourceNoteStudio({
   const createDisabled = !canEdit || isSaving || (isCreating && !isDirty);
   const editorTitle = isCreating ? "新建便签" : draft.title.trim() || editingItem?.item.title || "编辑当前便签";
   const editorMeta = isCreating
-    ? "点击“保存便签”后，系统会创建这张新便签。"
-    : "这里始终只编辑便签内容，隐藏元数据继续由系统维护。";
+    ? "点击“保存便签”后，系统会创建这张新便签；时间和重复规则请在保存后从便签详情里设置。"
+    : "这里始终只编辑便签内容；时间和重复规则请在便签详情里设置，隐藏元数据继续由系统维护。";
 
   return (
     <section className="note-source-studio">
@@ -68,7 +68,7 @@ export function SourceNoteStudio({
             <NotebookText className="note-source-studio__title-icon" />
             <div>
               <h2>内容式便签编辑</h2>
-              <p>这里只让用户写便签内容。第一行会作为标题，其余内容会作为正文；markdown 元数据继续由系统保留并在保存后写回主便签文件。</p>
+              <p>这里只让用户写便签内容。第一行会作为标题，其余内容会作为正文；时间和重复规则在保存后从便签详情里单独设置，markdown 元数据继续由系统保留并写回主便签文件。</p>
             </div>
           </div>
         </div>

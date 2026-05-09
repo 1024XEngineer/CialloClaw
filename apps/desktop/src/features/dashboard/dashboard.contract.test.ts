@@ -224,6 +224,7 @@ function loadSourceNoteEditorModule() {
         title: string;
         noteText: string;
       }) => string;
+      formatSourceNoteScheduleInputValue: (value: string | null | undefined) => string;
       parseSourceNoteEditorBlocks: (note: {
         content: string;
         fileName: string;
@@ -291,6 +292,11 @@ function loadSourceNoteEditorModule() {
         noteText: string;
         title: string;
       }>(draft: TDraft, content: string) => TDraft;
+      resolveSourceNoteDraftBucketForSchedule: (schedule: {
+        dueAt: string;
+        repeatRule: string;
+      }) => "upcoming" | "later" | "recurring_rule" | "closed";
+      serializeSourceNoteScheduleInputValue: (value: string) => string;
     };
   });
 }
@@ -2079,26 +2085,37 @@ test("task context links back into mirror detail state instead of plain text dea
 
 test("task page keeps waiting-auth anchors and routes follow-up steering through the detail panel", () => {
   const { canTaskAcceptSteering, getTaskPrimaryActions } = loadTaskPageMapperModule();
+  const confirmingIntentTask = createTask({ status: "confirming_intent", current_step: "intent_confirmation", intent: { name: "summarize", arguments: {} } });
   const waitingAuthTask = createTask({ status: "waiting_auth" });
   const waitingInputTask = createTask({ status: "waiting_input" });
   const processingPromptTask = createTask({ status: "processing", current_step: "generate_output", intent: { name: "agent_loop", arguments: {} } });
   const processingLoopTask = createTask({ status: "processing", current_step: "agent_loop", intent: { name: "agent_loop", arguments: {} } });
   const mapperSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskPage.mapper.ts"), "utf8");
   const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");
+  const taskServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskPage.service.ts"), "utf8");
   const taskDetailPanelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
 
+  assert.equal(canTaskAcceptSteering(confirmingIntentTask), false);
   assert.equal(canTaskAcceptSteering(waitingAuthTask), true);
   assert.equal(canTaskAcceptSteering(waitingInputTask), false);
   assert.equal(canTaskAcceptSteering(processingPromptTask), false);
   assert.equal(canTaskAcceptSteering(processingLoopTask), true);
+  assert.deepEqual(
+    getTaskPrimaryActions(confirmingIntentTask, createDetail({ approval_request: null, security_summary: { latest_restore_point: null, pending_authorizations: 0, risk_level: "yellow", security_status: "normal" }, task: confirmingIntentTask })).map((action) => action.action),
+    ["cancel", "open-safety"],
+  );
   assert.equal(getTaskPrimaryActions(waitingAuthTask, createDetail({ approval_request: null, security_summary: { latest_restore_point: null, pending_authorizations: 0, risk_level: "yellow", security_status: "normal" }, task: waitingAuthTask })).at(-1)?.label, "安全详情");
   assert.deepEqual(
     getTaskPrimaryActions(waitingInputTask, createDetail({ approval_request: null, security_summary: { latest_restore_point: null, pending_authorizations: 0, risk_level: "yellow", security_status: "normal" }, task: waitingInputTask })).map((action) => action.action),
     ["cancel", "open-safety"],
   );
+  assert.match(mapperSource, /title: "等待确认"/);
+  assert.match(taskServiceSource, /等待确认当前处理方式后继续执行。/);
   assert.doesNotMatch(mapperSource, /当前任务还在等待补充输入，如需修改或补充，请到悬浮球继续处理。/);
   assert.match(taskPageSource, /onSteerTask=\{handleSteerTask\}/);
-  assert.match(taskDetailPanelSource, /const canSteerTask = canTaskAcceptSteering\(task\)/);
+  assert.match(taskDetailPanelSource, /const canSteerTask = task \? canTaskAcceptSteering\(task\) : false;/);
+  assert.match(taskDetailPanelSource, /当前任务仍在等待确认处理方式；确认后才会开放正式 `agent\.task\.steer` 追加要求。/);
+  assert.match(taskDetailPanelSource, /当前任务还在等待确认处理方式，确认后才能继续追加要求。/);
   assert.match(taskDetailPanelSource, /placeholder=\{steeringPlaceholder\}/);
 });
 
@@ -6861,6 +6878,27 @@ test("note rpc service keeps transport failures visible instead of switching to 
   );
 });
 
+test("note conversion and confirming-intent surfaces use direct task handoff wording instead of stale confirm copy", () => {
+  const noteActionBarSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NoteActionBar.tsx"), "utf8");
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+  const noteServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/notePage.service.ts"), "utf8");
+  const voiceFieldSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/components/DashboardVoiceField.tsx"), "utf8");
+  const homeServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts"), "utf8");
+
+  assert.match(noteActionBarSource, /会直接生成任务并跳转到任务页。/);
+  assert.doesNotMatch(noteActionBarSource, /确认后会直接生成任务并跳转到任务页。/);
+  assert.match(notePageSource, /function getNoteConvertSuccessFeedback\(status: Task\["status"\]\)/);
+  assert.match(notePageSource, /正在打开任务详情，等待你确认处理方式。/);
+  assert.match(notePageSource, /后续还需要处理授权。/);
+  assert.match(noteServiceSource, /如果需要更稳定的执行结果，建议补一条更明确的上下文后再转交给 Agent。/);
+  assert.doesNotMatch(noteServiceSource, /再决定是否转交给 Agent。/);
+  assert.match(voiceFieldSource, /return "正在等待确认处理方式";/);
+  assert.doesNotMatch(voiceFieldSource, /已进入意图确认/);
+  assert.match(homeServiceSource, /actionLabel: "前往处理"/);
+  assert.match(homeServiceSource, /当前任务仍在等待确认处理方式/);
+  assert.doesNotMatch(homeServiceSource, /actionLabel: "确认继续"/);
+});
+
 test("source note editor keeps a content-only input while preserving hidden markdown metadata", () => {
   const sourceNoteEditor = loadSourceNoteEditorModule();
   const seededDraft = {
@@ -7112,6 +7150,16 @@ test("source note editor stops parsing hidden metadata after the body starts", (
   );
 });
 
+test("source note schedule helpers round-trip hidden time metadata and derive the persisted bucket", () => {
+  const sourceNoteEditor = loadSourceNoteEditorModule();
+
+  assert.equal(sourceNoteEditor.formatSourceNoteScheduleInputValue("2026-05-07T20:30"), "2026-05-07T20:30");
+  assert.equal(sourceNoteEditor.serializeSourceNoteScheduleInputValue("2026-05-07T20:30"), new Date("2026-05-07T20:30").toISOString());
+  assert.equal(sourceNoteEditor.resolveSourceNoteDraftBucketForSchedule({ dueAt: "2026-05-07T20:30:00.000Z", repeatRule: "" }), "upcoming");
+  assert.equal(sourceNoteEditor.resolveSourceNoteDraftBucketForSchedule({ dueAt: "2026-05-07T20:30:00.000Z", repeatRule: "每周" }), "recurring_rule");
+  assert.equal(sourceNoteEditor.resolveSourceNoteDraftBucketForSchedule({ dueAt: "", repeatRule: "" }), "later");
+});
+
 test("note page resolves newly created source notes from the appended tail block instead of matching by mutable metadata", () => {
   const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
 
@@ -7202,27 +7250,22 @@ test("note preview stacks assign increasing sidebar z-order so later cards cover
   assert.match(notePageStyleSource, /z-index: var\(--note-stack-order, 1\);/);
 });
 
-test("note page keeps local source-note fallback cards off the rail buckets while preserving board cards", () => {
+test("note page keeps markdown source blocks out of the rendered note buckets so new notes only show as formal cards", () => {
   const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
 
-  assert.match(notePageSource, /const sourceFallbackItemsByBucket = useMemo\(\(\) => \{/);
-  assert.match(notePageSource, /nextGroups\[item\.item\.bucket\]\.push\(item\);/);
-  assert.match(notePageSource, /const upcomingItems = useMemo\([\s\S]*sortNotesByUrgency\(\[\.\.\.sourceFallbackItemsByBucket\.upcoming, \.\.\.rpcUpcomingItems\]\)/);
-  assert.match(notePageSource, /const laterItems = useMemo\([\s\S]*sortNotesByUrgency\(\[\.\.\.sourceFallbackItemsByBucket\.later, \.\.\.rpcLaterItems\]\)/);
-  assert.match(notePageSource, /const recurringItems = useMemo\([\s\S]*sortNotesByUrgency\(\[\.\.\.sourceFallbackItemsByBucket\.recurring_rule, \.\.\.rpcRecurringItems\]\)/);
-  assert.match(notePageSource, /const closedItems = useMemo\([\s\S]*sortClosedNotes\(\[\.\.\.sourceFallbackItemsByBucket\.closed, \.\.\.rpcClosedItems\]\)/);
+  assert.doesNotMatch(notePageSource, /buildSourceNoteFallbackItems/);
+  assert.doesNotMatch(notePageSource, /const sourceFallbackItemsByBucket = useMemo\(\(\) => \{/);
+  assert.match(notePageSource, /const upcomingItems = rpcUpcomingItems;/);
+  assert.match(notePageSource, /const laterItems = rpcLaterItems;/);
+  assert.match(notePageSource, /const recurringItems = rpcRecurringItems;/);
+  assert.match(notePageSource, /const closedItems = rpcClosedItems;/);
   assert.match(notePageSource, /function isNoteItemRepresentedOnCanvas\(/);
   assert.match(notePageSource, /const canvasRepresentedSourceNoteBlocks = useMemo\(\(\) => \{/);
   assert.match(notePageSource, /resolveSourceNoteBlockAliases\(item, sourceNotesByPath, sourceNoteBlocksByPath\)\.some\(\(alias\) => canvasRepresentedSourceNoteBlocks\.has\(alias\)\)/);
   assert.match(notePageSource, /const visibleUpcomingItems = useMemo\([\s\S]*!isNoteItemRepresentedOnCanvas\(item, canvasItemIdSet, canvasRepresentedSourceNoteBlocks, sourceNotesByPath, sourceNoteBlocksByPath\)/);
-  assert.match(notePageSource, /const railUpcomingItems = useMemo\(\(\) => visibleUpcomingItems\.filter\(\(item\) => !item\.sourceNote\?\.localOnly\), \[visibleUpcomingItems\]\);/);
-  assert.match(notePageSource, /const formalLaterItems = useMemo\(\(\) => laterItems\.filter\(\(item\) => !item\.sourceNote\?\.localOnly\), \[laterItems\]\);/);
   assert.match(notePageSource, /const visibleLaterItems = useMemo\([\s\S]*!isNoteItemRepresentedOnCanvas\(item, canvasItemIdSet, canvasRepresentedSourceNoteBlocks, sourceNotesByPath, sourceNoteBlocksByPath\)/);
-  assert.match(notePageSource, /const railLaterItems = useMemo\(\(\) => visibleLaterItems\.filter\(\(item\) => !item\.sourceNote\?\.localOnly\), \[visibleLaterItems\]\);/);
   assert.match(notePageSource, /const visibleRecurringItems = useMemo\([\s\S]*!isNoteItemRepresentedOnCanvas\(item, canvasItemIdSet, canvasRepresentedSourceNoteBlocks, sourceNotesByPath, sourceNoteBlocksByPath\)/);
-  assert.match(notePageSource, /const railRecurringItems = useMemo\(\(\) => visibleRecurringItems\.filter\(\(item\) => !item\.sourceNote\?\.localOnly\), \[visibleRecurringItems\]\);/);
   assert.match(notePageSource, /const visibleClosedItems = useMemo\([\s\S]*!isNoteItemRepresentedOnCanvas\(item, canvasItemIdSet, canvasRepresentedSourceNoteBlocks, sourceNotesByPath, sourceNoteBlocksByPath\)/);
-  assert.match(notePageSource, /const railClosedItems = useMemo\(\(\) => visibleClosedItems\.filter\(\(item\) => !item\.sourceNote\?\.localOnly\), \[visibleClosedItems\]\);/);
   assert.match(notePageSource, /items=\{railUpcomingItems\}/);
   assert.match(notePageSource, /items=\{railLaterItems\}/);
   assert.match(notePageSource, /items=\{railRecurringItems\}/);
@@ -7230,6 +7273,32 @@ test("note page keeps local source-note fallback cards off the rail buckets whil
   assert.match(notePageSource, /railLaterItems\.length/);
   assert.match(notePageSource, /railRecurringItems\.length/);
   assert.match(notePageSource, /railClosedItems\.length/);
+});
+
+test("note page writes updated buckets back into markdown after note actions and rail moves", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /async function persistSourceNoteBucketForItem\(/);
+  assert.match(notePageSource, /bucket: nextBucket,/);
+  assert.match(notePageSource, /await saveNoteSource\(taskSourceRoots, context\.note\.path, nextSourceFile\.content\);/);
+  assert.match(notePageSource, /await persistSourceNoteBucketForItem\(updatedItem, updatedBucket\);/);
+  assert.match(notePageSource, /await persistSourceNoteBucketForItem\(updatedItem, outcome\.result\.notepad_item\.bucket\);/);
+  assert.match(notePageSource, /appendSourceBucketSyncFailure\(/);
+});
+
+test("note path display strips Windows extended prefixes without changing the underlying open path flow", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+  const noteDetailPanelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NoteDetailPanel.tsx"), "utf8");
+  const noteMapperSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/notePage.mapper.ts"), "utf8");
+
+  assert.match(noteMapperSource, /export function formatNoteDisplayPath\(value: string \| null \| undefined\)/);
+  assert.match(noteMapperSource, /value\.startsWith\("\\\\\\\\\?\\\\UNC\\\\"/);
+  assert.match(noteMapperSource, /value\.startsWith\("\\\\\\\\\?\\\\"/);
+  assert.match(noteDetailPanelSource, /formatNoteDisplayPath\(experience\.effectiveScope\)/);
+  assert.match(noteDetailPanelSource, /return formatNoteDisplayPath\(resource\.path\);/);
+  assert.match(notePageSource, /formatNoteDisplayPath\(primarySourceNote\.path\)/);
+  assert.match(notePageSource, /formatNoteDisplayPath\(resolvedSourceRoots\[0\]\)/);
+  assert.match(notePageSource, /resource\.url \?\? formatNoteDisplayPath\(resource\.path\)/);
 });
 
 test("note page keeps formal source-note buckets stable across inspection refreshes", () => {
@@ -7253,7 +7322,7 @@ test("note sidebar keeps single preview cards compact instead of stretching to f
   assert.match(notePageStyleSource, /\.note-preview-card \{[\s\S]*align-self: start;/);
 });
 
-test("note detail panel hides source scope and resource cards while keeping the action-bar open flow", () => {
+test.skip("note detail panel hides source scope and resource cards while keeping the action-bar open flow", () => {
   const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
   const noteDetailPanelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NoteDetailPanel.tsx"), "utf8");
   const noteActionBarSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NoteActionBar.tsx"), "utf8");
@@ -7266,6 +7335,48 @@ test("note detail panel hides source scope and resource cards while keeping the 
   assert.match(noteActionBarSource, /"open-resource"/);
   assert.match(notePageSource, /if \(action === "open-resource"\)/);
   assert.match(notePageSource, /void handleResourceOpen\(firstResource\.id\);/);
+});
+test("note detail panel surfaces scope, linked tasks, and related resources without losing the action-bar flow", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+  const noteDetailPanelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NoteDetailPanel.tsx"), "utf8");
+  const noteActionBarSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NoteActionBar.tsx"), "utf8");
+
+  assert.match(noteDetailPanelSource, /生效范围/);
+  assert.match(noteDetailPanelSource, /关联任务与资料/);
+  assert.match(noteDetailPanelSource, /note-detail-resource-list/);
+  assert.match(noteDetailPanelSource, /onOpenLinkedTask\?: \(\) => void;/);
+  assert.match(noteDetailPanelSource, /onOpenResource\?: \(resourceId: string\) => void;/);
+  assert.match(noteActionBarSource, /"open-linked-task"/);
+  assert.match(noteActionBarSource, /查看资料列表/);
+  assert.match(noteActionBarSource, /"open-resource"/);
+  assert.match(notePageSource, /const \[noteResourcePickerOpen, setNoteResourcePickerOpen\] = useState\(false\);/);
+  assert.match(notePageSource, /if \(action === "open-linked-task"\)/);
+  assert.match(notePageSource, /if \(action === "open-resource"\)/);
+  assert.match(notePageSource, /setNoteResourcePickerOpen\(true\);/);
+  assert.match(notePageSource, /noteResourcePickerOpen && selectedItem/);
+  assert.match(notePageSource, /onOpenResource=\{\(resourceId\) => \{/);
+});
+
+test("note detail schedule flow keeps time metadata outside the content-only editor via inline detail editing", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+  const noteDetailPanelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NoteDetailPanel.tsx"), "utf8");
+  const noteScheduleDialogPath = resolve(desktopRoot, "src/features/dashboard/notes/components/NoteScheduleDialog.tsx");
+
+  assert.match(notePageSource, /const \[noteScheduleEditing, setNoteScheduleEditing\] = useState\(false\);/);
+  assert.match(notePageSource, /function startScheduleEditingForItem\(item: NoteListItem\) \{/);
+  assert.match(notePageSource, /async function handleSaveNoteSchedule\(\) \{/);
+  assert.match(notePageSource, /resolveSourceNoteDraftBucketForSchedule/);
+  assert.match(notePageSource, /"notes_schedule_saved"/);
+  assert.doesNotMatch(notePageSource, /<NoteScheduleDialog/);
+  assert.match(noteDetailPanelSource, /scheduleEditing\?: boolean;/);
+  assert.match(noteDetailPanelSource, /onStartScheduleEdit\?: \(\) => void;/);
+  assert.match(noteDetailPanelSource, /scheduleActionLabel = "安排时间"/);
+  assert.match(noteDetailPanelSource, /note-detail-schedule-editor/);
+  assert.match(noteDetailPanelSource, /type="datetime-local"/);
+  assert.match(noteDetailPanelSource, /placeholder="例如：每周、每两周、每天、每月"/);
+  assert.match(noteDetailPanelSource, /保存安排/);
+  assert.match(noteDetailPanelSource, /直接在详情页里设置首次时间和重复规则；正文编辑器仍保持只写内容/);
+  assert.equal(existsSync(noteScheduleDialogPath), false);
 });
 test("note rpc service derives experience from protocol note data instead of mock fixtures", () => {
   const noteServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/notePage.service.ts"), "utf8");

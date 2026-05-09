@@ -56,6 +56,29 @@ export function describeNotePreview(item: TodoItem, experience: NoteDetailExperi
   return `${experience.previewStatus} · ${experience.timeHint}`;
 }
 
+/**
+ * Strips Windows extended-path prefixes from note UI copy while keeping the
+ * underlying filesystem path untouched for open/reveal actions.
+ *
+ * @param value Raw path-like text from note metadata or related resources.
+ * @returns User-facing path text without the `\\?\` prefix.
+ */
+export function formatNoteDisplayPath(value: string | null | undefined) {
+  if (!value) {
+    return "";
+  }
+
+  if (value.startsWith("\\\\?\\UNC\\")) {
+    return `\\\\${value.slice("\\\\?\\UNC\\".length)}`;
+  }
+
+  if (value.startsWith("\\\\?\\")) {
+    return value.slice("\\\\?\\".length);
+  }
+
+  return value;
+}
+
 export function buildNoteSummary(groups: Pick<Record<NotePreviewGroupKey, NoteListItem[]>, "upcoming" | "recurring_rule">) {
   const dueToday = groups.upcoming.filter((item) => item.item.status === "due_today").length;
   const overdue = groups.upcoming.filter((item) => item.item.status === "overdue").length;

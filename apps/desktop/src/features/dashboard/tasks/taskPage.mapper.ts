@@ -145,6 +145,13 @@ export function getTaskStateVoice(task: Task, experience: TaskExperience, timeli
     };
   }
 
+  if (task.status === "confirming_intent") {
+    return {
+      title: "等待确认",
+      body: experience.waitingReason ?? "当前任务已经识别出候选处理方式，等待你确认后继续执行。",
+    };
+  }
+
   if (task.status === "waiting_auth" || task.status === "waiting_input" || task.status === "paused") {
     return {
       title: "暂时等待中",
@@ -241,6 +248,13 @@ export function getTaskPrimaryActions(task: Task, detail: AgentTaskDetailGetResu
     ];
   }
 
+  if (task.status === "confirming_intent") {
+    return [
+      { action: "cancel", label: "取消", tooltip: "结束当前任务，并保留已有轨迹。" },
+      safetyAction,
+    ];
+  }
+
   if (task.status === "waiting_input") {
     return [
       { action: "cancel", label: "取消", tooltip: "结束当前任务，并保留已有轨迹。" },
@@ -296,7 +310,7 @@ export function isTaskEnded(task: Task) {
 
 export function getTaskPreviewStatusLabel(status: Task["status"]) {
   const labels: Record<Task["status"], string> = {
-    confirming_intent: "等待意图",
+    confirming_intent: "等待确认",
     processing: "正在进行",
     waiting_auth: "等待授权",
     waiting_input: "等待补充",
@@ -316,7 +330,7 @@ export function describeCurrentStep(task: Task, experience: TaskExperience) {
     return experience.endedSummary ?? "本次任务已经结束。";
   }
 
-  if (task.status === "waiting_auth" || task.status === "waiting_input" || task.status === "paused") {
+  if (task.status === "confirming_intent" || task.status === "waiting_auth" || task.status === "waiting_input" || task.status === "paused") {
     return experience.waitingReason ?? experience.phase;
   }
 

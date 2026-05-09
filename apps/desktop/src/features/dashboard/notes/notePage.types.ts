@@ -7,6 +7,7 @@ export type NoteDetailAction =
   | "cancel"
   | "skip-once"
   | "edit"
+  | "open-linked-task"
   | "open-resource"
   | "move-upcoming"
   | "toggle-recurring"

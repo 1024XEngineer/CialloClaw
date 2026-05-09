@@ -7,16 +7,16 @@ import { useUnmount } from "ahooks";
 import type { CSSProperties, PointerEvent as ReactPointerEvent, UIEvent } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, FilePlus2, PanelLeftClose, PanelLeftOpen, RefreshCcw, ScanSearch, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowUpRight, FilePlus2, PanelLeftClose, PanelLeftOpen, RefreshCcw, ScanSearch, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import type { NotepadAction } from "@cialloclaw/protocol";
+import type { NotepadAction, Task } from "@cialloclaw/protocol";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { navigateToDashboardTaskDetail } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import { cn } from "@/utils/cn";
-import { buildNoteSummary, describeNotePreview, getNoteBucketLabel, getNoteStatusBadgeClass, groupClosedNotes, sortClosedNotes, sortNotesByUrgency } from "./notePage.mapper";
+import { buildNoteSummary, describeNotePreview, formatNoteDisplayPath, getNoteBucketLabel, getNoteStatusBadgeClass, groupClosedNotes, sortClosedNotes, sortNotesByUrgency } from "./notePage.mapper";
 import { buildDashboardNoteBucketInvalidateKeys, buildDashboardNoteBucketQueryKey, dashboardNoteBucketGroups, getDashboardNoteRefreshPlan } from "./notePage.query";
 import {
   areDesktopSourceNotesAvailable,
@@ -27,14 +27,17 @@ import {
   runNoteSourceInspection,
   saveNoteSource,
 } from "./noteSource.service";
-import { buildSourceNoteFallbackItems, convertNoteToTask, loadNoteBucket, performNoteResourceOpenExecution, resolveNoteResourceOpenExecutionPlan, updateNote, type NotePageDataMode } from "./notePage.service";
+import { convertNoteToTask, loadNoteBucket, performNoteResourceOpenExecution, resolveNoteResourceOpenExecutionPlan, updateNote, type NotePageDataMode } from "./notePage.service";
 import {
   buildSourceNoteEditorDraftFromNote,
   createEmptySourceNoteEditorDraft,
   createSourceNoteEditorDraftSignature,
   formatSourceNoteEditorContent,
+  formatSourceNoteScheduleInputValue,
   parseSourceNoteEditorBlocks,
+  resolveSourceNoteDraftBucketForSchedule,
   serializeSourceNoteEditorDraft,
+  serializeSourceNoteScheduleInputValue,
   updateSourceNoteEditorDraftContent,
   upsertSourceNoteEditorBlock,
 } from "./sourceNoteEditor";
@@ -120,6 +123,18 @@ function normalizeSourceNoteTitleKey(value: string) {
 
 function normalizeSourceNoteBodyKey(value: string | null | undefined) {
   return value ? value.trim().replace(/\r\n/g, "\n").toLowerCase() : "";
+}
+
+function getNoteConvertSuccessFeedback(status: Task["status"]) {
+  if (status === "confirming_intent") {
+    return "已为这条事项生成任务，正在打开任务详情，等待你确认处理方式。";
+  }
+
+  if (status === "waiting_auth") {
+    return "已为这条事项生成任务，正在打开任务详情；后续还需要处理授权。";
+  }
+
+  return "已为这条事项生成任务，正在跳转到任务页。";
 }
 
 function registerSourceNoteLookupKey(
@@ -558,6 +573,11 @@ export function NotePage() {
   const [isCreatingSourceNote, setIsCreatingSourceNote] = useState(false);
   const [sourceStudioOpen, setSourceStudioOpen] = useState(false);
   const [isSavingSourceNote, setIsSavingSourceNote] = useState(false);
+  const [noteScheduleEditing, setNoteScheduleEditing] = useState(false);
+  const [noteResourcePickerOpen, setNoteResourcePickerOpen] = useState(false);
+  const [noteScheduleDueAt, setNoteScheduleDueAt] = useState("");
+  const [noteScheduleRepeatRule, setNoteScheduleRepeatRule] = useState("");
+  const [isSavingNoteSchedule, setIsSavingNoteSchedule] = useState(false);
   const [isRunningInspection, setIsRunningInspection] = useState(false);
   const feedbackTimeoutRef = useRef<number | null>(null);
   const rememberedFormalBucketByAliasRef = useRef(new Map<string, NotePreviewGroupKey>());
@@ -719,62 +739,14 @@ export function NotePage() {
   const rpcLaterItems = rpcItemsByBucket.later;
   const rpcRecurringItems = rpcItemsByBucket.recurring_rule;
   const rpcClosedItems = rpcItemsByBucket.closed;
-  const representedSourceNoteBlocks = useMemo(() => {
-    const representedBlocks = new Set<string>();
-
-    [...rpcUpcomingItems, ...rpcLaterItems, ...rpcRecurringItems, ...rpcClosedItems].forEach((item) => {
-      resolveSourceNoteBlockAliases(item, sourceNotesByPath, sourceNoteBlocksByPath).forEach((alias) => {
-        representedBlocks.add(alias);
-      });
-    });
-
-    return representedBlocks;
-  }, [rpcClosedItems, rpcLaterItems, rpcRecurringItems, rpcUpcomingItems, sourceNoteBlocksByPath, sourceNotesByPath]);
-  const sourceNoteFallbackItems = useMemo(
-    () =>
-      sourceNotes
-        .sort((left, right) => (right.modifiedAtMs ?? 0) - (left.modifiedAtMs ?? 0))
-        .flatMap((note) => buildSourceNoteFallbackItems(note))
-        .filter(
-          (item) =>
-            !resolveSourceNoteBlockAliases(item, sourceNotesByPath, sourceNoteBlocksByPath).some((alias) => representedSourceNoteBlocks.has(alias)),
-        ),
-    [representedSourceNoteBlocks, sourceNoteBlocksByPath, sourceNotes, sourceNotesByPath],
-  );
-  const sourceFallbackItemsByBucket = useMemo(() => {
-    const nextGroups: Record<NotePreviewGroupKey, NoteListItem[]> = {
-      closed: [],
-      later: [],
-      recurring_rule: [],
-      upcoming: [],
-    };
-
-    sourceNoteFallbackItems.forEach((item) => {
-      nextGroups[item.item.bucket].push(item);
-    });
-
-    return nextGroups;
-  }, [sourceNoteFallbackItems]);
-  const upcomingItems = useMemo(
-    () => sortNotesByUrgency([...sourceFallbackItemsByBucket.upcoming, ...rpcUpcomingItems]),
-    [rpcUpcomingItems, sourceFallbackItemsByBucket.upcoming],
-  );
-  const laterItems = useMemo(
-    () => sortNotesByUrgency([...sourceFallbackItemsByBucket.later, ...rpcLaterItems]),
-    [rpcLaterItems, sourceFallbackItemsByBucket.later],
-  );
-  const recurringItems = useMemo(
-    () => sortNotesByUrgency([...sourceFallbackItemsByBucket.recurring_rule, ...rpcRecurringItems]),
-    [rpcRecurringItems, sourceFallbackItemsByBucket.recurring_rule],
-  );
-  const closedItems = useMemo(
-    () => sortClosedNotes([...sourceFallbackItemsByBucket.closed, ...rpcClosedItems]),
-    [rpcClosedItems, sourceFallbackItemsByBucket.closed],
-  );
-  const formalUpcomingItems = useMemo(() => upcomingItems.filter((item) => !item.sourceNote?.localOnly), [upcomingItems]);
-  const formalLaterItems = useMemo(() => laterItems.filter((item) => !item.sourceNote?.localOnly), [laterItems]);
-  const formalRecurringItems = useMemo(() => recurringItems.filter((item) => !item.sourceNote?.localOnly), [recurringItems]);
-  const formalClosedItems = useMemo(() => closedItems.filter((item) => !item.sourceNote?.localOnly), [closedItems]);
+  const upcomingItems = rpcUpcomingItems;
+  const laterItems = rpcLaterItems;
+  const recurringItems = rpcRecurringItems;
+  const closedItems = rpcClosedItems;
+  const formalUpcomingItems = rpcUpcomingItems;
+  const formalLaterItems = rpcLaterItems;
+  const formalRecurringItems = rpcRecurringItems;
+  const formalClosedItems = rpcClosedItems;
   const allItems = useMemo(() => [...upcomingItems, ...laterItems, ...recurringItems, ...closedItems], [upcomingItems, laterItems, recurringItems, closedItems]);
   const noteItemsById = useMemo(() => new Map(allItems.map((item) => [item.item.item_id, item])), [allItems]);
   const canvasItemIdSet = useMemo(() => new Set(canvasCards.map((entry) => entry.itemId)), [canvasCards]);
@@ -883,6 +855,22 @@ export function NotePage() {
       ?? null,
     [allItems, preferredClosedItem, preferredLaterItem, preferredRecurringItem, preferredUpcomingItem, selectedItemId],
   );
+  const canScheduleSelectedItem = selectedItem !== null && selectedItem.item.bucket !== "closed";
+  const scheduleActionLabel = useMemo(() => {
+    if (!selectedItem) {
+      return "安排时间";
+    }
+
+    if (selectedItem.experience.repeatRule) {
+      return "修改时间/规则";
+    }
+
+    if (selectedItem.experience.plannedAt) {
+      return "修改时间";
+    }
+
+    return "安排时间";
+  }, [selectedItem]);
   const sourceStudioItem = useMemo(
     () => (sourceEditorItemId ? noteItemsById.get(sourceEditorItemId) ?? null : null),
     [noteItemsById, sourceEditorItemId],
@@ -1095,9 +1083,9 @@ export function NotePage() {
     applySourceNoteDraft(nextDraft, primarySourceNote?.content ?? "");
     setSourceNoteSyncMessage(
       primarySourceNote?.path
-        ? `开始新便签后，点击“保存便签”会追加到 ${primarySourceNote.path}`
+        ? `开始新便签后，点击“保存便签”会追加到 ${formatNoteDisplayPath(primarySourceNote.path)}`
         : resolvedSourceRoots[0]
-          ? `开始新便签后，点击“保存便签”会追加到 ${resolvedSourceRoots[0]} 下的主 markdown 便签文件`
+          ? `开始新便签后，点击“保存便签”会追加到 ${formatNoteDisplayPath(resolvedSourceRoots[0])} 下的主 markdown 便签文件`
           : "开始新便签后，点击“保存便签”会追加到第一个任务来源目录下的主 markdown 便签文件。",
     );
   }
@@ -1112,11 +1100,54 @@ export function NotePage() {
     return resolveNoteItemSourceNotePath(item, sourceNotesByPath, sourceNoteBlocksByPath);
   }
 
+  function resolveSourceNoteDocumentForItem(item: NoteListItem) {
+    const matchedPath = resolveSourceNotePathForItem(item) ?? item.sourceNote?.path ?? null;
+    if (matchedPath) {
+      return getSourceNoteLookupCandidates(sourceNotesByPath, matchedPath)[0] ?? null;
+    }
+
+    return sourceNotes.length === 1 ? sourceNotes[0] ?? null : null;
+  }
+
+  function resolveSourceNoteEditorContextForItem(item: NoteListItem) {
+    const matchedNote = resolveSourceNoteDocumentForItem(item);
+    if (!matchedNote) {
+      return null;
+    }
+
+    return {
+      draft: buildSourceNoteEditorDraftFromNote(matchedNote, item),
+      note: matchedNote,
+    };
+  }
+
+  async function persistSourceNoteBucketForItem(
+    item: NoteListItem,
+    nextBucket: NotePreviewGroupKey,
+  ) {
+    if (sourceNoteAvailabilityMessage !== null || taskSourceRoots.length === 0) {
+      return false;
+    }
+
+    const context = resolveSourceNoteEditorContextForItem(item);
+    if (!context) {
+      return false;
+    }
+
+    const nextDraft: SourceNoteEditorDraft = {
+      ...context.draft,
+      bucket: nextBucket,
+      endedAt: nextBucket === "closed" ? context.draft.endedAt : "",
+    };
+    const nextSourceFile = upsertSourceNoteEditorBlock(context.note, nextDraft);
+    skipNextSourceNoteRefreshRef.current = true;
+    await saveNoteSource(taskSourceRoots, context.note.path, nextSourceFile.content);
+    await Promise.all([sourceNotesQuery.refetch(), sourceNoteIndexQuery.refetch()]);
+    return true;
+  }
+
   function openSourceStudioForItem(item: NoteListItem) {
-    const matchedPath = resolveSourceNotePathForItem(item) ?? primarySourceNote?.path ?? null;
-    const matchedNote = matchedPath
-      ? getSourceNoteLookupCandidates(sourceNotesByPath, matchedPath)[0] ?? primarySourceNote
-      : primarySourceNote;
+    const matchedNote = resolveSourceNoteDocumentForItem(item) ?? primarySourceNote;
 
     if (matchedNote) {
       setIsCreatingSourceNote(false);
@@ -1134,6 +1165,24 @@ export function NotePage() {
 
     openCreateSourceNoteStudio();
     showFeedback(sourceNoteAvailabilityMessage ?? "还没有主 markdown 便签文件，先为你打开空白便签。");
+  }
+
+  function startScheduleEditingForItem(item: NoteListItem) {
+    if (sourceNoteAvailabilityMessage !== null) {
+      showFeedback(sourceNoteAvailabilityMessage);
+      return;
+    }
+
+    const context = resolveSourceNoteEditorContextForItem(item);
+    if (!context) {
+      showFeedback("还没定位到这条便签对应的 markdown 源块，请先执行一次巡检。");
+      return;
+    }
+
+    const plannedAt = context.draft.dueAt || context.draft.nextOccurrenceAt;
+    setNoteScheduleDueAt(formatSourceNoteScheduleInputValue(plannedAt));
+    setNoteScheduleRepeatRule(context.draft.repeatRule);
+    setNoteScheduleEditing(true);
   }
 
   async function handleSaveSourceNote() {
@@ -1204,6 +1253,61 @@ export function NotePage() {
     }
   }
 
+  async function handleSaveNoteSchedule() {
+    if (!selectedItem) {
+      return;
+    }
+
+    if (sourceNoteAvailabilityMessage !== null || taskSourceRoots.length === 0) {
+      showFeedback(sourceNoteAvailabilityMessage ?? "请先配置任务来源目录。");
+      return;
+    }
+
+    const context = resolveSourceNoteEditorContextForItem(selectedItem);
+    if (!context) {
+      showFeedback("还没定位到这条便签对应的 markdown 源块，请先执行一次巡检。");
+      return;
+    }
+
+    const nextDueAt = serializeSourceNoteScheduleInputValue(noteScheduleDueAt);
+    const nextRepeatRule = noteScheduleRepeatRule.trim();
+    if (nextRepeatRule !== "" && nextDueAt === "") {
+      showFeedback("设置重复规则前请先填写首次时间。");
+      return;
+    }
+
+    setIsSavingNoteSchedule(true);
+    try {
+      const scheduleChanged = nextDueAt !== context.draft.dueAt.trim() || nextRepeatRule !== context.draft.repeatRule.trim();
+      const nextDraft: SourceNoteEditorDraft = {
+        ...context.draft,
+        bucket: resolveSourceNoteDraftBucketForSchedule({
+          dueAt: nextDueAt,
+          repeatRule: nextRepeatRule,
+        }),
+        dueAt: nextDueAt,
+        endedAt: "",
+        nextOccurrenceAt: scheduleChanged ? "" : context.draft.nextOccurrenceAt,
+        recentInstanceStatus: scheduleChanged ? "" : context.draft.recentInstanceStatus,
+        repeatRule: nextRepeatRule,
+      };
+      const nextSourceFile = upsertSourceNoteEditorBlock(context.note, nextDraft);
+      skipNextSourceNoteRefreshRef.current = true;
+      await saveNoteSource(taskSourceRoots, context.note.path, nextSourceFile.content);
+      await Promise.all([sourceNotesQuery.refetch(), sourceNoteIndexQuery.refetch()]);
+      setNoteScheduleEditing(false);
+      setSourceNoteSyncMessage(nextRepeatRule !== "" ? "重复规则已保存，正在同步巡检结果。" : nextDueAt !== "" ? "计划时间已保存，正在同步巡检结果。" : "已清除时间安排，正在同步巡检结果。");
+      await refreshInspection(
+        "notes_schedule_saved",
+        nextRepeatRule !== "" ? "已更新重复规则" : nextDueAt !== "" ? "已安排时间" : "已清除时间安排",
+      );
+    } catch (error) {
+      showFeedback(error instanceof Error ? error.message : "便签时间安排保存失败。");
+    } finally {
+      setIsSavingNoteSchedule(false);
+    }
+  }
+
   const refreshInspectionRef = useRef(refreshInspection);
   refreshInspectionRef.current = refreshInspection;
   const sourceNotesRefetchRef = useRef(sourceNotesQuery.refetch);
@@ -1239,7 +1343,7 @@ export function NotePage() {
     mutationFn: (itemId: string) => convertNoteToTask(itemId, dataMode),
     onSuccess: async (outcome) => {
       await invalidateNoteBuckets(outcome.result.refresh_groups);
-      showFeedback("已为这条事项生成任务，正在跳转到任务页。");
+      showFeedback(getNoteConvertSuccessFeedback(outcome.result.task.status));
       navigateToDashboardTaskDetail(navigate, outcome.result.task.task_id);
     },
     onError: (error) => {
@@ -1253,6 +1357,7 @@ export function NotePage() {
     onSuccess: async (outcome, variables) => {
       const updatedBucket = outcome.result.notepad_item?.bucket ?? null;
       const updatedItem = noteItemsById.get(variables.itemId);
+      let sourceBucketSyncError: string | null = null;
       if (updatedItem) {
         updateRememberedFormalBucketForItem(
           rememberedFormalBucketByAliasRef.current,
@@ -1262,6 +1367,14 @@ export function NotePage() {
           sourceNoteBlocksByPath,
           { allowLaterReset: true },
         );
+
+        if (updatedBucket) {
+          try {
+            await persistSourceNoteBucketForItem(updatedItem, updatedBucket);
+          } catch (error) {
+            sourceBucketSyncError = error instanceof Error ? error.message : "请稍后再试。";
+          }
+        }
       }
 
       await invalidateNoteBuckets(outcome.result.refresh_groups);
@@ -1277,7 +1390,11 @@ export function NotePage() {
           outcome.result.notepad_item?.recurring_enabled === false ? "已暂停重复规则。" : "已重新开启重复规则。",
       };
 
-      showFeedback(feedbackByAction[variables.action]);
+      showFeedback(
+        sourceBucketSyncError
+          ? `${feedbackByAction[variables.action]} 但 markdown 分组回写失败：${sourceBucketSyncError}`
+          : feedbackByAction[variables.action],
+      );
       if (!outcome.result.notepad_item && outcome.result.deleted_item_id === selectedItem?.item.item_id) {
         setDetailOpen(false);
       }
@@ -1309,6 +1426,10 @@ export function NotePage() {
     }
   }
 
+  function openLinkedTaskDetail(taskId: string) {
+    navigateToDashboardTaskDetail(navigate, taskId);
+  }
+
   function handleDetailAction(action: NoteDetailAction) {
     if (!selectedItem) {
       return;
@@ -1324,12 +1445,29 @@ export function NotePage() {
       return;
     }
 
+    if (action === "open-linked-task") {
+      if (!selectedItem.item.linked_task_id) {
+        showFeedback("当前还没有关联任务。");
+        return;
+      }
+
+      showFeedback("正在打开关联任务详情。");
+      openLinkedTaskDetail(selectedItem.item.linked_task_id);
+      return;
+    }
+
     if (action === "open-resource") {
       const firstResource = selectedItem.experience.relatedResources[0];
       if (!firstResource) {
         showFeedback("当前没有可打开的相关资料。");
         return;
       }
+
+      if (selectedItem.experience.relatedResources.length > 1) {
+        setNoteResourcePickerOpen(true);
+        return;
+      }
+
       void handleResourceOpen(firstResource.id);
       return;
     }
@@ -1369,10 +1507,11 @@ export function NotePage() {
       return;
     }
 
+    setNoteResourcePickerOpen(false);
     const plan = resolveNoteResourceOpenExecutionPlan(resource);
     showFeedback(await performNoteResourceOpenExecution(plan, {
       onOpenTaskDetail: ({ taskId }) => {
-        navigateToDashboardTaskDetail(navigate, taskId);
+        openLinkedTaskDetail(taskId);
         return plan.feedback;
       },
     }));
@@ -1381,6 +1520,17 @@ export function NotePage() {
   useEffect(() => {
     sourceNoteIndexFingerprintRef.current = null;
   }, [dataMode, taskSourceRoots]);
+
+  useEffect(() => {
+    if (!detailOpen) {
+      setNoteScheduleEditing(false);
+      setNoteResourcePickerOpen(false);
+    }
+  }, [detailOpen]);
+
+  useEffect(() => {
+    setNoteScheduleEditing(false);
+  }, [selectedItemId]);
 
   useEffect(() => {
     noteItemSourcePathById.forEach((path, itemId) => {
@@ -1834,6 +1984,7 @@ export function NotePage() {
   async function runNoteUpdateForRailDrop(itemId: string, action: NotepadAction) {
     const outcome = await updateNote(itemId, action, dataMode);
     const updatedItem = noteItemsById.get(itemId);
+    let sourceBucketSyncError: string | null = null;
     if (updatedItem) {
       updateRememberedFormalBucketForItem(
         rememberedFormalBucketByAliasRef.current,
@@ -1843,9 +1994,24 @@ export function NotePage() {
         sourceNoteBlocksByPath,
         { allowLaterReset: true },
       );
+
+      if (outcome.result.notepad_item?.bucket) {
+        try {
+          await persistSourceNoteBucketForItem(updatedItem, outcome.result.notepad_item.bucket);
+        } catch (error) {
+          sourceBucketSyncError = error instanceof Error ? error.message : "请稍后再试。";
+        }
+      }
     }
     await invalidateNoteBuckets(outcome.result.refresh_groups);
-    return outcome.result.notepad_item;
+    return {
+      notepadItem: outcome.result.notepad_item,
+      sourceBucketSyncError,
+    };
+  }
+
+  function appendSourceBucketSyncFailure(message: string, sourceBucketSyncError: string | null) {
+    return sourceBucketSyncError ? `${message} 但 markdown 分组回写失败：${sourceBucketSyncError}` : message;
   }
 
   /**
@@ -1879,41 +2045,41 @@ export function NotePage() {
       }
 
       if (sourceBucket === "later" && targetBucket === "upcoming") {
-        await runNoteUpdateForRailDrop(item.item.item_id, "move_upcoming");
+        const moveOutcome = await runNoteUpdateForRailDrop(item.item.item_id, "move_upcoming");
         if (drawerOpen) {
           setExpandedBucket("upcoming");
         }
-        presentRailFeedback("已放进近期分组，并同步更新便签状态。");
+        presentRailFeedback(appendSourceBucketSyncFailure("已放进近期分组，并同步更新便签状态。", moveOutcome.sourceBucketSyncError));
         return;
       }
 
       if (sourceBucket === "recurring_rule" && targetBucket === "closed") {
-        await runNoteUpdateForRailDrop(item.item.item_id, "cancel_recurring");
+        const cancelRecurringOutcome = await runNoteUpdateForRailDrop(item.item.item_id, "cancel_recurring");
         if (drawerOpen) {
           setExpandedBucket("closed");
         }
-        presentRailFeedback("已放进已结束分组，并结束这条重复规则。");
+        presentRailFeedback(appendSourceBucketSyncFailure("已放进已结束分组，并结束这条重复规则。", cancelRecurringOutcome.sourceBucketSyncError));
         return;
       }
 
       if (sourceBucket === "closed") {
-        const restoredItem = await runNoteUpdateForRailDrop(item.item.item_id, "restore");
-        const restoredBucket = restoredItem?.bucket ?? sourceBucket;
+        const restoreOutcome = await runNoteUpdateForRailDrop(item.item.item_id, "restore");
+        const restoredBucket = restoreOutcome.notepadItem?.bucket ?? sourceBucket;
 
         if (restoredBucket === targetBucket) {
           if (drawerOpen) {
             setExpandedBucket(restoredBucket);
           }
-          presentRailFeedback(`已恢复到${targetLabel}分组。`);
+          presentRailFeedback(appendSourceBucketSyncFailure(`已恢复到${targetLabel}分组。`, restoreOutcome.sourceBucketSyncError));
           return;
         }
 
         if (restoredBucket === "later" && targetBucket === "upcoming") {
-          await runNoteUpdateForRailDrop(item.item.item_id, "move_upcoming");
+          const moveOutcome = await runNoteUpdateForRailDrop(item.item.item_id, "move_upcoming");
           if (drawerOpen) {
             setExpandedBucket("upcoming");
           }
-          presentRailFeedback("已恢复并提前到近期分组。");
+          presentRailFeedback(appendSourceBucketSyncFailure("已恢复并提前到近期分组。", moveOutcome.sourceBucketSyncError));
           return;
         }
 
@@ -2442,10 +2608,96 @@ export function NotePage() {
                   initial={{ opacity: 0, scale: 0.98, y: 16 }}
                   transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
                 >
-                  <NoteDetailPanel feedback={feedback} item={selectedItem} onAction={handleDetailAction} onClose={() => setDetailOpen(false)} />
+                  <NoteDetailPanel
+                    feedback={feedback}
+                    item={selectedItem}
+                    onAction={handleDetailAction}
+                    onClose={() => setDetailOpen(false)}
+                    onOpenLinkedTask={selectedItem.item.linked_task_id ? () => {
+                      showFeedback("正在打开关联任务详情。");
+                      openLinkedTaskDetail(selectedItem.item.linked_task_id!);
+                    } : undefined}
+                    onOpenResource={(resourceId) => {
+                      void handleResourceOpen(resourceId);
+                    }}
+                    scheduleActionLabel={scheduleActionLabel}
+                    scheduleDisabledReason={sourceNoteAvailabilityMessage}
+                    scheduleDueAt={noteScheduleDueAt}
+                    scheduleEditing={noteScheduleEditing}
+                    scheduleRepeatRule={noteScheduleRepeatRule}
+                    isSavingSchedule={isSavingNoteSchedule}
+                    onCancelScheduleEdit={() => setNoteScheduleEditing(false)}
+                    onResetSchedule={() => {
+                      setNoteScheduleDueAt("");
+                      setNoteScheduleRepeatRule("");
+                    }}
+                    onSaveSchedule={() => void handleSaveNoteSchedule()}
+                    onScheduleDueAtChange={setNoteScheduleDueAt}
+                    onScheduleRepeatRuleChange={setNoteScheduleRepeatRule}
+                    onStartScheduleEdit={canScheduleSelectedItem ? () => startScheduleEditingForItem(selectedItem) : undefined}
+                  />
                 </motion.div>
               </>
             ) : null}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {noteResourcePickerOpen && selectedItem ? (
+            <>
+              <motion.button
+                animate={{ opacity: 1 }}
+                className="note-detail-modal__backdrop note-resource-modal__backdrop"
+                exit={{ opacity: 0 }}
+                initial={{ opacity: 0 }}
+                onClick={() => setNoteResourcePickerOpen(false)}
+                type="button"
+              />
+              <motion.div
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                className="note-detail-modal note-detail-modal--resource"
+                exit={{ opacity: 0, scale: 0.98, y: 20 }}
+                initial={{ opacity: 0, scale: 0.98, y: 16 }}
+                transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+              >
+                <section className="note-schedule-modal note-resource-modal">
+                  <div className="note-schedule-modal__header">
+                    <div>
+                      <p className="note-preview-page__eyebrow">Related Resources</p>
+                      <h2 className="note-schedule-modal__title">选择相关资料</h2>
+                      <p className="note-schedule-modal__subtitle">{selectedItem.item.title}</p>
+                    </div>
+                    <Button className="note-schedule-modal__close" onClick={() => setNoteResourcePickerOpen(false)} size="icon-sm" type="button" variant="ghost">
+                      <X className="h-4 w-4" />
+                      <span className="sr-only">关闭相关资料列表</span>
+                    </Button>
+                  </div>
+
+                  <div className="note-schedule-modal__body note-resource-modal__body">
+                    <p className="note-schedule-modal__hint">这条便签关联了多份资料，选择其中一份继续打开。</p>
+                    <div className="note-detail-resource-list">
+                      {selectedItem.experience.relatedResources.map((resource) => (
+                        <button
+                          key={resource.id}
+                          className="note-detail-resource-item note-detail-resource-item--button"
+                          onClick={() => {
+                            void handleResourceOpen(resource.id);
+                          }}
+                          type="button"
+                        >
+                          <ArrowUpRight className="h-4 w-4" />
+                          <div>
+                            <p className="note-detail-resource-item__title">{resource.label}</p>
+                            <p className="note-detail-resource-item__meta">{resource.type}</p>
+                            <p className="note-detail-resource-item__path">{resource.url ?? formatNoteDisplayPath(resource.path)}</p>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </section>
+              </motion.div>
+            </>
+          ) : null}
         </AnimatePresence>
 
         <AnimatePresence>

@@ -85,6 +85,15 @@ function formatTimestampForEditor(value: string | null | undefined) {
   return `${year}-${month}-${day} ${hour}:${minute}`;
 }
 
+function formatTimestampForScheduleInput(parsed: Date) {
+  const year = parsed.getFullYear();
+  const month = `${parsed.getMonth() + 1}`.padStart(2, "0");
+  const day = `${parsed.getDate()}`.padStart(2, "0");
+  const hour = `${parsed.getHours()}`.padStart(2, "0");
+  const minute = `${parsed.getMinutes()}`.padStart(2, "0");
+  return `${year}-${month}-${day}T${hour}:${minute}`;
+}
+
 function readTodoSourcePath(item: NoteListItem["item"]) {
   const sourcePath = (item as NoteListItem["item"] & { source_path?: unknown }).source_path;
   return typeof sourcePath === "string" && sourcePath.trim() !== "" ? sourcePath : null;
@@ -162,6 +171,79 @@ export function formatSourceNoteEditorContent(draft: SourceNoteEditorDraft) {
   }
 
   return noteText === "" ? title : `${title}\n${noteText}`;
+}
+
+/**
+ * Formats hidden schedule metadata into the `datetime-local` value used by the
+ * lightweight schedule dialog.
+ *
+ * @param value Existing note schedule metadata from markdown or protocol state.
+ * @returns Local `datetime-local` input value, or an empty string when unknown.
+ */
+export function formatSourceNoteScheduleInputValue(value: string | null | undefined) {
+  if (!value) {
+    return "";
+  }
+
+  const normalizedValue = value.trim();
+  if (normalizedValue === "") {
+    return "";
+  }
+
+  const parsed = new Date(normalizedValue);
+  if (!Number.isNaN(parsed.getTime())) {
+    return formatTimestampForScheduleInput(parsed);
+  }
+
+  const normalizedLocalValue = normalizedValue.replace(" ", "T");
+  const localParsed = new Date(normalizedLocalValue);
+  if (!Number.isNaN(localParsed.getTime())) {
+    return formatTimestampForScheduleInput(localParsed);
+  }
+
+  return "";
+}
+
+/**
+ * Serializes a `datetime-local` input value back into the hidden markdown time
+ * metadata. The editor stores RFC3339 so later inspections preserve the user's
+ * local wall-clock selection without timezone drift.
+ *
+ * @param value Current `datetime-local` input value.
+ * @returns RFC3339 timestamp for markdown metadata, or an empty string.
+ */
+export function serializeSourceNoteScheduleInputValue(value: string) {
+  const normalizedValue = value.trim();
+  if (normalizedValue === "") {
+    return "";
+  }
+
+  const parsed = new Date(normalizedValue);
+  if (Number.isNaN(parsed.getTime())) {
+    return normalizedValue;
+  }
+
+  return parsed.toISOString();
+}
+
+/**
+ * Resolves the persisted note bucket that should accompany hidden schedule
+ * metadata. Timed notes become upcoming, recurring notes become recurring
+ * rules, and notes without schedule metadata fall back to later.
+ *
+ * @param schedule Hidden schedule fields about to be written back.
+ * @returns Bucket value that keeps later inspections aligned with the dialog.
+ */
+export function resolveSourceNoteDraftBucketForSchedule(schedule: Pick<SourceNoteEditorDraft, "dueAt" | "repeatRule">): SourceNoteEditorDraft["bucket"] {
+  if (schedule.repeatRule.trim() !== "") {
+    return "recurring_rule";
+  }
+
+  if (schedule.dueAt.trim() !== "") {
+    return "upcoming";
+  }
+
+  return "later";
 }
 
 /**
