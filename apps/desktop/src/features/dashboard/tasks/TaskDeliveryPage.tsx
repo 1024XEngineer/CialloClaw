@@ -223,7 +223,7 @@ export function TaskDeliveryPage() {
   }
 
   async function handleResolvedOpen(result: TaskDeliveryOpenResult) {
-    const plan = resolveTaskOpenExecutionPlan(result);
+    const plan = resolveTaskOpenExecutionPlan(result, taskId);
 
     if (plan.mode === "task_detail" && plan.taskId === taskId) {
       showFeedback("当前正式结果已经在交付页中展示。");

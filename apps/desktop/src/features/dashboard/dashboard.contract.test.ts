@@ -6375,6 +6375,7 @@ test("task workspace routes formal delivery through a dedicated page and keeps l
   assert.doesNotMatch(taskDeliverySource, /const artifactItems = artifactListQuery\.data\?\.items \?\? detailData\?\.detail\.artifacts \?\? \[\];/);
   assert.match(taskDeliverySource, /canOpenTaskDeliveryResult/);
   assert.match(taskDeliverySource, /const canOpenFormalDelivery = canOpenTaskDeliveryResult\(formalDeliveryResult\);/);
+  assert.match(taskDeliverySource, /const plan = resolveTaskOpenExecutionPlan\(result, taskId\);/);
   assert.match(taskDeliverySource, /getTaskDeliveryOpenLabel/);
   assert.match(taskDeliverySource, /buildDashboardTaskDetailRouteState/);
   assert.match(taskDeliverySource, /navigateToDashboardResultPage/);
@@ -9699,12 +9700,15 @@ test("TaskDetailPanel renders formal delivery as a first-class output entry", ()
   assert.match(panelSource, /formalDeliveryResult\.type === "workspace_document" \|\| formalDeliveryResult\.type === "open_file" \|\| formalDeliveryResult\.type === "reveal_in_folder"/);
   assert.match(panelSource, /outputArtifacts\.some\(\(artifact\) => artifact\.path\.trim\(\) === formalDeliveryPath\)/);
   assert.match(panelSource, /const hasFormalOutput = formalDeliveryResult !== null && !formalDeliveryDuplicatesArtifact;/);
+  assert.match(panelSource, /const canOpenFallbackDelivery = canOpenTaskDeliveryResult\(detailData\?\.detail\.delivery_result \?\? null\);/);
   assert.match(panelSource, /const hasOutputContent = hasFormalOutput \|\| hasOutputArtifacts;/);
   assert.match(panelSource, /canOpenTaskDeliveryResult/);
   assert.match(panelSource, /getTaskDeliveryOpenLabel\(formalDeliveryResult\)/);
+  assert.match(panelSource, /\{hasFormalOutput && formalDeliveryResult \? \(/);
   assert.match(panelSource, /task-detail-output-item--bubble/);
   assert.match(panelSource, /task-detail-output-item__bubble-copy/);
   assert.match(panelSource, /const shouldHideEndedResultCopy = ended && isInlineBubbleOutput && !hasOutputArtifacts;/);
+  assert.match(panelSource, /\{canOpenFallbackDelivery \? \(/);
   assert.match(panelSource, /当前没有可直接打开的产出内容。/);
   assert.doesNotMatch(panelSource, /Formal Delivery/);
   assert.doesNotMatch(panelSource, /该区域只消费正式 `delivery_result`/);

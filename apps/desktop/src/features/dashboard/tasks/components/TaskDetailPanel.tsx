@@ -159,6 +159,7 @@ export function TaskDetailPanel({
   const hasFormalOutput = formalDeliveryResult !== null && !formalDeliveryDuplicatesArtifact;
   const hasOutputContent = hasFormalOutput || hasOutputArtifacts;
   const canOpenFormalOutput = canOpenTaskDeliveryResult(formalDeliveryResult);
+  const canOpenFallbackDelivery = canOpenTaskDeliveryResult(detailData?.detail.delivery_result ?? null);
   const isInlineBubbleOutput = formalDeliveryResult?.type === "bubble";
   const shouldHideEndedResultCopy = ended && isInlineBubbleOutput && !hasOutputArtifacts;
 
@@ -221,10 +222,12 @@ export function TaskDetailPanel({
                     <p className="task-detail-card__eyebrow">产出内容</p>
                     <h3 className="task-detail-card__title">已生成的结果</h3>
                   </div>
-                  <button className="task-detail-card__action" disabled={deliveryActionPending} onClick={onOpenLatestDelivery} type="button">
-                    <ArrowUpRight className="h-4 w-4" />
-                    {deliveryActionPending ? "打开中..." : "打开结果"}
-                  </button>
+                  {canOpenFallbackDelivery ? (
+                    <button className="task-detail-card__action" disabled={deliveryActionPending} onClick={onOpenLatestDelivery} type="button">
+                      <ArrowUpRight className="h-4 w-4" />
+                      {deliveryActionPending ? "打开中..." : "打开结果"}
+                    </button>
+                  ) : null}
                 </div>
                 <div className="task-detail-output-list">
                   {artifactErrorMessage ? <p className="task-detail-card__hint">{artifactErrorMessage}</p> : null}
@@ -461,7 +464,7 @@ export function TaskDetailPanel({
         <div className="task-detail-output-list">
           {artifactErrorMessage ? <p className="task-detail-card__hint">{artifactErrorMessage}</p> : null}
           {artifactLoading && !hasOutputContent ? <p className="task-detail-card__empty">正在同步成果列表...</p> : null}
-          {formalDeliveryResult ? (
+          {hasFormalOutput && formalDeliveryResult ? (
             <article className={cn("task-detail-output-item", isInlineBubbleOutput && "task-detail-output-item--bubble") }>
               {isInlineBubbleOutput ? null : <SendHorizonal className="h-4 w-4" />}
               <div>
