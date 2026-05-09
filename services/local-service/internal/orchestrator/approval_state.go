@@ -84,7 +84,7 @@ func (s *Service) retireStalePendingApprovalRequests(ctx context.Context, taskID
 	if strings.TrimSpace(taskID) == "" || strings.TrimSpace(activeApprovalID) == "" {
 		return nil
 	}
-	records, _, err := s.storage.ApprovalRequestStore().ListApprovalRequests(ctx, taskID, 0, 0)
+	records, err := s.listAllApprovalRequestsForTask(ctx, taskID)
 	if err != nil {
 		return err
 	}
@@ -99,6 +99,25 @@ func (s *Service) retireStalePendingApprovalRequests(ctx context.Context, taskID
 		}
 	}
 	return nil
+}
+
+func (s *Service) listAllApprovalRequestsForTask(ctx context.Context, taskID string) ([]storage.ApprovalRequestRecord, error) {
+	if s == nil || s.storage == nil || s.storage.ApprovalRequestStore() == nil || strings.TrimSpace(taskID) == "" {
+		return nil, nil
+	}
+	const pageSize = 100
+	items := make([]storage.ApprovalRequestRecord, 0, pageSize)
+	for offset := 0; ; offset += pageSize {
+		page, total, err := s.storage.ApprovalRequestStore().ListApprovalRequests(ctx, taskID, pageSize, offset)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, page...)
+		if len(items) >= total || len(page) < pageSize {
+			break
+		}
+	}
+	return items, nil
 }
 
 func (s *Service) persistAuthorizationDecision(task runengine.TaskRecord, authorizationRecord map[string]any) error {
