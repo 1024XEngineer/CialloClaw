@@ -3122,6 +3122,54 @@ func TestServiceTaskControlResumeExecutesHumanLoopTask(t *testing.T) {
 	}
 }
 
+func TestServiceTaskControlResumeExecutesHumanLoopPromptFallbackTask(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Recovered after review.")
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_hitl_prompt_fallback_resume",
+		Title:       "Polish this response after review",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "agent_loop", "arguments": map[string]any{}},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+		Snapshot: contextsvc.TaskContextSnapshot{
+			Text:      "Polish this response after review",
+			InputType: "text",
+			Trigger:   "hover_text_input",
+		},
+	})
+	taskID := task.TaskID
+	if _, ok := service.runEngine.EscalateHumanLoop(taskID, map[string]any{"reason": "doom_loop", "status": "pending"}, map[string]any{"task_id": taskID, "type": "status", "text": "需要人工介入"}); !ok {
+		t.Fatal("expected human escalation to succeed")
+	}
+
+	result, err := service.TaskControl(map[string]any{
+		"task_id": taskID,
+		"action":  "resume",
+		"arguments": map[string]any{
+			"review": map[string]any{
+				"decision":    "approve",
+				"reviewer_id": "reviewer_prompt_fallback",
+				"notes":       "continue with prompt fallback",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("task control resume failed: %v", err)
+	}
+	updatedTask := result["task"].(map[string]any)
+	if updatedTask["status"] != "completed" {
+		t.Fatalf("expected prompt fallback human loop resume to finish task, got %+v", updatedTask)
+	}
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected resumed task to remain in runtime")
+	}
+	if record.PendingExecution != nil {
+		t.Fatalf("expected resumed prompt fallback task to clear pending execution, got %+v", record.PendingExecution)
+	}
+}
+
 func TestExecutionSegmentKindClassifiesInitialResumeAndRestart(t *testing.T) {
 	initialTask := runengine.TaskRecord{RunID: "run_same", Status: "processing", ExecutionAttempt: 1}
 	initialProcessing := runengine.TaskRecord{RunID: "run_same", Status: "processing", ExecutionAttempt: 1}

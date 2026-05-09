@@ -893,6 +893,34 @@ func TestEngineControlTaskResumeSupportsHumanLoopBlockedTasks(t *testing.T) {
 	}
 }
 
+func TestEngineControlTaskResumeSupportsHumanLoopPromptFallbackTasks(t *testing.T) {
+	engine := NewEngine()
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_hitl_prompt_fallback_resume",
+		Title:       "trace escalation",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "agent_loop"},
+		CurrentStep: "generate_output",
+		RiskLevel:   "yellow",
+	})
+	escalated, ok := engine.EscalateHumanLoop(task.TaskID, map[string]any{"reason": "doom_loop", "status": "pending"}, map[string]any{"task_id": task.TaskID, "type": "status", "text": "需要人工介入"})
+	if !ok {
+		t.Fatal("expected human escalation to succeed")
+	}
+	if escalated.PendingExecution["resume_step"] != "generate_output" {
+		t.Fatalf("expected human escalation to preserve prompt fallback step, got %+v", escalated.PendingExecution)
+	}
+
+	resumed, err := engine.ControlTask(task.TaskID, "resume", map[string]any{"task_id": task.TaskID, "type": "status", "text": "人工复核完成"})
+	if err != nil {
+		t.Fatalf("expected resume from human_in_loop to succeed, got %v", err)
+	}
+	if resumed.Status != "processing" || resumed.CurrentStep != "generate_output" {
+		t.Fatalf("expected human loop prompt fallback resume to restore processing/generate_output, got %+v", resumed)
+	}
+}
+
 func TestEngineControlTaskResumePreservesPromptFallbackStep(t *testing.T) {
 	engine := NewEngine()
 	task := engine.CreateTask(CreateTaskInput{

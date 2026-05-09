@@ -2381,6 +2381,9 @@ func budgetFailureSignal(request Request, generationErr error) map[string]any {
 	if !boolValue(request.BudgetDowngrade, "applied") || generationErr == nil {
 		return nil
 	}
+	if errors.Is(generationErr, context.Canceled) || errors.Is(generationErr, context.DeadlineExceeded) {
+		return nil
+	}
 	reason := strings.TrimSpace(generationErr.Error())
 	if strings.Contains(reason, context.Canceled.Error()) {
 		reason = context.Canceled.Error()
@@ -2402,7 +2405,7 @@ func budgetFailureSignal(request Request, generationErr error) map[string]any {
 func isBudgetFailureReason(reason string) bool {
 	trimmed := strings.TrimSpace(reason)
 	switch trimmed {
-	case model.ErrClientNotConfigured.Error(), model.ErrToolCallingNotSupported.Error(), model.ErrModelProviderUnsupported.Error(), model.ErrSecretNotFound.Error(), model.ErrSecretSourceFailed.Error(), context.Canceled.Error(), context.DeadlineExceeded.Error():
+	case model.ErrClientNotConfigured.Error(), model.ErrToolCallingNotSupported.Error(), model.ErrModelProviderUnsupported.Error(), model.ErrSecretNotFound.Error(), model.ErrSecretSourceFailed.Error():
 		return true
 	default:
 		return false

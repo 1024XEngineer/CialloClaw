@@ -179,8 +179,11 @@ func (s *Service) classifyTaskContinuation(snapshot taskcontext.TaskContextSnaps
 }
 
 func (s *Service) modelTaskContinuationDecision(snapshot taskcontext.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext, options taskContinuationOptions) (taskContinuationDecision, bool) {
+	if s == nil {
+		return taskContinuationDecision{}, false
+	}
 	modelService := s.currentModel()
-	if s == nil || modelService == nil {
+	if modelService == nil {
 		return taskContinuationDecision{}, false
 	}
 	// Continuation classification is a best-effort refinement on top of the local
