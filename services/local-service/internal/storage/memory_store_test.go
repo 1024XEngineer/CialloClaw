@@ -1,4 +1,3 @@
-// 该测试文件验证存储层的数据行为。
 package storage
 
 import (
@@ -6,7 +5,6 @@ import (
 	"testing"
 )
 
-// TestInMemoryMemoryStoreSearchReturnsRankedMatches 验证InMemoryMemoryStoreSearchReturnsRankedMatches。
 func TestInMemoryMemoryStoreSearchReturnsRankedMatches(t *testing.T) {
 	store := NewInMemoryMemoryStore()
 	seed := []MemorySummaryRecord{
@@ -34,7 +32,6 @@ func TestInMemoryMemoryStoreSearchReturnsRankedMatches(t *testing.T) {
 	}
 }
 
-// TestInMemoryMemoryStoreListRecentSummariesReturnsLatestFirst 验证InMemoryMemoryStoreListRecentSummariesReturnsLatestFirst。
 func TestInMemoryMemoryStoreListRecentSummariesReturnsLatestFirst(t *testing.T) {
 	store := NewInMemoryMemoryStore()
 	seed := []MemorySummaryRecord{
@@ -62,7 +59,6 @@ func TestInMemoryMemoryStoreListRecentSummariesReturnsLatestFirst(t *testing.T) 
 	}
 }
 
-// TestInMemoryMemoryStoreUsesDefaultLimitWhenNonPositive 验证InMemoryMemoryStoreUsesDefaultLimitWhenNonPositive。
 func TestInMemoryMemoryStoreUsesDefaultLimitWhenNonPositive(t *testing.T) {
 	store := NewInMemoryMemoryStore()
 	for i := 0; i < 6; i++ {
@@ -87,7 +83,6 @@ func TestInMemoryMemoryStoreUsesDefaultLimitWhenNonPositive(t *testing.T) {
 	}
 }
 
-// TestInMemoryMemoryStoreSaveRetrievalHitsStoresRecords 验证InMemoryMemoryStoreSaveRetrievalHitsStoresRecords。
 func TestInMemoryMemoryStoreSaveRetrievalHitsStoresRecords(t *testing.T) {
 	store := NewInMemoryMemoryStore()
 

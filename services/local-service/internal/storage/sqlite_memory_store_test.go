@@ -1,4 +1,3 @@
-// 该测试文件验证存储层的数据行为。
 package storage
 
 import (
@@ -10,7 +9,6 @@ import (
 	"time"
 )
 
-// TestNewSQLiteMemoryStoreInitializesWALMode 验证NewSQLiteMemoryStoreInitializesWALMode。
 func TestNewSQLiteMemoryStoreInitializesWALMode(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "memory.db")
 	store, err := NewSQLiteMemoryStore(path)
@@ -32,7 +30,6 @@ func TestNewSQLiteMemoryStoreInitializesWALMode(t *testing.T) {
 	assertTableExists(t, store.db, sqliteVectorStubTableName)
 }
 
-// TestSQLiteMemoryStoreSaveSearchAndListRecent 验证SQLiteMemoryStoreSaveSearchAndListRecent。
 func TestSQLiteMemoryStoreSaveSearchAndListRecent(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "memory.db")
 	store, err := NewSQLiteMemoryStore(path)
@@ -92,7 +89,6 @@ func TestSQLiteMemoryStoreSaveSearchAndListRecent(t *testing.T) {
 	assertRetrievalHitCount(t, store.db, 1)
 }
 
-// TestNewServicePrefersSQLiteMemoryStoreWhenConfigured 验证NewServicePrefersSQLiteMemoryStoreWhenConfigured。
 func TestNewServicePrefersSQLiteMemoryStoreWhenConfigured(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "service.db")
 	service := NewService(stubAdapter{databasePath: path})
@@ -112,7 +108,6 @@ func TestNewServicePrefersSQLiteMemoryStoreWhenConfigured(t *testing.T) {
 	}
 }
 
-// TestSQLiteMemoryStoreRejectsInvalidSummaryRecord 验证SQLiteMemoryStoreRejectsInvalidSummaryRecord。
 func TestSQLiteMemoryStoreRejectsInvalidSummaryRecord(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "invalid.db")
 	store, err := NewSQLiteMemoryStore(path)
@@ -133,7 +128,6 @@ func TestSQLiteMemoryStoreRejectsInvalidSummaryRecord(t *testing.T) {
 	}
 }
 
-// TestSQLiteMemoryStoreRejectsInvalidRetrievalHitRecord 验证SQLiteMemoryStoreRejectsInvalidRetrievalHitRecord。
 func TestSQLiteMemoryStoreRejectsInvalidRetrievalHitRecord(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "invalid-hit.db")
 	store, err := NewSQLiteMemoryStore(path)

@@ -1,4 +1,4 @@
-// 该文件负责存储层的数据接口或落盘实现。
+// Package storage contains process-local and SQLite-backed persistence stores.
 package storage
 
 import (
@@ -8,17 +8,17 @@ import (
 	"sync"
 )
 
-// defaultMemoryListLimit 定义当前模块的基础变量。
+// defaultMemoryListLimit is the fallback result count for memory reads.
 const defaultMemoryListLimit = 5
 
-// InMemoryMemoryStore 定义当前模块的数据结构。
+// InMemoryMemoryStore is the process-local memory persistence fallback.
 type InMemoryMemoryStore struct {
 	mu            sync.RWMutex
 	summaries     []MemorySummaryRecord
 	retrievalHits []MemoryRetrievalRecord
 }
 
-// NewInMemoryMemoryStore 创建并返回InMemoryMemoryStore。
+// NewInMemoryMemoryStore returns an empty in-memory store.
 func NewInMemoryMemoryStore() *InMemoryMemoryStore {
 	return &InMemoryMemoryStore{
 		summaries:     make([]MemorySummaryRecord, 0),
@@ -26,7 +26,7 @@ func NewInMemoryMemoryStore() *InMemoryMemoryStore {
 	}
 }
 
-// SaveSummary 处理当前模块的相关逻辑。
+// SaveSummary appends one validated summary to the in-memory store.
 func (s *InMemoryMemoryStore) SaveSummary(_ context.Context, summary MemorySummaryRecord) error {
 	if err := validateMemorySummaryRecord(summary); err != nil {
 		return err
@@ -39,7 +39,7 @@ func (s *InMemoryMemoryStore) SaveSummary(_ context.Context, summary MemorySumma
 	return nil
 }
 
-// SaveRetrievalHits 处理当前模块的相关逻辑。
+// SaveRetrievalHits appends validated retrieval-hit records.
 func (s *InMemoryMemoryStore) SaveRetrievalHits(_ context.Context, hits []MemoryRetrievalRecord) error {
 	if len(hits) == 0 {
 		return nil
@@ -58,7 +58,7 @@ func (s *InMemoryMemoryStore) SaveRetrievalHits(_ context.Context, hits []Memory
 	return nil
 }
 
-// SearchSummaries 处理当前模块的相关逻辑。
+// SearchSummaries returns ranked summaries from other task/run pairs.
 func (s *InMemoryMemoryStore) SearchSummaries(_ context.Context, taskID, runID, query string, limit int) ([]MemoryRetrievalRecord, error) {
 	limit = normalizeMemoryLimit(limit)
 	query = strings.ToLower(strings.TrimSpace(query))
@@ -106,7 +106,7 @@ func (s *InMemoryMemoryStore) SearchSummaries(_ context.Context, taskID, runID, 
 	return hits, nil
 }
 
-// ListRecentSummaries 列出RecentSummaries。
+// ListRecentSummaries returns newest summaries first.
 func (s *InMemoryMemoryStore) ListRecentSummaries(_ context.Context, limit int) ([]MemorySummaryRecord, error) {
 	limit = normalizeMemoryLimit(limit)
 
@@ -125,7 +125,7 @@ func (s *InMemoryMemoryStore) ListRecentSummaries(_ context.Context, limit int) 
 	return result, nil
 }
 
-// normalizeMemoryLimit 处理当前模块的相关逻辑。
+// normalizeMemoryLimit applies the default list limit for non-positive requests.
 func normalizeMemoryLimit(limit int) int {
 	if limit <= 0 {
 		return defaultMemoryListLimit
@@ -134,7 +134,7 @@ func normalizeMemoryLimit(limit int) int {
 	return limit
 }
 
-// matchMemorySummary 处理当前模块的相关逻辑。
+// matchMemorySummary scores query-term overlap against one summary.
 func matchMemorySummary(summary, query string) float64 {
 	summary = strings.ToLower(strings.TrimSpace(summary))
 	if summary == "" || query == "" {
