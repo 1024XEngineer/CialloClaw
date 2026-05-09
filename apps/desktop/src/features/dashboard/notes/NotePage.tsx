@@ -9,14 +9,14 @@ import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ArrowLeft, ArrowUpRight, FilePlus2, PanelLeftClose, PanelLeftOpen, RefreshCcw, ScanSearch, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import type { NotepadAction, Task } from "@cialloclaw/protocol";
+import type { NotepadAction, Task, TodoItem } from "@cialloclaw/protocol";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { navigateToDashboardTaskDetail } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import { cn } from "@/utils/cn";
-import { buildNoteSummary, describeNotePreview, formatNoteDisplayPath, getNoteBucketLabel, getNoteStatusBadgeClass, groupClosedNotes, sortClosedNotes, sortNotesByUrgency } from "./notePage.mapper";
+import { buildNoteSummary, describeNotePreview, formatNoteBoardTimeHint, formatNoteDisplayPath, getNoteBucketLabel, getNoteStatusBadgeClass, groupClosedNotes, sortClosedNotes, sortNotesByUrgency } from "./notePage.mapper";
 import { buildDashboardNoteBucketInvalidateKeys, buildDashboardNoteBucketQueryKey, dashboardNoteBucketGroups, getDashboardNoteRefreshPlan } from "./notePage.query";
 import {
   areDesktopSourceNotesAvailable,
@@ -35,7 +35,9 @@ import {
   formatSourceNoteEditorContent,
   formatSourceNoteScheduleInputValue,
   parseSourceNoteEditorBlocks,
+  removeSourceNoteEditorBlock,
   resolveSourceNoteDraftBucketForSchedule,
+  sanitizeSourceNoteBodyText,
   serializeSourceNoteEditorDraft,
   serializeSourceNoteScheduleInputValue,
   updateSourceNoteEditorDraftContent,
@@ -157,8 +159,11 @@ function getSourceNoteLookupCandidates(lookup: SourceNotePathLookup, key: string
 
 function scoreSourceNoteBlockCandidate(item: NoteListItem, block: SourceNoteEditorBlock) {
   const sourceLine = item.sourceNote?.sourceLine ?? readTodoSourceLine(item.item);
-  const normalizedTitle = normalizeSourceNoteTitleKey(item.sourceNote?.title ?? item.item.title);
-  const normalizedNoteText = normalizeSourceNoteBodyKey(item.item.note_text ?? item.experience.noteText);
+  const itemTitle = item.sourceNote?.title ?? item.item.title;
+  const normalizedTitle = normalizeSourceNoteTitleKey(itemTitle);
+  const normalizedNoteText = normalizeSourceNoteBodyKey(
+    sanitizeSourceNoteBodyText(item.item.note_text ?? item.experience.noteText, { title: itemTitle }),
+  );
   const normalizedRepeatRule = normalizeSourceNoteBodyKey(item.item.repeat_rule ?? item.experience.repeatRule);
   const normalizedRecentInstanceStatus = normalizeSourceNoteBodyKey(item.item.recent_instance_status ?? item.experience.recentInstanceStatus);
   const normalizedDueAt = (item.item.due_at ?? item.experience.plannedAt ?? "").trim();
@@ -178,7 +183,10 @@ function scoreSourceNoteBlockCandidate(item: NoteListItem, block: SourceNoteEdit
     return -1;
   }
 
-  if (normalizedNoteText !== "" && normalizeSourceNoteBodyKey(block.noteText) === normalizedNoteText) {
+  if (
+    normalizedNoteText !== ""
+    && normalizeSourceNoteBodyKey(sanitizeSourceNoteBodyText(block.noteText, { title: block.title || itemTitle })) === normalizedNoteText
+  ) {
     score += 2;
   }
 
@@ -440,6 +448,106 @@ function resolveSourceNoteBlockAliases(
     item.sourceNote?.title ?? item.item.title,
     item.sourceNote?.sourceLine ?? readTodoSourceLine(item.item),
   );
+}
+
+function resolveSourceNoteBlockForItem(
+  item: NoteListItem,
+  sourceNotesByPath: SourceNotePathLookup,
+  sourceNoteBlocksByPath: Map<string, SourceNoteEditorBlock[]>,
+): SourceNoteEditorBlock | null {
+  const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath, sourceNoteBlocksByPath);
+  if (!matchedPath) {
+    return null;
+  }
+
+  const blocks = sourceNoteBlocksByPath.get(matchedPath) ?? [];
+  let bestBlock: SourceNoteEditorBlock | null = null;
+  let bestScore = -1;
+  let tied = false;
+
+  blocks.forEach((block) => {
+    const candidateScore = scoreSourceNoteBlockCandidate(item, block);
+    if (candidateScore < 0) {
+      return;
+    }
+
+    if (candidateScore > bestScore) {
+      bestBlock = block;
+      bestScore = candidateScore;
+      tied = false;
+      return;
+    }
+
+    if (candidateScore === bestScore) {
+      tied = true;
+    }
+  });
+
+  if (!bestBlock || tied) {
+    return null;
+  }
+
+  return bestBlock;
+}
+
+function readSourceNoteRecurringEnabledOverride(block: SourceNoteEditorBlock | null) {
+  if (!block) {
+    return null;
+  }
+
+  const metadataValue = block.extraMetadata
+    .find((entry) => normalizeSourceNoteTitleKey(entry.key) === "recurring_enabled")
+    ?.value.trim()
+    .toLowerCase();
+
+  if (metadataValue === "false" || metadataValue === "0" || metadataValue === "paused") {
+    return false;
+  }
+
+  if (metadataValue === "true" || metadataValue === "1") {
+    return true;
+  }
+
+  const normalizedRecentStatus = normalizeSourceNoteBodyKey(block.recentInstanceStatus);
+  if (normalizedRecentStatus === "paused" || normalizedRecentStatus.includes("暂停")) {
+    return false;
+  }
+
+  return null;
+}
+
+function applySourceNoteDisplayOverrides(
+  item: NoteListItem,
+  sourceNotesByPath: SourceNotePathLookup,
+  sourceNoteBlocksByPath: Map<string, SourceNoteEditorBlock[]>,
+): NoteListItem {
+  if (item.sourceNote?.localOnly || item.item.bucket !== "recurring_rule") {
+    return item;
+  }
+
+  const matchedBlock = resolveSourceNoteBlockForItem(item, sourceNotesByPath, sourceNoteBlocksByPath);
+  const recurringEnabledOverride = readSourceNoteRecurringEnabledOverride(matchedBlock);
+  if (recurringEnabledOverride !== false) {
+    return item;
+  }
+
+  const recurringStatusText = matchedBlock?.recentInstanceStatus?.trim() || item.experience.recentInstanceStatus || "paused";
+
+  return {
+    ...item,
+    experience: {
+      ...item.experience,
+      detailStatus: "重复规则已暂停",
+      detailStatusTone: "warn",
+      isRecurringEnabled: false,
+      nextOccurrenceAt: null,
+      plannedAt: null,
+      previewStatus: "规则已暂停",
+      recentInstanceStatus: recurringStatusText,
+      summaryLabel: "重复规则已暂停",
+      timeHint: "已暂停",
+    },
+  };
 }
 
 /**
@@ -710,10 +818,14 @@ export function NotePage() {
       );
     });
   }, [rawRpcItems, sourceNoteBlocksByPath, sourceNotesByPath]);
+  const displayRpcItems = useMemo(
+    () => rawRpcItems.map((item) => applySourceNoteDisplayOverrides(item, sourceNotesByPath, sourceNoteBlocksByPath)),
+    [rawRpcItems, sourceNoteBlocksByPath, sourceNotesByPath],
+  );
   const rpcItemsByBucket = useMemo(() => {
     const nextGroups = createEmptyBucketGroups();
 
-    rawRpcItems
+    displayRpcItems
       .forEach((item) => {
         const displayedBucket = resolveRememberedFormalBucket(
           rememberedFormalBucketByAliasRef.current,
@@ -730,7 +842,7 @@ export function NotePage() {
     nextGroups.closed = sortClosedNotes(nextGroups.closed);
 
     return nextGroups;
-  }, [rawRpcItems, sourceNoteBlocksByPath, sourceNotesByPath]);
+  }, [displayRpcItems, sourceNoteBlocksByPath, sourceNotesByPath]);
   const rpcUpcomingItems = rpcItemsByBucket.upcoming;
   const rpcLaterItems = rpcItemsByBucket.later;
   const rpcRecurringItems = rpcItemsByBucket.recurring_rule;
@@ -1117,9 +1229,58 @@ export function NotePage() {
     };
   }
 
-  async function persistSourceNoteBucketForItem(
+  /**
+   * Formal note actions can change more than just the visible bucket. Keep the
+   * markdown source block aligned with the returned formal item while preserving
+   * hidden metadata that only exists in the source file.
+   */
+  function buildSourceNoteDraftFromFormalItem(
+    context: {
+      draft: SourceNoteEditorDraft;
+      note: SourceNoteDocument;
+    },
+    nextItem: TodoItem,
+  ): SourceNoteEditorDraft {
+    const nextNoteText = nextItem.note_text === null || nextItem.note_text === undefined
+      ? context.draft.noteText
+      : sanitizeSourceNoteBodyText(nextItem.note_text, { title: nextItem.title });
+    const nextExtraMetadata = context.draft.extraMetadata.filter(
+      (entry) => normalizeSourceNoteTitleKey(entry.key) !== "recurring_enabled",
+    );
+
+    if (nextItem.bucket === "recurring_rule" && nextItem.recurring_enabled === false) {
+      nextExtraMetadata.push({
+        key: "recurring_enabled",
+        value: "false",
+      });
+    }
+
+    return {
+      ...context.draft,
+      agentSuggestion: nextItem.agent_suggestion?.trim() ?? "",
+      bucket: nextItem.bucket,
+      checked: nextItem.status === "completed",
+      dueAt: nextItem.due_at?.trim() ?? "",
+      effectiveScope: nextItem.effective_scope?.trim() ?? "",
+      endedAt: nextItem.ended_at?.trim() ?? "",
+      extraMetadata: nextExtraMetadata,
+      nextOccurrenceAt: nextItem.next_occurrence_at?.trim() ?? "",
+      noteText: nextNoteText,
+      prerequisite: nextItem.prerequisite?.trim() ?? "",
+      recentInstanceStatus:
+        nextItem.recent_instance_status?.trim()
+        ?? (nextItem.bucket === "recurring_rule" && nextItem.recurring_enabled === false ? "paused" : ""),
+      repeatRule: nextItem.repeat_rule?.trim() ?? "",
+      sourceLine: context.draft.sourceLine,
+      sourcePath: context.draft.sourcePath ?? context.note.path,
+      title: nextItem.title.trim() || context.draft.title,
+    };
+  }
+
+  async function persistSourceNoteMutationForItem(
     item: NoteListItem,
-    nextBucket: NotePreviewGroupKey,
+    nextItem: TodoItem | null,
+    deletedItemId: string | null,
   ) {
     if (sourceNoteAvailabilityMessage !== null || taskSourceRoots.length === 0) {
       return false;
@@ -1130,11 +1291,22 @@ export function NotePage() {
       return false;
     }
 
-    const nextDraft: SourceNoteEditorDraft = {
-      ...context.draft,
-      bucket: nextBucket,
-      endedAt: nextBucket === "closed" ? context.draft.endedAt : "",
-    };
+    if (!nextItem && deletedItemId === item.item.item_id) {
+      const nextSourceFile = removeSourceNoteEditorBlock(context.note, context.draft);
+      if (!nextSourceFile.removed) {
+        return false;
+      }
+      skipNextSourceNoteRefreshRef.current = true;
+      await saveNoteSource(taskSourceRoots, context.note.path, nextSourceFile.content);
+      await Promise.all([sourceNotesQuery.refetch(), sourceNoteIndexQuery.refetch()]);
+      return true;
+    }
+
+    if (!nextItem) {
+      return false;
+    }
+
+    const nextDraft = buildSourceNoteDraftFromFormalItem(context, nextItem);
     const nextSourceFile = upsertSourceNoteEditorBlock(context.note, nextDraft);
     skipNextSourceNoteRefreshRef.current = true;
     await saveNoteSource(taskSourceRoots, context.note.path, nextSourceFile.content);
@@ -1353,7 +1525,7 @@ export function NotePage() {
     onSuccess: async (outcome, variables) => {
       const updatedBucket = outcome.result.notepad_item?.bucket ?? null;
       const updatedItem = noteItemsById.get(variables.itemId);
-      let sourceBucketSyncError: string | null = null;
+      let sourceNoteSyncError: string | null = null;
       if (updatedItem) {
         updateRememberedFormalBucketForItem(
           rememberedFormalBucketByAliasRef.current,
@@ -1364,12 +1536,14 @@ export function NotePage() {
           { allowLaterReset: true },
         );
 
-        if (updatedBucket) {
-          try {
-            await persistSourceNoteBucketForItem(updatedItem, updatedBucket);
-          } catch (error) {
-            sourceBucketSyncError = error instanceof Error ? error.message : "请稍后再试。";
-          }
+        try {
+          await persistSourceNoteMutationForItem(
+            updatedItem,
+            outcome.result.notepad_item,
+            outcome.result.deleted_item_id ?? null,
+          );
+        } catch (error) {
+          sourceNoteSyncError = error instanceof Error ? error.message : "请稍后再试。";
         }
       }
 
@@ -1387,8 +1561,8 @@ export function NotePage() {
       };
 
       showFeedback(
-        sourceBucketSyncError
-          ? `${feedbackByAction[variables.action]} 但 markdown 分组回写失败：${sourceBucketSyncError}`
+        sourceNoteSyncError
+          ? `${feedbackByAction[variables.action]} 但 markdown 同步失败：${sourceNoteSyncError}`
           : feedbackByAction[variables.action],
       );
       if (!outcome.result.notepad_item && outcome.result.deleted_item_id === selectedItem?.item.item_id) {
@@ -1469,6 +1643,11 @@ export function NotePage() {
     }
 
     if (action === "edit") {
+      if (selectedItem.item.bucket === "recurring_rule") {
+        startScheduleEditingForItem(selectedItem);
+        return;
+      }
+
       openSourceStudioForItem(selectedItem);
       return;
     }
@@ -1980,7 +2159,7 @@ export function NotePage() {
   async function runNoteUpdateForRailDrop(itemId: string, action: NotepadAction) {
     const outcome = await updateNote(itemId, action, dataMode);
     const updatedItem = noteItemsById.get(itemId);
-    let sourceBucketSyncError: string | null = null;
+    let sourceNoteSyncError: string | null = null;
     if (updatedItem) {
       updateRememberedFormalBucketForItem(
         rememberedFormalBucketByAliasRef.current,
@@ -1991,18 +2170,20 @@ export function NotePage() {
         { allowLaterReset: true },
       );
 
-      if (outcome.result.notepad_item?.bucket) {
-        try {
-          await persistSourceNoteBucketForItem(updatedItem, outcome.result.notepad_item.bucket);
-        } catch (error) {
-          sourceBucketSyncError = error instanceof Error ? error.message : "请稍后再试。";
-        }
+      try {
+        await persistSourceNoteMutationForItem(
+          updatedItem,
+          outcome.result.notepad_item,
+          outcome.result.deleted_item_id ?? null,
+        );
+      } catch (error) {
+        sourceNoteSyncError = error instanceof Error ? error.message : "请稍后再试。";
       }
     }
     await invalidateNoteBuckets(outcome.result.refresh_groups);
     return {
       notepadItem: outcome.result.notepad_item,
-      sourceBucketSyncError,
+      sourceBucketSyncError: sourceNoteSyncError,
     };
   }
 
@@ -2329,6 +2510,9 @@ export function NotePage() {
   }
 
   function renderBoardCard(item: NoteListItem, placement: { x: number; y: number; zIndex: number }) {
+    const boardCardCopy = item.experience.noteText.trim();
+    const hasBoardCardCopy = boardCardCopy !== "";
+
     return (
       <button
         key={item.item.item_id}
@@ -2348,15 +2532,22 @@ export function NotePage() {
         <div className="note-preview-page__board-card-top">
           <div>
             <p className="note-preview-page__board-kicker">{getNoteBucketLabel(item.item.bucket)}</p>
-            <h3 className="note-preview-page__board-card-title">{item.item.title}</h3>
+            <h3
+              className={cn(
+                "note-preview-page__board-card-title",
+                !hasBoardCardCopy && "note-preview-page__board-card-title--spacious",
+              )}
+            >
+              {item.item.title}
+            </h3>
           </div>
           <Badge className={cn("border-0 px-3 py-1 text-[0.72rem] ring-1", getNoteStatusBadgeClass(item.item.status))}>{item.experience.previewStatus}</Badge>
         </div>
 
-        <p className="note-preview-page__board-card-copy">{item.experience.noteText || describeNotePreview(item.item, item.experience)}</p>
+        {hasBoardCardCopy ? <p className="note-preview-page__board-card-copy">{boardCardCopy}</p> : null}
 
         <div className="note-preview-page__board-card-footer">
-          <span>{item.experience.timeHint}</span>
+          <span>{formatNoteBoardTimeHint(item.item, item.experience)}</span>
           <span>{item.experience.typeLabel}</span>
         </div>
 
@@ -2616,6 +2807,7 @@ export function NotePage() {
                     onOpenResource={(resourceId) => {
                       void handleResourceOpen(resourceId);
                     }}
+                    onToggleRecurring={selectedItem.item.bucket === "recurring_rule" ? () => handleDetailAction("toggle-recurring") : undefined}
                     scheduleActionLabel={scheduleActionLabel}
                     scheduleDisabledReason={sourceNoteAvailabilityMessage}
                     scheduleDueAt={noteScheduleDueAt}

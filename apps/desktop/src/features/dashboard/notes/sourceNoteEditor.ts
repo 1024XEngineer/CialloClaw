@@ -20,6 +20,12 @@ const SOURCE_NOTE_RESERVED_METADATA_KEYS = new Set([
   "tags",
   "updated_at",
 ]);
+const SOURCE_NOTE_BODY_METADATA_NOISE_KEYS = new Set([
+  "created_at",
+  "ended_at",
+  "recurring_enabled",
+  "updated_at",
+]);
 
 function normalizeLineEndings(value: string) {
   return value.replace(/\r\n/g, "\n");
@@ -31,6 +37,21 @@ function trimTrailingEmptyLines(lines: string[]) {
     trimmedLines.pop();
   }
   return trimmedLines;
+}
+
+function trimBoundaryBlankLines(lines: string[]) {
+  let start = 0;
+  let end = lines.length;
+
+  while (start < end && lines[start]?.trim() === "") {
+    start += 1;
+  }
+
+  while (end > start && lines[end - 1]?.trim() === "") {
+    end -= 1;
+  }
+
+  return lines.slice(start, end);
 }
 
 function stripLeadingStructuralBlankLine(lines: string[]) {
@@ -65,6 +86,26 @@ function splitMetadataLine(line: string) {
   }
 
   return { key, value };
+}
+
+function isSourceNoteBodyMetadataNoiseLine(line: string) {
+  const metadata = splitMetadataLine(line.trim());
+  if (!metadata || !SOURCE_NOTE_BODY_METADATA_NOISE_KEYS.has(metadata.key)) {
+    return false;
+  }
+
+  if (metadata.key === "recurring_enabled") {
+    const normalizedValue = metadata.value.trim().toLowerCase();
+    return normalizedValue === "true"
+      || normalizedValue === "false"
+      || normalizedValue === "1"
+      || normalizedValue === "0"
+      || normalizedValue === "paused"
+      || normalizedValue === "enabled"
+      || normalizedValue === "disabled";
+  }
+
+  return !Number.isNaN(new Date(metadata.value).getTime());
 }
 
 function formatTimestampForEditor(value: string | null | undefined) {
@@ -171,6 +212,57 @@ export function formatSourceNoteEditorContent(draft: SourceNoteEditorDraft) {
   }
 
   return noteText === "" ? title : `${title}\n${noteText}`;
+}
+
+/**
+ * Removes backend-only metadata pollution from the content-only note body shown
+ * in the editor. This keeps duplicated timestamps and recurring flags out of
+ * the textarea while preserving legitimate body lines in the middle.
+ *
+ * @param value Raw note body text from markdown or formal note payloads.
+ * @param options Optional title context used to collapse title-only echoes.
+ * @returns Sanitized note body that is safe to show and write back.
+ */
+export function sanitizeSourceNoteBodyText(
+  value: string | null | undefined,
+  options: {
+    title?: string | null;
+  } = {},
+) {
+  if (!value) {
+    return "";
+  }
+
+  const normalizedTitle = options.title?.trim() ?? "";
+  let lines = trimBoundaryBlankLines(normalizeLineEndings(value).split("\n"));
+  if (lines.length === 0) {
+    return "";
+  }
+
+  if (normalizedTitle !== "" && lines[0]?.trim() === normalizedTitle) {
+    const remainingLines = trimBoundaryBlankLines(lines.slice(1));
+    if (remainingLines.length === 0 || remainingLines.every((line) => isSourceNoteBodyMetadataNoiseLine(line))) {
+      return "";
+    }
+  }
+
+  let start = 0;
+  let end = lines.length;
+  while (start < end && isSourceNoteBodyMetadataNoiseLine(lines[start] ?? "")) {
+    start += 1;
+  }
+
+  while (end > start && isSourceNoteBodyMetadataNoiseLine(lines[end - 1] ?? "")) {
+    end -= 1;
+  }
+
+  lines = trimBoundaryBlankLines(lines.slice(start, end));
+  const sanitizedText = lines.join("\n");
+  if (normalizedTitle !== "" && sanitizedText.trim() === normalizedTitle) {
+    return "";
+  }
+
+  return sanitizedText;
 }
 
 /**
@@ -308,6 +400,7 @@ function toIsoTimestamp(value: Date) {
 
 function buildDraftFromParsedBlock(block: SourceNoteEditorBlock, fallbackItem?: NoteListItem | null): SourceNoteEditorDraft {
   const fallbackDraft = fallbackItem ? buildSourceNoteEditorDraftFromItem(fallbackItem, block.sourcePath) : null;
+  const draftTitle = block.title || fallbackDraft?.title || "";
 
   return {
     agentSuggestion: block.agentSuggestion || fallbackDraft?.agentSuggestion || "",
@@ -319,15 +412,33 @@ function buildDraftFromParsedBlock(block: SourceNoteEditorBlock, fallbackItem?: 
     endedAt: block.endedAt || fallbackDraft?.endedAt || "",
     extraMetadata: [...block.extraMetadata],
     nextOccurrenceAt: block.nextOccurrenceAt || fallbackDraft?.nextOccurrenceAt || "",
-    noteText: block.noteText,
+    noteText: sanitizeSourceNoteBodyText(block.noteText, { title: draftTitle }),
     prerequisite: block.prerequisite || fallbackDraft?.prerequisite || "",
     recentInstanceStatus: block.recentInstanceStatus || fallbackDraft?.recentInstanceStatus || "",
     repeatRule: block.repeatRule || fallbackDraft?.repeatRule || "",
     sourceLine: block.sourceLine,
     sourcePath: block.sourcePath,
-    title: block.title || fallbackDraft?.title || "",
+    title: draftTitle,
     updatedAt: block.updatedAt || fallbackDraft?.updatedAt || "",
   };
+}
+
+function findMatchingSourceNoteEditorBlock(
+  blocks: SourceNoteEditorBlock[],
+  draft: Pick<SourceNoteEditorDraft, "sourceLine" | "title">,
+) {
+  let matchedBlock: SourceNoteEditorBlock | null = null;
+
+  if (typeof draft.sourceLine === "number" && draft.sourceLine > 0) {
+    matchedBlock = blocks.find((block) => block.sourceLine === draft.sourceLine) ?? null;
+  }
+
+  if (!matchedBlock && draft.title.trim() !== "") {
+    const candidates = blocks.filter((block) => block.title.trim().toLowerCase() === draft.title.trim().toLowerCase());
+    matchedBlock = candidates.length === 1 ? candidates[0] : candidates[0] ?? null;
+  }
+
+  return matchedBlock;
 }
 
 /**
@@ -382,7 +493,7 @@ export function buildSourceNoteEditorDraftFromItem(
     endedAt: formatTimestampForEditor(item.experience.endedAt),
     extraMetadata: [],
     nextOccurrenceAt: formatTimestampForEditor(item.item.next_occurrence_at),
-    noteText: item.item.note_text?.trim() ?? "",
+    noteText: sanitizeSourceNoteBodyText(item.item.note_text, { title: item.item.title }),
     prerequisite: item.item.prerequisite?.trim() ?? "",
     recentInstanceStatus: item.item.recent_instance_status?.trim() ?? "",
     repeatRule: item.item.repeat_rule?.trim() ?? "",
@@ -674,16 +785,7 @@ export function upsertSourceNoteEditorBlock(note: SourceNoteDocument, draft: Sou
   const normalizedContent = normalizeLineEndings(note.content);
   const lines = normalizedContent.split("\n");
   const blocks = parseSourceNoteEditorBlocks(note);
-  let matchedBlock: SourceNoteEditorBlock | null = null;
-
-  if (typeof draft.sourceLine === "number" && draft.sourceLine > 0) {
-    matchedBlock = blocks.find((block) => block.sourceLine === draft.sourceLine) ?? null;
-  }
-
-  if (!matchedBlock && normalizedDraft.title !== "") {
-    const candidates = blocks.filter((block) => block.title.trim().toLowerCase() === normalizedDraft.title.trim().toLowerCase());
-    matchedBlock = candidates.length === 1 ? candidates[0] : candidates[0] ?? null;
-  }
+  const matchedBlock = findMatchingSourceNoteEditorBlock(blocks, normalizedDraft);
 
   if (!matchedBlock || matchedBlock.sourceLine === null) {
     const trimmed = normalizedContent.trimEnd();
@@ -703,5 +805,41 @@ export function upsertSourceNoteEditorBlock(note: SourceNoteDocument, draft: Sou
   return {
     content: `${nextLines.join("\n").trimEnd()}\n`,
     sourceLine: matchedBlock.sourceLine,
+  };
+}
+
+/**
+ * Removes one markdown note block from the shared source file when the caller
+ * already knows which draft identity was deleted from the formal note list.
+ *
+ * @param note Shared markdown source document.
+ * @param draft Draft identity used to resolve the existing block.
+ * @returns Updated file content plus whether any matching block was removed.
+ */
+export function removeSourceNoteEditorBlock(
+  note: SourceNoteDocument,
+  draft: Pick<SourceNoteEditorDraft, "sourceLine" | "title">,
+) {
+  const normalizedContent = normalizeLineEndings(note.content);
+  const lines = normalizedContent.split("\n");
+  const blocks = parseSourceNoteEditorBlocks(note);
+  const matchedBlock = findMatchingSourceNoteEditorBlock(blocks, draft);
+
+  if (!matchedBlock || matchedBlock.sourceLine === null) {
+    return {
+      content: normalizedContent,
+      removed: false,
+    };
+  }
+
+  const nextLines = [
+    ...lines.slice(0, matchedBlock.sourceLine - 1),
+    ...lines.slice(matchedBlock.endLine),
+  ];
+  const trimmedContent = nextLines.join("\n").trimEnd();
+
+  return {
+    content: trimmedContent === "" ? "" : `${trimmedContent}\n`,
+    removed: true,
   };
 }

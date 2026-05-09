@@ -225,6 +225,12 @@ function loadSourceNoteEditorModule() {
         noteText: string;
       }) => string;
       formatSourceNoteScheduleInputValue: (value: string | null | undefined) => string;
+      sanitizeSourceNoteBodyText: (
+        value: string | null | undefined,
+        options?: {
+          title?: string | null;
+        },
+      ) => string;
       parseSourceNoteEditorBlocks: (note: {
         content: string;
         fileName: string;
@@ -251,6 +257,23 @@ function loadSourceNoteEditorModule() {
         title: string;
         updatedAt: string;
       }>;
+      removeSourceNoteEditorBlock: (
+        note: {
+          content: string;
+          fileName: string;
+          modifiedAtMs: number | null;
+          path: string;
+          sourceRoot: string;
+          title: string;
+        },
+        draft: {
+          sourceLine: number | null;
+          title: string;
+        },
+      ) => {
+        content: string;
+        removed: boolean;
+      };
       serializeSourceNoteEditorDraft: (draft: {
         agentSuggestion: string;
         bucket: "upcoming" | "later" | "recurring_rule" | "closed";
@@ -316,6 +339,12 @@ function loadNotePageServiceModule(desktopLocalPath?: DashboardContractDesktopLo
     delete requireFn.cache[modulePath];
 
     return requireFn(modulePath) as {
+      buildVisibleNoteText: (
+        value: string | null | undefined,
+        options?: {
+          title?: string | null;
+        },
+      ) => string;
       buildSourceNoteFallbackItems: (note: {
         content: string;
         fileName: string;
@@ -418,6 +447,21 @@ function loadTaskPageMapperModule() {
     requireFn(resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/tasks/taskPage.mapper.js")) as {
       canTaskAcceptSteering: (task: Task) => boolean;
       getTaskPrimaryActions: (task: Task, detail: AgentTaskDetailGetResult) => Array<{ action: string; label: string; tooltip: string }>;
+    },
+  );
+}
+
+function loadNotePageMapperModule() {
+  return withDesktopAliasRuntime((requireFn) =>
+    requireFn(resolve(desktopRoot, "src/features/dashboard/notes/notePage.mapper.ts")) as {
+      describeNotePreview: (
+        item: { bucket: "upcoming" | "later" | "recurring_rule" | "closed" },
+        experience: { isRecurringEnabled?: boolean; repeatRule?: string; previewStatus?: string; timeHint: string },
+      ) => string;
+      formatNoteBoardTimeHint: (
+        item: { bucket: "upcoming" | "later" | "recurring_rule" | "closed" },
+        experience: { isRecurringEnabled?: boolean; timeHint: string },
+      ) => string;
     },
   );
 }
@@ -6902,6 +6946,41 @@ test("note conversion and confirming-intent surfaces use direct task handoff wor
   assert.doesNotMatch(homeServiceSource, /actionLabel: "确认继续"/);
 });
 
+test("note visible content strips hidden header metadata before rendering preview copy", () => {
+  const noteService = loadNotePageServiceModule();
+
+  assert.equal(
+    noteService.buildVisibleNoteText([
+      "created_at: 2026-05-07T13:41:26.242Z",
+      "updated_at: 2026-05-07T16:51:39.202Z",
+      "",
+      "今晚之前完成计算机作业",
+      "作业在 C:/workspace/homework",
+    ].join("\n")),
+    [
+      "今晚之前完成计算机作业",
+      "作业在 C:/workspace/homework",
+    ].join("\n"),
+  );
+  assert.equal(
+    noteService.buildVisibleNoteText([
+      "今晚之前完成计算机作业",
+      "updated_at: 2026-05-07T16:51:39.202Z",
+      "recurring_enabled: false",
+    ].join("\n"), { title: "今晚之前完成计算机作业" }),
+    "",
+  );
+  assert.equal(
+    noteService.buildVisibleNoteText([
+      "整理今天的会议纪要",
+      "updated_at: 2026-05-07T16:51:39.202Z",
+      "recurring_enabled: false",
+    ].join("\n")),
+    "整理今天的会议纪要",
+  );
+  assert.equal(noteService.buildVisibleNoteText("note: 只展示这一句"), "只展示这一句");
+});
+
 test("source note editor keeps a content-only input while preserving hidden markdown metadata", () => {
   const sourceNoteEditor = loadSourceNoteEditorModule();
   const seededDraft = {
@@ -7042,6 +7121,35 @@ test("source note editor keeps matched markdown blocks content-only without leak
   assert.equal(draft.noteText, "");
 });
 
+test("source note editor strips backend-only metadata pollution from content-only note bodies", () => {
+  const sourceNoteEditor = loadSourceNoteEditorModule();
+
+  assert.equal(
+    sourceNoteEditor.sanitizeSourceNoteBodyText([
+      "完成计算机作业",
+      "created_at: 2026-05-07T18:37:21.131Z",
+      "updated_at: 2026-05-07T18:40:43.265Z",
+      "recurring_enabled: false",
+    ].join("\n"), { title: "完成计算机作业" }),
+    "",
+  );
+  assert.equal(
+    sourceNoteEditor.sanitizeSourceNoteBodyText([
+      "第一行正文",
+      "updated_at: 2026-05-07T18:40:43.265Z",
+      "recurring_enabled: false",
+    ].join("\n")),
+    "第一行正文",
+  );
+  assert.equal(
+    sourceNoteEditor.sanitizeSourceNoteBodyText([
+      "status: 这一行现在是正文",
+      "updated_at: 2026-05-07T18:40:43.265Z",
+    ].join("\n")),
+    "status: 这一行现在是正文",
+  );
+});
+
 test("source note editor keeps custom header metadata hidden from the content editor", () => {
   const sourceNoteEditor = loadSourceNoteEditorModule();
   const draft = sourceNoteEditor.buildSourceNoteEditorDraftFromNote(
@@ -7163,6 +7271,42 @@ test("source note schedule helpers round-trip hidden time metadata and derive th
   assert.equal(sourceNoteEditor.resolveSourceNoteDraftBucketForSchedule({ dueAt: "", repeatRule: "" }), "later");
 });
 
+test("source note editor removes the matched markdown block when a note record is deleted", () => {
+  const sourceNoteEditor = loadSourceNoteEditorModule();
+  const removal = sourceNoteEditor.removeSourceNoteEditorBlock(
+    {
+      content: [
+        "- [ ] 第一条",
+        "bucket: later",
+        "",
+        "- [x] 第二条",
+        "bucket: closed",
+        "ended_at: 2026-05-07T20:30:00.000Z",
+      ].join("\n"),
+      fileName: "notes.md",
+      modifiedAtMs: null,
+      path: "workspace/notes/notes.md",
+      sourceRoot: "workspace/notes",
+      title: "notes",
+    },
+    {
+      sourceLine: 1,
+      title: "第一条",
+    },
+  );
+
+  assert.equal(removal.removed, true);
+  assert.equal(
+    removal.content,
+    [
+      "- [x] 第二条",
+      "bucket: closed",
+      "ended_at: 2026-05-07T20:30:00.000Z",
+      "",
+    ].join("\n"),
+  );
+});
+
 test("note page resolves newly created source notes from the appended tail block instead of matching by mutable metadata", () => {
   const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
 
@@ -7278,15 +7422,34 @@ test("note page keeps markdown source blocks out of the rendered note buckets so
   assert.match(notePageSource, /railClosedItems\.length/);
 });
 
-test("note page writes updated buckets back into markdown after note actions and rail moves", () => {
+test("note page writes full markdown state back after note actions and removes the source block on delete", () => {
   const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
 
-  assert.match(notePageSource, /async function persistSourceNoteBucketForItem\(/);
-  assert.match(notePageSource, /bucket: nextBucket,/);
+  assert.match(notePageSource, /function buildSourceNoteDraftFromFormalItem\(/);
+  assert.match(notePageSource, /sanitizeSourceNoteBodyText\(nextItem\.note_text, \{ title: nextItem\.title \}\)/);
+  assert.match(notePageSource, /async function persistSourceNoteMutationForItem\(/);
+  assert.match(notePageSource, /const nextSourceFile = removeSourceNoteEditorBlock\(context\.note, context\.draft\);/);
+  assert.match(notePageSource, /const nextDraft = buildSourceNoteDraftFromFormalItem\(context, nextItem\);/);
   assert.match(notePageSource, /await saveNoteSource\(taskSourceRoots, context\.note\.path, nextSourceFile\.content\);/);
-  assert.match(notePageSource, /await persistSourceNoteBucketForItem\(updatedItem, updatedBucket\);/);
-  assert.match(notePageSource, /await persistSourceNoteBucketForItem\(updatedItem, outcome\.result\.notepad_item\.bucket\);/);
+  assert.match(notePageSource, /await persistSourceNoteMutationForItem\(\s*updatedItem,\s*outcome\.result\.notepad_item,\s*outcome\.result\.deleted_item_id \?\? null,\s*\);/);
   assert.match(notePageSource, /appendSourceBucketSyncFailure\(/);
+});
+
+test("recurring rule edit stays inside the detail-page schedule editor instead of jumping to the source-note editor", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /if \(action === "edit"\) \{\s*if \(selectedItem\.item\.bucket === "recurring_rule"\) \{\s*startScheduleEditingForItem\(selectedItem\);/);
+});
+
+test("paused recurring rules persist a hidden markdown override and reapply it after inspection refreshes", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /key\) !== "recurring_enabled"/);
+  assert.match(notePageSource, /key: "recurring_enabled",\s*value: "false"/);
+  assert.match(notePageSource, /const displayRpcItems = useMemo\(\s*\(\) => rawRpcItems\.map\(\(item\) => applySourceNoteDisplayOverrides\(item, sourceNotesByPath, sourceNoteBlocksByPath\)\)/);
+  assert.match(notePageSource, /const recurringEnabledOverride = readSourceNoteRecurringEnabledOverride\(matchedBlock\);/);
+  assert.match(notePageSource, /isRecurringEnabled: false,/);
+  assert.match(notePageSource, /previewStatus: "规则已暂停",/);
 });
 
 test("note path display strips Windows extended prefixes without changing the underlying open path flow", () => {
@@ -7380,6 +7543,63 @@ test("note detail schedule flow keeps time metadata outside the content-only edi
   assert.match(noteDetailPanelSource, /保存安排/);
   assert.match(noteDetailPanelSource, /直接在详情页里设置首次时间和重复规则；正文编辑器仍保持只写内容/);
   assert.equal(existsSync(noteScheduleDialogPath), false);
+});
+test("recurring rule detail panel exposes a direct pause-resume button beside schedule editing instead of burying it in the footer action bar", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+  const noteDetailPanelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NoteDetailPanel.tsx"), "utf8");
+  const noteActionBarSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NoteActionBar.tsx"), "utf8");
+
+  assert.match(noteDetailPanelSource, /onToggleRecurring\?: \(\) => void;/);
+  assert.match(noteDetailPanelSource, /const isRecurringRule = item\.item\.bucket === "recurring_rule";/);
+  assert.match(noteDetailPanelSource, /const recurringToggleLabel = item\.experience\.isRecurringEnabled \? "暂停重复" : "开启重复";/);
+  assert.match(noteDetailPanelSource, /点击“开启重复”可立即恢复/);
+  assert.match(noteDetailPanelSource, /className="note-detail-card__action-row"/);
+  assert.match(noteDetailPanelSource, /onClick=\{onToggleRecurring\}/);
+  assert.match(notePageSource, /onToggleRecurring=\{selectedItem\.item\.bucket === "recurring_rule" \? \(\) => handleDetailAction\("toggle-recurring"\) : undefined\}/);
+  assert.doesNotMatch(noteActionBarSource, /label: item\.experience\.isRecurringEnabled \? "暂停重复" : "开启重复"/);
+  assert.doesNotMatch(noteActionBarSource, /label: "修改规则"/);
+});
+
+test("note board cards label footer time by start or next execution semantics", () => {
+  const noteMapper = loadNotePageMapperModule();
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.equal(
+    noteMapper.formatNoteBoardTimeHint({ bucket: "upcoming" }, { timeHint: "5/10 00:51" }),
+    "开始时间 5/10 00:51",
+  );
+  assert.equal(
+    noteMapper.formatNoteBoardTimeHint({ bucket: "later" }, { timeHint: "5/11 08:30" }),
+    "开始时间 5/11 08:30",
+  );
+  assert.equal(
+    noteMapper.formatNoteBoardTimeHint({ bucket: "recurring_rule" }, { timeHint: "5/10 00:51" }),
+    "下次执行 5/10 00:51",
+  );
+  assert.equal(
+    noteMapper.formatNoteBoardTimeHint({ bucket: "recurring_rule" }, { isRecurringEnabled: false, timeHint: "已暂停" }),
+    "重复已暂停",
+  );
+  assert.equal(
+    noteMapper.describeNotePreview({ bucket: "recurring_rule" }, { isRecurringEnabled: false, timeHint: "已暂停" }),
+    "重复规则 · 已暂停",
+  );
+  assert.equal(
+    noteMapper.formatNoteBoardTimeHint({ bucket: "closed" }, { timeHint: "5/12 18:20" }),
+    "结束时间 5/12 18:20",
+  );
+  assert.match(notePageSource, /formatNoteBoardTimeHint\(item\.item, item\.experience\)/);
+});
+
+test("note board cards hide duplicate preview copy when a note has no visible body content", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+  const notePageStyleSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/notePage.css"), "utf8");
+
+  assert.match(notePageSource, /const boardCardCopy = item\.experience\.noteText\.trim\(\);/);
+  assert.match(notePageSource, /const hasBoardCardCopy = boardCardCopy !== "";/);
+  assert.match(notePageSource, /!hasBoardCardCopy && "note-preview-page__board-card-title--spacious"/);
+  assert.match(notePageSource, /hasBoardCardCopy \? <p className="note-preview-page__board-card-copy">\{boardCardCopy\}<\/p> : null/);
+  assert.match(notePageStyleSource, /\.note-preview-page__board-card-title--spacious \{/);
 });
 test("note rpc service derives experience from protocol note data instead of mock fixtures", () => {
   const noteServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/notePage.service.ts"), "utf8");
