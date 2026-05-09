@@ -5184,6 +5184,63 @@ func TestServiceSecurityRespondRejectsStaleApprovalIDAfterRebuiltCycle(t *testin
 	}
 }
 
+func TestServiceSecurityRespondRejectsUnsupportedDecision(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "unsupported decision output")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "notes"), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "notes", "output.md"), []byte("old content"), 0o644); err != nil {
+		t.Fatalf("seed output file: %v", err)
+	}
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_unsupported_approval_decision",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请覆盖该文件",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"target_path": "notes/output.md",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	if _, err := service.SecurityRespond(map[string]any{
+		"task_id":     taskID,
+		"approval_id": activeApprovalIDForTask(t, service, taskID),
+		"decision":    "manual_override",
+	}); !errors.Is(err, ErrTaskStatusInvalid) {
+		t.Fatalf("expected unsupported approval decision to be rejected, got %v", err)
+	}
+
+	task, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatalf("expected waiting task %s to remain in runtime", taskID)
+	}
+	if task.Status != "waiting_auth" || task.CurrentStep != "waiting_authorization" {
+		t.Fatalf("expected unsupported decision not to resume task, got status=%s step=%s", task.Status, task.CurrentStep)
+	}
+
+	items, total, err := service.storage.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), taskID, "", 20, 0)
+	if err != nil {
+		t.Fatalf("list authorization records failed: %v", err)
+	}
+	if total != 0 || len(items) != 0 {
+		t.Fatalf("expected unsupported decision not to persist authorization history, got total=%d items=%+v", total, items)
+	}
+}
+
 func TestServiceSecurityRespondKeepsAuthorizationHistoryAcrossMultipleCycles(t *testing.T) {
 	service, workspaceRoot := newTestServiceWithExecution(t, "history persistence output")
 	if service.storage == nil {
@@ -7634,6 +7691,68 @@ func TestBuildScreenAnalysisApprovalStateKeepsApprovalHistory(t *testing.T) {
 	}
 	if statuses[stringValue(firstApproval, "approval_id", "")] != "resolved" {
 		t.Fatalf("expected stale screen approval to be resolved, got %+v", items)
+	}
+}
+
+func TestBuildScreenAnalysisApprovalStateRetiresAllStalePendingApprovals(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "unused")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_screen_stale_pending_pagination",
+		Title:       "Analyze current screen",
+		SourceType:  "screen_capture",
+		Status:      "waiting_auth",
+		CurrentStep: "waiting_authorization",
+		RiskLevel:   "yellow",
+		Intent: map[string]any{
+			"name": "screen_analyze",
+			"arguments": map[string]any{
+				"path": "inputs/screen.png",
+			},
+		},
+	})
+
+	var latestApproval map[string]any
+	var latestPendingExecution map[string]any
+	for i := 0; i < 25; i++ {
+		approvalRequest, pendingExecution, _, err := service.buildScreenAnalysisApprovalState(task)
+		if err != nil {
+			t.Fatalf("build paginated screen approval state failed at cycle %d: %v", i, err)
+		}
+		if err := service.persistApprovalRequestState(task.TaskID, approvalRequest, mapValue(pendingExecution, "impact_scope")); err != nil {
+			t.Fatalf("persist paginated screen approval state failed at cycle %d: %v", i, err)
+		}
+		latestApproval = approvalRequest
+		latestPendingExecution = pendingExecution
+	}
+	if latestApproval == nil || latestPendingExecution == nil {
+		t.Fatal("expected latest approval cycle to be captured")
+	}
+
+	items, total, err := service.storage.ApprovalRequestStore().ListApprovalRequests(context.Background(), task.TaskID, 100, 0)
+	if err != nil {
+		t.Fatalf("list approval request history failed: %v", err)
+	}
+	if total != 25 || len(items) != 25 {
+		t.Fatalf("expected every approval cycle to persist, got total=%d items=%+v", total, items)
+	}
+
+	activeApprovalID := stringValue(latestApproval, "approval_id", "")
+	pendingCount := 0
+	for _, item := range items {
+		if item.Status != "pending" {
+			continue
+		}
+		pendingCount++
+		if item.ApprovalID != activeApprovalID {
+			t.Fatalf("expected only the newest approval cycle to remain pending, got %+v", items)
+		}
+	}
+	if pendingCount != 1 {
+		t.Fatalf("expected exactly one pending approval after retiring stale history, got %d from %+v", pendingCount, items)
 	}
 }
 

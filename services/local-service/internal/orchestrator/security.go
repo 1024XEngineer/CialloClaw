@@ -258,6 +258,9 @@ func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error)
 	}
 
 	decision := stringValue(params, "decision", "allow_once")
+	if !isSupportedApprovalDecision(decision) {
+		return nil, ErrTaskStatusInvalid
+	}
 	rememberRule := boolValue(params, "remember_rule", false)
 	authorizationRecord := map[string]any{
 		"authorization_record_id": fmt.Sprintf("auth_%s_%d", task.TaskID, time.Now().UnixNano()),
@@ -374,6 +377,15 @@ func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error)
 		response["delivery_result"] = nil
 	}
 	return response, nil
+}
+
+func isSupportedApprovalDecision(decision string) bool {
+	switch strings.TrimSpace(decision) {
+	case "allow_once", "deny_once":
+		return true
+	default:
+		return false
+	}
 }
 
 func aggregateRiskLevel(tasks []runengine.TaskRecord, pendingApprovals []map[string]any, fallback string) string {
