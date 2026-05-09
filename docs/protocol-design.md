@@ -1240,17 +1240,20 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
   "result": {
     "data": {
       "delivery_result": {
-        "type": "workspace_document",
-        "title": "处理结果",
+        "type": "result_page",
+        "title": "网页读取结果",
         "payload": {
-          "path": "D:/CialloClawWorkspace/Q3复盘.md",
-          "task_id": "task_201"
+          "path": null,
+          "task_id": "task_201",
+          "url": "./dashboard.html#/tasks/delivery/task_201"
         },
-        "preview_text": "已为你写入文档并打开"
+        "preview_text": "结果已生成，正在打开结果页"
       },
-      "open_action": "open_file",
+      "open_action": "result_page",
       "resolved_payload": {
-        "path": "D:/CialloClawWorkspace/Q3复盘.md"
+        "path": null,
+        "task_id": "task_201",
+        "url": "./dashboard.html#/tasks/delivery/task_201"
       },
       "artifact": null
     },
