@@ -12729,6 +12729,36 @@ func TestTaskArtifactHelpersCoverFallbackBranches(t *testing.T) {
 	}
 }
 
+func TestTaskDeliveryHelpersSupportResultPage(t *testing.T) {
+	if got := resolveDeliveryType("result_page", "bubble", "workspace_document"); got != "result_page" {
+		t.Fatalf("expected result_page preferred delivery to be preserved, got %q", got)
+	}
+	if got := previewTextForDeliveryType("result_page"); got != "结果已生成，正在打开结果页" {
+		t.Fatalf("expected result_page preview copy, got %q", got)
+	}
+	if got := deliveryTypeFromIntent(map[string]any{"name": "page_read"}); got != "result_page" {
+		t.Fatalf("expected page_read default delivery to use result_page, got %q", got)
+	}
+	if got := deliveryTypeFromIntent(map[string]any{"name": "browser_snapshot"}); got != "result_page" {
+		t.Fatalf("expected browser_snapshot default delivery to use result_page, got %q", got)
+	}
+	if got := deliveryTypeFromIntent(map[string]any{"name": "browser_attach_current"}); got != "bubble" {
+		t.Fatalf("expected browser_attach_current to remain bubble delivery, got %q", got)
+	}
+	result := normalizeDeliveryOpenResult(nil, map[string]any{
+		"type":    "result_page",
+		"title":   "结果页任务",
+		"payload": map[string]any{},
+	}, "task_result_page")
+	payload := result["payload"].(map[string]any)
+	if payload["path"] != nil {
+		t.Fatalf("expected result_page normalization to clear path payload, got %+v", payload)
+	}
+	if payload["url"] != delivery.ResolveResultPageURL("task_result_page") {
+		t.Fatalf("expected result_page normalization to backfill stable url, got %+v", payload)
+	}
+}
+
 func TestServiceTaskArtifactListFallsBackToRuntimeArtifactsWhenStoreEmpty(t *testing.T) {
 	service := newTestService()
 	startResult, err := service.StartTask(map[string]any{
@@ -16207,7 +16237,7 @@ func TestServiceStartTaskWithExecutorReturnsGeneratedBubble(t *testing.T) {
 	}
 }
 
-func TestServiceStartTaskWithExecutorDeliversPageReadBubble(t *testing.T) {
+func TestServiceStartTaskWithExecutorDeliversPageReadResultPage(t *testing.T) {
 	service, _ := newTestServiceWithExecutionAndPlaywright(t, "unused", platform.LocalExecutionBackend{}, nil, stubPlaywrightClient{readResult: tools.BrowserPageReadResult{
 		Title:       "Example Domain",
 		TextContent: "This domain is for use in illustrative examples in documents.",
@@ -16246,15 +16276,30 @@ func TestServiceStartTaskWithExecutorDeliversPageReadBubble(t *testing.T) {
 		t.Fatalf("security respond failed: %v", err)
 	}
 
+	taskID := result["task"].(map[string]any)["task_id"].(string)
 	deliveryResult := result["delivery_result"].(map[string]any)
-	if deliveryResult["type"] != "bubble" {
-		t.Fatalf("expected bubble delivery result, got %+v", deliveryResult)
+	if deliveryResult["type"] != "result_page" {
+		t.Fatalf("expected result_page delivery result, got %+v", deliveryResult)
+	}
+	payload := deliveryResult["payload"].(map[string]any)
+	if payload["path"] != nil || payload["url"] != delivery.ResolveResultPageURL(taskID) {
+		t.Fatalf("expected page_read delivery payload to expose stable result_page url, got %+v", payload)
 	}
 	bubble := result["bubble_message"].(map[string]any)
 	if !strings.Contains(bubble["text"].(string), "illustrative examples") {
 		t.Fatalf("expected bubble text to contain page preview, got %+v", bubble)
 	}
-	taskID := result["task"].(map[string]any)["task_id"].(string)
+	openResult, err := service.DeliveryOpen(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("delivery open failed: %v", err)
+	}
+	if openResult["open_action"] != "result_page" {
+		t.Fatalf("expected result_page open action, got %+v", openResult)
+	}
+	resolvedPayload := openResult["resolved_payload"].(map[string]any)
+	if resolvedPayload["url"] != delivery.ResolveResultPageURL(taskID) || resolvedPayload["path"] != nil {
+		t.Fatalf("expected delivery open to return stable result_page payload, got %+v", resolvedPayload)
+	}
 	record, ok := service.runEngine.GetTask(taskID)
 	if !ok {
 		t.Fatal("expected task to remain in runtime")
@@ -16274,7 +16319,7 @@ func TestServiceStartTaskWithExecutorDeliversPageReadBubble(t *testing.T) {
 	}
 }
 
-func TestServiceStartTaskWithExecutorDeliversPageSearchBubble(t *testing.T) {
+func TestServiceStartTaskWithExecutorDeliversPageSearchResultPage(t *testing.T) {
 	service, _ := newTestServiceWithExecutionAndPlaywright(t, "unused", platform.LocalExecutionBackend{}, nil, stubPlaywrightClient{searchResult: tools.BrowserPageSearchResult{
 		Matches:    []string{"Keyword beta lives here"},
 		MatchCount: 1,
@@ -16312,15 +16357,19 @@ func TestServiceStartTaskWithExecutorDeliversPageSearchBubble(t *testing.T) {
 	if err != nil {
 		t.Fatalf("security respond failed: %v", err)
 	}
+	taskID := result["task"].(map[string]any)["task_id"].(string)
 	deliveryResult := result["delivery_result"].(map[string]any)
-	if deliveryResult["type"] != "bubble" {
-		t.Fatalf("expected bubble delivery result, got %+v", deliveryResult)
+	if deliveryResult["type"] != "result_page" {
+		t.Fatalf("expected result_page delivery result, got %+v", deliveryResult)
+	}
+	payload := deliveryResult["payload"].(map[string]any)
+	if payload["url"] != delivery.ResolveResultPageURL(taskID) || payload["path"] != nil {
+		t.Fatalf("expected page_search delivery payload to expose stable result_page url, got %+v", payload)
 	}
 	bubble := result["bubble_message"].(map[string]any)
 	if !strings.Contains(bubble["text"].(string), "关键词") {
 		t.Fatalf("expected page_search bubble summary, got %+v", bubble)
 	}
-	taskID := result["task"].(map[string]any)["task_id"].(string)
 	record, ok := service.runEngine.GetTask(taskID)
 	if !ok {
 		t.Fatal("expected task to remain in runtime")
@@ -16524,15 +16573,19 @@ func TestServiceStartTaskWithRealLocalPageReadDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("security respond failed: %v", err)
 	}
+	taskID := result["task"].(map[string]any)["task_id"].(string)
 	deliveryResult := result["delivery_result"].(map[string]any)
-	if deliveryResult["type"] != "bubble" {
-		t.Fatalf("expected bubble delivery result, got %+v", deliveryResult)
+	if deliveryResult["type"] != "result_page" {
+		t.Fatalf("expected result_page delivery result, got %+v", deliveryResult)
+	}
+	payload := deliveryResult["payload"].(map[string]any)
+	if payload["url"] != delivery.ResolveResultPageURL(taskID) || payload["path"] != nil {
+		t.Fatalf("expected local page_read delivery payload to expose stable result_page url, got %+v", payload)
 	}
 	bubble := result["bubble_message"].(map[string]any)
 	if !strings.Contains(bubble["text"].(string), "Local acceptance page") {
 		t.Fatalf("expected real local page preview in bubble, got %+v", bubble)
 	}
-	taskID := result["task"].(map[string]any)["task_id"].(string)
 	record, ok := service.runEngine.GetTask(taskID)
 	if !ok {
 		t.Fatal("expected task to remain in runtime")

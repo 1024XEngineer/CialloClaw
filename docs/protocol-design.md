@@ -270,7 +270,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - `bubble`：气泡轻量交付。
 - `workspace_document`：写入工作区文档。
-- `result_page`：结果页交付。
+- `result_page`：结果页交付；正式载荷应通过 `payload.url` 指向结果页入口，`payload.path` 保持为空。
 - `open_file`：直接打开文件。
 - `reveal_in_folder`：打开文件夹并高亮文件。
 - `task_detail`：跳转任务详情。
@@ -1193,6 +1193,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - **系统处理**：
   - 若携带 `artifact_id`，优先基于真实 artifact 解析打开动作
   - 若未携带 `artifact_id`，则基于任务当前 `delivery_result` 解析打开动作
+  - 当 `delivery_result.type = result_page` 时，`open_action` 仍为 `result_page`，且 `resolved_payload.url` 必须回落到稳定结果页入口
   - 返回统一的 `delivery_result`、`open_action`、`resolved_payload`
 - **入参**：任务 ID，可选产物 ID
 - **出参**：交付结果、打开动作、解析后的载荷，按需附带产物对象
@@ -1227,7 +1228,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | ----------------------- | ---------------- |
 | `data.delivery_result`  | 主交付对象       |
 | `data.open_action`      | 最终打开动作     |
-| `data.resolved_payload` | 解析后的打开载荷 |
+| `data.resolved_payload` | 解析后的打开载荷；可包含 `path` 或 `url` |
 | `data.artifact`         | 命中的产物对象   |
 
 ### agent.delivery.open 出参示例

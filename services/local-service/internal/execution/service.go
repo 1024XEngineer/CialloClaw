@@ -1063,6 +1063,7 @@ func (s *Service) executeDirectBuiltinTool(ctx context.Context, request Request)
 		return Result{}, false, nil
 	}
 	toolName := intentName
+	deliveryType := directToolDeliveryType(request.DeliveryType)
 	toolResult, recoveryPoint, err := s.executeTool(ctx, request, s.workspace, toolName, toolInput)
 	if err != nil {
 		failedResult := Result{
@@ -1073,7 +1074,7 @@ func (s *Service) executeDirectBuiltinTool(ctx context.Context, request Request)
 			failedResult.ToolName = toolName
 			failedResult.ToolInput = mergeToolInputs(toolInput, map[string]any{
 				"intent_name":     toolName,
-				"delivery_type":   "bubble",
+				"delivery_type":   deliveryType,
 				"available_tools": s.availableToolNames(),
 				"workers":         s.availableWorkers(),
 			})
@@ -1084,7 +1085,7 @@ func (s *Service) executeDirectBuiltinTool(ctx context.Context, request Request)
 	bubbleText := toolBubbleText(toolName, toolResult)
 	return Result{
 		Content:        bubbleText,
-		DeliveryResult: s.delivery.BuildDeliveryResultWithTargetPath(request.TaskID, "bubble", request.ResultTitle, bubbleText, ""),
+		DeliveryResult: s.delivery.BuildDeliveryResultWithTargetPath(request.TaskID, deliveryType, request.ResultTitle, bubbleText, ""),
 		Artifacts:      toolArtifactsFromResult(request.TaskID, toolResult),
 		BubbleText:     bubbleText,
 		RecoveryPoint:  cloneMap(recoveryPoint),
@@ -1092,7 +1093,7 @@ func (s *Service) executeDirectBuiltinTool(ctx context.Context, request Request)
 		ToolName:       toolName,
 		ToolInput: mergeToolInputs(toolInput, map[string]any{
 			"intent_name":     toolName,
-			"delivery_type":   "bubble",
+			"delivery_type":   deliveryType,
 			"available_tools": s.availableToolNames(),
 			"workers":         s.availableWorkers(),
 		}),
@@ -1150,10 +1151,11 @@ func (s *Service) executeThroughToolExecutor(ctx context.Context, request Reques
 			}
 		}
 	} else {
+		deliveryType := directToolDeliveryType(request.DeliveryType)
 		bubbleText := toolBubbleText(toolName, toolResult)
 		result.BubbleText = bubbleText
 		result.Content = bubbleText
-		result.DeliveryResult = s.delivery.BuildDeliveryResultWithTargetPath(request.TaskID, "bubble", request.ResultTitle, bubbleText, "")
+		result.DeliveryResult = s.delivery.BuildDeliveryResultWithTargetPath(request.TaskID, deliveryType, request.ResultTitle, bubbleText, "")
 	}
 
 	return result, true, nil
@@ -1194,6 +1196,13 @@ func (s *Service) resolveToolExecution(request Request, deliveryResult map[strin
 		return "", nil, false
 	}
 	return intentName, input, true
+}
+
+func directToolDeliveryType(requestDeliveryType string) string {
+	if strings.TrimSpace(requestDeliveryType) == "result_page" {
+		return "result_page"
+	}
+	return "bubble"
 }
 
 func resolveDirectToolInput(intentName string, args map[string]any, snapshot contextsvc.TaskContextSnapshot) (map[string]any, bool) {
@@ -2495,10 +2504,14 @@ func previewTextForOutput(outputText, deliveryType string) string {
 }
 
 func previewTextForDeliveryType(deliveryType string) string {
-	if deliveryType == "workspace_document" {
+	switch deliveryType {
+	case "workspace_document":
 		return "已为你写入文档并打开"
+	case "result_page":
+		return "结果已生成，正在打开结果页"
+	default:
+		return "结果已通过气泡返回"
 	}
-	return "结果已通过气泡返回"
 }
 
 func truncateBubbleText(outputText string) string {
