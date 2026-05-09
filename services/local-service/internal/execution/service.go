@@ -2385,12 +2385,6 @@ func budgetFailureSignal(request Request, generationErr error) map[string]any {
 		return nil
 	}
 	reason := strings.TrimSpace(generationErr.Error())
-	if strings.Contains(reason, context.Canceled.Error()) {
-		reason = context.Canceled.Error()
-	}
-	if strings.Contains(reason, context.DeadlineExceeded.Error()) {
-		reason = context.DeadlineExceeded.Error()
-	}
 	if !errors.Is(generationErr, model.ErrClientNotConfigured) && !errors.Is(generationErr, model.ErrToolCallingNotSupported) && !errors.Is(generationErr, model.ErrModelProviderUnsupported) && !errors.Is(generationErr, model.ErrSecretNotFound) && !errors.Is(generationErr, model.ErrSecretSourceFailed) && !isBudgetFailureReason(reason) {
 		return nil
 	}
