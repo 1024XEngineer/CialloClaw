@@ -1,9 +1,9 @@
 import type {
   ApprovalDecision,
   BubbleMessage,
+  InputContext,
   IntentPayload,
   PageContext,
-  RecommendationContext,
 } from "@cialloclaw/protocol";
 
 export type ShellBallBubbleRole = "user" | "agent";
@@ -35,7 +35,20 @@ export type ShellBallBubbleInlineRecommendationState = {
   recommendationId: string;
   intent: IntentPayload;
   pageContext: PageContext;
-  requestContext: RecommendationContext;
+  requestContext: ShellBallRecommendationContext;
+};
+
+export type ShellBallRecommendationContext = InputContext & {
+  page_title: string;
+  app_name: string;
+  page_url?: string;
+  window_title?: string;
+  visible_text?: string;
+  screen_summary?: string;
+  clipboard_text?: string;
+  clipboard_mime_type?: string;
+  hover_target?: string;
+  error_text?: string;
 };
 
 export type ShellBallBubbleDesktopState = {

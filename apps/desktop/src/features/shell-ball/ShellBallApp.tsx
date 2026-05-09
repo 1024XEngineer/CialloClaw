@@ -38,6 +38,7 @@ import {
   setShellBallInteractiveRegions,
   setShellBallPressLock,
 } from "../../platform/shellBallWindow";
+import { loadSettings } from "../../services/settingsService";
 import { openOrFocusDesktopWindow } from "../../platform/windowController";
 import { buildDesktopOnboardingPresentation } from "@/features/onboarding/onboardingGeometry";
 import {
@@ -68,6 +69,7 @@ const SHELL_BALL_DASHBOARD_TRANSITION_DURATION_MS = 260;
 const SHELL_BALL_SELECTION_PROMPT_CLEAR_DELAY_MS = 240;
 const SHELL_BALL_CLIPBOARD_PROMPT_WINDOW_MS = 10_000;
 const SHELL_BALL_EDGE_DOCK_REVEAL_MARGIN_PX = 24;
+const SHELL_BALL_EDGE_DOCK_REVEAL_HIDE_DELAY_MS = 90;
 
 type ShellBallClipboardPrompt = {
   text: string;
@@ -326,6 +328,13 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   const motionConfig = getShellBallMotionConfig(visualState);
   const [dashboardTransitionPhase, setDashboardTransitionPhase] = useState<ShellBallDashboardTransitionPhase>("idle");
   const [fileDropActive, setFileDropActive] = useState(false);
+  const [floatingBallSize, setFloatingBallSize] = useState<ShellBallFloatingSize>(() => {
+    if (typeof window === "undefined") {
+      return "medium";
+    }
+
+    return normalizeShellBallFloatingSize(loadSettings().settings.floating_ball.size);
+  });
   const [inputFocusToken, setInputFocusToken] = useState(0);
   const [textDragActive, setTextDragActive] = useState(false);
   const [selectionPrompt, setSelectionPrompt] = useState<ShellBallSelectionSnapshot | null>(null);
@@ -339,6 +348,7 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
   const selectionPromptClearTimeoutRef = useRef<number | null>(null);
   const previousVisualStateRef = useRef<ShellBallVisualState>(visualState);
   const transitionQueueRef = useRef(Promise.resolve());
+  const edgeDockRevealHideTimeoutRef = useRef<number | null>(null);
   const dragDropHandlersRef = useRef<{
     handleDroppedFiles: (paths: string[]) => Promise<void> | void;
   }>({
@@ -399,7 +409,29 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     snapshotInputBarMode: snapshot.inputBarMode,
   });
   const visibleBubbleItems = getShellBallVisibleBubbleItems(snapshot.bubbleItems);
+  const hasPendingAgentLoading = visibleBubbleItems.some((item) => item.role === "agent" && item.desktop.presentationHint === "loading");
+  const hasPendingApproval = snapshot.bubbleItems.some((item) => item.desktop.inlineApproval?.status === "idle");
+  const hasAlertOpportunity = selectionPrompt !== null || isShellBallClipboardPromptActive(clipboardPrompt);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    function syncFloatingBallSizeFromStorage() {
+      setFloatingBallSize(normalizeShellBallFloatingSize(loadSettings().settings.floating_ball.size));
+    }
+
+    window.addEventListener("storage", syncFloatingBallSizeFromStorage);
+
+    return () => {
+      window.removeEventListener("storage", syncFloatingBallSizeFromStorage);
+    };
+  }, []);
+
   const {
+    ballDockSettling,
+    ballDragActive,
     beginBallWindowPointerDrag,
     edgeDockState,
     endBallWindowPointerDrag,
@@ -422,6 +454,13 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     handleDroppedFiles: handleCoordinatorDroppedFiles,
   };
   windowFrameRef.current = windowFrame;
+
+  const cancelEdgeDockRevealHide = useCallback(() => {
+    if (edgeDockRevealHideTimeoutRef.current !== null) {
+      window.clearTimeout(edgeDockRevealHideTimeoutRef.current);
+      edgeDockRevealHideTimeoutRef.current = null;
+    }
+  }, []);
 
   const reportInteractiveRegions = useCallback(async () => {
     const currentWindow = getCurrentWindow();
@@ -748,11 +787,12 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     // Reset native mascot hotspot state only when the shell-ball host actually
     // unmounts so ordinary frame updates do not churn IPC requests.
     return () => {
+      cancelEdgeDockRevealHide();
       void setShellBallInteractiveRegions([]);
       void setShellBallPressLock(false);
       lastReportedInteractiveRegionsRef.current = "";
     };
-  }, []);
+  }, [cancelEdgeDockRevealHide]);
 
   useEffect(() => {
     if (getCurrentWindow().label !== shellBallWindowLabels.ball) {
@@ -1017,26 +1057,78 @@ export function ShellBallApp({ isDev = false }: ShellBallAppProps) {
     selectionPrompt,
   ]);
 
-  const handleDockAwareRegionEnter = useCallback(() => {
+  const handleDockAwareRegionEnter = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+    void event;
+    cancelEdgeDockRevealHide();
     setEdgeDockRevealed(true);
     handleCoordinatorRegionEnter();
-  }, [handleCoordinatorRegionEnter, setEdgeDockRevealed]);
+  }, [cancelEdgeDockRevealHide, handleCoordinatorRegionEnter, setEdgeDockRevealed]);
 
-  const handleDockAwareRegionLeave = useCallback(() => {
-    setEdgeDockRevealed(false);
-    handleCoordinatorRegionLeave();
-  }, [handleCoordinatorRegionLeave, setEdgeDockRevealed]);
+  const handleDockAwareRegionLeave = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+    const dockSide = edgeDockState.side;
+
+    if (dockSide === null) {
+      setEdgeDockRevealed(false);
+      handleCoordinatorRegionLeave();
+      return;
+    }
+
+    const screenX = event.screenX;
+    const screenY = event.screenY;
+    cancelEdgeDockRevealHide();
+
+    // Keep the parked orb revealed while the pointer is still hugging the same
+    // monitor edge, so sub-pixel leave events at the screen boundary do not
+    // bounce between parked and revealed states.
+    edgeDockRevealHideTimeoutRef.current = window.setTimeout(() => {
+      edgeDockRevealHideTimeoutRef.current = null;
+
+      void (async () => {
+        const monitor = await monitorFromPoint(screenX, screenY);
+
+        if (monitor !== null) {
+          const logicalPosition = monitor.position.toLogical(monitor.scaleFactor);
+          const logicalSize = monitor.size.toLogical(monitor.scaleFactor);
+          const shouldRetainReveal = shouldRetainShellBallEdgeDockReveal({
+            bounds: {
+              minX: logicalPosition.x,
+              minY: logicalPosition.y,
+              maxX: logicalPosition.x + logicalSize.width,
+              maxY: logicalPosition.y + logicalSize.height,
+            },
+            edgeDockSide: dockSide,
+            screenX,
+            screenY,
+          });
+
+          if (shouldRetainReveal) {
+            return;
+          }
+        }
+
+        setEdgeDockRevealed(false);
+        handleCoordinatorRegionLeave();
+      })();
+    }, SHELL_BALL_EDGE_DOCK_REVEAL_HIDE_DELAY_MS);
+  }, [cancelEdgeDockRevealHide, edgeDockState.side, handleCoordinatorRegionLeave, setEdgeDockRevealed]);
 
   return (
     <ShellBallSurface
       containerRef={rootRef}
       dashboardTransitionPhase={dashboardTransitionPhase}
+      dockTarget={edgeDockState.side}
       edgeDockRevealed={edgeDockState.revealed}
       edgeDockSide={edgeDockState.side}
       mascotRef={mascotRef}
+      floatingBallSize={floatingBallSize}
+      hasAlertOpportunity={hasAlertOpportunity}
+      hasPendingAgentLoading={hasPendingAgentLoading}
+      hasPendingApproval={hasPendingApproval}
       fileDropActive={shouldShowShellBallFileDropOverlay({
         fileDropActive,
       })}
+      isDragging={ballDragActive}
+      isSettling={ballDockSettling}
       topContent={isEdgeDocked ? null : (
         <div className="shell-ball-surface__bubble-reserve" data-visible={snapshot.visibility.bubble && visibleBubbleItems.length > 0 ? "true" : "false"}>
           <div className="shell-ball-surface__bubble-reserve-content">

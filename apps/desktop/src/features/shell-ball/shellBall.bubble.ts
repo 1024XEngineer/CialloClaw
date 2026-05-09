@@ -6,6 +6,7 @@ export type {
   ShellBallBubbleDesktopState,
   ShellBallBubbleItem,
   ShellBallBubbleRole,
+  ShellBallRecommendationContext,
 } from "./shellBallBubbleDesktop";
 
 export {

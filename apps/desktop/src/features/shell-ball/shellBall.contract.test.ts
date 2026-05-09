@@ -7997,6 +7997,18 @@ test("shell-ball floating size normalization falls back to medium", () => {
   assert.equal(normalizeShellBallFloatingSize(undefined), "medium");
 });
 
+test("shell-ball app keeps floating size and edge-dock reveal runtime wiring intact", () => {
+  const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
+
+  assert.match(appSource, /const \[floatingBallSize, setFloatingBallSize\] = useState<ShellBallFloatingSize>\(\(\) => \{/);
+  assert.match(appSource, /window\.addEventListener\("storage", syncFloatingBallSizeFromStorage\);/);
+  assert.match(appSource, /floatingBallSize=\{floatingBallSize\}/);
+  assert.match(appSource, /const cancelEdgeDockRevealHide = useCallback\(\(\) => \{/);
+  assert.match(appSource, /edgeDockRevealHideTimeoutRef\.current = window\.setTimeout\(\(\) => \{/);
+  assert.match(appSource, /const monitor = await monitorFromPoint\(screenX, screenY\);/);
+  assert.match(appSource, /}, SHELL_BALL_EDGE_DOCK_REVEAL_HIDE_DELAY_MS\);/);
+});
+
 test("shell-ball mascot hotspot policy only opens primary click for selected-text prompts", () => {
   assert.equal(
     getShellBallMascotHotspotGestureAction({
@@ -8984,7 +8996,41 @@ test("shell-ball inline input preserves readonly snapshots and only upgrades hid
     }),
     "hidden",
   );
-  assert.match(appSource, /const shouldRenderInlineInput = snapshot\.visibility\.input;/);
+  assert.match(appSource, /const shouldRenderInlineInput = snapshot\.visibility\.input \|\| visualState === "idle";/);
+});
+
+test("shell-ball recommendation acceptance promotes the suggestion into a formal recommendation_click task", () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  const bubbleMessageSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallBubbleMessage.tsx"), "utf8");
+  const taskServiceSource = readFileSync(resolve(desktopRoot, "src/services/taskService.ts"), "utf8");
+
+  assert.match(coordinatorSource, /const handlePrimaryRecommendationClick = useCallback\(async \(\) => \{/);
+  assert.match(coordinatorSource, /const recommendationRequestContext = createShellBallRecommendationRequestContext\(\{/);
+  assert.match(coordinatorSource, /const handleRecommendationAccept = useCallback\(async \(bubbleId: string\) => \{/);
+  assert.match(coordinatorSource, /const result = await startTaskFromRecommendation\(recommendationText, \{/);
+  assert.equal(coordinatorSource.includes("intent: inlineRecommendation.intent,"), false);
+  assert.match(coordinatorSource, /submitShellBallRecommendationFeedback\(inlineRecommendation\.recommendationId, "positive"\);/);
+  assert.match(bubbleMessageSource, /Not now/);
+  assert.match(bubbleMessageSource, /Try this/);
+  assert.match(taskServiceSource, /request_meta: createRequestMeta\("recommendation_click"\)/);
+  assert.match(taskServiceSource, /trigger: "recommendation_click"/);
+  assert.equal(taskServiceSource.includes("...(context.intent ? { intent: context.intent } : {})"), false);
+});
+
+test("shell-ball primary recommendation flow stays backend-driven when an error scene returns no recommendations", () => {
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  const errorSignalSource = readFileSync(resolve(desktopRoot, "src/platform/desktopErrorSignal.ts"), "utf8");
+  const taskServiceSource = readFileSync(resolve(desktopRoot, "src/services/taskService.ts"), "utf8");
+
+  assert.match(coordinatorSource, /const recommendationScene = resolveShellBallRecommendationScene\(\{/);
+  assert.match(coordinatorSource, /scene: recommendationScene,/);
+  assert.match(
+    coordinatorSource,
+    /if \(recommendationItems.length === 0\) \{\s*setBubbleItems\(\(currentItems\) => removeShellBallInlineRecommendationBubbles\(currentItems\)\);\s*return;\s*\}/,
+  );
+  assert.equal(coordinatorSource.includes("await handleErrorSignalPrompt(errorText, recommendationContext.pageContext);"), false);
+  assert.match(errorSignalSource, /normalizeDesktopErrorSignalText/);
+  assert.match(taskServiceSource, /export async function startTaskFromErrorSignal\(/);
 });
 
 test("shell-ball input bar mode stays aligned with visual states", () => {

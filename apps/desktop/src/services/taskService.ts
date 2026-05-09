@@ -1,7 +1,6 @@
 import type {
   DeliveryPreference,
   InputContext,
-  IntentPayload,
   PageContext,
   RequestMeta,
   RequestSource,
@@ -19,7 +18,6 @@ import { compactPageContext, mapDesktopWindowSnapshotToPageContext } from "./pag
 type StartTaskContext = {
   context?: InputContext;
   delivery?: DeliveryPreference;
-  intent?: IntentPayload;
   pageContext?: PageContext;
   sessionId?: string;
   source?: RequestSource;
@@ -243,7 +241,6 @@ export async function startTaskFromRecommendation(
     ...(resolvedSessionId ? { session_id: resolvedSessionId } : {}),
     source: context.source ?? "floating_ball",
     trigger: "recommendation_click",
-    ...(context.intent ? { intent: context.intent } : {}),
     input: {
       type: "text",
       text: normalizedText,

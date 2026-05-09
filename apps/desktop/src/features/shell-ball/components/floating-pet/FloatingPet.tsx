@@ -27,6 +27,30 @@ type FloatingPetProps = {
 };
 
 type FloatingPetEffectName = "sparkle" | "bubbleAlert" | "bubbleSafe" | "bubbleThinking" | "bubbleListening";
+type FloatingPetBubbleAnimation = {
+  initial?: {
+    opacity: number;
+    scale?: number;
+    scaleX?: number;
+    scaleY?: number;
+  };
+  animate:
+    | {
+        opacity: number[];
+        scale: number[];
+      }
+    | {
+        opacity: number[];
+        scaleX: number[];
+        scaleY: number[];
+      };
+  assetName: FloatingPetAssetName;
+  duration: number;
+  layout: FloatingPetLayerTransform;
+  repeat: number;
+  repeatType?: "loop" | "reverse" | "mirror";
+  times: readonly number[];
+};
 
 const HAPPY_FACE_TIMES = [0, 10 / 120, 15 / 120, 105 / 120, 110 / 120, 1] as const;
 const HAPPY_FACE_CLOSED_EYE_ROTATE = [180, 180, 180, 180, 180, 180] as const;
@@ -125,7 +149,7 @@ function toPingPongKeyframes(values: readonly number[], times: readonly number[]
   };
 }
 
-function renderBubbleAnimation(effectName: FloatingPetEffectName, phase: "active" | "exit") {
+function renderBubbleAnimation(effectName: FloatingPetEffectName, phase: "active" | "exit"): FloatingPetBubbleAnimation {
   const layout = effectName === "sparkle" ? floatingPetInitialLayout.sparkle : floatingPetInitialLayout.bubble.effects[effectName];
   const assetName = EFFECT_TO_ASSET[effectName];
   const alertOpacity = toPingPongKeyframes([0, 1, 1, 1], EFFECT_LOOP_TIMES);
