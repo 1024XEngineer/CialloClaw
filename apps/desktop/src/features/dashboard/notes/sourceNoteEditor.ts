@@ -25,6 +25,21 @@ function normalizeLineEndings(value: string) {
   return value.replace(/\r\n/g, "\n");
 }
 
+function trimTrailingEmptyLines(lines: string[]) {
+  const trimmedLines = [...lines];
+  while (trimmedLines.length > 0 && trimmedLines[trimmedLines.length - 1]?.trim() === "") {
+    trimmedLines.pop();
+  }
+  return trimmedLines;
+}
+
+function stripLeadingStructuralBlankLine(lines: string[]) {
+  if (lines[0]?.trim() === "") {
+    return lines.slice(1);
+  }
+  return lines;
+}
+
 function parseChecklistLine(line: string) {
   const match = SOURCE_NOTE_CHECKLIST_PATTERN.exec(line.trim());
   if (!match) {
@@ -105,7 +120,7 @@ function deriveDraftTitleAndBody(draft: SourceNoteEditorDraft) {
   if (explicitTitle !== "") {
     return {
       checked: draft.checked,
-      noteText: normalizedNoteText.trim(),
+      noteText: trimTrailingEmptyLines(normalizedNoteText.split("\n")).join("\n"),
       title: explicitTitle,
     };
   }
@@ -122,12 +137,64 @@ function deriveDraftTitleAndBody(draft: SourceNoteEditorDraft) {
 
   const firstContentLine = bodyLines[firstContentLineIndex].trim();
   const checklist = parseChecklistLine(firstContentLine);
-  const remainingLines = bodyLines.slice(firstContentLineIndex + 1).join("\n").trim();
+  const remainingLines = trimTrailingEmptyLines(bodyLines.slice(firstContentLineIndex + 1)).join("\n");
 
   return {
-    checked: checklist?.checked ?? draft.checked,
+    checked: draft.checked,
     noteText: remainingLines,
     title: (checklist?.title ?? firstContentLine).trim() || "New note",
+  };
+}
+
+/**
+ * Formats the structured note draft back into the single content field shown
+ * to users. The first line stays reserved for the derived title and the rest
+ * of the lines remain the editable body content.
+ *
+ * @param draft Current source-note editor draft.
+ * @returns Single textarea content shown in the notes editor.
+ */
+export function formatSourceNoteEditorContent(draft: SourceNoteEditorDraft) {
+  const title = draft.title.trim();
+  const noteText = normalizeLineEndings(draft.noteText);
+  if (title === "") {
+    return noteText;
+  }
+
+  return noteText === "" ? title : `${title}\n${noteText}`;
+}
+
+/**
+ * Applies the single content field back onto the structured note draft while
+ * keeping the hidden metadata untouched. Users edit only free-form content;
+ * the editor still derives the title from the first line, but hidden checklist
+ * completion remains owned by the existing draft state.
+ *
+ * @param draft Current source-note editor draft.
+ * @param content Updated textarea content from the editor.
+ * @returns Next draft with derived title and body content.
+ */
+export function updateSourceNoteEditorDraftContent(draft: SourceNoteEditorDraft, content: string): SourceNoteEditorDraft {
+  if (content.trim() === "") {
+    return {
+      ...draft,
+      checked: draft.checked,
+      noteText: "",
+      title: "",
+    };
+  }
+
+  const derivedContent = deriveDraftTitleAndBody({
+    ...draft,
+    noteText: content,
+    title: "",
+  });
+
+  return {
+    ...draft,
+    checked: derivedContent.checked,
+    noteText: derivedContent.noteText,
+    title: derivedContent.title,
   };
 }
 
@@ -142,7 +209,7 @@ function createDraftSignaturePayload(draft: SourceNoteEditorDraft) {
     endedAt: draft.endedAt.trim(),
     extraMetadata: normalizeMetadataEntries(draft.extraMetadata),
     nextOccurrenceAt: draft.nextOccurrenceAt.trim(),
-    noteText: normalizeLineEndings(draft.noteText).trim(),
+    noteText: normalizeLineEndings(draft.noteText),
     prerequisite: draft.prerequisite.trim(),
     recentInstanceStatus: draft.recentInstanceStatus.trim(),
     repeatRule: draft.repeatRule.trim(),
@@ -170,7 +237,7 @@ function buildDraftFromParsedBlock(block: SourceNoteEditorBlock, fallbackItem?: 
     endedAt: block.endedAt || fallbackDraft?.endedAt || "",
     extraMetadata: [...block.extraMetadata],
     nextOccurrenceAt: block.nextOccurrenceAt || fallbackDraft?.nextOccurrenceAt || "",
-    noteText: block.noteText || fallbackDraft?.noteText || "",
+    noteText: block.noteText,
     prerequisite: block.prerequisite || fallbackDraft?.prerequisite || "",
     recentInstanceStatus: block.recentInstanceStatus || fallbackDraft?.recentInstanceStatus || "",
     repeatRule: block.repeatRule || fallbackDraft?.repeatRule || "",
@@ -256,6 +323,7 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
   let current:
     | (SourceNoteEditorDraft & {
         bodyLines: string[];
+        bodyStarted: boolean;
         endLine: number;
         noteMetadataText: string;
       })
@@ -266,8 +334,10 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
       return;
     }
 
-    const trimmedBody = current.bodyLines.join("\n").trim();
-    const noteText = [current.noteMetadataText, trimmedBody].filter(Boolean).join("\n\n").trim();
+    const bodyText = trimTrailingEmptyLines(stripLeadingStructuralBlankLine(current.bodyLines)).join("\n");
+    const noteText = current.noteMetadataText !== ""
+      ? [current.noteMetadataText, bodyText].filter(Boolean).join("\n\n")
+      : bodyText;
     blocks.push({
       agentSuggestion: current.agentSuggestion,
       bucket: current.bucket,
@@ -298,6 +368,7 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
       current = {
         ...createEmptySourceNoteEditorDraft(note.path),
         bodyLines: [],
+        bodyStarted: false,
         checked: checklist.checked,
         endLine: index + 1,
         noteMetadataText: "",
@@ -313,12 +384,21 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
 
     current.endLine = index + 1;
     if (line.trim() === "") {
+      current.bodyStarted = true;
       current.bodyLines.push("");
+      return;
+    }
+
+    // Hidden metadata only belongs to the header segment above the body.
+    // After the body starts, reserved "key: value" prefixes must stay as literal note content.
+    if (current.bodyStarted) {
+      current.bodyLines.push(line.trimEnd());
       return;
     }
 
     const metadata = splitMetadataLine(line.trim());
     if (!metadata) {
+      current.bodyStarted = true;
       current.bodyLines.push(line.trimEnd());
       return;
     }
@@ -370,7 +450,10 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
         current.extraMetadata.push(metadata);
         return;
       default:
-        current.bodyLines.push(line.trimEnd());
+        // Keep any remaining header "key: value" lines hidden so the editor
+        // always round-trips metadata without showing it as editable content.
+        current.extraMetadata.push(metadata);
+        return;
     }
   });
 
@@ -451,8 +534,11 @@ export function serializeSourceNoteEditorDraft(draft: SourceNoteEditorDraft, now
     title: derivedContent.title,
     updatedAt: normalizedNow,
   } satisfies SourceNoteEditorDraft);
+  const bodyText = normalizedDraft.noteText;
+  const inlineNoteText = bodyText !== "" && !bodyText.includes("\n") ? bodyText : null;
   const metadataLines = [
     `bucket: ${normalizedDraft.bucket}`,
+    normalizedDraft.createdAt ? `created_at: ${normalizedDraft.createdAt}` : null,
     normalizedDraft.dueAt ? `due: ${normalizedDraft.dueAt}` : null,
     normalizedDraft.nextOccurrenceAt ? `next: ${normalizedDraft.nextOccurrenceAt}` : null,
     normalizedDraft.repeatRule ? `repeat: ${normalizedDraft.repeatRule}` : null,
@@ -460,12 +546,14 @@ export function serializeSourceNoteEditorDraft(draft: SourceNoteEditorDraft, now
     normalizedDraft.agentSuggestion ? `agent: ${normalizedDraft.agentSuggestion}` : null,
     normalizedDraft.effectiveScope ? `scope: ${normalizedDraft.effectiveScope}` : null,
     normalizedDraft.recentInstanceStatus ? `status: ${normalizedDraft.recentInstanceStatus}` : null,
+    inlineNoteText ? `note: ${inlineNoteText}` : null,
+    normalizedDraft.endedAt ? `ended_at: ${normalizedDraft.endedAt}` : null,
+    normalizedDraft.updatedAt ? `updated_at: ${normalizedDraft.updatedAt}` : null,
     ...normalizedDraft.extraMetadata
       .filter((entry) => !SOURCE_NOTE_RESERVED_METADATA_KEYS.has(entry.key))
       .map((entry) => `${entry.key}: ${entry.value}`),
   ].filter((line): line is string => Boolean(line));
-  const bodyText = normalizedDraft.noteText;
-  const bodyLines = bodyText === "" ? [] : ["", ...bodyText.split("\n")];
+  const bodyLines = inlineNoteText || bodyText === "" ? [] : ["", ...bodyText.split("\n")];
   const checklistMarker = normalizedDraft.checked ? "[x]" : "[ ]";
   const blockLines = [
     `- ${checklistMarker} ${normalizedDraft.title}`,

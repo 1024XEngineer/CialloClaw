@@ -32,8 +32,10 @@ import {
   buildSourceNoteEditorDraftFromNote,
   createEmptySourceNoteEditorDraft,
   createSourceNoteEditorDraftSignature,
+  formatSourceNoteEditorContent,
   parseSourceNoteEditorBlocks,
   serializeSourceNoteEditorDraft,
+  updateSourceNoteEditorDraftContent,
   upsertSourceNoteEditorBlock,
 } from "./sourceNoteEditor";
 import type { NoteDetailAction, NoteListItem, NotePreviewGroupKey, SourceNoteDocument, SourceNoteEditorDraft } from "./notePage.types";
@@ -224,6 +226,8 @@ export function NotePage() {
   const [selectedSourceNotePath, setSelectedSourceNotePath] = useState<string | null>(null);
   const [sourceNoteDraft, setSourceNoteDraft] = useState<SourceNoteEditorDraft>(() => createEmptySourceNoteEditorDraft());
   const [sourceNoteBaseline, setSourceNoteBaseline] = useState(() => createSourceNoteEditorDraftSignature(createEmptySourceNoteEditorDraft()));
+  const [sourceNoteEditorContent, setSourceNoteEditorContent] = useState(() => formatSourceNoteEditorContent(createEmptySourceNoteEditorDraft()));
+  const [sourceNoteEditorBaselineContent, setSourceNoteEditorBaselineContent] = useState(() => formatSourceNoteEditorContent(createEmptySourceNoteEditorDraft()));
   const [sourceNoteBaselineContent, setSourceNoteBaselineContent] = useState("");
   const [sourceEditorItemId, setSourceEditorItemId] = useState<string | null>(null);
   const [sourceNoteSyncMessage, setSourceNoteSyncMessage] = useState<string | null>(null);
@@ -446,8 +450,8 @@ export function NotePage() {
     () => sourceNotes.find((note) => note.path === selectedSourceNotePath) ?? primarySourceNote,
     [primarySourceNote, selectedSourceNotePath, sourceNotes],
   );
-  const sourceStudioFileLabel = selectedSourceNote?.fileName ?? primarySourceNote?.fileName ?? null;
-  const sourceEditorDirty = createSourceNoteEditorDraftSignature(sourceNoteDraft) !== sourceNoteBaseline;
+  const sourceEditorDirty = sourceNoteEditorContent !== sourceNoteEditorBaselineContent
+    || createSourceNoteEditorDraftSignature(sourceNoteDraft) !== sourceNoteBaseline;
   const sourceNoteIndexFingerprint = useMemo(
     () => (sourceNoteIndexData ?? []).map((note) => `${note.path}:${note.modifiedAtMs ?? 0}:${note.sizeBytes}`).join("|"),
     [sourceNoteIndexData],
@@ -630,9 +634,17 @@ export function NotePage() {
   }
 
   function applySourceNoteDraft(nextDraft: SourceNoteEditorDraft, fileContent: string) {
+    const nextEditorContent = formatSourceNoteEditorContent(nextDraft);
     setSourceNoteDraft(nextDraft);
     setSourceNoteBaseline(createSourceNoteEditorDraftSignature(nextDraft));
+    setSourceNoteEditorContent(nextEditorContent);
+    setSourceNoteEditorBaselineContent(nextEditorContent);
     setSourceNoteBaselineContent(fileContent);
+  }
+
+  function handleSourceNoteEditorChange(content: string) {
+    setSourceNoteEditorContent(content);
+    setSourceNoteDraft((currentDraft) => updateSourceNoteEditorDraftContent(currentDraft, content));
   }
 
   function startCreatingSourceNote() {
@@ -644,10 +656,10 @@ export function NotePage() {
     applySourceNoteDraft(nextDraft, primarySourceNote?.content ?? "");
     setSourceNoteSyncMessage(
       primarySourceNote?.path
-        ? `新便签会追加到 ${primarySourceNote.path}`
+        ? `开始新便签后，点击“保存便签”会追加到 ${primarySourceNote.path}`
         : resolvedSourceRoots[0]
-          ? `新便签会追加到 ${resolvedSourceRoots[0]} 下的主 markdown 便签文件`
-          : "新便签会追加到第一个任务来源目录下的主 markdown 便签文件。",
+          ? `开始新便签后，点击“保存便签”会追加到 ${resolvedSourceRoots[0]} 下的主 markdown 便签文件`
+          : "开始新便签后，点击“保存便签”会追加到第一个任务来源目录下的主 markdown 便签文件。",
     );
   }
 
@@ -672,7 +684,7 @@ export function NotePage() {
       setSourceEditorItemId(item.item.item_id);
       setSelectedSourceNotePath(matchedNote.path);
       applySourceNoteDraft(buildSourceNoteEditorDraftFromNote(matchedNote, item), matchedNote.content);
-      setSourceNoteSyncMessage("正在编辑当前便签的 markdown 元数据。");
+      setSourceNoteSyncMessage("正在编辑当前便签内容，系统会保留既有 markdown 元数据。");
       setDetailOpen(false);
       setSourceStudioOpen(true);
       if (sourceNoteAvailabilityMessage) {
@@ -693,7 +705,7 @@ export function NotePage() {
       return;
     }
 
-    if (isSavingSourceNote || (sourceNoteDraft.title.trim() === "" && sourceNoteDraft.noteText.trim() === "")) {
+    if (isSavingSourceNote || sourceNoteEditorContent.trim() === "") {
       return;
     }
 
@@ -701,18 +713,16 @@ export function NotePage() {
     try {
       const createdSourceNote = isCreatingSourceNote;
       const sourceNoteTarget = selectedSourceNote ?? primarySourceNote;
-      const { blockContent, normalizedDraft } = serializeSourceNoteEditorDraft(sourceNoteDraft);
+      const nextDraft = updateSourceNoteEditorDraftContent(sourceNoteDraft, sourceNoteEditorContent);
+      const { blockContent, normalizedDraft } = serializeSourceNoteEditorDraft(nextDraft);
       let savedNote: SourceNoteDocument;
       let resolvedSourceLine: number | null = null;
       let createdSourceNoteIdentity: PendingCreatedSourceNote | null = null;
 
       if (createdSourceNote || !sourceNoteTarget) {
         savedNote = await createNoteSource(taskSourceRoots, blockContent);
-        const createdBlock = parseSourceNoteEditorBlocks(savedNote)
-          .filter((block) => normalizeSourceNoteTitleKey(block.title) === normalizeSourceNoteTitleKey(normalizedDraft.title))
-          .reverse()
-          .find((block) => block.updatedAt === normalizedDraft.updatedAt)
-          ?? null;
+        const createdBlocks = parseSourceNoteEditorBlocks(savedNote);
+        const createdBlock = createdBlocks[createdBlocks.length - 1] ?? null;
         resolvedSourceLine = createdBlock?.sourceLine ?? null;
         createdSourceNoteIdentity = {
           path: savedNote.path,
@@ -720,7 +730,7 @@ export function NotePage() {
           title: normalizedDraft.title,
         };
       } else {
-        const nextSourceFile = upsertSourceNoteEditorBlock(sourceNoteTarget, sourceNoteDraft);
+        const nextSourceFile = upsertSourceNoteEditorBlock(sourceNoteTarget, nextDraft);
         resolvedSourceLine = nextSourceFile.sourceLine;
         savedNote = await saveNoteSource(taskSourceRoots, sourceNoteTarget.path, nextSourceFile.content);
       }
@@ -1965,25 +1975,25 @@ export function NotePage() {
                     <div className="note-source-modal__header">
                       <div>
                         <p className="note-preview-page__eyebrow">Source Notes</p>
-                        <h2 className="note-source-modal__title">{isCreatingSourceNote ? "空白便签" : "任务来源便签"}</h2>
+                        <h2 className="note-source-modal__title">{isCreatingSourceNote ? "新建便签" : "编辑便签"}</h2>
                       </div>
                       <Button className="note-source-modal__close" onClick={() => setSourceStudioOpen(false)} size="icon-sm" type="button" variant="ghost">
                         <X className="h-4 w-4" />
-                        <span className="sr-only">关闭源便签编辑器</span>
+                        <span className="sr-only">关闭便签编辑器</span>
                       </Button>
                     </div>
 
                     <SourceNoteStudio
                       availabilityMessage={sourceNoteAvailabilityMessage}
                       draft={sourceNoteDraft}
+                      editorContent={sourceNoteEditorContent}
                       editingItem={sourceStudioItem}
-                      fileLabel={sourceStudioFileLabel}
                       isCreating={isCreatingSourceNote}
                       isDirty={sourceEditorDirty}
                       isInspecting={isRunningInspection}
                       isLoading={sourceNotesLoading}
                       isSaving={isSavingSourceNote}
-                      onChange={(value) => setSourceNoteDraft(value)}
+                      onChange={handleSourceNoteEditorChange}
                       onClose={() => setSourceStudioOpen(false)}
                       onCreate={openCreateSourceNoteStudio}
                       onInspect={() => void refreshInspection("notes_page_manual_run")}
