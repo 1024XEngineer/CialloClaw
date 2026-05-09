@@ -108,8 +108,61 @@ function normalizeSourceNoteKey(value: string) {
   return value.trim().replace(/\\/g, "/").toLowerCase();
 }
 
+function normalizeSourceNoteRelativeKey(value: string) {
+  return normalizeSourceNoteKey(value).replace(/^\.?\//, "");
+}
+
 function normalizeSourceNoteTitleKey(value: string) {
   return value.trim().toLowerCase();
+}
+
+function registerSourceNoteLookupKey(
+  lookup: Map<string, SourceNoteDocument>,
+  conflictingKeys: Set<string>,
+  key: string,
+  note: SourceNoteDocument,
+) {
+  const normalizedKey = normalizeSourceNoteKey(key);
+  if (normalizedKey === "" || conflictingKeys.has(normalizedKey)) {
+    return;
+  }
+
+  const existing = lookup.get(normalizedKey);
+  if (!existing) {
+    lookup.set(normalizedKey, note);
+    return;
+  }
+
+  if (existing.path !== note.path) {
+    lookup.delete(normalizedKey);
+    conflictingKeys.add(normalizedKey);
+  }
+}
+
+function buildSourceNotePathLookup(sourceNotes: SourceNoteDocument[]) {
+  const lookup = new Map<string, SourceNoteDocument>();
+  const conflictingKeys = new Set<string>();
+
+  sourceNotes.forEach((note) => {
+    registerSourceNoteLookupKey(lookup, conflictingKeys, note.path, note);
+
+    const normalizedNotePath = normalizeSourceNoteKey(note.path);
+    const normalizedSourceRoot = normalizeSourceNoteKey(note.sourceRoot);
+    const rootPrefix = normalizedSourceRoot.endsWith("/") ? normalizedSourceRoot : `${normalizedSourceRoot}/`;
+    if (!normalizedSourceRoot || !normalizedNotePath.startsWith(rootPrefix)) {
+      return;
+    }
+
+    const relativePath = normalizeSourceNoteRelativeKey(normalizedNotePath.slice(rootPrefix.length));
+    if (!relativePath) {
+      return;
+    }
+
+    registerSourceNoteLookupKey(lookup, conflictingKeys, relativePath, note);
+    registerSourceNoteLookupKey(lookup, conflictingKeys, `workspace/${relativePath}`, note);
+  });
+
+  return lookup;
 }
 
 function buildSourceNoteBlockKey(path: string, title: string, sourceLine?: number | null) {
@@ -149,12 +202,16 @@ function findReplacementItemIdForSourceNote(
   }
 
   const candidateIds = noteItemIdsBySourcePath.get(normalizeSourceNoteKey(sourceIdentity.path)) ?? [];
-  if (candidateIds.length === 0) {
+  const formalCandidateIds = candidateIds.filter((itemId) => {
+    const item = noteItemsById.get(itemId);
+    return item ? !item.sourceNote?.localOnly : false;
+  });
+  if (formalCandidateIds.length === 0) {
     return null;
   }
 
   if (typeof sourceIdentity.sourceLine === "number" && sourceIdentity.sourceLine > 0) {
-    const exactLineCandidate = candidateIds.find((itemId) => {
+    const exactLineCandidate = formalCandidateIds.find((itemId) => {
       const item = noteItemsById.get(itemId);
       return item ? readTodoSourceLine(item.item) === sourceIdentity.sourceLine : false;
     });
@@ -164,7 +221,7 @@ function findReplacementItemIdForSourceNote(
   }
 
   const normalizedTitle = normalizeSourceNoteTitleKey(sourceIdentity.title);
-  const exactCandidate = candidateIds.find((itemId) => {
+  const exactCandidate = formalCandidateIds.find((itemId) => {
     const item = noteItemsById.get(itemId);
     return item ? normalizeSourceNoteTitleKey(item.item.title) === normalizedTitle : false;
   });
@@ -172,7 +229,50 @@ function findReplacementItemIdForSourceNote(
     return exactCandidate;
   }
 
-  return candidateIds.length === 1 ? candidateIds[0] : null;
+  return formalCandidateIds.length === 1 ? formalCandidateIds[0] : null;
+}
+
+function findPreferredItemIdForSourceNote(
+  noteItemsById: Map<string, NoteListItem>,
+  noteItemIdsBySourcePath: Map<string, string[]>,
+  sourceIdentity: SourceNoteIdentity | PendingCreatedSourceNote | null,
+) {
+  if (!sourceIdentity) {
+    return null;
+  }
+
+  const candidateIds = noteItemIdsBySourcePath.get(normalizeSourceNoteKey(sourceIdentity.path)) ?? [];
+  if (candidateIds.length === 0) {
+    return null;
+  }
+
+  const formalCandidateIds = candidateIds.filter((itemId) => {
+    const item = noteItemsById.get(itemId);
+    return item ? !item.sourceNote?.localOnly : false;
+  });
+  const fallbackCandidateIds = candidateIds.filter((itemId) => !formalCandidateIds.includes(itemId));
+  const orderedCandidateIds = [...formalCandidateIds, ...fallbackCandidateIds];
+
+  if (typeof sourceIdentity.sourceLine === "number" && sourceIdentity.sourceLine > 0) {
+    const exactLineCandidate = orderedCandidateIds.find((itemId) => {
+      const item = noteItemsById.get(itemId);
+      return item ? readTodoSourceLine(item.item) === sourceIdentity.sourceLine : false;
+    });
+    if (exactLineCandidate) {
+      return exactLineCandidate;
+    }
+  }
+
+  const normalizedTitle = normalizeSourceNoteTitleKey(sourceIdentity.title);
+  const exactCandidate = orderedCandidateIds.find((itemId) => {
+    const item = noteItemsById.get(itemId);
+    return item ? normalizeSourceNoteTitleKey(item.item.title) === normalizedTitle : false;
+  });
+  if (exactCandidate) {
+    return exactCandidate;
+  }
+
+  return orderedCandidateIds.length === 1 ? orderedCandidateIds[0] : null;
 }
 
 function resolveNoteItemSourceNotePath(
@@ -181,11 +281,11 @@ function resolveNoteItemSourceNotePath(
 ) {
   const sourcePath = readTodoSourcePath(item.item);
   if (sourcePath) {
-    return sourcePath;
+    return sourceNotesByPath.get(normalizeSourceNoteKey(sourcePath))?.path ?? null;
   }
 
   if (item.sourceNote?.path) {
-    return item.sourceNote.path;
+    return sourceNotesByPath.get(normalizeSourceNoteKey(item.sourceNote.path))?.path ?? null;
   }
 
   const resourceMatch = item.experience.relatedResources
@@ -210,9 +310,8 @@ function matchesSourceNotePath(
 function resolveSourceNoteBlockAliases(
   item: NoteListItem,
   sourceNotesByPath: Map<string, SourceNoteDocument>,
-  sourceNotesByTitle: Map<string, SourceNoteDocument>,
 ) {
-  const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath, sourceNotesByTitle);
+  const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath);
   if (!matchedPath) {
     return [];
   }
@@ -222,6 +321,86 @@ function resolveSourceNoteBlockAliases(
     item.sourceNote?.title ?? item.item.title,
     item.sourceNote?.sourceLine ?? readTodoSourceLine(item.item),
   );
+}
+
+function createEmptyBucketGroups(): Record<NotePreviewGroupKey, NoteListItem[]> {
+  return {
+    closed: [],
+    later: [],
+    recurring_rule: [],
+    upcoming: [],
+  };
+}
+
+function findFormalReplacementItemIdForSourceNoteEntry(
+  itemId: string,
+  noteItemsById: Map<string, NoteListItem>,
+  noteItemIdsBySourcePath: Map<string, string[]>,
+  sourceNoteIdentityByItemId: Map<string, SourceNoteIdentity>,
+) {
+  const sourceIdentity = sourceNoteIdentityByItemId.get(itemId) ?? null;
+  if (!sourceIdentity) {
+    return null;
+  }
+
+  const replacementItemId = findReplacementItemIdForSourceNote(noteItemsById, noteItemIdsBySourcePath, sourceIdentity);
+  return replacementItemId && replacementItemId !== itemId ? replacementItemId : null;
+}
+
+function updateRememberedFormalBucketForItem(
+  rememberedBucketByAlias: Map<string, NotePreviewGroupKey>,
+  item: NoteListItem,
+  nextBucket: NotePreviewGroupKey | null,
+  sourceNotesByPath: Map<string, SourceNoteDocument>,
+  options: {
+    allowLaterReset?: boolean;
+  } = {},
+) {
+  if (item.sourceNote?.localOnly) {
+    return;
+  }
+
+  resolveSourceNoteBlockAliases(item, sourceNotesByPath).forEach((alias) => {
+    if (!nextBucket) {
+      rememberedBucketByAlias.delete(alias);
+      return;
+    }
+
+    if (nextBucket === "later") {
+      if (options.allowLaterReset) {
+        rememberedBucketByAlias.delete(alias);
+      }
+      return;
+    }
+
+    rememberedBucketByAlias.set(alias, nextBucket);
+  });
+}
+
+function applyRememberedFormalBucket(
+  rememberedBucketByAlias: Map<string, NotePreviewGroupKey>,
+  item: NoteListItem,
+  sourceNotesByPath: Map<string, SourceNoteDocument>,
+) {
+  if (item.sourceNote?.localOnly || item.item.bucket !== "later") {
+    return item;
+  }
+
+  const rememberedBucket = resolveSourceNoteBlockAliases(item, sourceNotesByPath).find((alias) => {
+    const bucket = rememberedBucketByAlias.get(alias);
+    return bucket !== undefined && bucket !== "later";
+  });
+  if (!rememberedBucket) {
+    return item;
+  }
+
+  return {
+    ...item,
+    item: {
+      ...item.item,
+      bucket: rememberedBucketByAlias.get(rememberedBucket) ?? item.item.bucket,
+    },
+  };
 }
 
 /**
@@ -264,6 +443,7 @@ export function NotePage() {
   const [isSavingSourceNote, setIsSavingSourceNote] = useState(false);
   const [isRunningInspection, setIsRunningInspection] = useState(false);
   const feedbackTimeoutRef = useRef<number | null>(null);
+  const rememberedFormalBucketByAliasRef = useRef(new Map<string, NotePreviewGroupKey>());
   const sourceNoteIndexFingerprintRef = useRef<string | null>(null);
   const pendingCreatedSourceNoteRef = useRef<PendingCreatedSourceNote | null>(null);
   const noteSourceIdentityByItemIdRef = useRef(new Map<string, SourceNoteIdentity>());
@@ -367,30 +547,68 @@ export function NotePage() {
     retry: false,
   });
 
-  const rpcUpcomingItems = sortNotesByUrgency(upcomingQuery.data?.items ?? []);
-  const rpcLaterItems = sortNotesByUrgency(laterQuery.data?.items ?? []);
-  const recurringItems = sortNotesByUrgency(recurringQuery.data?.items ?? []);
-  const closedItems = sortClosedNotes(closedQuery.data?.items ?? []);
   const sourceNotesData = sourceNotesQuery.data?.notes;
   const sourceNoteIndexData = sourceNoteIndexQuery.data?.notes;
   const sourceRootsData = sourceNotesQuery.data?.sourceRoots;
   const sourceNotes = useMemo(() => sourceNotesData ?? [], [sourceNotesData]);
   const resolvedSourceRoots = useMemo(() => sourceRootsData ?? taskSourceRoots, [sourceRootsData, taskSourceRoots]);
-  const sourceNotesByPath = useMemo(
-    () => new Map(sourceNotes.map((note) => [normalizeSourceNoteKey(note.path), note])),
-    [sourceNotes],
+  const sourceNotesByPath = useMemo(() => buildSourceNotePathLookup(sourceNotes), [sourceNotes]);
+  const rawRpcItems = useMemo(
+    () => [
+      ...(upcomingQuery.data?.items ?? []),
+      ...(laterQuery.data?.items ?? []),
+      ...(recurringQuery.data?.items ?? []),
+      ...(closedQuery.data?.items ?? []),
+    ],
+    [closedQuery.data?.items, laterQuery.data?.items, recurringQuery.data?.items, upcomingQuery.data?.items],
   );
+  useEffect(() => {
+    rawRpcItems.forEach((item) => {
+      updateRememberedFormalBucketForItem(
+        rememberedFormalBucketByAliasRef.current,
+        item,
+        item.item.bucket,
+        sourceNotesByPath,
+      );
+    });
+  }, [rawRpcItems, sourceNotesByPath]);
+  const rpcItemsByBucket = useMemo(() => {
+    const nextGroups = createEmptyBucketGroups();
+
+    rawRpcItems
+      .map((item) =>
+        applyRememberedFormalBucket(
+          rememberedFormalBucketByAliasRef.current,
+          item,
+          sourceNotesByPath,
+        ),
+      )
+      .forEach((item) => {
+        nextGroups[item.item.bucket].push(item);
+      });
+
+    nextGroups.upcoming = sortNotesByUrgency(nextGroups.upcoming);
+    nextGroups.later = sortNotesByUrgency(nextGroups.later);
+    nextGroups.recurring_rule = sortNotesByUrgency(nextGroups.recurring_rule);
+    nextGroups.closed = sortClosedNotes(nextGroups.closed);
+
+    return nextGroups;
+  }, [rawRpcItems, sourceNotesByPath]);
+  const rpcUpcomingItems = rpcItemsByBucket.upcoming;
+  const rpcLaterItems = rpcItemsByBucket.later;
+  const rpcRecurringItems = rpcItemsByBucket.recurring_rule;
+  const rpcClosedItems = rpcItemsByBucket.closed;
   const representedSourceNoteBlocks = useMemo(() => {
     const representedBlocks = new Set<string>();
 
-    [...rpcUpcomingItems, ...rpcLaterItems, ...recurringItems, ...closedItems].forEach((item) => {
-      resolveSourceNoteBlockAliases(item, sourceNotesByPath, sourceNotesByTitle).forEach((alias) => {
+    [...rpcUpcomingItems, ...rpcLaterItems, ...rpcRecurringItems, ...rpcClosedItems].forEach((item) => {
+      resolveSourceNoteBlockAliases(item, sourceNotesByPath).forEach((alias) => {
         representedBlocks.add(alias);
       });
     });
 
     return representedBlocks;
-  }, [closedItems, recurringItems, rpcLaterItems, rpcUpcomingItems, sourceNotesByPath, sourceNotesByTitle]);
+  }, [rpcClosedItems, rpcLaterItems, rpcRecurringItems, rpcUpcomingItems, sourceNotesByPath]);
   const sourceNoteFallbackItems = useMemo(
     () =>
       sourceNotes
@@ -398,28 +616,76 @@ export function NotePage() {
         .flatMap((note) => buildSourceNoteFallbackItems(note))
         .filter(
           (item) =>
-            !resolveSourceNoteBlockAliases(item, sourceNotesByPath, sourceNotesByTitle).some((alias) => representedSourceNoteBlocks.has(alias)),
+            !resolveSourceNoteBlockAliases(item, sourceNotesByPath).some((alias) => representedSourceNoteBlocks.has(alias)),
         ),
-    [representedSourceNoteBlocks, sourceNotes, sourceNotesByPath, sourceNotesByTitle],
+    [representedSourceNoteBlocks, sourceNotes, sourceNotesByPath],
   );
-  const upcomingItems = rpcUpcomingItems;
-  const laterItems = useMemo(() => [...sourceNoteFallbackItems, ...rpcLaterItems], [rpcLaterItems, sourceNoteFallbackItems]);
+  const sourceFallbackItemsByBucket = useMemo(() => {
+    const nextGroups: Record<NotePreviewGroupKey, NoteListItem[]> = {
+      closed: [],
+      later: [],
+      recurring_rule: [],
+      upcoming: [],
+    };
+
+    sourceNoteFallbackItems.forEach((item) => {
+      nextGroups[item.item.bucket].push(item);
+    });
+
+    return nextGroups;
+  }, [sourceNoteFallbackItems]);
+  const upcomingItems = useMemo(
+    () => sortNotesByUrgency([...sourceFallbackItemsByBucket.upcoming, ...rpcUpcomingItems]),
+    [rpcUpcomingItems, sourceFallbackItemsByBucket.upcoming],
+  );
+  const laterItems = useMemo(
+    () => sortNotesByUrgency([...sourceFallbackItemsByBucket.later, ...rpcLaterItems]),
+    [rpcLaterItems, sourceFallbackItemsByBucket.later],
+  );
+  const recurringItems = useMemo(
+    () => sortNotesByUrgency([...sourceFallbackItemsByBucket.recurring_rule, ...rpcRecurringItems]),
+    [rpcRecurringItems, sourceFallbackItemsByBucket.recurring_rule],
+  );
+  const closedItems = useMemo(
+    () => sortClosedNotes([...sourceFallbackItemsByBucket.closed, ...rpcClosedItems]),
+    [rpcClosedItems, sourceFallbackItemsByBucket.closed],
+  );
+  const formalUpcomingItems = useMemo(() => upcomingItems.filter((item) => !item.sourceNote?.localOnly), [upcomingItems]);
+  const formalLaterItems = useMemo(() => laterItems.filter((item) => !item.sourceNote?.localOnly), [laterItems]);
+  const formalRecurringItems = useMemo(() => recurringItems.filter((item) => !item.sourceNote?.localOnly), [recurringItems]);
+  const formalClosedItems = useMemo(() => closedItems.filter((item) => !item.sourceNote?.localOnly), [closedItems]);
   const canvasItemIdSet = useMemo(() => new Set(canvasCards.map((entry) => entry.itemId)), [canvasCards]);
   const visibleUpcomingItems = useMemo(() => upcomingItems.filter((item) => !canvasItemIdSet.has(item.item.item_id)), [canvasItemIdSet, upcomingItems]);
   const visibleLaterItems = useMemo(() => laterItems.filter((item) => !canvasItemIdSet.has(item.item.item_id)), [canvasItemIdSet, laterItems]);
   const visibleRecurringItems = useMemo(() => recurringItems.filter((item) => !canvasItemIdSet.has(item.item.item_id)), [canvasItemIdSet, recurringItems]);
   const visibleClosedItems = useMemo(() => closedItems.filter((item) => !canvasItemIdSet.has(item.item.item_id)), [canvasItemIdSet, closedItems]);
-  const closedGroups = useMemo(() => groupClosedNotes(visibleClosedItems, showMoreClosed), [showMoreClosed, visibleClosedItems]);
+  /**
+   * Keep renderer-local source note cards on the canvas only. The sidebar
+   * should list formal note items instead of duplicating local markdown
+   * fallback cards beside the board.
+   */
+  const railUpcomingItems = useMemo(() => visibleUpcomingItems.filter((item) => !item.sourceNote?.localOnly), [visibleUpcomingItems]);
+  const railLaterItems = useMemo(() => visibleLaterItems.filter((item) => !item.sourceNote?.localOnly), [visibleLaterItems]);
+  const railRecurringItems = useMemo(() => visibleRecurringItems.filter((item) => !item.sourceNote?.localOnly), [visibleRecurringItems]);
+  const railClosedItems = useMemo(() => visibleClosedItems.filter((item) => !item.sourceNote?.localOnly), [visibleClosedItems]);
+  const preferredUpcomingItem = useMemo(() => railUpcomingItems[0] ?? formalUpcomingItems[0] ?? null, [formalUpcomingItems, railUpcomingItems]);
+  const preferredLaterItem = useMemo(() => railLaterItems[0] ?? formalLaterItems[0] ?? null, [formalLaterItems, railLaterItems]);
+  const preferredRecurringItem = useMemo(() => railRecurringItems[0] ?? formalRecurringItems[0] ?? null, [formalRecurringItems, railRecurringItems]);
+  const preferredClosedItem = useMemo(() => railClosedItems[0] ?? formalClosedItems[0] ?? null, [formalClosedItems, railClosedItems]);
+  const closedGroups = useMemo(() => groupClosedNotes(railClosedItems, showMoreClosed), [railClosedItems, showMoreClosed]);
   const hasOlderClosedItems = useMemo(() => {
     const now = Date.now();
 
-    return visibleClosedItems.some((item) => {
+    return railClosedItems.some((item) => {
       const endedAt = item.experience.endedAt ? new Date(item.experience.endedAt).getTime() : now;
       const diffDays = (now - endedAt) / (1000 * 60 * 60 * 24);
       return diffDays > 7;
     });
-  }, [visibleClosedItems]);
-  const summary = useMemo(() => buildNoteSummary({ recurring_rule: recurringItems, upcoming: upcomingItems }), [recurringItems, upcomingItems]);
+  }, [railClosedItems]);
+  const summary = useMemo(
+    () => buildNoteSummary({ recurring_rule: formalRecurringItems, upcoming: formalUpcomingItems }),
+    [formalRecurringItems, formalUpcomingItems],
+  );
   const allItems = useMemo(() => [...upcomingItems, ...laterItems, ...recurringItems, ...closedItems], [upcomingItems, laterItems, recurringItems, closedItems]);
   const noteItemsById = useMemo(() => new Map(allItems.map((item) => [item.item.item_id, item])), [allItems]);
   const noteItemSourcePathById = useMemo(() => {
@@ -447,8 +713,14 @@ export function NotePage() {
     return pathItemMap;
   }, [noteItemSourcePathById]);
   const selectedItem = useMemo(
-    () => allItems.find((entry) => entry.item.item_id === selectedItemId) ?? upcomingItems[0] ?? laterItems[0] ?? recurringItems[0] ?? closedItems[0] ?? null,
-    [allItems, closedItems, laterItems, recurringItems, selectedItemId, upcomingItems],
+    () =>
+      allItems.find((entry) => entry.item.item_id === selectedItemId)
+      ?? preferredUpcomingItem
+      ?? preferredLaterItem
+      ?? preferredRecurringItem
+      ?? preferredClosedItem
+      ?? null,
+    [allItems, preferredClosedItem, preferredLaterItem, preferredRecurringItem, preferredUpcomingItem, selectedItemId],
   );
   const sourceStudioItem = useMemo(
     () => (sourceEditorItemId ? noteItemsById.get(sourceEditorItemId) ?? null : null),
@@ -554,13 +826,13 @@ export function NotePage() {
     ];
   }
 
-  async function triggerAutoTaskExecutionForSourceNote(
+  async function syncCreatedSourceNoteToBoard(
     savedNote: SourceNoteDocument,
     sourceIdentity: PendingCreatedSourceNote,
   ) {
     const latestSourceNotesResult = await sourceNotesQuery.refetch();
     const latestSourceNotes = latestSourceNotesResult.data?.notes ?? sourceNotes;
-    const latestSourceNotesByPath = new Map(latestSourceNotes.map((note) => [normalizeSourceNoteKey(note.path), note]));
+    const latestSourceNotesByPath = buildSourceNotePathLookup(latestSourceNotes);
     const normalizedExpectedPath = normalizeSourceNoteKey(sourceIdentity.path);
     const normalizedExpectedTitle = normalizeSourceNoteTitleKey(sourceIdentity.title);
     const refetchedItems = await refetchAllNoteBuckets();
@@ -592,16 +864,12 @@ export function NotePage() {
       return;
     }
 
-    try {
-      const outcome = await convertNoteToTask(matchedItem.item.item_id, dataMode);
-      await invalidateNoteBuckets(outcome.result.refresh_groups);
-      await refetchAllNoteBuckets();
-      setSelectedItemId(matchedItem.item.item_id);
-      showFeedback("新便签已保存，并已触发后端开始执行。");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "触发后端执行失败，请稍后重试。";
-      showFeedback(`新便签已保存，但触发后端执行失败：${message}`);
-    }
+    pendingCreatedSourceNoteRef.current = null;
+    setDrawerOpen(true);
+    setExpandedBucket(matchedItem.item.bucket);
+    setSelectedItemId(matchedItem.item.item_id);
+    pinNoteToCanvasRef.current(matchedItem.item.item_id);
+    showFeedback("新便签已同步到便签页，并放到了网格里。");
   }
 
   async function refreshInspection(reason: string, prefix?: string) {
@@ -763,7 +1031,7 @@ export function NotePage() {
         createdSourceNote ? `已创建 ${savedNote.fileName}` : `已保存 ${savedNote.fileName}`,
       );
       if (createdSourceNote && createdSourceNoteIdentity) {
-        await triggerAutoTaskExecutionForSourceNote(savedNote, createdSourceNoteIdentity);
+        await syncCreatedSourceNoteToBoard(savedNote, createdSourceNoteIdentity);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "markdown 便签保存失败。";
@@ -821,6 +1089,18 @@ export function NotePage() {
   const updateMutation = useMutation({
     mutationFn: ({ action, itemId }: { action: NotepadAction; itemId: string }) => updateNote(itemId, action, dataMode),
     onSuccess: async (outcome, variables) => {
+      const updatedBucket = outcome.result.notepad_item?.bucket ?? null;
+      const updatedItem = noteItemsById.get(variables.itemId);
+      if (updatedItem) {
+        updateRememberedFormalBucketForItem(
+          rememberedFormalBucketByAliasRef.current,
+          updatedItem,
+          updatedBucket,
+          sourceNotesByPath,
+          { allowLaterReset: true },
+        );
+      }
+
       await invalidateNoteBuckets(outcome.result.refresh_groups);
 
       const feedbackByAction: Record<NotepadAction, string> = {
@@ -1046,29 +1326,30 @@ export function NotePage() {
       return;
     }
 
-    const selectedExists = selectedItemId ? allItems.some((entry) => entry.item.item_id === selectedItemId) : false;
-    if (selectedExists) {
-      return;
-    }
-
     if (selectedItemId) {
-      const selectedSourceIdentity = noteSourceIdentityByItemIdRef.current.get(selectedItemId) ?? null;
-      const replacementItemId = findReplacementItemIdForSourceNote(
+      const selectedItem = noteItemsById.get(selectedItemId);
+      const replacementItemId = findFormalReplacementItemIdForSourceNoteEntry(
+        selectedItemId,
         noteItemsById,
         noteItemIdsBySourcePath,
-        selectedSourceIdentity,
+        noteSourceIdentityByItemIdRef.current,
       );
-      if (replacementItemId) {
+      if (replacementItemId && (selectedItem?.sourceNote?.localOnly || !selectedItem)) {
         setSelectedItemId(replacementItemId);
         return;
       }
     }
 
-    const nextItem = upcomingItems[0] ?? laterItems[0] ?? recurringItems[0] ?? closedItems[0];
+    const selectedExists = selectedItemId ? allItems.some((entry) => entry.item.item_id === selectedItemId) : false;
+    if (selectedExists) {
+      return;
+    }
+
+    const nextItem = preferredUpcomingItem ?? preferredLaterItem ?? preferredRecurringItem ?? preferredClosedItem;
     if (nextItem) {
       setSelectedItemId(nextItem.item.item_id);
     }
-  }, [allItems, closedItems, laterItems, noteItemIdsBySourcePath, noteItemsById, recurringItems, selectedItemId, upcomingItems]);
+  }, [allItems, noteItemIdsBySourcePath, noteItemsById, preferredClosedItem, preferredLaterItem, preferredRecurringItem, preferredUpcomingItem, selectedItemId]);
 
   useUnmount(() => {
     if (feedbackTimeoutRef.current) {
@@ -1105,13 +1386,13 @@ export function NotePage() {
     }
 
     append(selectedItem);
-    append(upcomingItems[0]);
-    append(laterItems[0]);
-    append(recurringItems[0]);
-    append(closedItems[0]);
+    append(preferredUpcomingItem);
+    append(preferredLaterItem);
+    append(preferredRecurringItem);
+    append(preferredClosedItem);
 
     return picked.slice(0, NOTE_CANVAS_SEED_POSITIONS.length).map((item) => item.item.item_id);
-  }, [closedItems, laterItems, recurringItems, selectedItem, upcomingItems]);
+  }, [preferredClosedItem, preferredLaterItem, preferredRecurringItem, preferredUpcomingItem, selectedItem]);
 
   const boardItems = useMemo(
     () =>
@@ -1197,23 +1478,24 @@ export function NotePage() {
       const next: NoteCanvasCard[] = [];
 
       current.forEach((entry) => {
-        if (noteItemsById.has(entry.itemId)) {
-          seenItemIds.add(entry.itemId);
-          next.push(entry);
-          return;
-        }
-
-        const sourceIdentity = noteSourceIdentityByItemIdRef.current.get(entry.itemId) ?? null;
-        const replacementItemId = findReplacementItemIdForSourceNote(
+        const currentItem = noteItemsById.get(entry.itemId);
+        const replacementItemId = findFormalReplacementItemIdForSourceNoteEntry(
+          entry.itemId,
           noteItemsById,
           noteItemIdsBySourcePath,
-          sourceIdentity,
+          noteSourceIdentityByItemIdRef.current,
         );
 
-        if (replacementItemId && !seenItemIds.has(replacementItemId)) {
+        if (replacementItemId && (currentItem?.sourceNote?.localOnly || !currentItem) && !seenItemIds.has(replacementItemId)) {
           changed = true;
           seenItemIds.add(replacementItemId);
           next.push({ ...entry, itemId: replacementItemId });
+          return;
+        }
+
+        if (currentItem) {
+          seenItemIds.add(entry.itemId);
+          next.push(entry);
           return;
         }
 
@@ -1241,19 +1523,20 @@ export function NotePage() {
       return current;
     });
 
-    if (draggingBoardItemId && !noteItemsById.has(draggingBoardItemId)) {
-      const sourceIdentity = noteSourceIdentityByItemIdRef.current.get(draggingBoardItemId) ?? null;
-      const replacementItemId = findReplacementItemIdForSourceNote(
+    if (draggingBoardItemId) {
+      const draggingItem = noteItemsById.get(draggingBoardItemId);
+      const replacementItemId = findFormalReplacementItemIdForSourceNoteEntry(
+        draggingBoardItemId,
         noteItemsById,
         noteItemIdsBySourcePath,
-        sourceIdentity,
+        noteSourceIdentityByItemIdRef.current,
       );
-      if (replacementItemId) {
+      if (replacementItemId && (draggingItem?.sourceNote?.localOnly || !draggingItem)) {
         if (dragStateRef.current?.itemId === draggingBoardItemId) {
           dragStateRef.current = { ...dragStateRef.current, itemId: replacementItemId };
         }
         setDraggingBoardItemId(replacementItemId);
-      } else {
+      } else if (!draggingItem) {
         setDraggingBoardItemId(null);
         dragStateRef.current = null;
       }
@@ -1296,7 +1579,7 @@ export function NotePage() {
       }
 
       const targetItem = noteItemsById.get(itemId);
-      const targetAliases = targetItem ? resolveSourceNoteBlockAliases(targetItem, sourceNotesByPath, sourceNotesByTitle) : [];
+      const targetAliases = targetItem ? resolveSourceNoteBlockAliases(targetItem, sourceNotesByPath) : [];
       if (targetAliases.length > 0) {
         const replacementIndex = current.findIndex((entry) => {
           const currentItem = noteItemsById.get(entry.itemId);
@@ -1304,7 +1587,7 @@ export function NotePage() {
             return false;
           }
 
-          return resolveSourceNoteBlockAliases(currentItem, sourceNotesByPath, sourceNotesByTitle).some((alias) => targetAliases.includes(alias));
+          return resolveSourceNoteBlockAliases(currentItem, sourceNotesByPath).some((alias) => targetAliases.includes(alias));
         });
 
         if (replacementIndex >= 0) {
@@ -1334,7 +1617,12 @@ export function NotePage() {
       return;
     }
 
-    const nextItemId = findReplacementItemIdForSourceNote(
+    const replacementItemId = findReplacementItemIdForSourceNote(
+      noteItemsById,
+      noteItemIdsBySourcePath,
+      pendingSourceNote,
+    );
+    const nextItemId = replacementItemId ?? findPreferredItemIdForSourceNote(
       noteItemsById,
       noteItemIdsBySourcePath,
       pendingSourceNote,
@@ -1352,6 +1640,10 @@ export function NotePage() {
     setExpandedBucket(nextItem.item.bucket);
     setSelectedItemId(nextItemId);
     pinNoteToCanvasRef.current(nextItemId);
+    if (nextItem.sourceNote?.localOnly) {
+      showFeedback("新便签已放到网格里，正在同步正式分组。");
+      return;
+    }
     pendingCreatedSourceNoteRef.current = null;
     showFeedback("新便签已同步到便签页，并放到了网格里。");
   }, [noteItemIdsBySourcePath, noteItemsById]);
@@ -1378,6 +1670,16 @@ export function NotePage() {
 
   async function runNoteUpdateForRailDrop(itemId: string, action: NotepadAction) {
     const outcome = await updateNote(itemId, action, dataMode);
+    const updatedItem = noteItemsById.get(itemId);
+    if (updatedItem) {
+      updateRememberedFormalBucketForItem(
+        rememberedFormalBucketByAliasRef.current,
+        updatedItem,
+        outcome.result.notepad_item?.bucket ?? null,
+        sourceNotesByPath,
+        { allowLaterReset: true },
+      );
+    }
     await invalidateNoteBuckets(outcome.result.refresh_groups);
     return outcome.result.notepad_item;
   }
@@ -1827,7 +2129,7 @@ export function NotePage() {
                       emptyLabel={upcomingQuery.isPending && !upcomingQuery.data ? "加载中" : "这组便签已全部放到网格。"}
                       isDropTarget={activeRailDropBucket === "upcoming"}
                       isExpanded={expandedBucket === "upcoming"}
-                      items={visibleUpcomingItems}
+                      items={railUpcomingItems}
                       onCanvasDragEnd={handleDrawerCardDragEnd}
                       onCanvasDragMove={handleDrawerCardDragMove}
                       onCanvasDragStart={handleDrawerCardDragStart}
@@ -1835,7 +2137,7 @@ export function NotePage() {
                       onToggle={() => toggleBucket("upcoming")}
                       stackCards
                       title="近期"
-                      trailing={<span className="note-preview-shell__count">{upcomingQuery.isPending && !upcomingQuery.data ? "..." : visibleUpcomingItems.length}</span>}
+                      trailing={<span className="note-preview-shell__count">{upcomingQuery.isPending && !upcomingQuery.data ? "..." : railUpcomingItems.length}</span>}
                     />
 
                     <NotePreviewSection
@@ -1845,7 +2147,7 @@ export function NotePage() {
                       emptyLabel={laterQuery.isPending && !laterQuery.data ? "加载中" : "这组便签已全部放到网格。"}
                       isDropTarget={activeRailDropBucket === "later"}
                       isExpanded={expandedBucket === "later"}
-                      items={visibleLaterItems}
+                      items={railLaterItems}
                       onCanvasDragEnd={handleDrawerCardDragEnd}
                       onCanvasDragMove={handleDrawerCardDragMove}
                       onCanvasDragStart={handleDrawerCardDragStart}
@@ -1853,7 +2155,7 @@ export function NotePage() {
                       onToggle={() => toggleBucket("later")}
                       stackCards
                       title="后续"
-                      trailing={<span className="note-preview-shell__count">{laterQuery.isPending && !laterQuery.data ? "..." : visibleLaterItems.length}</span>}
+                      trailing={<span className="note-preview-shell__count">{laterQuery.isPending && !laterQuery.data ? "..." : railLaterItems.length}</span>}
                     />
 
                     <NotePreviewSection
@@ -1863,7 +2165,7 @@ export function NotePage() {
                       emptyLabel={recurringQuery.isPending && !recurringQuery.data ? "加载中" : "这组便签已全部放到网格。"}
                       isDropTarget={activeRailDropBucket === "recurring_rule"}
                       isExpanded={expandedBucket === "recurring_rule"}
-                      items={visibleRecurringItems}
+                      items={railRecurringItems}
                       onCanvasDragEnd={handleDrawerCardDragEnd}
                       onCanvasDragMove={handleDrawerCardDragMove}
                       onCanvasDragStart={handleDrawerCardDragStart}
@@ -1871,13 +2173,13 @@ export function NotePage() {
                       onToggle={() => toggleBucket("recurring_rule")}
                       stackCards
                       title="重复"
-                      trailing={<span className="note-preview-shell__count">{recurringQuery.isPending && !recurringQuery.data ? "..." : visibleRecurringItems.length}</span>}
+                      trailing={<span className="note-preview-shell__count">{recurringQuery.isPending && !recurringQuery.data ? "..." : railRecurringItems.length}</span>}
                     />
 
                     <article className={cn("dashboard-card note-preview-shell", activeRailDropBucket === "closed" && "is-drop-target", expandedBucket === "closed" ? "is-expanded" : "is-collapsed")}>
                       <button aria-expanded={expandedBucket === "closed"} className="note-preview-shell__bucket-toggle" onClick={() => toggleBucket("closed")} type="button">
                         <p className="dashboard-card__kicker">已结束</p>
-                        <span className="note-preview-shell__count">{closedQuery.isPending && !closedQuery.data ? "..." : visibleClosedItems.length}</span>
+                        <span className="note-preview-shell__count">{closedQuery.isPending && !closedQuery.data ? "..." : railClosedItems.length}</span>
                       </button>
 
                       {expandedBucket === "closed" ? (

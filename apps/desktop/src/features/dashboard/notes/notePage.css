@@ -996,6 +996,7 @@
 .note-preview-finished-groups,
 .note-detail-list,
 .note-detail-resource-list {
+  align-content: start;
   display: grid;
   gap: 0.75rem;
 }
@@ -1090,6 +1091,7 @@
 }
 
 .note-preview-card {
+  align-self: start;
   background:
     linear-gradient(180deg, rgba(255, 252, 247, 0.9), rgba(246, 239, 231, 0.86)),
     color-mix(in srgb, var(--note-paper) 88%, var(--note-accent) 12%);

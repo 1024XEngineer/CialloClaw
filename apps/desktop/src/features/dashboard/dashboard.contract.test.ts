@@ -6505,6 +6505,8 @@ test("note page no longer guesses source-note paths from duplicated titles", () 
   const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
 
   assert.match(notePageSource, /function resolveNoteItemSourceNotePath\(/);
+  assert.match(notePageSource, /function buildSourceNotePathLookup\(sourceNotes: SourceNoteDocument\[\]\)/);
+  assert.match(notePageSource, /registerSourceNoteLookupKey\(lookup, conflictingKeys, `workspace\/\$\{relativePath\}`, note\);/);
   assert.doesNotMatch(notePageSource, /sourceNotesByTitle\.get\(item\.item\.title/);
   assert.match(notePageSource, /return null;/);
 });
@@ -6841,6 +6843,403 @@ test("note rpc service keeps transport failures visible instead of switching to 
   );
 });
 
+test("source note editor keeps a content-only input while preserving hidden markdown metadata", () => {
+  const sourceNoteEditor = loadSourceNoteEditorModule();
+  const seededDraft = {
+    ...sourceNoteEditor.createEmptySourceNoteEditorDraft("workspace/notes/tasks.md"),
+    agentSuggestion: "把问题拆成前端回归点。",
+    bucket: "upcoming" as const,
+    createdAt: "2026-04-20T09:00:00.000Z",
+    dueAt: "2026-05-01 18:30",
+    endedAt: "2026-04-22T12:00:00.000Z",
+    updatedAt: "2026-04-28T15:45:00.000Z",
+  };
+
+  const editedDraft = sourceNoteEditor.updateSourceNoteEditorDraftContent(
+    seededDraft,
+    "整理 PR365 的便签体验\n前端只让用户输入内容。\n其余元数据继续由系统维护。",
+  );
+
+  assert.equal(editedDraft.title, "整理 PR365 的便签体验");
+  assert.equal(editedDraft.noteText, "前端只让用户输入内容。\n其余元数据继续由系统维护。");
+  assert.equal(editedDraft.bucket, "upcoming");
+  assert.equal(editedDraft.dueAt, "2026-05-01 18:30");
+  assert.equal(editedDraft.agentSuggestion, "把问题拆成前端回归点。");
+  assert.equal(
+    sourceNoteEditor.formatSourceNoteEditorContent(editedDraft),
+    "整理 PR365 的便签体验\n前端只让用户输入内容。\n其余元数据继续由系统维护。",
+  );
+
+  const serialized = sourceNoteEditor.serializeSourceNoteEditorDraft(editedDraft, new Date("2026-04-30T08:00:00.000Z"));
+  assert.match(
+    serialized.blockContent,
+    /^- \[ \] 整理 PR365 的便签体验\nbucket: upcoming\ncreated_at: 2026-04-20T09:00:00.000Z\ndue: 2026-05-01 18:30\nagent: 把问题拆成前端回归点。\nended_at: 2026-04-22T12:00:00.000Z\nupdated_at: 2026-04-30T08:00:00.000Z\n\n前端只让用户输入内容。/,
+  );
+  assert.equal(serialized.normalizedDraft.title, "整理 PR365 的便签体验");
+  assert.equal(serialized.normalizedDraft.noteText, "前端只让用户输入内容。\n其余元数据继续由系统维护。");
+});
+
+test("source note editor keeps completed notes completed while the textarea is temporarily empty", () => {
+  const sourceNoteEditor = loadSourceNoteEditorModule();
+  const completedDraft = {
+    ...sourceNoteEditor.createEmptySourceNoteEditorDraft("workspace/notes/tasks.md"),
+    checked: true,
+    noteText: "旧正文",
+    title: "已完成便签",
+  };
+
+  const clearedDraft = sourceNoteEditor.updateSourceNoteEditorDraftContent(completedDraft, "");
+  assert.equal(clearedDraft.checked, true);
+  assert.equal(clearedDraft.title, "");
+  assert.equal(clearedDraft.noteText, "");
+
+  const replacedDraft = sourceNoteEditor.updateSourceNoteEditorDraftContent(
+    clearedDraft,
+    "重写后的标题\n重写后的正文",
+  );
+  assert.equal(replacedDraft.checked, true);
+  assert.equal(replacedDraft.title, "重写后的标题");
+  assert.equal(replacedDraft.noteText, "重写后的正文");
+});
+
+test("source note editor preserves an intentional blank line between the title and body", () => {
+  const sourceNoteEditor = loadSourceNoteEditorModule();
+  const draft = sourceNoteEditor.updateSourceNoteEditorDraftContent(
+    sourceNoteEditor.createEmptySourceNoteEditorDraft("workspace/notes/tasks.md"),
+    "标题\n\n第二段正文",
+  );
+
+  assert.equal(draft.title, "标题");
+  assert.equal(draft.noteText, "\n第二段正文");
+  assert.equal(
+    sourceNoteEditor.formatSourceNoteEditorContent(draft),
+    "标题\n\n第二段正文",
+  );
+});
+
+test("source note editor keeps matched markdown blocks content-only without leaking hidden metadata back from the item fallback", () => {
+  const sourceNoteEditor = loadSourceNoteEditorModule();
+  const draft = sourceNoteEditor.buildSourceNoteEditorDraftFromNote(
+    {
+      content: [
+        "- [ ] 不好",
+        "bucket: later",
+        "created_at: 2026-05-02T11:35:52.489Z",
+        "updated_at: 2026-05-02T11:35:52.489Z",
+      ].join("\n"),
+      fileName: "notes.md",
+      modifiedAtMs: null,
+      path: "workspace/notes/notes.md",
+      sourceRoot: "workspace/notes",
+      title: "notes",
+    },
+    {
+      experience: {
+        agentSuggestion: { detail: "", label: "" },
+        canConvertToTask: false,
+        detailStatus: "",
+        detailStatusTone: "normal",
+        effectiveScope: null,
+        endedAt: null,
+        isRecurringEnabled: false,
+        nextOccurrenceAt: null,
+        noteText: "created_at: 2026-05-02T11:35:52.489Z\n\nupdated_at: 2026-05-02T11:35:52.489Z",
+        noteType: "follow-up",
+        plannedAt: null,
+        prerequisite: null,
+        previewStatus: "",
+        recentInstanceStatus: null,
+        relatedResources: [],
+        repeatRule: null,
+        summaryLabel: "",
+        timeHint: "",
+        title: "",
+        typeLabel: "",
+      },
+      item: {
+        agent_suggestion: null,
+        bucket: "later",
+        due_at: null,
+        effective_scope: null,
+        item_id: "note_001",
+        next_occurrence_at: null,
+        note_text: "created_at: 2026-05-02T11:35:52.489Z\n\nupdated_at: 2026-05-02T11:35:52.489Z",
+        prerequisite: null,
+        recent_instance_status: null,
+        repeat_rule: null,
+        status: "pending",
+        title: "不好",
+      },
+      sourceNote: {
+        localOnly: false,
+        path: "workspace/notes/notes.md",
+        sourceLine: 1,
+        title: "不好",
+      },
+    },
+  );
+
+  assert.equal(draft.title, "不好");
+  assert.equal(draft.noteText, "");
+});
+
+test("source note editor keeps custom header metadata hidden from the content editor", () => {
+  const sourceNoteEditor = loadSourceNoteEditorModule();
+  const draft = sourceNoteEditor.buildSourceNoteEditorDraftFromNote(
+    {
+      content: [
+        "- [ ] 只显示正文",
+        "priority: p1",
+        "owner: desk-team",
+        "",
+        "真正给用户编辑的正文",
+      ].join("\n"),
+      fileName: "notes.md",
+      modifiedAtMs: null,
+      path: "workspace/notes/notes.md",
+      sourceRoot: "workspace/notes",
+      title: "notes",
+    },
+    {
+      experience: {
+        agentSuggestion: { detail: "", label: "" },
+        canConvertToTask: false,
+        detailStatus: "",
+        detailStatusTone: "normal",
+        effectiveScope: null,
+        endedAt: null,
+        isRecurringEnabled: false,
+        nextOccurrenceAt: null,
+        noteText: "priority: p1\nowner: desk-team\n\n真正给用户编辑的正文",
+        noteType: "follow-up",
+        plannedAt: null,
+        prerequisite: null,
+        previewStatus: "",
+        recentInstanceStatus: null,
+        relatedResources: [],
+        repeatRule: null,
+        summaryLabel: "",
+        timeHint: "",
+        title: "",
+        typeLabel: "",
+      },
+      item: {
+        agent_suggestion: null,
+        bucket: "later",
+        due_at: null,
+        effective_scope: null,
+        item_id: "note_002",
+        next_occurrence_at: null,
+        note_text: "priority: p1\nowner: desk-team\n\n真正给用户编辑的正文",
+        prerequisite: null,
+        recent_instance_status: null,
+        repeat_rule: null,
+        status: "pending",
+        title: "只显示正文",
+      },
+      sourceNote: {
+        localOnly: false,
+        path: "workspace/notes/notes.md",
+        sourceLine: 1,
+        title: "只显示正文",
+      },
+    },
+  );
+
+  assert.equal(draft.title, "只显示正文");
+  assert.equal(draft.noteText, "真正给用户编辑的正文");
+});
+
+test("source note editor strips pasted checklist markers from the title without changing hidden completion state", () => {
+  const sourceNoteEditor = loadSourceNoteEditorModule();
+  const completedDraft = {
+    ...sourceNoteEditor.createEmptySourceNoteEditorDraft("workspace/notes/tasks.md"),
+    checked: true,
+  };
+
+  const nextDraft = sourceNoteEditor.updateSourceNoteEditorDraftContent(
+    completedDraft,
+    "- [ ] 重写后的标题\n正文保持普通文本。",
+  );
+  assert.equal(nextDraft.checked, true);
+  assert.equal(nextDraft.title, "重写后的标题");
+  assert.equal(nextDraft.noteText, "正文保持普通文本。");
+});
+
+test("source note editor stops parsing hidden metadata after the body starts", () => {
+  const sourceNoteEditor = loadSourceNoteEditorModule();
+  const blocks = sourceNoteEditor.parseSourceNoteEditorBlocks({
+    content: [
+      "- [ ] 保留正文里的保留前缀",
+      "bucket: upcoming",
+      "status: waiting_review",
+      "",
+      "status: 这一行现在是正文",
+      "resource: https://example.com/as-body-text",
+      "note: 这一行也应继续留在正文里",
+    ].join("\n"),
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "workspace/notes/tasks.md",
+    sourceRoot: "workspace/notes",
+    title: "tasks",
+  });
+
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0]?.recentInstanceStatus, "waiting_review");
+  assert.deepEqual(blocks[0]?.extraMetadata, []);
+  assert.equal(
+    blocks[0]?.noteText,
+    "status: 这一行现在是正文\nresource: https://example.com/as-body-text\nnote: 这一行也应继续留在正文里",
+  );
+});
+
+test("note page resolves newly created source notes from the appended tail block instead of matching by mutable metadata", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /const createdBlocks = parseSourceNoteEditorBlocks\(savedNote\);/);
+  assert.match(notePageSource, /const createdBlock = createdBlocks\[createdBlocks\.length - 1\] \?\? null;/);
+  assert.doesNotMatch(notePageSource, /find\(\(block\) => block\.updatedAt === normalizedDraft\.updatedAt\)/);
+});
+
+test("note page prefers formal notepad items over local source fallback cards when matching a newly created source note", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /const formalCandidateIds = candidateIds\.filter\(\(itemId\) => \{/);
+  assert.match(notePageSource, /return item \? !item\.sourceNote\?\.localOnly : false;/);
+  assert.match(notePageSource, /const exactLineCandidate = formalCandidateIds\.find\(\(itemId\) => \{/);
+  assert.match(notePageSource, /const exactCandidate = formalCandidateIds\.find\(\(itemId\) => \{/);
+  assert.match(notePageSource, /return formalCandidateIds\.length === 1 \? formalCandidateIds\[0\] : null;/);
+});
+
+test("note page can pin a pending created source note before the formal bucket item finishes syncing", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /function findPreferredItemIdForSourceNote\(/);
+  assert.match(notePageSource, /const nextItemId = replacementItemId \?\? findPreferredItemIdForSourceNote\(/);
+  assert.match(notePageSource, /if \(nextItem\.sourceNote\?\.localOnly\) \{/);
+  assert.match(notePageSource, /showFeedback\("新便签已放到网格里，正在同步正式分组。"\);/);
+});
+
+test("note page upgrades canvas and selected source-note cards to their formal items once sync completes", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /function findFormalReplacementItemIdForSourceNoteEntry\(/);
+  assert.match(notePageSource, /if \(replacementItemId && \(selectedItem\?\.sourceNote\?\.localOnly \|\| !selectedItem\)\) \{/);
+  assert.match(notePageSource, /if \(replacementItemId && \(currentItem\?\.sourceNote\?\.localOnly \|\| !currentItem\) && !seenItemIds\.has\(replacementItemId\)\) \{/);
+  assert.match(notePageSource, /next\.push\(\{ \.\.\.entry, itemId: replacementItemId \}\);/);
+});
+
+test("note page syncs newly created source notes onto the board instead of auto-converting them into tasks", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /async function syncCreatedSourceNoteToBoard\(/);
+  assert.match(notePageSource, /pinNoteToCanvasRef\.current\(matchedItem\.item\.item_id\);/);
+  assert.match(notePageSource, /showFeedback\("新便签已同步到便签页，并放到了网格里。"\);/);
+  assert.doesNotMatch(notePageSource, /const outcome = await convertNoteToTask\(matchedItem\.item\.item_id, dataMode\);/);
+});
+
+test("source note studio removes direct metadata form inputs from the user-facing editor", () => {
+  const sourceNoteStudioSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/SourceNoteStudio.tsx"), "utf8");
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(sourceNoteStudioSource, /内容式便签编辑/);
+  assert.match(sourceNoteStudioSource, /第一行会作为标题/);
+  assert.match(sourceNoteStudioSource, /开始新便签/);
+  assert.match(sourceNoteStudioSource, /点击“保存便签”后/);
+  assert.match(sourceNoteStudioSource, /value=\{editorContent\}/);
+  assert.doesNotMatch(sourceNoteStudioSource, /formatSourceNoteEditorContent/);
+  assert.doesNotMatch(sourceNoteStudioSource, /updateSourceNoteEditorDraftContent/);
+  assert.match(notePageSource, /const \[sourceNoteEditorContent, setSourceNoteEditorContent\] = useState/);
+  assert.match(notePageSource, /const nextDraft = updateSourceNoteEditorDraftContent\(sourceNoteDraft, sourceNoteEditorContent\);/);
+  assert.match(notePageSource, /editorContent=\{sourceNoteEditorContent\}/);
+  assert.doesNotMatch(sourceNoteStudioSource, /<span>标题<\/span>/);
+  assert.doesNotMatch(sourceNoteStudioSource, /<span>分组<\/span>/);
+  assert.doesNotMatch(sourceNoteStudioSource, /<span>计划时间<\/span>/);
+  assert.doesNotMatch(sourceNoteStudioSource, /<span>Agent 建议<\/span>/);
+  assert.doesNotMatch(sourceNoteStudioSource, /写入分组/);
+  assert.doesNotMatch(sourceNoteStudioSource, /最近写回/);
+});
+
+test("note page deduplicates source-note fallback cards and canvas cards by source block identity", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /function buildSourceNoteBlockAliases\(/);
+  assert.match(notePageSource, /function resolveSourceNoteBlockAliases\(/);
+  assert.match(notePageSource, /resolveSourceNoteBlockAliases\(item, sourceNotesByPath\)\.forEach\(\(alias\) => \{/);
+  assert.match(notePageSource, /resolveSourceNoteBlockAliases\(item, sourceNotesByPath\)\.some\(\(alias\) => representedSourceNoteBlocks\.has\(alias\)\)/);
+  assert.match(notePageSource, /const targetAliases = targetItem \? resolveSourceNoteBlockAliases\(targetItem, sourceNotesByPath\) : \[\];/);
+  assert.match(notePageSource, /next\[replacementIndex\] = \{ \.\.\.next\[replacementIndex\], itemId \};/);
+});
+
+test("note preview stacks assign increasing sidebar z-order so later cards cover earlier cards", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+  const notePreviewSectionSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NotePreviewSection.tsx"), "utf8");
+  const notePreviewCardSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NotePreviewCard.tsx"), "utf8");
+  const notePageStyleSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/notePage.css"), "utf8");
+
+  assert.match(notePreviewSectionSource, /stackOrder=\{stackCards && items\.length > 1 \? index \+ 1 : undefined\}/);
+  assert.match(notePageSource, /stackOrder=\{group\.items\.length > 1 \? index \+ 1 : undefined\}/);
+  assert.match(notePreviewCardSource, /"--note-stack-order": String\(stackOrder\)/);
+  assert.match(notePageStyleSource, /z-index: var\(--note-stack-order, 1\);/);
+});
+
+test("note page keeps local source-note fallback cards off the rail buckets while preserving board cards", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /const sourceFallbackItemsByBucket = useMemo\(\(\) => \{/);
+  assert.match(notePageSource, /nextGroups\[item\.item\.bucket\]\.push\(item\);/);
+  assert.match(notePageSource, /const upcomingItems = useMemo\([\s\S]*sortNotesByUrgency\(\[\.\.\.sourceFallbackItemsByBucket\.upcoming, \.\.\.rpcUpcomingItems\]\)/);
+  assert.match(notePageSource, /const laterItems = useMemo\([\s\S]*sortNotesByUrgency\(\[\.\.\.sourceFallbackItemsByBucket\.later, \.\.\.rpcLaterItems\]\)/);
+  assert.match(notePageSource, /const recurringItems = useMemo\([\s\S]*sortNotesByUrgency\(\[\.\.\.sourceFallbackItemsByBucket\.recurring_rule, \.\.\.rpcRecurringItems\]\)/);
+  assert.match(notePageSource, /const closedItems = useMemo\([\s\S]*sortClosedNotes\(\[\.\.\.sourceFallbackItemsByBucket\.closed, \.\.\.rpcClosedItems\]\)/);
+  assert.match(notePageSource, /const railUpcomingItems = useMemo\(\(\) => visibleUpcomingItems\.filter\(\(item\) => !item\.sourceNote\?\.localOnly\), \[visibleUpcomingItems\]\);/);
+  assert.match(notePageSource, /const formalLaterItems = useMemo\(\(\) => laterItems\.filter\(\(item\) => !item\.sourceNote\?\.localOnly\), \[laterItems\]\);/);
+  assert.match(notePageSource, /const railLaterItems = useMemo\(\(\) => visibleLaterItems\.filter\(\(item\) => !item\.sourceNote\?\.localOnly\), \[visibleLaterItems\]\);/);
+  assert.match(notePageSource, /const railRecurringItems = useMemo\(\(\) => visibleRecurringItems\.filter\(\(item\) => !item\.sourceNote\?\.localOnly\), \[visibleRecurringItems\]\);/);
+  assert.match(notePageSource, /const railClosedItems = useMemo\(\(\) => visibleClosedItems\.filter\(\(item\) => !item\.sourceNote\?\.localOnly\), \[visibleClosedItems\]\);/);
+  assert.match(notePageSource, /items=\{railUpcomingItems\}/);
+  assert.match(notePageSource, /items=\{railLaterItems\}/);
+  assert.match(notePageSource, /items=\{railRecurringItems\}/);
+  assert.match(notePageSource, /railUpcomingItems\.length/);
+  assert.match(notePageSource, /railLaterItems\.length/);
+  assert.match(notePageSource, /railRecurringItems\.length/);
+  assert.match(notePageSource, /railClosedItems\.length/);
+});
+
+test("note page keeps formal source-note buckets stable across inspection refreshes", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /const rememberedFormalBucketByAliasRef = useRef\(new Map<string, NotePreviewGroupKey>\(\)\);/);
+  assert.match(notePageSource, /const rawRpcItems = useMemo\(\s*\(\) => \[/);
+  assert.match(notePageSource, /updateRememberedFormalBucketForItem\(\s*rememberedFormalBucketByAliasRef\.current,\s*item,\s*item\.item\.bucket,/);
+  assert.match(notePageSource, /applyRememberedFormalBucket\(\s*rememberedFormalBucketByAliasRef\.current,\s*item,/);
+  assert.match(notePageSource, /if \(nextBucket === "later"\) \{\s*if \(options\.allowLaterReset\) \{\s*rememberedBucketByAlias\.delete\(alias\);/);
+  assert.match(notePageSource, /updateRememberedFormalBucketForItem\([\s\S]*allowLaterReset: true/);
+  assert.match(notePageSource, /nextGroups\[item\.item\.bucket\]\.push\(item\);/);
+});
+
+test("note sidebar keeps single preview cards compact instead of stretching to fill the whole bucket", () => {
+  const notePageStyleSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/notePage.css"), "utf8");
+
+  assert.match(notePageStyleSource, /\.note-preview-shell__list,[\s\S]*align-content: start;/);
+  assert.match(notePageStyleSource, /\.note-preview-card \{[\s\S]*align-self: start;/);
+});
+
+test("note detail panel hides source scope and resource cards while keeping the action-bar open flow", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+  const noteDetailPanelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NoteDetailPanel.tsx"), "utf8");
+  const noteActionBarSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NoteActionBar.tsx"), "utf8");
+
+  assert.doesNotMatch(noteDetailPanelSource, /生效范围/);
+  assert.doesNotMatch(noteDetailPanelSource, /当前事项关联的入口/);
+  assert.doesNotMatch(noteDetailPanelSource, /note-detail-resource-list/);
+  assert.doesNotMatch(noteDetailPanelSource, /onResourceOpen/);
+  assert.doesNotMatch(notePageSource, /onResourceOpen=\{handleResourceOpen\}/);
+  assert.match(noteActionBarSource, /"open-resource"/);
+  assert.match(notePageSource, /if \(action === "open-resource"\)/);
+  assert.match(notePageSource, /void handleResourceOpen\(firstResource\.id\);/);
+});
 test("note rpc service derives experience from protocol note data instead of mock fixtures", () => {
   const noteServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/notePage.service.ts"), "utf8");
 
