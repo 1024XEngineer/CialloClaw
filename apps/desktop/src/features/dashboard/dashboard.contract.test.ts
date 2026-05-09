@@ -1799,6 +1799,9 @@ test("dashboard home randomizes summons while preferring a different module when
   assert.match(dashboardHomeSource, /const pool = candidateIndexes\.length > 0 \? candidateIndexes : fallbackIndexes/);
   assert.match(dashboardHomeSource, /Math\.floor\(Math\.random\(\) \* pool\.length\)/);
   assert.match(dashboardHomeSource, /lastSummonModuleRef\.current = template\.module/);
+  assert.match(dashboardHomeSource, /const closeActiveOverlay = useCallback\(\(\) => \{/);
+  assert.match(dashboardHomeSource, /if \(event\.key === "Escape" && \(activeStateKey \|\| activeExpandedState\)\) \{/);
+  assert.match(dashboardHomeSource, /onClose=\{closeActiveOverlay\}/);
 });
 
 test("mirror page stays RPC-only instead of exposing a page-level mock toggle", () => {

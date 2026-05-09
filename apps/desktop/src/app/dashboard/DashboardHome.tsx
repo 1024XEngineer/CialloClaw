@@ -118,6 +118,11 @@ export function DashboardHome({
   const currentReasonLine = activeState?.subline ?? summons[0]?.reason ?? data.focusLine.reason;
   const isOverlayOpen = Boolean(activeState || voiceOpen);
 
+  const closeActiveOverlay = useCallback(() => {
+    setActiveExpandedState(null);
+    setActiveStateKey(null);
+  }, []);
+
   const scheduleSummon = useCallback(() => {
     if (data.summonTemplates.length === 0) {
       return;
@@ -179,15 +184,15 @@ export function DashboardHome({
         return;
       }
 
-      if (event.key === "Escape" && activeStateKey) {
+      if (event.key === "Escape" && (activeStateKey || activeExpandedState)) {
         event.preventDefault();
-        setActiveStateKey(null);
+        closeActiveOverlay();
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeStateKey]);
+  }, [activeExpandedState, activeStateKey, closeActiveOverlay]);
 
   const centerVisualState = voiceOpen ? "voice_locked" : getCenterState(activeStateKey);
   const pageStyle = {
@@ -333,10 +338,7 @@ export function DashboardHome({
 
       <DashboardEventPanel
         activeState={activeState}
-        onClose={() => {
-          setActiveExpandedState(null);
-          setActiveStateKey(null);
-        }}
+        onClose={closeActiveOverlay}
         onStateChange={(stateKey) => {
           setActiveExpandedState(null);
           setActiveStateKey(stateKey);
