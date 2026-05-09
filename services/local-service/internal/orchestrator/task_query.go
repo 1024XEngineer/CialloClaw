@@ -22,16 +22,7 @@ func (s *Service) TaskList(params map[string]any) (map[string]any, error) {
 	offset := clampListOffset(intValue(params, "offset", 0))
 	sortBy := stringValue(params, "sort_by", "updated_at")
 	sortOrder := stringValue(params, "sort_order", "desc")
-	allTasks := newTaskQueryViews(s).tasks(group, sortBy, sortOrder)
-	total := len(allTasks)
-	tasks := []runengine.TaskRecord{}
-	if offset < total {
-		end := offset + limit
-		if limit <= 0 || end > total {
-			end = total
-		}
-		tasks = allTasks[offset:end]
-	}
+	tasks, total := s.taskListRecords(group, sortBy, sortOrder, limit, offset)
 
 	items := make([]map[string]any, 0, len(tasks))
 	for _, task := range tasks {
@@ -498,9 +489,10 @@ func normalizeEventTimeFilter(value string) (string, error) {
 	if parsed.IsZero() {
 		return "", fmt.Errorf("invalid time %q", trimmed)
 	}
-	// Loop runtime events persist UTC RFC3339 timestamps, so keeping filters in
-	// the same lexical format preserves the task_id/created_at index usage.
-	return parsed.UTC().Format(time.RFC3339), nil
+	// Preserve the caller's timestamp precision after normalizing to UTC so the
+	// SQLite runtime-event store can compare the actual instant rather than a
+	// second-truncated string representation.
+	return parsed.UTC().Format(time.RFC3339Nano), nil
 }
 
 func parseEventTimeFilter(value string) time.Time {

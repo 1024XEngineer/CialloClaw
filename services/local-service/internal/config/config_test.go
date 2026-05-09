@@ -5,6 +5,106 @@ import (
 	"testing"
 )
 
+func TestLoadUsesDefaultsWithoutOverrides(t *testing.T) {
+	cfg := Load()
+
+	if cfg.DataDir != DefaultRuntimeRoot() {
+		t.Fatalf("expected default data dir %q, got %q", DefaultRuntimeRoot(), cfg.DataDir)
+	}
+	if cfg.WorkspaceRoot != DefaultWorkspaceRoot() {
+		t.Fatalf("expected default workspace root %q, got %q", DefaultWorkspaceRoot(), cfg.WorkspaceRoot)
+	}
+	if cfg.DatabasePath != DefaultDatabasePath() {
+		t.Fatalf("expected default database path %q, got %q", DefaultDatabasePath(), cfg.DatabasePath)
+	}
+	if cfg.RPC.NamedPipeName != `\\.\pipe\cialloclaw-rpc` {
+		t.Fatalf("expected default named pipe, got %q", cfg.RPC.NamedPipeName)
+	}
+	if cfg.RPC.DebugHTTPAddress != ":4317" {
+		t.Fatalf("expected default debug http address, got %q", cfg.RPC.DebugHTTPAddress)
+	}
+}
+
+func TestLoadUsesProvidedDataDirectory(t *testing.T) {
+	dataDir := filepath.Join(`C:\Users`, "tester", "AppData", "Roaming", "com.cialloclaw.desktop")
+	cfg := Load(LoadOptions{DataDir: dataDir})
+
+	if cfg.DataDir != dataDir {
+		t.Fatalf("expected cleaned data dir %q, got %q", dataDir, cfg.DataDir)
+	}
+	if cfg.WorkspaceRoot != filepath.Join(dataDir, defaultWorkspaceDirName) {
+		t.Fatalf("expected workspace root under data dir, got %q", cfg.WorkspaceRoot)
+	}
+	if cfg.DatabasePath != filepath.Join(dataDir, "data", defaultDatabaseFileName) {
+		t.Fatalf("expected database path under data dir, got %q", cfg.DatabasePath)
+	}
+}
+
+func TestLoadDataDirectoryDoesNotOverrideExplicitWorkspaceAndDatabaseEnv(t *testing.T) {
+	dataDir := filepath.Join(`C:\Users`, "tester", "AppData", "Roaming", "com.cialloclaw.desktop")
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace-root")
+	databasePath := filepath.Join(t.TempDir(), "data", "override.db")
+	t.Setenv("CIALLOCLAW_WORKSPACE_ROOT", workspaceRoot)
+	t.Setenv("CIALLOCLAW_DATABASE_PATH", databasePath)
+
+	cfg := Load(LoadOptions{DataDir: dataDir})
+
+	if cfg.DataDir != dataDir {
+		t.Fatalf("expected cleaned data dir %q, got %q", dataDir, cfg.DataDir)
+	}
+	if cfg.WorkspaceRoot != workspaceRoot {
+		t.Fatalf("expected workspace env override %q, got %q", workspaceRoot, cfg.WorkspaceRoot)
+	}
+	if cfg.DatabasePath != databasePath {
+		t.Fatalf("expected database env override %q, got %q", databasePath, cfg.DatabasePath)
+	}
+}
+
+func TestLoadTrimsDataDirectoryOverride(t *testing.T) {
+	dataDir := filepath.Join("D:", "runtime", "cialloclaw")
+	cfg := Load(LoadOptions{DataDir: "  " + dataDir + "  "})
+
+	if cfg.DataDir != dataDir {
+		t.Fatalf("expected trimmed data dir %q, got %q", dataDir, cfg.DataDir)
+	}
+}
+
+func TestLoadUsesProvidedNamedPipeOverride(t *testing.T) {
+	pipeName := `\\.\pipe\cialloclaw-rpc-test-user`
+	cfg := Load(LoadOptions{NamedPipeName: "  " + pipeName + "  "})
+
+	if cfg.RPC.NamedPipeName != pipeName {
+		t.Fatalf("expected named pipe %q, got %q", pipeName, cfg.RPC.NamedPipeName)
+	}
+}
+
+func TestLoadRepairsNamedPipePathMissingLeadingSlash(t *testing.T) {
+	brokenPipeName := `\.\pipe\cialloclaw-rpc-test-user`
+	pipeName := `\\.\pipe\cialloclaw-rpc-test-user`
+	cfg := Load(LoadOptions{NamedPipeName: brokenPipeName})
+
+	if cfg.RPC.NamedPipeName != pipeName {
+		t.Fatalf("expected repaired named pipe %q, got %q", pipeName, cfg.RPC.NamedPipeName)
+	}
+}
+
+func TestLoadUsesProvidedDebugHTTPOverride(t *testing.T) {
+	debugHTTPAddress := "127.0.0.1:0"
+	cfg := Load(LoadOptions{DebugHTTPAddress: debugHTTPAddress, DebugHTTPAddressSet: true})
+
+	if cfg.RPC.DebugHTTPAddress != debugHTTPAddress {
+		t.Fatalf("expected debug http address %q, got %q", debugHTTPAddress, cfg.RPC.DebugHTTPAddress)
+	}
+}
+
+func TestLoadAllowsExplicitlyDisablingDebugHTTP(t *testing.T) {
+	cfg := Load(LoadOptions{DebugHTTPAddress: "", DebugHTTPAddressSet: true})
+
+	if cfg.RPC.DebugHTTPAddress != "" {
+		t.Fatalf("expected explicit empty debug http override to disable the listener, got %q", cfg.RPC.DebugHTTPAddress)
+	}
+}
+
 func TestDefaultRuntimePathsPreferOverrides(t *testing.T) {
 	runtimeRoot := filepath.Join(t.TempDir(), "runtime-root")
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace-root")

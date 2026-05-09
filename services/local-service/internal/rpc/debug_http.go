@@ -170,12 +170,22 @@ func setDebugCORSOrigin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	host := strings.ToLower(parsed.Hostname())
-	if host != "localhost" && host != "127.0.0.1" {
+	if !isAllowedDebugOriginHost(host) {
 		return
 	}
 
 	w.Header().Set("Access-Control-Allow-Origin", origin)
 	w.Header().Set("Vary", "Origin")
+}
+
+func isAllowedDebugOriginHost(host string) bool {
+	normalized := strings.TrimSpace(strings.ToLower(host))
+	switch normalized {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	default:
+		return strings.HasSuffix(normalized, ".localhost")
+	}
 }
 
 // marshalSSEData encodes arbitrary debug payloads into one SSE data field.

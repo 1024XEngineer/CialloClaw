@@ -2508,7 +2508,7 @@ func executionAttemptHasSideEffects(result execution.Result) bool {
 
 func isMutatingToolCall(toolName string) bool {
 	switch strings.TrimSpace(toolName) {
-	case "write_file", "exec_command", "page_interact", "transcode_media", "normalize_recording", "extract_frames":
+	case "write_file", "exec_command", "page_interact", "browser_navigate", "browser_tab_focus", "browser_interact", "transcode_media", "normalize_recording", "extract_frames":
 		return true
 	default:
 		return false
