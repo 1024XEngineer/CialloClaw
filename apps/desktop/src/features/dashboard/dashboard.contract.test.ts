@@ -7485,6 +7485,20 @@ test("note preview stacks assign increasing sidebar z-order so later cards cover
   assert.match(notePreviewCardSource, /"--note-stack-order": String\(stackOrder\)/);
   assert.match(notePageStyleSource, /z-index: var\(--note-stack-order, 1\);/);
 });
+test("note detail panel hides source scope and resource cards while keeping the action-bar open flow", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+  const noteDetailPanelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NoteDetailPanel.tsx"), "utf8");
+  const noteActionBarSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NoteActionBar.tsx"), "utf8");
+
+  assert.doesNotMatch(noteDetailPanelSource, /生效范围/);
+  assert.doesNotMatch(noteDetailPanelSource, /当前事项关联的入口/);
+  assert.doesNotMatch(noteDetailPanelSource, /note-detail-resource-list/);
+  assert.doesNotMatch(noteDetailPanelSource, /onResourceOpen/);
+  assert.doesNotMatch(notePageSource, /onResourceOpen=\{handleResourceOpen\}/);
+  assert.match(noteActionBarSource, /"open-resource"/);
+  assert.match(notePageSource, /if \(action === "open-resource"\)/);
+  assert.match(notePageSource, /void handleResourceOpen\(firstResource\.id\);/);
+});
 test("TaskDetailPanel defers the entire fallback security summary until formal detail arrives", () => {
   const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
 

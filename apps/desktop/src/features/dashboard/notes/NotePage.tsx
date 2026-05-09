@@ -1976,7 +1976,7 @@ export function NotePage() {
                   initial={{ opacity: 0, scale: 0.98, y: 16 }}
                   transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
                 >
-                  <NoteDetailPanel feedback={feedback} item={selectedItem} onAction={handleDetailAction} onClose={() => setDetailOpen(false)} onResourceOpen={handleResourceOpen} />
+                  <NoteDetailPanel feedback={feedback} item={selectedItem} onAction={handleDetailAction} onClose={() => setDetailOpen(false)} />
                 </motion.div>
               </>
             ) : null}

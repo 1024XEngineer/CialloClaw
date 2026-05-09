@@ -1,5 +1,5 @@
 import { motion } from "motion/react";
-import { CalendarClock, FolderOpen, Repeat, Sparkles, X } from "lucide-react";
+import { CalendarClock, Repeat, Sparkles, X } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -14,10 +14,9 @@ type NoteDetailPanelProps = {
   item: NoteListItem;
   onAction: (action: NoteDetailAction) => void;
   onClose: () => void;
-  onResourceOpen: (resourceId: string) => void;
 };
 
-export function NoteDetailPanel({ feedback, item, onAction, onClose, onResourceOpen }: NoteDetailPanelProps) {
+export function NoteDetailPanel({ feedback, item, onAction, onClose }: NoteDetailPanelProps) {
   const { experience } = item;
 
   return (
@@ -148,15 +147,6 @@ export function NoteDetailPanel({ feedback, item, onAction, onClose, onResourceO
                     </div>
                   </article>
                 ) : null}
-                {experience.effectiveScope ? (
-                  <article className="note-detail-list__item">
-                    <Repeat className="h-4 w-4" />
-                    <div>
-                      <p className="note-detail-list__label">生效范围</p>
-                      <p className="note-detail-list__value">{experience.effectiveScope}</p>
-                    </div>
-                  </article>
-                ) : null}
               </div>
             </section>
           </div>
@@ -169,31 +159,6 @@ export function NoteDetailPanel({ feedback, item, onAction, onClose, onResourceO
             <p className="note-detail-card__copy">{experience.agentSuggestion.detail}</p>
           </section>
 
-          <section className="note-detail-card">
-            <div className="note-detail-card__header">
-              <p className="note-detail-card__eyebrow">相关资料</p>
-              <h3 className="note-detail-card__title">当前事项关联的入口</h3>
-            </div>
-            <div className="note-detail-resource-list">
-              {experience.relatedResources.length > 0 ? (
-                experience.relatedResources.map((resource) => (
-                  <article key={resource.id} className="note-detail-resource-item">
-                    <FolderOpen className="h-4 w-4" />
-                    <div>
-                      <p className="note-detail-resource-item__title">{resource.label}</p>
-                      <p className="note-detail-resource-item__meta">{resource.type}</p>
-                      <p className="note-detail-resource-item__path">{resource.path}</p>
-                    </div>
-                    <Button className="note-detail-resource-item__open" onClick={() => onResourceOpen(resource.id)} variant="ghost">
-                      打开
-                    </Button>
-                  </article>
-                ))
-              ) : (
-                <p className="note-detail-card__copy">当前没有挂载相关资料，后续可以补充到这里。</p>
-              )}
-            </div>
-          </section>
         </div>
       </ScrollArea>
 
