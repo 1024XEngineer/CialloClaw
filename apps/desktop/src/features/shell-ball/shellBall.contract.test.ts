@@ -5017,10 +5017,11 @@ test("shell-ball bubble zone renders per-bubble pin and delete controls", () => 
     }),
   );
 
-  assert.match(markup, /shell-ball-bubble-message__pin-control/g);
-  assert.match(markup, /shell-ball-bubble-message__delete-control/g);
-  assert.equal(markup.match(/data-bubble-action="pin"/g)?.length, 2);
+  assert.match(markup, /shell-ball-bubble-message__hover-controls/g);
+  assert.match(markup, /shell-ball-bubble-message__hover-control-icon/g);
+  assert.doesNotMatch(markup, /data-bubble-action="pin"/);
   assert.equal(markup.match(/data-bubble-action="delete"/g)?.length, 2);
+  assert.doesNotMatch(markup, /data-tooltip=/);
 });
 
 test("shell-ball pending-approval bubbles render inline allow and deny controls", () => {
@@ -5055,9 +5056,9 @@ test("shell-ball pending-approval bubbles render inline allow and deny controls"
     }),
   );
 
-  assert.match(markup, /shell-ball-bubble-message__approval-actions/);
-  assert.equal(markup.match(/data-bubble-action="allow_approval"/g)?.length, 1);
-  assert.equal(markup.match(/data-bubble-action="deny_approval"/g)?.length, 1);
+  assert.doesNotMatch(markup, /shell-ball-bubble-message__approval-actions/);
+  assert.doesNotMatch(markup, /data-bubble-action="allow_approval"/);
+  assert.doesNotMatch(markup, /data-bubble-action="deny_approval"/);
   assert.doesNotMatch(markup, /data-bubble-action="pin"/);
   assert.doesNotMatch(markup, /data-bubble-action="delete"/);
 });

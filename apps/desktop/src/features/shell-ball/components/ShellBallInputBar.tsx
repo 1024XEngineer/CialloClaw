@@ -275,10 +275,14 @@ const StyledInputBar = styled.div`
   }
 
   .shell-ball-uiverse-inputbox::before {
-    background: radial-gradient(ellipse at center, rgba(149, 188, 232, 0.28) 0%, rgba(149, 188, 232, 0.16) 48%, rgba(149, 188, 232, 0) 78%);
+    background: radial-gradient(
+      circle at center,
+      color-mix(in srgb, var(--shell-ball-input-shell-line-active) 72%, white) 0%,
+      transparent 72%
+    );
     border-radius: 28px;
     content: "";
-    filter: blur(12px);
+    filter: blur(14px);
     inset: -8px;
     opacity: 0;
     pointer-events: none;
@@ -306,6 +310,7 @@ const StyledInputBar = styled.div`
     transform: scaleY(0);
     transform-origin: center bottom;
     transition:
+      background 220ms ease,
       opacity 220ms ease,
       transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
     z-index: 0;
@@ -512,12 +517,13 @@ const StyledInputBar = styled.div`
 
   &:focus-within .shell-ball-uiverse-inputbox::before,
   &[data-settled="true"] .shell-ball-uiverse-inputbox::before {
-    opacity: 1;
+    opacity: 0.92;
     transform: scale(1.08);
   }
 
   &:focus-within .shell-ball-uiverse-fill,
   &[data-settled="true"] .shell-ball-uiverse-fill {
+    background: #fffcf8;
     opacity: 1;
     transform: scaleY(1);
   }
