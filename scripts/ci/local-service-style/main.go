@@ -89,6 +89,9 @@ func run() error {
 		if err := checkAddedComments(root, baseRef); err != nil {
 			return err
 		}
+		if err := checkAllComments(root); err != nil {
+			return err
+		}
 	}
 	if err := checkChangedFileSizes(root, baseRef); err != nil {
 		return err
@@ -169,6 +172,23 @@ func checkAddedComments(root, baseRef string) error {
 
 	var builder strings.Builder
 	builder.WriteString("Chinese characters are not allowed in added Go comments:\n")
+	for _, item := range violations {
+		fmt.Fprintf(&builder, "%s:%d: %s\n", item.file, item.line, strings.TrimSpace(item.text))
+	}
+	return errors.New(strings.TrimRight(builder.String(), "\n"))
+}
+
+func checkAllComments(root string) error {
+	violations, err := findAllCommentViolations(root)
+	if err != nil {
+		return err
+	}
+	if len(violations) == 0 {
+		return nil
+	}
+
+	var builder strings.Builder
+	builder.WriteString("Chinese characters are not allowed in local-service Go comments:\n")
 	for _, item := range violations {
 		fmt.Fprintf(&builder, "%s:%d: %s\n", item.file, item.line, strings.TrimSpace(item.text))
 	}
@@ -374,6 +394,51 @@ func findCommentViolations(root string, diffChunks []diffChunk) ([]violation, er
 			}
 		}
 	}
+
+	return violations, nil
+}
+
+func findAllCommentViolations(root string) ([]violation, error) {
+	basePath := filepath.Join(root, localServicePath)
+	var violations []violation
+
+	if err := filepath.WalkDir(basePath, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") {
+			return nil
+		}
+
+		relativePath, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		relativePath = filepath.ToSlash(relativePath)
+
+		commentLines, err := scanCommentLines(root, relativePath, workingTreeFileReader)
+		if err != nil {
+			return err
+		}
+		for line, comments := range commentLines {
+			for _, comment := range comments {
+				if containsHan(comment) {
+					violations = append(violations, violation{file: relativePath, line: line, text: comment})
+				}
+			}
+		}
+
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("scan local-service comments: %w", err)
+	}
+
+	sort.SliceStable(violations, func(i, j int) bool {
+		if violations[i].file == violations[j].file {
+			return violations[i].line < violations[j].line
+		}
+		return violations[i].file < violations[j].file
+	})
 
 	return violations, nil
 }
