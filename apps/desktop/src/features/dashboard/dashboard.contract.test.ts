@@ -9694,7 +9694,11 @@ test("TaskDetailPanel renders formal delivery as a first-class output entry", ()
   const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
 
   assert.match(panelSource, /const formalDeliveryResult = detail\?\.delivery_result \?\? null;/);
-  assert.match(panelSource, /const hasFormalOutput = formalDeliveryResult !== null;/);
+  assert.match(panelSource, /const formalDeliveryPath = formalDeliveryResult\?\.payload\.path\?\.trim\(\) \?\? "";/);
+  assert.match(panelSource, /const formalDeliveryDuplicatesArtifact = Boolean\(/);
+  assert.match(panelSource, /formalDeliveryResult\.type === "workspace_document" \|\| formalDeliveryResult\.type === "open_file" \|\| formalDeliveryResult\.type === "reveal_in_folder"/);
+  assert.match(panelSource, /outputArtifacts\.some\(\(artifact\) => artifact\.path\.trim\(\) === formalDeliveryPath\)/);
+  assert.match(panelSource, /const hasFormalOutput = formalDeliveryResult !== null && !formalDeliveryDuplicatesArtifact;/);
   assert.match(panelSource, /const hasOutputContent = hasFormalOutput \|\| hasOutputArtifacts;/);
   assert.match(panelSource, /canOpenTaskDeliveryResult/);
   assert.match(panelSource, /getTaskDeliveryOpenLabel\(formalDeliveryResult\)/);

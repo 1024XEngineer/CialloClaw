@@ -129,6 +129,13 @@ export function TaskDetailPanel({
   const evidenceArtifactRefs = new Set(evidenceItems.map((citation) => citation.source_ref));
   const evidenceArtifacts = artifactItems.filter((artifact) => evidenceArtifactRefs.has(artifact.artifact_id) || evidenceArtifactRefs.has(artifact.path));
   const outputArtifacts = artifactItems.filter((artifact) => !evidenceArtifactRefs.has(artifact.artifact_id) && !evidenceArtifactRefs.has(artifact.path));
+  const formalDeliveryPath = formalDeliveryResult?.payload.path?.trim() ?? "";
+  const formalDeliveryDuplicatesArtifact = Boolean(
+    formalDeliveryResult
+    && formalDeliveryPath.length > 0
+    && (formalDeliveryResult.type === "workspace_document" || formalDeliveryResult.type === "open_file" || formalDeliveryResult.type === "reveal_in_folder")
+    && outputArtifacts.some((artifact) => artifact.path.trim() === formalDeliveryPath),
+  );
   const formalEvidenceCount = new Set(
     evidenceItems.map((citation) => {
       const sourceRef = citation.source_ref.trim();
@@ -149,7 +156,7 @@ export function TaskDetailPanel({
       runtimeSummary.observation_signals.length > 0),
   );
   const hasRuntimeProcessContent = hasRuntimeSummarySignals || eventItems.length > 0 || eventLoading || eventErrorMessage !== null;
-  const hasFormalOutput = formalDeliveryResult !== null;
+  const hasFormalOutput = formalDeliveryResult !== null && !formalDeliveryDuplicatesArtifact;
   const hasOutputContent = hasFormalOutput || hasOutputArtifacts;
   const canOpenFormalOutput = canOpenTaskDeliveryResult(formalDeliveryResult);
   const isInlineBubbleOutput = formalDeliveryResult?.type === "bubble";
