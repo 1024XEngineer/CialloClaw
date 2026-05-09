@@ -9,11 +9,40 @@ import (
 	"time"
 )
 
+const defaultTransportShutdownTimeout = 5 * time.Second
+
+var (
+	errTransportShutdownIncomplete = errors.New("transport shutdown incomplete")
+	errServerAlreadyRunning        = errors.New("server already running")
+)
+
 // Start serves configured transports until one fails or ctx is canceled.
 // Shutdown always runs before Start returns, and the supervisor waits for
 // transport goroutines so callers do not inherit a partially stopped server.
 func (s *Server) Start(ctx context.Context) error {
-	supervisor := newTransportSupervisor(ctx, 2)
+	s.streamMu.Lock()
+	if s.terminalErr != nil {
+		err := s.terminalErr
+		s.streamMu.Unlock()
+		return err
+	}
+	if s.serveRunning {
+		s.streamMu.Unlock()
+		return errServerAlreadyRunning
+	}
+	runCtx, runCancel := context.WithCancel(ctx)
+	s.serveRunning = true
+	s.runCancel = runCancel
+	s.shuttingDown = false
+	s.streamMu.Unlock()
+	defer func() {
+		s.streamMu.Lock()
+		s.serveRunning = false
+		s.runCancel = nil
+		s.streamMu.Unlock()
+	}()
+
+	supervisor := newTransportSupervisor(runCtx, 2)
 
 	if s.debugHTTPServer != nil {
 		supervisor.Go(func(context.Context) error {
@@ -26,8 +55,12 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 
 	if s.transport == "named_pipe" {
+		serveNamedPipeFn := s.serveNamedPipe
+		if serveNamedPipeFn == nil {
+			serveNamedPipeFn = serveNamedPipe
+		}
 		supervisor.Go(func(ctx context.Context) error {
-			err := serveNamedPipe(ctx, s.namedPipeName, s.handleStreamConn)
+			err := serveNamedPipeFn(ctx, s.namedPipeName, s.handleStreamConn)
 			if errors.Is(err, errNamedPipeUnsupported) || ctx.Err() != nil {
 				return nil
 			}
@@ -35,26 +68,42 @@ func (s *Server) Start(ctx context.Context) error {
 		})
 	}
 
-	return supervisor.Wait(func() error {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
+	err := supervisor.Wait(s.transportShutdownTimeout, func(shutdownCtx context.Context) error {
 		return s.Shutdown(shutdownCtx)
 	})
+	if errors.Is(err, context.DeadlineExceeded) {
+		err = errors.Join(errTransportShutdownIncomplete, err)
+		s.streamMu.Lock()
+		s.terminalErr = err
+		s.streamMu.Unlock()
+		return err
+	}
+	s.streamMu.Lock()
+	s.terminalErr = nil
+	s.streamMu.Unlock()
+	return err
 }
 
 // Shutdown gracefully closes the debug HTTP server and terminates active stream
 // handlers so Start does not hand a half-stopped transport back to callers.
 func (s *Server) Shutdown(ctx context.Context) error {
-	var shutdownErr error
-
-	if s.debugHTTPServer == nil {
-	} else if err := s.debugHTTPServer.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		shutdownErr = err
+	s.streamMu.Lock()
+	runCancel := s.runCancel
+	s.streamMu.Unlock()
+	if runCancel != nil {
+		runCancel()
 	}
+
+	var shutdownErr error
 
 	conns := s.beginStreamShutdown()
 	for _, conn := range conns {
 		_ = conn.Close()
+	}
+
+	if s.debugHTTPServer == nil {
+	} else if err := s.debugHTTPServer.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		shutdownErr = err
 	}
 
 	done := make(chan struct{})
@@ -110,7 +159,11 @@ func (s *transportSupervisor) Go(run func(context.Context) error) {
 
 // Wait returns the first transport error after canceling sibling transports,
 // running shutdown, and joining every started transport goroutine.
-func (s *transportSupervisor) Wait(shutdown func() error) error {
+func (s *transportSupervisor) Wait(timeout time.Duration, shutdown func(context.Context) error) error {
+	if timeout <= 0 {
+		timeout = defaultTransportShutdownTimeout
+	}
+
 	var transportErr error
 	select {
 	case transportErr = <-s.errCh:
@@ -118,14 +171,21 @@ func (s *transportSupervisor) Wait(shutdown func() error) error {
 	}
 
 	s.cancel()
-	shutdownErr := shutdown()
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	shutdownErr := shutdown(shutdownCtx)
 
 	done := make(chan struct{})
 	go func() {
 		s.wg.Wait()
 		close(done)
 	}()
-	<-done
+
+	select {
+	case <-done:
+	case <-shutdownCtx.Done():
+		return shutdownCtx.Err()
+	}
 
 	if transportErr != nil {
 		return transportErr

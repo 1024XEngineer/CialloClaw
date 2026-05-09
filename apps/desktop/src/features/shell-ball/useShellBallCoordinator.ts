@@ -97,6 +97,10 @@ type QueuedRuntimeNotification = {
 
 type QueuedTaskUpdatedNotification = TaskUpdatedNotification;
 type ShellBallRuntimeNotification = TaskRuntimeNotification | TaskSteeredNotification;
+type TerminalTaskBubbleDeduper = {
+  markAndCheckShouldDisplay: (taskId: string, status: string) => boolean;
+  clearTask: (taskId: string) => void;
+};
 type ShellBallTaskOutputServiceModule = {
   openTaskDeliveryForTask: (taskId: string, artifactId: string | undefined, source?: "rpc" | "mock") => Promise<unknown>;
   performTaskOpenExecution: (
@@ -131,6 +135,29 @@ type ShellBallTaskOutputServiceModule = {
 
 const defaultSubmitVoiceText: NonNullable<ShellBallCoordinatorInput["onSubmitVoiceText"]> = () => null;
 let shellBallTaskOutputServicePromise: Promise<ShellBallTaskOutputServiceModule> | null = null;
+
+export function createTerminalTaskBubbleDeduper(): TerminalTaskBubbleDeduper {
+  const taskStatusMap = new Map<string, Set<string>>();
+
+  return {
+    markAndCheckShouldDisplay(taskId, status) {
+      const knownStatuses = taskStatusMap.get(taskId);
+      if (knownStatuses?.has(status)) {
+        return false;
+      }
+
+      if (knownStatuses === undefined) {
+        taskStatusMap.set(taskId, new Set([status]));
+      } else {
+        knownStatuses.add(status);
+      }
+      return true;
+    },
+    clearTask(taskId) {
+      taskStatusMap.delete(taskId);
+    },
+  };
+}
 
 // Lazy-load the dashboard delivery-open helpers so shell-ball can reuse the
 // formal desktop open path without creating a hard startup dependency.
@@ -934,8 +961,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const bubbleHoveredRef = useRef(false);
   const inputFocusedRef = useRef(false);
   const inputHoveredRef = useRef(false);
-  const bubbleHideDelayTimeoutRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
-  const bubbleHideCompleteTimeoutRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
+  const bubbleHideDelayTimeoutRef = useRef<number | ReturnType<typeof setTimeout> | null>(null);
+  const bubbleHideCompleteTimeoutRef = useRef<number | ReturnType<typeof setTimeout> | null>(null);
   helperWindowsVisibleRef.current = helpersVisible;
   visualStateRef.current = input.visualState;
   // Programmatic interaction-state changes can retire the input without a DOM

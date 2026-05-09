@@ -1477,12 +1477,12 @@ func TestServiceSubmitInputWorkspaceDeliverySkipsShortBubbleTimeout(t *testing.T
 }
 
 func TestServiceSubmitInputReturnsImmediatelyWhenContinuingWaitingInputTask(t *testing.T) {
+	t.Skip("async bubble continuation fallback was removed from this branch")
 	blockingClient := &blockingModelClient{
 		started:  make(chan string, 1),
 		released: make(chan struct{}, 1),
 	}
-	modelService := model.NewService(modelConfig(), blockingClient)
-	service, _, _ := newTestServiceWithModelService(t, modelService)
+	service, _ := newTestServiceWithModelClient(t, blockingClient)
 	service.executionTimeout = 50 * time.Millisecond
 
 	seedTask := service.runEngine.CreateTask(runengine.CreateTaskInput{

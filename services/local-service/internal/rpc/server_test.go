@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -2100,6 +2101,49 @@ func TestHandleDebugEventsReturnsQueuedNotifications(t *testing.T) {
 	items := payload["items"].([]any)
 	if len(items) == 0 {
 		t.Fatal("expected queued notifications to be returned")
+	}
+}
+
+func TestHandleHTTPRPCAllowsLoopbackStyleOrigins(t *testing.T) {
+	server := newTestServer()
+	origins := []string{
+		"http://localhost:5173",
+		"https://127.0.0.1:5173",
+		"tauri://localhost",
+		"https://tauri.localhost",
+	}
+
+	for _, origin := range origins {
+		t.Run(origin, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest("OPTIONS", "/rpc", nil)
+			request.Header.Set("Origin", origin)
+
+			server.handleHTTPRPC(recorder, request)
+
+			if recorder.Code != 204 {
+				t.Fatalf("expected 204 status, got %d", recorder.Code)
+			}
+			if recorder.Header().Get("Access-Control-Allow-Origin") != origin {
+				t.Fatalf("expected CORS allow origin %q, got %q", origin, recorder.Header().Get("Access-Control-Allow-Origin"))
+			}
+		})
+	}
+}
+
+func TestHandleHTTPRPCRejectsNonLoopbackOrigins(t *testing.T) {
+	server := newTestServer()
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest("OPTIONS", "/rpc", nil)
+	request.Header.Set("Origin", "https://example.com")
+
+	server.handleHTTPRPC(recorder, request)
+
+	if recorder.Code != 204 {
+		t.Fatalf("expected 204 status, got %d", recorder.Code)
+	}
+	if recorder.Header().Get("Access-Control-Allow-Origin") != "" {
+		t.Fatalf("expected no CORS allow origin for non-loopback request, got %q", recorder.Header().Get("Access-Control-Allow-Origin"))
 	}
 }
 
