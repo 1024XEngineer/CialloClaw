@@ -1076,7 +1076,7 @@ func TestServiceStartTaskAndConfirmFlow(t *testing.T) {
 		plugin.NewService(),
 	)
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -1139,7 +1139,7 @@ func TestServiceSubmitInputReturnsSocialChatWithoutTask(t *testing.T) {
 	testCases := []string{"你好", "🙂"}
 	for index, testCase := range testCases {
 		t.Run(testCase, func(t *testing.T) {
-			result, err := service.SubmitInput(map[string]any{
+			result, err := submitInputForTest(service, map[string]any{
 				"session_id": fmt.Sprintf("sess_short_text_%02d", index),
 				"source":     "floating_ball",
 				"trigger":    "hover_text_input",
@@ -1177,7 +1177,7 @@ func TestServiceSubmitInputRoutesUnanchoredAmbiguousTextToConfirmation(t *testin
 		output: `{"route":"clarification_needed","reply":""}`,
 	})
 
-	result, err := service.SubmitInput(map[string]any{
+	result, err := submitInputForTest(service, map[string]any{
 		"session_id": "sess_ambiguous_text",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -1219,7 +1219,7 @@ func TestServiceSubmitInputKeepsTaskRequestAfterClassifier(t *testing.T) {
 		},
 	})
 
-	result, err := service.SubmitInput(map[string]any{
+	result, err := submitInputForTest(service, map[string]any{
 		"session_id": "sess_classified_task",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -1260,7 +1260,7 @@ func TestServiceSubmitInputFallsBackToTaskWhenClassifierFails(t *testing.T) {
 		},
 	})
 
-	result, err := service.SubmitInput(map[string]any{
+	result, err := submitInputForTest(service, map[string]any{
 		"session_id": "sess_classifier_fallback",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -1285,7 +1285,7 @@ func TestServiceSubmitInputFallsBackToTaskWhenClassifierFails(t *testing.T) {
 func TestServiceSubmitInputRespectsExplicitConfirmationForFreeText(t *testing.T) {
 	service := newTestService()
 
-	result, err := service.SubmitInput(map[string]any{
+	result, err := submitInputForTest(service, map[string]any{
 		"session_id": "sess_confirm_free_text",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -1317,7 +1317,7 @@ func TestServiceSubmitInputRespectsExplicitConfirmationForFreeText(t *testing.T)
 func TestServiceSubmitInputRoutesClearCommandToAgentLoopWithoutForcedConfirmation(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Translated note ready.")
 
-	result, err := service.SubmitInput(map[string]any{
+	result, err := submitInputForTest(service, map[string]any{
 		"session_id": "sess_clear_command",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -1350,7 +1350,7 @@ func TestServiceSubmitInputRoutesClearCommandToAgentLoopWithoutForcedConfirmatio
 func TestServiceSubmitInputUsesSuggestedWorkspaceDeliveryForLongAgentLoopInput(t *testing.T) {
 	service, workspaceRoot := newTestServiceWithExecution(t, "Long-form result body.")
 
-	result, err := service.SubmitInput(map[string]any{
+	result, err := submitInputForTest(service, map[string]any{
 		"session_id": "sess_long_command",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -1387,7 +1387,7 @@ func TestServiceStartTaskFailsAfterExecutionTimeout(t *testing.T) {
 	})
 	service.executionTimeout = 20 * time.Millisecond
 
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_execution_timeout",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -1459,7 +1459,7 @@ func TestServiceSubmitInputWorkspaceDeliverySkipsShortBubbleTimeout(t *testing.T
 	})
 	service.executionTimeout = 20 * time.Millisecond
 
-	result, err := service.SubmitInput(map[string]any{
+	result, err := submitInputForTest(service, map[string]any{
 		"session_id": "sess_long_command_timeout",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -1493,7 +1493,7 @@ func TestServiceSubmitInputWorkspaceDeliverySkipsShortBubbleTimeout(t *testing.T
 func TestServiceSubmitInputQueuesDirectAgentLoopTaskBehindSameSessionWork(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Queued task output.")
 
-	firstResult, err := service.StartTask(map[string]any{
+	firstResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_serial",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -1516,7 +1516,7 @@ func TestServiceSubmitInputQueuesDirectAgentLoopTaskBehindSameSessionWork(t *tes
 		t.Fatalf("expected first task to wait for authorization, got %+v", firstResult["task"])
 	}
 
-	secondResult, err := service.SubmitInput(map[string]any{
+	secondResult, err := submitInputForTest(service, map[string]any{
 		"session_id": "sess_serial",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -1544,7 +1544,7 @@ func TestServiceSubmitInputQueuesDirectAgentLoopTaskBehindSameSessionWork(t *tes
 func TestServiceConfirmTaskQueuesCorrectedTaskBehindSameSessionWork(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Queued confirm output.")
 
-	firstResult, err := service.StartTask(map[string]any{
+	firstResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_confirm_queue",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -1567,7 +1567,7 @@ func TestServiceConfirmTaskQueuesCorrectedTaskBehindSameSessionWork(t *testing.T
 		t.Fatalf("expected first task to wait for authorization, got %+v", firstResult["task"])
 	}
 
-	secondResult, err := service.SubmitInput(map[string]any{
+	secondResult, err := submitInputForTest(service, map[string]any{
 		"session_id": "sess_confirm_queue",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -1607,7 +1607,7 @@ func TestServiceConfirmTaskQueuesCorrectedTaskBehindSameSessionWork(t *testing.T
 func TestServiceTaskControlCancelQueuedTaskDoesNotResumeWhileSessionBusy(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Queued cancel output.")
 
-	firstResult, err := service.StartTask(map[string]any{
+	firstResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_cancel_queue",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -1628,7 +1628,7 @@ func TestServiceTaskControlCancelQueuedTaskDoesNotResumeWhileSessionBusy(t *test
 	}
 	firstTaskID := firstResult["task"].(map[string]any)["task_id"].(string)
 
-	secondResult, err := service.SubmitInput(map[string]any{
+	secondResult, err := submitInputForTest(service, map[string]any{
 		"session_id": "sess_cancel_queue",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -1642,7 +1642,7 @@ func TestServiceTaskControlCancelQueuedTaskDoesNotResumeWhileSessionBusy(t *test
 	}
 	secondTaskID := secondResult["task"].(map[string]any)["task_id"].(string)
 
-	thirdResult, err := service.SubmitInput(map[string]any{
+	thirdResult, err := submitInputForTest(service, map[string]any{
 		"session_id": "sess_cancel_queue",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -1680,7 +1680,7 @@ func TestServiceTaskControlCancelQueuedTaskDoesNotResumeWhileSessionBusy(t *test
 func TestServiceSecurityRespondResumesQueuedTaskWithOriginalSnapshot(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Snapshot resume output.")
 
-	firstResult, err := service.StartTask(map[string]any{
+	firstResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_snapshot_queue",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -1701,7 +1701,7 @@ func TestServiceSecurityRespondResumesQueuedTaskWithOriginalSnapshot(t *testing.
 	}
 	firstTaskID := firstResult["task"].(map[string]any)["task_id"].(string)
 
-	secondResult, err := service.StartTask(map[string]any{
+	secondResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_snapshot_queue",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -1760,7 +1760,7 @@ func TestServiceSecurityRespondResumesQueuedTaskWithOriginalSnapshot(t *testing.
 func TestServiceSecurityRespondResumesQueuedSessionTask(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Queued task resumed output.")
 
-	firstResult, err := service.StartTask(map[string]any{
+	firstResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_resume_queue",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -1781,7 +1781,7 @@ func TestServiceSecurityRespondResumesQueuedSessionTask(t *testing.T) {
 	}
 	firstTaskID := firstResult["task"].(map[string]any)["task_id"].(string)
 
-	secondResult, err := service.SubmitInput(map[string]any{
+	secondResult, err := submitInputForTest(service, map[string]any{
 		"session_id": "sess_resume_queue",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -1826,7 +1826,7 @@ func TestServiceSecurityRespondResumesQueuedScreenAnalyzeTaskThroughApproval(t *
 		t.Fatalf("write screen input failed: %v", err)
 	}
 
-	firstResult, err := service.StartTask(map[string]any{
+	firstResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_screen_queue",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -1847,7 +1847,7 @@ func TestServiceSecurityRespondResumesQueuedScreenAnalyzeTaskThroughApproval(t *
 	}
 	firstTaskID := firstResult["task"].(map[string]any)["task_id"].(string)
 
-	secondResult, err := service.StartTask(map[string]any{
+	secondResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_screen_queue",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -1902,7 +1902,7 @@ func TestServiceSecurityRespondResumesQueuedScreenAnalyzeTaskThroughApproval(t *
 	if screenResult["task"].(map[string]any)["status"] != "completed" {
 		t.Fatalf("expected queued screen task to complete after approval, got %+v", screenResult["task"])
 	}
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": secondTaskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": secondTaskID})
 	if err != nil {
 		t.Fatalf("task detail get for queued screen task failed: %v", err)
 	}
@@ -1933,7 +1933,7 @@ func TestServiceSecurityRespondResumesQueuedScreenAnalyzeTaskThroughApproval(t *
 func TestServiceConfirmTaskRunsStoredAgentLoopIntentWithoutCorrection(t *testing.T) {
 	service, _ := newTestServiceWithModelClient(t, &stubToolCallingModelClient{})
 
-	startResult, err := service.SubmitInput(map[string]any{
+	startResult, err := submitInputForTest(service, map[string]any{
 		"session_id": "sess_unknown_confirm",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -1985,7 +1985,7 @@ func TestServiceConfirmTaskRunsStoredAgentLoopIntentWithoutCorrection(t *testing
 func TestServiceConfirmTaskKeepsUnknownIntentInConfirmationWhenRejected(t *testing.T) {
 	service := newTestService()
 
-	startResult, err := service.SubmitInput(map[string]any{
+	startResult, err := submitInputForTest(service, map[string]any{
 		"session_id": "sess_unknown_cancel",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -2032,7 +2032,7 @@ func TestServiceConfirmTaskKeepsUnknownIntentInConfirmationWhenRejected(t *testi
 func TestServiceConfirmTaskRewritesPlaceholderTitleAfterCorrection(t *testing.T) {
 	service := newTestService()
 
-	startResult, err := service.SubmitInput(map[string]any{
+	startResult, err := submitInputForTest(service, map[string]any{
 		"session_id": "sess_unknown_title",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -2070,7 +2070,7 @@ func TestServiceConfirmTaskRewritesPlaceholderTitleAfterCorrection(t *testing.T)
 func TestServiceConfirmTaskIgnoresCorrectedIntentWhenConfirmedTrue(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Explained content.")
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_confirm_ignore_correction",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -2114,7 +2114,7 @@ func TestServiceConfirmTaskIgnoresCorrectedIntentWhenConfirmedTrue(t *testing.T)
 func TestServiceConfirmTaskRejectsOutOfPhaseRequest(t *testing.T) {
 	service := newTestService()
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_confirm_out_of_phase",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -2783,7 +2783,7 @@ func TestServiceNotepadUpdateReturnsDeletedItemID(t *testing.T) {
 func TestServiceExecutionAuditIDsStayUniqueAcrossToolAndTaskRecords(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "runtime output")
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_audit",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -2825,7 +2825,7 @@ func TestServiceExecutionAuditIDsStayUniqueAcrossToolAndTaskRecords(t *testing.T
 func TestServiceRecommendationGetUsesRuntimeTaskState(t *testing.T) {
 	service := newTestService()
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_recommend",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -3387,7 +3387,7 @@ func TestServiceTaskControlRestartExecutesFreshAttempt(t *testing.T) {
 	modelClient := &stubToolCallingModelClient{output: "Restarted loop output."}
 	service, _ := newTestServiceWithModelClient(t, modelClient)
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_restart_attempt",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -3764,7 +3764,7 @@ func TestServiceTaskDetailGetRestartAttemptHidesPreviousRunFormalObjects(t *test
 		t.Fatalf("expected restart to allocate a fresh processing attempt, got %+v", restartedTask)
 	}
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": task.TaskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": task.TaskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -3840,7 +3840,7 @@ func TestServiceRestartPreparationStaysInvisibleUntilAttemptCommits(t *testing.T
 		t.Fatalf("expected live task to stay on the previous finished attempt before commit, got %+v", liveTask)
 	}
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": task.TaskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": task.TaskID})
 	if err != nil {
 		t.Fatalf("task detail get during restart preparation failed: %v", err)
 	}
@@ -4044,13 +4044,12 @@ func TestServiceRecommendationFeedbackSubmitAppliesCooldown(t *testing.T) {
 func TestServiceSubmitInputWithFilesDoesNotWaitForInput(t *testing.T) {
 	service := newTestService()
 
-	result, err := service.SubmitInput(map[string]any{
+	result, err := submitInputForTest(service, map[string]any{
 		"session_id": "sess_files",
 		"source":     "floating_ball",
-		"input": map[string]any{
-			"files": []any{"workspace/notes.md"},
-		},
+		"input":      map[string]any{},
 		"context": map[string]any{
+			"files": []any{"workspace/notes.md"},
 			"page": map[string]any{
 				"title":    "Workspace",
 				"app_name": "desktop",
@@ -4085,7 +4084,7 @@ func TestServiceSubmitInputEmptyTextReturnsWaitingInput(t *testing.T) {
 		plugin.NewService(),
 	)
 
-	result, err := service.SubmitInput(map[string]any{
+	result, err := submitInputForTest(service, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -4147,7 +4146,7 @@ func TestServiceDirectStartBuildsMemoryAndDeliveryHandoffs(t *testing.T) {
 		plugin.NewService(),
 	)
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -4202,7 +4201,7 @@ func TestServiceDirectStartBuildsMemoryAndDeliveryHandoffs(t *testing.T) {
 func TestServiceStartTaskRespectsPreferredDelivery(t *testing.T) {
 	service := newTestService()
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -4252,7 +4251,7 @@ func TestServiceStartTaskRespectsPreferredDelivery(t *testing.T) {
 func TestServiceStartTaskFileInstructionSkipsForcedIntentConfirmation(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Attachment summary ready.")
 
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_file_instruction",
 		"source":     "floating_ball",
 		"trigger":    "file_drop",
@@ -4288,7 +4287,7 @@ func TestServiceStartTaskFileInstructionSkipsForcedIntentConfirmation(t *testing
 func TestServiceStartTaskFileWithoutInstructionStillRequiresConfirmation(t *testing.T) {
 	service := newTestService()
 
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_file_needs_goal",
 		"source":     "floating_ball",
 		"trigger":    "file_drop",
@@ -4330,7 +4329,7 @@ func TestServiceStartTaskPersistsFormalReadFileSampleChain(t *testing.T) {
 		t.Fatalf("write source file: %v", err)
 	}
 
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_read_file_sample",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -4400,7 +4399,7 @@ func TestServiceStartTaskPersistsFormalReadFileSampleChain(t *testing.T) {
 		t.Fatalf("expected persisted direct delivery result, ok=%v record=%+v", ok, deliveryRecord)
 	}
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -4417,7 +4416,7 @@ func TestServiceStartTaskPersistsFormalReadFileSampleChain(t *testing.T) {
 func TestServiceSubmitInputRespectsPreferredDelivery(t *testing.T) {
 	service := newTestService()
 
-	result, err := service.SubmitInput(map[string]any{
+	result, err := submitInputForTest(service, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -4463,7 +4462,7 @@ func TestServiceSubmitInputRespectsPreferredDelivery(t *testing.T) {
 func TestServiceConfirmTaskRespectsStoredPreferredDelivery(t *testing.T) {
 	service := newTestService()
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -4521,7 +4520,7 @@ func TestServiceStartTaskWaitingAuthDoesNotSetFinishedAt(t *testing.T) {
 		plugin.NewService(),
 	)
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "file_drop",
@@ -4574,7 +4573,7 @@ func TestServiceConfirmCanEnterWaitingAuth(t *testing.T) {
 		plugin.NewService(),
 	)
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -4641,7 +4640,7 @@ func TestServiceConfirmWaitingAuthPersistsApprovalRequestRecord(t *testing.T) {
 		t.Fatal("expected storage service to be wired")
 	}
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_approval_store",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -4694,7 +4693,7 @@ func TestServiceConfirmTaskReturnsStorageErrorWhenApprovalPersistenceFails(t *te
 	defer replaceApprovalRequestStore(t, service.storage, originalStore)
 	replaceApprovalRequestStore(t, service.storage, failingApprovalRequestStore{base: originalStore, err: errors.New("approval store unavailable")})
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_approval_store_failure",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -4739,7 +4738,7 @@ func TestServiceSecurityRespondAllowOnceResumesAndCompletes(t *testing.T) {
 		plugin.NewService(),
 	)
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -4832,7 +4831,7 @@ func TestServiceSecurityRespondAllowOnceResumesAndCompletes(t *testing.T) {
 func TestServiceSecurityRespondRespectsFallbackDelivery(t *testing.T) {
 	service := newTestService()
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -4900,7 +4899,7 @@ func TestServiceSecurityRespondDenyOnceCancelsTask(t *testing.T) {
 		plugin.NewService(),
 	)
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -4965,7 +4964,7 @@ func TestServiceSecurityRespondPersistsAuthorizationRecord(t *testing.T) {
 		t.Fatal("expected storage service to be wired")
 	}
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_authorization_store",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -5035,7 +5034,7 @@ func TestServiceSecurityRespondReturnsStorageErrorWhenAuthorizationPersistenceFa
 	originalStore := service.storage.AuthorizationRecordStore()
 	defer replaceAuthorizationRecordStore(t, service.storage, originalStore)
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_authorization_store_failure",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -5089,7 +5088,7 @@ func TestServiceSecurityRespondRejectsOutOfPhaseAuthorizationPersistence(t *test
 		t.Fatalf("seed output file: %v", err)
 	}
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_authorization_out_of_phase",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -5196,7 +5195,7 @@ func TestServiceSecurityRespondRejectsUnsupportedDecision(t *testing.T) {
 		t.Fatalf("seed output file: %v", err)
 	}
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_unsupported_approval_decision",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -5253,7 +5252,7 @@ func TestServiceSecurityRespondKeepsAuthorizationHistoryAcrossMultipleCycles(t *
 		t.Fatalf("seed output file: %v", err)
 	}
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_authorization_history",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -5324,7 +5323,7 @@ func TestServiceStartTaskWriteFileOverwriteWaitsForApproval(t *testing.T) {
 		t.Fatalf("seed output file: %v", err)
 	}
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_overwrite",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -5362,7 +5361,7 @@ func TestServiceStartTaskWriteFileOverwriteWaitsForApproval(t *testing.T) {
 func TestServiceStartTaskExecCommandWaitsForApproval(t *testing.T) {
 	service, workspaceRoot := newTestServiceWithExecution(t, "unused")
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_exec_cmd",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -5401,7 +5400,7 @@ func TestServiceStartTaskExecCommandWaitsForApproval(t *testing.T) {
 func TestServiceStartTaskOutOfWorkspaceWriteIsBlocked(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "unused")
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_outside",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -5438,7 +5437,7 @@ func TestServiceStartTaskOutOfWorkspaceWriteIsBlocked(t *testing.T) {
 func TestServiceSecurityRespondAllowOnceReturnsStructuredExecutionFailure(t *testing.T) {
 	service, _ := newTestServiceWithExecutionOptions(t, "unused", failingExecutionBackend{err: errors.New("runner unavailable")}, nil)
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_exec_fail",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -5500,7 +5499,7 @@ func TestServiceSecurityRespondAllowOnceExecCommandCompletesAfterApproval(t *tes
 		t.Fatalf("mkdir workspace root: %v", err)
 	}
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_exec_allow",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -5544,7 +5543,7 @@ func TestServiceSecurityRespondAllowOnceExecCommandCompletesAfterApproval(t *tes
 func TestServiceSecurityRespondAllowOnceCompletesDerivedWriteFileAfterApproval(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "新的文档内容")
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_derived_write",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -5591,7 +5590,7 @@ func TestServiceSecurityRespondAllowOnceReturnsStructuredRecoveryFailure(t *test
 		t.Fatalf("seed output file: %v", err)
 	}
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_recovery_fail",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -5653,7 +5652,7 @@ func TestServiceTaskListSupportsSortParams(t *testing.T) {
 		return current
 	})
 
-	firstResult, err := service.StartTask(map[string]any{
+	firstResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -5672,7 +5671,7 @@ func TestServiceTaskListSupportsSortParams(t *testing.T) {
 		t.Fatalf("start first task failed: %v", err)
 	}
 
-	secondResult, err := service.StartTask(map[string]any{
+	secondResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -6089,7 +6088,7 @@ func TestServiceTaskListUsesStructuredStoreUnlimitedPaginationInMemoryFallback(t
 func TestServiceTaskListMergesStructuredStorageWhenOffsetExceedsRuntimePage(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "runtime paging")
 
-	_, err := service.StartTask(map[string]any{
+	_, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_page",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -6152,7 +6151,7 @@ func TestServiceTaskListClampsPagingParams(t *testing.T) {
 	service := newTestService()
 
 	for index := 0; index < 25; index++ {
-		_, err := service.StartTask(map[string]any{
+		_, err := startTaskForTest(service, map[string]any{
 			"session_id": fmt.Sprintf("sess_clamp_%02d", index),
 			"source":     "floating_ball",
 			"trigger":    "hover_text_input",
@@ -6329,7 +6328,7 @@ func TestServiceTaskListFallbackMatchesRuntimeSortTieBreaker(t *testing.T) {
 func TestServiceDashboardOverviewUsesRuntimeAggregation(t *testing.T) {
 	service := newTestService()
 
-	completedResult, err := service.StartTask(map[string]any{
+	completedResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -6348,7 +6347,7 @@ func TestServiceDashboardOverviewUsesRuntimeAggregation(t *testing.T) {
 		t.Fatalf("start completed task failed: %v", err)
 	}
 
-	waitingResult, err := service.StartTask(map[string]any{
+	waitingResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -6512,7 +6511,7 @@ func TestIsWorkspaceRelativePathKeepsArtifactsInsideWorkspaceScope(t *testing.T)
 func TestServiceTaskDetailGetExposesActiveApprovalAnchor(t *testing.T) {
 	service := newTestService()
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_detail",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -6532,7 +6531,7 @@ func TestServiceTaskDetailGetExposesActiveApprovalAnchor(t *testing.T) {
 	}
 
 	taskID := startResult["task"].(map[string]any)["task_id"].(string)
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -6560,7 +6559,7 @@ func TestServiceTaskDetailGetExposesActiveApprovalAnchor(t *testing.T) {
 func TestServiceTaskDetailGetDropsStaleApprovalAnchorOutsideWaitingAuth(t *testing.T) {
 	service := newTestService()
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_detail_stale",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -6592,7 +6591,7 @@ func TestServiceTaskDetailGetDropsStaleApprovalAnchorOutsideWaitingAuth(t *testi
 		runtimeRecord.SecuritySummary["pending_authorizations"] = 1
 	})
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -6609,7 +6608,7 @@ func TestServiceTaskDetailGetDropsStaleApprovalAnchorOutsideWaitingAuth(t *testi
 func TestServiceTaskDetailGetDropsApprovalAnchorWithMismatchedTaskID(t *testing.T) {
 	service := newTestService()
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_detail_bad_task",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -6633,7 +6632,7 @@ func TestServiceTaskDetailGetDropsApprovalAnchorWithMismatchedTaskID(t *testing.
 		runtimeRecord.ApprovalRequest["task_id"] = "task_other"
 	})
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -6650,7 +6649,7 @@ func TestServiceTaskDetailGetDropsApprovalAnchorWithMismatchedTaskID(t *testing.
 func TestServiceTaskDetailGetDropsApprovalAnchorWhenStatusIsNotPending(t *testing.T) {
 	service := newTestService()
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_detail_bad_status",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -6674,7 +6673,7 @@ func TestServiceTaskDetailGetDropsApprovalAnchorWhenStatusIsNotPending(t *testin
 		runtimeRecord.ApprovalRequest["status"] = "approved"
 	})
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -6688,7 +6687,7 @@ func TestServiceTaskDetailGetIncludesRuntimeSummary(t *testing.T) {
 	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
 		t.Fatal("expected loop runtime store to be wired")
 	}
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_detail_runtime_summary",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -6739,7 +6738,7 @@ func TestServiceTaskDetailGetIncludesRuntimeSummary(t *testing.T) {
 		t.Fatal("expected steering append to succeed")
 	}
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -6769,7 +6768,7 @@ func TestServiceTaskDetailGetIncludesRuntimeSummary(t *testing.T) {
 
 func TestServiceTaskDetailGetKeepsRuntimeSummaryScopedToRuntimeEvents(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "task detail runtime event scope")
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_detail_runtime_scope",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -6786,7 +6785,7 @@ func TestServiceTaskDetailGetKeepsRuntimeSummaryScopedToRuntimeEvents(t *testing
 		t.Fatal("expected steering append to succeed")
 	}
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -6844,7 +6843,7 @@ func TestServiceTaskDetailGetIncludesFailureSummaryForFailedScreenTask(t *testin
 		},
 	}, tools.ErrOCRWorkerFailed)
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": updatedTask.TaskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": updatedTask.TaskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -7139,7 +7138,7 @@ func TestServiceDashboardOverviewRespectsIncludeFilter(t *testing.T) {
 func TestServiceDashboardOverviewFocusModeNarrowsSecondaryData(t *testing.T) {
 	service := newTestService()
 
-	_, err := service.StartTask(map[string]any{
+	_, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_focus",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -7158,7 +7157,7 @@ func TestServiceDashboardOverviewFocusModeNarrowsSecondaryData(t *testing.T) {
 		t.Fatalf("start completed task failed: %v", err)
 	}
 
-	_, err = service.StartTask(map[string]any{
+	_, err = startTaskForTest(service, map[string]any{
 		"session_id": "sess_focus",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -7293,7 +7292,7 @@ func TestServiceDashboardOverviewResortsMergedRuntimeAndStoredTasks(t *testing.T
 		t.Fatal("expected storage service to be wired")
 	}
 
-	runtimeResult, err := service.StartTask(map[string]any{
+	runtimeResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_merge_overview",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -7376,7 +7375,7 @@ func TestServiceDashboardOverviewLoadsStoredTasksOncePerRequest(t *testing.T) {
 	countingStore := &countingTaskStore{base: service.storage.TaskStore()}
 	replaceTaskStore(t, service.storage, countingStore)
 
-	if _, err := service.StartTask(map[string]any{
+	if _, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_overview_count",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -7428,7 +7427,7 @@ func TestServiceDashboardOverviewLoadsStoredTasksOncePerRequest(t *testing.T) {
 func TestServiceMirrorOverviewUsesRuntimeMirrorReferences(t *testing.T) {
 	service := newTestService()
 
-	_, err := service.StartTask(map[string]any{
+	_, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -7477,7 +7476,7 @@ func TestServiceStartTaskWritesRealMemorySummary(t *testing.T) {
 		t.Fatal("expected storage service to be wired")
 	}
 
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_memory_write",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -7521,7 +7520,7 @@ func TestServiceStartTaskHandlesControlledScreenAnalyzeIntent(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspaceRoot, "inputs", "screen.png"), []byte("fake screen capture"), 0o644); err != nil {
 		t.Fatalf("write screen input failed: %v", err)
 	}
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_screen_task",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -7597,7 +7596,7 @@ func TestServiceStartTaskHandlesControlledScreenAnalyzeIntent(t *testing.T) {
 	if payload["screen_session_id"] == "" || payload["capture_mode"] != "screenshot" || payload["retention_policy"] == "" || payload["evidence_role"] != "error_evidence" {
 		t.Fatalf("expected persisted artifact payload to retain screen metadata, got %+v", payload)
 	}
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": task["task_id"]})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": task["task_id"]})
 	if err != nil {
 		t.Fatalf("task detail get for screen task failed: %v", err)
 	}
@@ -7767,7 +7766,7 @@ func TestServiceStartTaskPreservesClipCaptureModeThroughScreenApproval(t *testin
 		t.Fatalf("write clip input failed: %v", err)
 	}
 
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_screen_clip_task",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -7823,7 +7822,7 @@ func TestServiceStartTaskInfersScreenAnalyzeFromVisualErrorRequest(t *testing.T)
 	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_local_0001/frame_0001.png", Text: "fatal build error", Language: "eng", Source: "ocr_worker_text"}}
 	service, _ := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient())
 
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_screen_infer_start",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -7911,7 +7910,7 @@ func TestServiceStartTaskExplicitScreenAnalyzeKeepsFreshAuthorizationBoundary(t 
 		},
 	})
 
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": activeTask.SessionID,
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -7985,7 +7984,7 @@ func TestServiceStartTaskHandlesClipScreenAnalyzePath(t *testing.T) {
 		t.Fatalf("write clip source failed: %v", err)
 	}
 
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_screen_clip_start",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -8034,7 +8033,7 @@ func TestServiceStartTaskHandlesClipScreenAnalyzePath(t *testing.T) {
 	if payload["capture_mode"] != "clip" || payload["screen_session_id"] == "" {
 		t.Fatalf("expected clip artifact payload to preserve clip capture metadata, got %+v", payload)
 	}
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get for clip screen task failed: %v", err)
 	}
@@ -8058,7 +8057,7 @@ func TestServiceScreenAnalyzeStopsSessionAfterSuccessfulApproval(t *testing.T) {
 	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_sess_0001/frame_0001.png", Text: "fatal build error", Language: "eng", Source: "ocr_worker_text"}}
 	service, _ := newTestServiceWithExecutionWorkersAndScreen(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient(), screenClient)
 
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_screen_stop",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -8110,7 +8109,7 @@ func TestServiceScreenAnalyzeFailureExpiresAndCleansSession(t *testing.T) {
 	ocrStub := stubOCRWorkerClient{err: tools.ErrOCRWorkerFailed}
 	service, _ := newTestServiceWithExecutionWorkersAndScreen(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient(), screenClient)
 
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_screen_cleanup",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -8160,7 +8159,7 @@ func TestServiceScreenAnalyzeCaptureFailureExpiresAndCleansSession(t *testing.T)
 	screenClient := &recordingScreenCaptureClient{base: sidecarclient.NewInMemoryScreenCaptureClient(), captureErr: tools.ErrScreenCaptureFailed}
 	service, _ := newTestServiceWithExecutionWorkersAndScreen(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), sidecarclient.NewNoopOCRWorkerClient(), sidecarclient.NewNoopMediaWorkerClient(), screenClient)
 
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_screen_capture_failure",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -8207,7 +8206,7 @@ func TestServiceStartTaskInfersScreenAnalyzeTitleFromScreenSummaryWhenTitlesAreM
 	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_local_0001/frame_0001.png", Text: "fatal build error", Language: "eng", Source: "ocr_worker_text"}}
 	service, _ := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient())
 
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_screen_summary_title",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -8241,7 +8240,7 @@ func TestServiceSubmitInputInfersScreenAnalyzeFromVisualErrorRequest(t *testing.
 	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_local_0001/frame_0001.png", Text: "fatal build error", Language: "eng", Source: "ocr_worker_text"}}
 	service, _ := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient())
 
-	result, err := service.SubmitInput(map[string]any{
+	result, err := submitInputForTest(service, map[string]any{
 		"session_id": "sess_screen_infer_submit",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -8277,7 +8276,7 @@ func TestServiceSubmitInputInfersScreenAnalyzeFromVisualErrorRequest(t *testing.
 func TestServiceStartTaskFallsBackWhenScreenCapabilityUnavailable(t *testing.T) {
 	service := newTestService()
 
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_screen_capability_fallback",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -8316,7 +8315,7 @@ func TestServiceStartTaskFallsBackWhenScreenCapabilityUnavailable(t *testing.T) 
 func TestServiceSubmitInputFallbackKeepsExplicitConfirmationWhenScreenCapabilityUnavailable(t *testing.T) {
 	service := newTestService()
 
-	result, err := service.SubmitInput(map[string]any{
+	result, err := submitInputForTest(service, map[string]any{
 		"session_id": "sess_screen_capability_confirm_fallback",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -8363,7 +8362,7 @@ func TestServiceSubmitInputFallbackKeepsExplicitConfirmationWhenScreenCapability
 func TestSecurityRespondScreenAnalyzeFailureReconcilesTaskState(t *testing.T) {
 	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_local_0001/frame_0001.png", Text: "fatal build error", Language: "eng", Source: "ocr_worker_text"}}
 	service, _ := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient())
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_screen_fail",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -8421,7 +8420,7 @@ func TestServiceStartTaskHitsRealMemoryAndRecordsRetrievalHit(t *testing.T) {
 		t.Fatalf("seed memory summary failed: %v", err)
 	}
 
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_memory_hit",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -8515,7 +8514,7 @@ func TestServiceStartTaskInjectsRetrievedMemoryIntoExecutionInput(t *testing.T) 
 		t.Fatalf("seed memory summary failed: %v", err)
 	}
 
-	_, err := service.StartTask(map[string]any{
+	_, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_memory_context",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -8580,7 +8579,7 @@ func TestServiceConfirmTaskPersistsRetrievalHitOncePerConfirmation(t *testing.T)
 		t.Fatalf("seed memory summary failed: %v", err)
 	}
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_confirm_memory_hit",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -8666,7 +8665,7 @@ func TestServiceMirrorOverviewFallsBackToStoredFinishedTasks(t *testing.T) {
 func TestServiceSecuritySummaryUsesRuntimeTaskState(t *testing.T) {
 	service := newTestService()
 
-	_, err := service.StartTask(map[string]any{
+	_, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -8685,7 +8684,7 @@ func TestServiceSecuritySummaryUsesRuntimeTaskState(t *testing.T) {
 		t.Fatalf("start completed task failed: %v", err)
 	}
 
-	waitingResult, err := service.StartTask(map[string]any{
+	waitingResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -8740,7 +8739,7 @@ func TestServiceSecuritySummaryUsesRuntimeTaskState(t *testing.T) {
 func TestServiceSecuritySummaryIncludesRuntimeTokenUsage(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "executor-backed token summary")
 
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_exec",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -8797,7 +8796,7 @@ func TestServiceBudgetAutoDowngradeSwitchesWorkspaceDeliveryToBubble(t *testing.
 	})
 	defer unsubscribe()
 
-	result, err := service.SubmitInput(map[string]any{
+	result, err := submitInputForTest(service, map[string]any{
 		"session_id": "sess_budget_downgrade",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -8964,7 +8963,7 @@ func TestServiceBudgetAutoDowngradeDisabledKeepsWorkspaceDelivery(t *testing.T) 
 		t.Fatalf("settings update failed: %v", err)
 	}
 
-	result, err := service.SubmitInput(map[string]any{
+	result, err := submitInputForTest(service, map[string]any{
 		"session_id": "sess_budget_disabled",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -9109,7 +9108,7 @@ func TestExecutionFailureBubbleRedactsSecretBearingProviderMessages(t *testing.T
 
 func TestServiceBudgetFallbackSuccessStillAppendsFailureSignal(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "executor-backed fallback success signal")
-	result, err := service.SubmitInput(map[string]any{
+	result, err := submitInputForTest(service, map[string]any{
 		"session_id": "sess_budget_fallback_signal",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -9331,7 +9330,7 @@ func TestServiceDashboardModuleCountsRuntimeAndStoredPendingAuthorizations(t *te
 		t.Fatal("expected storage service to be wired")
 	}
 
-	runtimeResult, err := service.StartTask(map[string]any{
+	runtimeResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_dashboard_module_mixed",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -9402,7 +9401,7 @@ func TestServiceSecuritySummaryCountsRuntimeAndStoredPendingAuthorizations(t *te
 		t.Fatal("expected storage service to be wired")
 	}
 
-	runtimeResult, err := service.StartTask(map[string]any{
+	runtimeResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_security_summary_mixed",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -9466,7 +9465,7 @@ func TestServiceSecurityPendingListMergesRuntimeAndStoredPendingAuthorizations(t
 		t.Fatal("expected storage service to be wired")
 	}
 
-	runtimeResult, err := service.StartTask(map[string]any{
+	runtimeResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_security_pending_list_mixed",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -9547,7 +9546,7 @@ func TestServiceSecurityPendingListPaginatesMergedPendingAuthorizations(t *testi
 		t.Fatal("expected storage service to be wired")
 	}
 
-	runtimeResult, err := service.StartTask(map[string]any{
+	runtimeResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_security_pending_list_page",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -9772,7 +9771,7 @@ func TestServiceSecurityRestoreApplyReturnsStorageErrorWhenApprovalPersistenceFa
 		t.Fatalf("seed output file: %v", err)
 	}
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_restore_store_failure",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -9813,7 +9812,7 @@ func TestServiceSecurityRestoreApplyReturnsStorageErrorWhenApprovalPersistenceFa
 func TestServiceDashboardModuleHighlightsIncludeAuditTrail(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "dashboard audit trail")
 
-	_, err := service.StartTask(map[string]any{
+	_, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_exec",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -10114,7 +10113,7 @@ func TestServiceTaskDetailGetFallsBackToStoredRecoveryPointForTask(t *testing.T)
 		t.Fatal("expected storage service to be wired")
 	}
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_exec",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -10138,7 +10137,7 @@ func TestServiceTaskDetailGetFallsBackToStoredRecoveryPointForTask(t *testing.T)
 		t.Fatalf("write recovery point failed: %v", err)
 	}
 
-	result, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	result, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -10155,7 +10154,7 @@ func TestServiceTaskDetailGetDropsMismatchedSummaryRecoveryPointBeforeStorageFal
 		t.Fatal("expected storage service to be wired")
 	}
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_exec_mismatch",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -10187,7 +10186,7 @@ func TestServiceTaskDetailGetDropsMismatchedSummaryRecoveryPointBeforeStorageFal
 		t.Fatalf("write recovery point failed: %v", err)
 	}
 
-	result, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	result, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -10208,7 +10207,7 @@ func TestServiceSecurityRestoreApplyRestoresWorkspaceAndReturnsFormalResult(t *t
 		t.Fatalf("seed original file: %v", err)
 	}
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_exec",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -10328,7 +10327,7 @@ func TestServiceSecurityRestoreApplyReturnsStructuredFailure(t *testing.T) {
 		t.Fatalf("seed original file: %v", err)
 	}
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_exec",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -10420,7 +10419,7 @@ func TestServiceSecurityRestoreApplySupportsPersistedTaskFallback(t *testing.T) 
 		t.Fatalf("seed original file: %v", err)
 	}
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_exec",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -10446,7 +10445,7 @@ func TestServiceSecurityRestoreApplySupportsPersistedTaskFallback(t *testing.T) 
 	if respondResult["task"].(map[string]any)["status"] != "completed" {
 		t.Fatalf("expected task to complete before persisted fallback, got %+v", respondResult)
 	}
-	if _, err := service.TaskDetailGet(map[string]any{"task_id": taskID}); err != nil {
+	if _, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID}); err != nil {
 		t.Fatalf("task detail get before persisted fallback failed: %v", err)
 	}
 	pointsResult, err := service.SecurityRestorePointsList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
@@ -10478,7 +10477,7 @@ func TestServiceSecurityRestoreApplySupportsPersistedTaskFallback(t *testing.T) 
 func TestServiceTaskDetailGetPreservesStableContractShape(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "task detail delivery")
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_detail",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -10492,7 +10491,7 @@ func TestServiceTaskDetailGetPreservesStableContractShape(t *testing.T) {
 	}
 
 	taskID := startResult["task"].(map[string]any)["task_id"].(string)
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -10526,7 +10525,7 @@ func TestServiceTaskDetailGetPreservesStableContractShape(t *testing.T) {
 func TestServiceTaskDetailGetNormalizesProtocolCollections(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "task detail protocol collections")
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_detail_protocol",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -10566,7 +10565,7 @@ func TestServiceTaskDetailGetNormalizesProtocolCollections(t *testing.T) {
 		t.Fatal("expected mirror reference update to succeed")
 	}
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -10656,7 +10655,7 @@ func TestServiceTaskDetailGetFallsBackToStoredTaskRun(t *testing.T) {
 		t.Fatalf("save artifact failed: %v", err)
 	}
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": "task_stored_detail"})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": "task_stored_detail"})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -10731,7 +10730,7 @@ func TestServiceTaskDetailGetFallsBackToTaskRunCitationsForScreenTask(t *testing
 		t.Fatalf("delete runtime task shadow failed: %v", err)
 	}
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": "task_stored_screen_detail"})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": "task_stored_screen_detail"})
 	if err != nil {
 		t.Fatalf("task detail get with stored citations failed: %v", err)
 	}
@@ -10780,7 +10779,7 @@ func TestServiceTaskDetailGetPrefersStructuredTaskStoreFallback(t *testing.T) {
 		t.Fatalf("replace structured task steps failed: %v", err)
 	}
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": "task_structured_detail"})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": "task_structured_detail"})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -10844,7 +10843,7 @@ func TestServiceTaskDetailGetUsesStructuredSnapshotWithoutReloadingTaskRuns(t *t
 		t.Fatalf("save task run failed: %v", err)
 	}
 
-	result, err := service.TaskDetailGet(map[string]any{"task_id": "task_structured_snapshot"})
+	result, err := taskDetailGetForTest(service, map[string]any{"task_id": "task_structured_snapshot"})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -10925,7 +10924,7 @@ func TestServiceTaskDetailGetReloadsTaskRunWhenStructuredSnapshotIsInvalid(t *te
 		t.Fatalf("overwrite structured task failed: %v", err)
 	}
 
-	result, err := service.TaskDetailGet(map[string]any{"task_id": "task_structured_invalid_snapshot"})
+	result, err := taskDetailGetForTest(service, map[string]any{"task_id": "task_structured_invalid_snapshot"})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -11032,7 +11031,7 @@ func TestServiceTaskDetailGetStructuredFallbackUsesSessionAndRunStores(t *testin
 	}); err != nil {
 		t.Fatalf("write run failed: %v", err)
 	}
-	result, err := service.TaskDetailGet(map[string]any{"task_id": "task_structured_session_run"})
+	result, err := taskDetailGetForTest(service, map[string]any{"task_id": "task_structured_session_run"})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -11082,7 +11081,7 @@ func TestServiceTaskDetailGetPrefersRuntimeStateWhenStructuredRowIsStale(t *test
 	}); err != nil {
 		t.Fatalf("write stale structured task failed: %v", err)
 	}
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": runtimeTask.TaskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": runtimeTask.TaskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -11193,7 +11192,7 @@ func TestServiceTaskDetailGetStructuredFallbackBackfillsTaskRunEvidence(t *testi
 		t.Fatalf("delete runtime task shadow failed: %v", err)
 	}
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -11269,7 +11268,7 @@ func TestServiceTaskDetailGetStructuredFallbackReadsFormalDeliveryFromLoopStore(
 		t.Fatalf("delete runtime task shadow failed: %v", err)
 	}
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -11349,7 +11348,7 @@ func TestServiceTaskDetailGetStructuredFallbackReadsFormalCitationsFromLoopStore
 		t.Fatalf("delete runtime task shadow failed: %v", err)
 	}
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -11470,7 +11469,7 @@ func TestServiceTaskDetailGetStructuredFallbackPrefersFirstClassDeliveryAndCitat
 		t.Fatalf("delete runtime task shadow failed: %v", err)
 	}
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -11551,7 +11550,7 @@ func TestServiceTaskDetailGetStructuredFallbackNormalizesSparseDeliveryPayloadKe
 		t.Fatalf("delete sparse runtime task shadow failed: %v", err)
 	}
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -11683,7 +11682,7 @@ func TestServiceRestartedStructuredTaskFallsBackToCurrentSnapshotFormalData(t *t
 		t.Fatalf("delete runtime task shadow failed: %v", err)
 	}
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -11781,7 +11780,7 @@ func TestServiceTaskDetailGetStructuredFallbackRehydratesApprovalRequest(t *test
 		t.Fatalf("write approval request failed: %v", err)
 	}
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -11868,7 +11867,7 @@ func TestServiceTaskDetailGetStructuredFallbackRehydratesAuthorizationAndAudit(t
 		t.Fatalf("write structured audit record failed: %v", err)
 	}
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -12022,7 +12021,7 @@ func TestServiceTaskDetailGetPrefersStoredScreenFormalObjectsOverRuntimeCompatib
 		t.Fatalf("write stored audit record failed: %v", err)
 	}
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": runtimeTask.TaskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": runtimeTask.TaskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -12093,7 +12092,7 @@ func TestServiceTaskDetailGetPrefersStoredApprovalRequestOverRuntimeCompatibilit
 		t.Fatalf("write stored approval request failed: %v", err)
 	}
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": runtimeTask.TaskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": runtimeTask.TaskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -12247,7 +12246,7 @@ func TestServiceTaskDetailGetStructuredScreenFallbackPrefersFormalEvidenceObject
 		t.Fatalf("delete runtime task shadow failed: %v", err)
 	}
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -12450,7 +12449,7 @@ func TestServiceTaskDetailGetReloadsTaskRunWhenFormalScreenObjectsMaskInvalidSna
 		t.Fatalf("rewrite structured task with invalid snapshot failed: %v", err)
 	}
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -12541,7 +12540,7 @@ func TestServiceTaskDetailGetScreenAuditPrefersNewerTerminalGovernanceRecord(t *
 		t.Fatalf("write recovery audit record failed: %v", err)
 	}
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -12620,7 +12619,7 @@ func TestServiceTaskDetailGetStructuredScreenApprovalPrefersFormalApprovalReques
 		t.Fatalf("write formal screen approval request failed: %v", err)
 	}
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -12923,7 +12922,7 @@ func TestServiceTaskArtifactOpenPrefersStoredArtifactOverRuntimeCompatibility(t 
 
 func TestServiceTaskArtifactOpenReturnsArtifactNotFoundWhenTaskExists(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "artifact not found")
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_artifact_not_found",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -12953,7 +12952,7 @@ func TestServiceStartTaskPersistsArtifactsToStore(t *testing.T) {
 	if service.storage == nil {
 		t.Fatal("expected storage service to be wired")
 	}
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_artifact_persist",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -12991,7 +12990,7 @@ func TestServiceStartTaskPersistsArtifactsToStore(t *testing.T) {
 
 func TestServiceDeliveryOpenReturnsTaskDeliveryResult(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "delivery open task")
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_delivery_open",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -13143,7 +13142,7 @@ func TestTaskArtifactHelpersCoverFallbackBranches(t *testing.T) {
 
 func TestServiceTaskArtifactListFallsBackToRuntimeArtifactsWhenStoreEmpty(t *testing.T) {
 	service := newTestService()
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_runtime_artifact",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -13194,7 +13193,7 @@ func TestServiceTaskArtifactListMergesStoredAndRuntimeArtifacts(t *testing.T) {
 	if service.storage == nil || service.storage.ArtifactStore() == nil {
 		t.Fatal("expected storage service to be wired")
 	}
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_merge_artifact",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -13280,7 +13279,7 @@ func TestServiceTaskArtifactListMergesStoredAndRuntimeArtifacts(t *testing.T) {
 
 func TestServiceRuntimeArtifactsBackfillStableArtifactIdentifiersWhenMissing(t *testing.T) {
 	service := newTestService()
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_runtime_missing_artifact_id",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -13308,7 +13307,7 @@ func TestServiceRuntimeArtifactsBackfillStableArtifactIdentifiersWhenMissing(t *
 		"delivery_payload": map[string]any{"path": "workspace/runtime-output.txt", "task_id": taskID},
 	}})
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -13342,7 +13341,7 @@ func TestServiceRuntimeArtifactsBackfillStableArtifactIdentifiersWhenMissing(t *
 func TestServiceTaskControlRejectsInvalidStatusTransition(t *testing.T) {
 	service := newTestService()
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -14104,7 +14103,7 @@ func TestDashboardModuleGetIncludesPluginRuntimeSummary(t *testing.T) {
 
 func TestDashboardModuleGetTasksIncludesFocusRuntimeSummary(t *testing.T) {
 	service := newTestService()
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_dashboard_tasks_runtime",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -14177,7 +14176,7 @@ func TestServiceTaskControlRequiresTaskID(t *testing.T) {
 func TestServiceTaskControlRequiresAction(t *testing.T) {
 	service := newTestService()
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -14208,7 +14207,7 @@ func TestServiceTaskControlRequiresAction(t *testing.T) {
 func TestServiceTaskControlRejectsFinishedTaskOperations(t *testing.T) {
 	service := newTestService()
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -14240,7 +14239,7 @@ func TestServiceTaskControlRejectsFinishedTaskOperations(t *testing.T) {
 func TestServiceTaskControlReturnsUpdatedTaskAndBubbleForWaitingAuthCancel(t *testing.T) {
 	service := newTestService()
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_task_control_payload",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -14599,7 +14598,7 @@ func TestPersistExecutionToolCallEventsFallsBackWhenToolCallIDMissing(t *testing
 
 func TestServiceTaskSteerPersistsFollowUpMessage(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "task steer")
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_task_steer",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -14835,7 +14834,7 @@ func TestServiceSubmitInputRoutesFollowUpIntoExistingTask(t *testing.T) {
 	activeTaskID = activeTask.TaskID
 	activeSessionID := activeTask.SessionID
 
-	followUpResult, err := service.SubmitInput(map[string]any{
+	followUpResult, err := submitInputForTest(service, map[string]any{
 		"source":  "floating_ball",
 		"trigger": "hover_text_input",
 		"input": map[string]any{
@@ -14876,7 +14875,7 @@ func TestServiceSubmitInputQueuesNewTaskWhenActivePromptTaskCannotConsumeSteerin
 		RiskLevel:   "green",
 	})
 
-	result, err := service.SubmitInput(map[string]any{
+	result, err := submitInputForTest(service, map[string]any{
 		"session_id": activeTask.SessionID,
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -14909,7 +14908,7 @@ func TestServiceSubmitInputQueuesNewTaskWhenActivePromptTaskCannotConsumeSteerin
 func TestServiceStartTaskNotificationIncludesSessionID(t *testing.T) {
 	service := newTestService()
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_notification_contract",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -14973,7 +14972,7 @@ func TestServiceStartTaskDescribedFileDoesNotAttachToProcessingTask(t *testing.T
 	})
 	activeTaskID = activeTask.TaskID
 
-	followUpResult, err := service.StartTask(map[string]any{
+	followUpResult, err := startTaskForTest(service, map[string]any{
 		"source":  "floating_ball",
 		"trigger": "file_drop",
 		"input": map[string]any{
@@ -15022,7 +15021,7 @@ func TestServiceStartTaskDescribedFileStartsNewTaskWithoutPendingEvidence(t *tes
 		},
 	})
 
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": waitingTask.SessionID,
 		"source":     "floating_ball",
 		"trigger":    "file_drop",
@@ -15073,7 +15072,7 @@ func TestServiceStartTaskShellBallAnchorDoesNotContinuePendingFileTask(t *testin
 		},
 	})
 
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": waitingTask.SessionID,
 		"source":     "floating_ball",
 		"trigger":    "file_drop",
@@ -15170,7 +15169,7 @@ func TestServiceStartTaskConfirmRequiredFileDoesNotContinueProcessingTask(t *tes
 	})
 	activeTaskID = activeTask.TaskID
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": activeTask.SessionID,
 		"source":     "floating_ball",
 		"trigger":    "file_drop",
@@ -15230,7 +15229,7 @@ func TestServiceSubmitInputConfirmRequiredTextContinuesPendingTask(t *testing.T)
 		RiskLevel:   "green",
 	})
 
-	result, err := service.SubmitInput(map[string]any{
+	result, err := submitInputForTest(service, map[string]any{
 		"session_id": activeTask.SessionID,
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -15290,7 +15289,7 @@ func TestServiceSubmitInputFallsBackWhenContinuationModelTimesOut(t *testing.T) 
 	})
 
 	start := time.Now()
-	result, err := service.SubmitInput(map[string]any{
+	result, err := submitInputForTest(service, map[string]any{
 		"source":  "floating_ball",
 		"trigger": "hover_text_input",
 		"input": map[string]any{
@@ -15351,7 +15350,7 @@ func TestServiceSubmitInputConfirmRequiredTextContinuesImplicitPendingTask(t *te
 		},
 	})
 
-	result, err := service.SubmitInput(map[string]any{
+	result, err := submitInputForTest(service, map[string]any{
 		"source":  "floating_ball",
 		"trigger": "hover_text_input",
 		"input": map[string]any{
@@ -15429,7 +15428,7 @@ func TestServiceSubmitInputPlainTextKeepsConfirmingTaskBehindConfirmation(t *tes
 		},
 	})
 
-	result, err := service.SubmitInput(map[string]any{
+	result, err := submitInputForTest(service, map[string]any{
 		"session_id": activeTask.SessionID,
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -15513,7 +15512,7 @@ func TestServiceStartTaskPlainTextImplicitPendingTaskStartsNewWithoutExplicitCon
 	})
 	activeTaskID = activeTask.TaskID
 
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"source":  "floating_ball",
 		"trigger": "hover_text_input",
 		"input": map[string]any{
@@ -15644,7 +15643,7 @@ func TestServiceStartTaskConfirmRequiredFileContinuesWaitingInputTask(t *testing
 	})
 	activeTaskID = activeTask.TaskID
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": activeTask.SessionID,
 		"source":     "floating_ball",
 		"trigger":    "file_drop",
@@ -15721,7 +15720,7 @@ func TestServiceStartTaskStructuredSupplementContinuesPendingTaskWithoutAutoExec
 		},
 	})
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": activeTask.SessionID,
 		"source":     "floating_ball",
 		"trigger":    "file_drop",
@@ -15783,7 +15782,7 @@ func TestServiceStartTaskStructuredSupplementResumesWaitingTaskWithConfirmedInte
 		},
 	})
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": activeTask.SessionID,
 		"source":     "floating_ball",
 		"trigger":    "file_drop",
@@ -15869,7 +15868,7 @@ func TestServiceStartTaskConfirmRequiredFileContinuesUniquePendingTaskAmongCandi
 		},
 	})
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": targetTask.SessionID,
 		"source":     "floating_ball",
 		"trigger":    "file_drop",
@@ -15944,7 +15943,7 @@ func TestServiceStartTaskConfirmRequiredFileStartsNewTaskWithoutPendingEvidence(
 	})
 	activeTaskID = activeTask.TaskID
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"session_id": activeTask.SessionID,
 		"source":     "floating_ball",
 		"trigger":    "file_drop",
@@ -15986,7 +15985,7 @@ func TestServiceStartTaskConfirmRequiredFileStartsNewTaskWithoutPendingEvidence(
 func TestServiceSubmitInputDoesNotContinueWaitingAuthorizationTask(t *testing.T) {
 	service := newTestService()
 
-	startResult, err := service.StartTask(map[string]any{
+	startResult, err := startTaskForTest(service, map[string]any{
 		"source":  "floating_ball",
 		"trigger": "hover_text_input",
 		"input": map[string]any{
@@ -16005,7 +16004,7 @@ func TestServiceSubmitInputDoesNotContinueWaitingAuthorizationTask(t *testing.T)
 	}
 	firstTask := startResult["task"].(map[string]any)
 
-	followUpResult, err := service.SubmitInput(map[string]any{
+	followUpResult, err := submitInputForTest(service, map[string]any{
 		"source":  "floating_ball",
 		"trigger": "hover_text_input",
 		"input": map[string]any{
@@ -16042,7 +16041,7 @@ func TestServiceSubmitInputDoesNotContinuePausedTask(t *testing.T) {
 		t.Fatalf("pause task failed: %v", err)
 	}
 
-	followUpResult, err := service.SubmitInput(map[string]any{
+	followUpResult, err := submitInputForTest(service, map[string]any{
 		"source":  "floating_ball",
 		"trigger": "hover_text_input",
 		"input": map[string]any{
@@ -16073,7 +16072,7 @@ func TestServiceStartTaskWithExplicitIntentDoesNotReuseWaitingTaskWithoutAnchors
 		RiskLevel:   "green",
 	})
 
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"source":  "floating_ball",
 		"trigger": "hover_text_input",
 		"input": map[string]any{
@@ -16116,7 +16115,7 @@ func TestServiceSubmitInputStartsNewTaskForUnrelatedRequest(t *testing.T) {
 		},
 	})
 
-	firstResult, err := service.StartTask(map[string]any{
+	firstResult, err := startTaskForTest(service, map[string]any{
 		"source":  "floating_ball",
 		"trigger": "hover_text_input",
 		"input": map[string]any{
@@ -16135,7 +16134,7 @@ func TestServiceSubmitInputStartsNewTaskForUnrelatedRequest(t *testing.T) {
 	}
 	firstTask := firstResult["task"].(map[string]any)
 
-	secondResult, err := service.SubmitInput(map[string]any{
+	secondResult, err := submitInputForTest(service, map[string]any{
 		"source":  "floating_ball",
 		"trigger": "hover_text_input",
 		"input": map[string]any{
@@ -16167,7 +16166,7 @@ func TestServiceReusesRecentIdleSessionForNewTopLevelTask(t *testing.T) {
 		RiskLevel:   "green",
 	})
 
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"source":  "floating_ball",
 		"trigger": "hover_text_input",
 		"input": map[string]any{
@@ -16193,7 +16192,7 @@ func TestServiceReusesRecentIdleSessionForNewTopLevelTask(t *testing.T) {
 func TestServiceTaskListIncludesLoopStopReason(t *testing.T) {
 	service := newTestService()
 	for index := 0; index < 2; index++ {
-		_, err := service.StartTask(map[string]any{
+		_, err := startTaskForTest(service, map[string]any{
 			"session_id": fmt.Sprintf("sess_loop_stop_%02d", index),
 			"source":     "floating_ball",
 			"trigger":    "hover_text_input",
@@ -16515,7 +16514,7 @@ func TestServiceTaskListDoesNotDoubleCountRuntimeTasksBackedByLegacyRows(t *test
 func TestServiceStartTaskWithExecutorWritesWorkspaceDocument(t *testing.T) {
 	service, workspaceRoot := newTestServiceWithExecution(t, "第一点\n第二点\n第三点")
 
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_exec",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -16577,7 +16576,7 @@ func TestServiceStartTaskWithExecutorWritesWorkspaceDocument(t *testing.T) {
 func TestServiceStartTaskWithExecutorReturnsGeneratedBubble(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "这段内容主要在解释当前问题的原因和处理方向。")
 
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_exec",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -16628,7 +16627,7 @@ func TestServiceStartTaskWithExecutorDeliversPageReadBubble(t *testing.T) {
 		Source:      "playwright_sidecar",
 	}})
 
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_page_read",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -16693,7 +16692,7 @@ func TestServiceStartTaskWithExecutorDeliversPageSearchBubble(t *testing.T) {
 		Source:     "playwright_sidecar",
 	}})
 
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_page_search",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -16744,7 +16743,7 @@ func TestServiceStartTaskWithExecutorDeliversPageSearchBubble(t *testing.T) {
 
 func TestServiceWorkerToolWritesToolCallEventNotification(t *testing.T) {
 	service, _ := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), stubOCRWorkerClient{result: tools.OCRTextResult{Path: "notes/demo.txt", Text: "hello from ocr", Language: "plain_text", PageCount: 1, Source: "ocr_worker_text"}}, sidecarclient.NewNoopMediaWorkerClient())
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_ocr_extract",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -16793,7 +16792,7 @@ func TestServiceWorkerToolWritesToolCallEventNotification(t *testing.T) {
 
 func TestServiceMediaWorkerPropagatesArtifactsAndWorkerEventPayload(t *testing.T) {
 	service, _ := newTestServiceWithExecutionWorkers(t, "unused", platform.LocalExecutionBackend{}, nil, sidecarclient.NewNoopPlaywrightSidecarClient(), sidecarclient.NewNoopOCRWorkerClient(), stubMediaWorkerClient{transcodeResult: tools.MediaTranscodeResult{InputPath: "clips/demo.mov", OutputPath: "clips/demo.mp4", Format: "mp4", Source: "media_worker_ffmpeg"}})
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_media_transcode",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -16848,7 +16847,7 @@ func TestServiceMediaWorkerPropagatesArtifactsAndWorkerEventPayload(t *testing.T
 func TestServiceStartTaskWithExecutorPageReadFailureUsesUnifiedError(t *testing.T) {
 	service, _ := newTestServiceWithExecutionAndPlaywright(t, "unused", platform.LocalExecutionBackend{}, nil, stubPlaywrightClient{err: tools.ErrPlaywrightSidecarFailed})
 
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_page_read_fail",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -16907,7 +16906,7 @@ func TestServiceStartTaskWithRealLocalPageReadDelivery(t *testing.T) {
 	}()
 
 	service, _ := newTestServiceWithExecutionAndPlaywright(t, "unused", platform.LocalExecutionBackend{}, nil, localHTTPPlaywrightClient{})
-	result, err := service.StartTask(map[string]any{
+	result, err := startTaskForTest(service, map[string]any{
 		"session_id": "sess_real_page_read",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",

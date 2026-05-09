@@ -12,7 +12,15 @@ import (
 // StartTask creates the formal task/run mapping from an explicit object or an
 // inferred intent. Object-only starts stay in confirmation unless the caller
 // supplied enough instruction to enter governance and execution immediately.
-func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
+func (s *Service) StartTask(request StartTaskRequest) (TaskEntryResponse, error) {
+	response, err := s.startTask(request.paramsMap())
+	if err != nil {
+		return TaskEntryResponse{}, err
+	}
+	return newTaskEntryResponse(response), nil
+}
+
+func (s *Service) startTask(params map[string]any) (map[string]any, error) {
 	flow := s.prepareStartTaskFlow(params)
 	if response, handled, err := s.maybeContinueStartTask(&flow); err != nil || handled {
 		return response, err

@@ -10,7 +10,15 @@ import (
 // SubmitInput adapts free-form user input into the task-centric execution path.
 // It captures context, derives an intent suggestion, then either waits for more
 // input, asks for confirmation, or creates the task/run pair for execution.
-func (s *Service) SubmitInput(params map[string]any) (map[string]any, error) {
+func (s *Service) SubmitInput(request SubmitInputRequest) (TaskEntryResponse, error) {
+	response, err := s.submitInput(request.paramsMap())
+	if err != nil {
+		return TaskEntryResponse{}, err
+	}
+	return newTaskEntryResponse(response), nil
+}
+
+func (s *Service) submitInput(params map[string]any) (map[string]any, error) {
 	flow := s.prepareInputSubmitFlow(params)
 	if response, handled, err := s.maybeContinueInputSubmit(&flow); err != nil || handled {
 		return response, err

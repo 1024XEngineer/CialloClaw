@@ -117,13 +117,20 @@ func newSuccessEnvelope(id json.RawMessage, data any, serverTime string) success
 		JSONRPC: "2.0",
 		ID:      normalizeID(id),
 		Result: resultEnvelope{
-			Data: data,
+			Data: protocolResultData(data),
 			Meta: responseMeta{
 				ServerTime: serverTime,
 			},
 			Warnings: []string{},
 		},
 	}
+}
+
+func protocolResultData(data any) any {
+	if mappable, ok := data.(interface{ Map() map[string]any }); ok {
+		return mappable.Map()
+	}
+	return data
 }
 
 // newErrorEnvelope assembles the shared error response format.

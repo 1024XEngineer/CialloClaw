@@ -38,7 +38,15 @@ func (s *Service) TaskList(params map[string]any) (map[string]any, error) {
 // TaskDetailGet returns the task detail payload for `agent.task.detail.get`.
 // It keeps structured storage authoritative for formal evidence while allowing
 // live runtime state to fill task status fields that have not persisted yet.
-func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
+func (s *Service) TaskDetailGet(request TaskDetailGetRequest) (TaskDetailGetResponse, error) {
+	response, err := s.taskDetailGet(request.paramsMap())
+	if err != nil {
+		return TaskDetailGetResponse{}, err
+	}
+	return newTaskDetailGetResponse(response), nil
+}
+
+func (s *Service) taskDetailGet(params map[string]any) (map[string]any, error) {
 	taskID := stringValue(params, "task_id", "")
 	task, ok := s.taskDetailFromStorage(taskID)
 	if runtimeTask, runtimeOK := s.runEngine.TaskDetail(taskID); runtimeOK {

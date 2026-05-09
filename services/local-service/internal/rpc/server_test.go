@@ -139,7 +139,7 @@ func (a testStorageAdapter) SecretStorePath() string {
 // are emitted on the stream connection after task confirmation enters waiting_auth.
 func TestHandleStreamConnEmitsApprovalNotifications(t *testing.T) {
 	server := newTestServer()
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -215,7 +215,7 @@ func TestHandleStreamConnEmitsApprovalNotifications(t *testing.T) {
 
 func TestHandleStreamConnEmitsLoopLifecycleNotifications(t *testing.T) {
 	server := newTestServer()
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_loop_notify",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -298,7 +298,7 @@ func TestHandleStreamConnStreamsLoopLifecycleNotificationsBeforeResponse(t *test
 		generateToolSeen: make(chan struct{}),
 	}
 	server := newTestServerWithModelClient(modelClient)
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_loop_stream",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -575,7 +575,7 @@ func TestHandleStreamConnFiltersRuntimeNotificationsToRequestTask(t *testing.T) 
 
 	startTask := func(sessionID string) string {
 		t.Helper()
-		result, err := server.orchestrator.StartTask(map[string]any{
+		result, err := startTaskForTest(server.orchestrator, map[string]any{
 			"session_id": sessionID,
 			"source":     "floating_ball",
 			"trigger":    "text_selected_click",
@@ -1426,7 +1426,7 @@ func TestHandleStreamConnSerializesTaskStartingRequestsOnSharedConnection(t *tes
 
 func TestHandleStreamConnReplaysLateTaskNotificationsBeforeQueuedSameTaskFollowUp(t *testing.T) {
 	server := newTestServer()
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_late_task_replay",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -1551,7 +1551,7 @@ func TestHandleStreamConnReplaysLateTaskNotificationsBeforeQueuedSameTaskFollowU
 
 func TestHandleStreamConnTaskListDoesNotStealBufferedNotifications(t *testing.T) {
 	server := newTestServer()
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_task_list_replay_owner",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -1696,7 +1696,7 @@ func TestHandleStreamConnKeepsQueuedReadsResponsiveWhileLoopTaskRuns(t *testing.
 
 	startTask := func(sessionID string) string {
 		t.Helper()
-		result, err := server.orchestrator.StartTask(map[string]any{
+		result, err := startTaskForTest(server.orchestrator, map[string]any{
 			"session_id": sessionID,
 			"source":     "floating_ball",
 			"trigger":    "text_selected_click",
@@ -1839,7 +1839,7 @@ func TestHandleStreamConnSerializesConcurrentRequestsForSameTask(t *testing.T) {
 	}
 	server := newTestServerWithModelClient(modelClient)
 
-	result, err := server.orchestrator.StartTask(map[string]any{
+	result, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_pipe_same_task",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -2065,7 +2065,7 @@ func TestDispatchTaskStartFileInstructionSkipsIntentConfirmation(t *testing.T) {
 // notifications can be fetched through the debug events endpoint.
 func TestHandleDebugEventsReturnsQueuedNotifications(t *testing.T) {
 	server := newTestServer()
-	result, err := server.orchestrator.StartTask(map[string]any{
+	result, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -2150,7 +2150,7 @@ func TestHandleHTTPRPCRejectsNonLoopbackOrigins(t *testing.T) {
 func TestDispatchTaskDetailGetIncludesActiveApprovalAnchor(t *testing.T) {
 	server := newTestServer()
 
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_detail_rpc",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -2204,7 +2204,7 @@ func TestDispatchTaskDetailGetIncludesActiveApprovalAnchor(t *testing.T) {
 func TestDispatchTaskDetailGetOmitsApprovalAnchorForCompletedTask(t *testing.T) {
 	server := newTestServer()
 
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_detail_rpc_done",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -2257,7 +2257,7 @@ func TestDispatchTaskDetailGetOmitsApprovalAnchorForCompletedTask(t *testing.T) 
 func TestDispatchMapsTaskControlStatusErrors(t *testing.T) {
 	server := newTestServer()
 
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -2293,7 +2293,7 @@ func TestDispatchMapsTaskControlStatusErrors(t *testing.T) {
 func TestDispatchMapsTaskControlFinishedErrors(t *testing.T) {
 	server := newTestServer()
 
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -2423,7 +2423,7 @@ func TestDispatchReturnsSecurityRestoreApplyResult(t *testing.T) {
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "restore-apply.db")))
 	defer func() { _ = storageService.Close() }()
 	server.orchestrator.WithStorage(storageService)
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_restore",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -2636,7 +2636,7 @@ func TestDispatchReturnsDeliveryOpenForArtifact(t *testing.T) {
 
 func TestDispatchReturnsDeliveryOpenForTaskResult(t *testing.T) {
 	server := newTestServer()
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_delivery_rpc",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -3066,7 +3066,7 @@ func TestDispatchReturnsPluginDetail(t *testing.T) {
 func TestDispatchMapsTaskControlInvalidActionToInvalidParams(t *testing.T) {
 	server := newTestServer()
 
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "text_selected_click",
@@ -3123,7 +3123,7 @@ func TestDispatchMapsTaskControlMissingTaskIDToInvalidParams(t *testing.T) {
 func TestDispatchMapsTaskControlMissingActionToInvalidParams(t *testing.T) {
 	server := newTestServer()
 
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_demo",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -3165,7 +3165,7 @@ func TestDispatchTaskListClampsPagingParams(t *testing.T) {
 	server := newTestServer()
 
 	for index := 0; index < 25; index++ {
-		_, err := server.orchestrator.StartTask(map[string]any{
+		_, err := startTaskForTest(server.orchestrator, map[string]any{
 			"session_id": fmt.Sprintf("sess_rpc_task_list_%02d", index),
 			"source":     "floating_ball",
 			"trigger":    "hover_text_input",
@@ -3306,7 +3306,7 @@ func TestDispatchTaskToolCallsListReturnsPersistedToolCalls(t *testing.T) {
 
 func TestDispatchTaskSteerReturnsUpdatedTask(t *testing.T) {
 	server := newTestServer()
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_rpc_task_steer",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",

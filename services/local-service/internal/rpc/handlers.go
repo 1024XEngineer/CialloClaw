@@ -1,6 +1,8 @@
 // Package rpc routes stable JSON-RPC methods into the main orchestrator.
 package rpc
 
+import "github.com/cialloclaw/cialloclaw/services/local-service/internal/orchestrator"
+
 // registerHandlers binds stable agent.* JSON-RPC methods to their protocol
 // decoders and orchestrator entry points.
 func (s *Server) registerHandlers() {
@@ -32,13 +34,13 @@ func (s *Server) handleAgentDeliveryOpen(params map[string]any) (any, *rpcError)
 
 // handleAgentInputSubmit handles agent.input.submit.
 func (s *Server) handleAgentInputSubmit(params map[string]any) (any, *rpcError) {
-	data, err := s.orchestrator.SubmitInput(params)
+	data, err := s.orchestrator.SubmitInput(orchestrator.SubmitInputRequestFromParams(params))
 	return wrapOrchestratorResult(data, err)
 }
 
 // handleAgentTaskStart handles agent.task.start.
 func (s *Server) handleAgentTaskStart(params map[string]any) (any, *rpcError) {
-	data, err := s.orchestrator.StartTask(params)
+	data, err := s.orchestrator.StartTask(orchestrator.StartTaskRequestFromParams(params))
 	return wrapOrchestratorResult(data, err)
 }
 
@@ -69,7 +71,7 @@ func (s *Server) handleAgentTaskList(params map[string]any) (any, *rpcError) {
 
 // handleAgentTaskDetailGet handles agent.task.detail.get.
 func (s *Server) handleAgentTaskDetailGet(params map[string]any) (any, *rpcError) {
-	data, err := s.orchestrator.TaskDetailGet(params)
+	data, err := s.orchestrator.TaskDetailGet(orchestrator.TaskDetailGetRequestFromParams(params))
 	return wrapOrchestratorResult(data, err)
 }
 

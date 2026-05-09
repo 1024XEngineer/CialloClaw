@@ -269,7 +269,7 @@ func TestHandleDebugEventsCoversValidationAndSuccess(t *testing.T) {
 		t.Fatalf("expected unknown task_id to return 404, got %d", notFoundRecorder.Code)
 	}
 
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_debug_events",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
@@ -331,7 +331,7 @@ func TestHandleDebugEventStreamCoversValidationSuccessAndError(t *testing.T) {
 		t.Fatalf("expected SSE error event, got %q", errorRecorder.Body.String())
 	}
 
-	startResult, err := server.orchestrator.StartTask(map[string]any{
+	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_stream_success",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",

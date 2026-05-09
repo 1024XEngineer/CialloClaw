@@ -139,6 +139,8 @@ func normalizeNotificationKey(method, taskID string, params map[string]any) map[
 // a task_id suffix.
 func collectTaskIDs(rawValue any, ids map[string]struct{}) {
 	switch value := rawValue.(type) {
+	case interface{ Map() map[string]any }:
+		collectTaskIDs(value.Map(), ids)
 	case map[string]any:
 		for key, item := range value {
 			if strings.HasSuffix(key, "task_id") {
