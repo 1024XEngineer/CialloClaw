@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -169,12 +170,12 @@ func checkAddedComments(root, baseRef string) error {
 }
 
 func checkChangedFileSizes(root, baseRef string) error {
-	files, err := changedGoFiles(root, strings.TrimSpace(baseRef))
+	diffChunks, err := collectDiffChunks(root, strings.TrimSpace(baseRef))
 	if err != nil {
 		return err
 	}
 
-	violations, err := findFileSizeViolations(root, files)
+	violations, err := findFileSizeViolations(root, diffChunks)
 	if err != nil {
 		return err
 	}
@@ -188,6 +189,23 @@ func checkChangedFileSizes(root, baseRef string) error {
 		fmt.Fprintf(&builder, "%s: %d lines exceeds %d\n", item.file, item.lines, item.maxLines)
 	}
 	return errors.New(strings.TrimRight(builder.String(), "\n"))
+}
+
+func collectChangedGoFiles(diff string) []string {
+	seen := make(map[string]bool)
+	files := make([]string, 0)
+	for _, rawLine := range strings.Split(diff, "\n") {
+		if !strings.HasPrefix(rawLine, "+++ ") {
+			continue
+		}
+		file := parseNewFile(rawLine)
+		if file == "" || seen[file] {
+			continue
+		}
+		seen[file] = true
+		files = append(files, file)
+	}
+	return files
 }
 
 func collectDiffChunks(root, baseRef string) ([]diffChunk, error) {
@@ -330,29 +348,46 @@ func findCommentViolations(root string, diffChunks []diffChunk) ([]violation, er
 	return violations, nil
 }
 
-func findFileSizeViolations(root string, files []string) ([]fileSizeViolation, error) {
-	var violations []fileSizeViolation
-	for _, file := range files {
-		if !shouldCheckGoFileSize(file) {
-			continue
-		}
+func findFileSizeViolations(root string, diffChunks []diffChunk) ([]fileSizeViolation, error) {
+	violationsByFile := make(map[string]fileSizeViolation)
+	for _, chunk := range diffChunks {
+		for _, file := range collectChangedGoFiles(chunk.diff) {
+			if !shouldCheckGoFileSize(file) {
+				continue
+			}
 
-		source, err := os.ReadFile(filepath.Join(root, file))
-		if errors.Is(err, os.ErrNotExist) {
-			continue
-		}
-		if err != nil {
-			return nil, fmt.Errorf("read %s for size check: %w", file, err)
-		}
+			source, err := chunk.readFile(root, file)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return nil, fmt.Errorf("read %s for size check: %w", file, err)
+			}
 
-		lineCount := countLines(source)
-		if lineCount > maxGoFileLines {
-			violations = append(violations, fileSizeViolation{
+			lineCount := countLines(source)
+			if lineCount <= maxGoFileLines {
+				continue
+			}
+			violation := fileSizeViolation{
 				file:     file,
 				lines:    lineCount,
 				maxLines: maxGoFileLines,
-			})
+			}
+			if previous, ok := violationsByFile[file]; !ok || lineCount > previous.lines {
+				violationsByFile[file] = violation
+			}
 		}
+	}
+
+	files := make([]string, 0, len(violationsByFile))
+	for file := range violationsByFile {
+		files = append(files, file)
+	}
+	sort.Strings(files)
+
+	violations := make([]fileSizeViolation, 0, len(files))
+	for _, file := range files {
+		violations = append(violations, violationsByFile[file])
 	}
 	return violations, nil
 }

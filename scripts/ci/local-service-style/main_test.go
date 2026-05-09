@@ -178,23 +178,43 @@ index 2222222..3333333 100644
 
 func TestFindFileSizeViolationsRejectsLargeImplementationFiles(t *testing.T) {
 	root := writeTestFile(t, "package demo\n")
-	path := filepath.Join(root, localServicePath, "internal", "demo", "large.go")
-	if err := os.WriteFile(path, []byte(strings.Repeat("package_line\n", maxGoFileLines+1)), 0o644); err != nil {
+	const path = "services/local-service/internal/demo/large.go"
+	largePath := filepath.Join(root, localServicePath, "internal", "demo", "large.go")
+	if err := os.WriteFile(largePath, []byte(strings.Repeat("package_line\n", maxGoFileLines+1)), 0o644); err != nil {
 		t.Fatalf("write large file: %v", err)
 	}
 
-	violations, err := findFileSizeViolations(root, []string{
-		"services/local-service/internal/demo/large.go",
-		"services/local-service/internal/demo/large_test.go",
-		"scripts/ci/local-service-style/main.go",
-	})
+	violations, err := findFileSizeViolations(root, []diffChunk{{
+		diff:     diffForFiles(path, "services/local-service/internal/demo/large_test.go"),
+		readFile: workingTreeFileReader,
+	}})
 	if err != nil {
 		t.Fatalf("findFileSizeViolations returned error: %v", err)
 	}
 	if len(violations) != 1 {
 		t.Fatalf("expected one size violation, got %d: %#v", len(violations), violations)
 	}
-	if violations[0].file != "services/local-service/internal/demo/large.go" {
+	if violations[0].file != path {
+		t.Fatalf("unexpected violation file: %#v", violations[0])
+	}
+}
+
+func TestFindFileSizeViolationsReadsDiffSnapshot(t *testing.T) {
+	const path = "services/local-service/internal/demo/large.go"
+	root := writeTestFile(t, "package demo\n")
+	stagedSource := []byte(strings.Repeat("package_line\n", maxGoFileLines+1))
+
+	violations, err := findFileSizeViolations(root, []diffChunk{{
+		diff:     diffForFiles(path),
+		readFile: staticFileReader(path, stagedSource),
+	}})
+	if err != nil {
+		t.Fatalf("findFileSizeViolations returned error: %v", err)
+	}
+	if len(violations) != 1 {
+		t.Fatalf("expected one size violation from diff snapshot, got %d: %#v", len(violations), violations)
+	}
+	if violations[0].file != path {
 		t.Fatalf("unexpected violation file: %#v", violations[0])
 	}
 }
@@ -230,6 +250,22 @@ func writeTestFile(t *testing.T, content string) string {
 		t.Fatalf("write test file: %v", err)
 	}
 	return root
+}
+
+func diffForFiles(paths ...string) string {
+	var builder strings.Builder
+	for _, path := range paths {
+		builder.WriteString("diff --git a/")
+		builder.WriteString(path)
+		builder.WriteString(" b/")
+		builder.WriteString(path)
+		builder.WriteString("\nindex 1111111..2222222 100644\n--- a/")
+		builder.WriteString(path)
+		builder.WriteString("\n+++ b/")
+		builder.WriteString(path)
+		builder.WriteString("\n@@ -1,0 +1 @@\n+package demo\n")
+	}
+	return builder.String()
 }
 
 func staticFileReader(expectedPath string, source []byte) fileReader {
