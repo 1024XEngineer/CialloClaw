@@ -29,7 +29,6 @@ type Server struct {
 	streamWG                 sync.WaitGroup
 	serveRunning             bool
 	runCancel                context.CancelFunc
-	namedPipeCancel          context.CancelFunc
 	shuttingDown             bool
 	terminalErr              error
 }

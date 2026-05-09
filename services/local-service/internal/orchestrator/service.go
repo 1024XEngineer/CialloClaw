@@ -4841,13 +4841,6 @@ func isAgentLoopTaskIntent(taskIntent map[string]any) bool {
 	return stringValue(taskIntent, "name", "") == "agent_loop"
 }
 
-func executionStepName(taskIntent map[string]any) string {
-	if stringValue(taskIntent, "name", "") == "agent_loop" {
-		return "agent_loop"
-	}
-	return "generate_output"
-}
-
 // activeExecutionStepName records the execution step that can actually consume
 // live follow-up steering. Agent-loop intent may still fall back to prompt
 // generation, so processing tasks must not advertise a pollable loop unless the
