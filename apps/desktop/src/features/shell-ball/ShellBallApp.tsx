@@ -451,8 +451,7 @@ export function ShellBallApp() {
     onPrimaryClick: handlePrimaryClick,
     onRequestInputFocus: () => focusInlineInputField(),
   });
-  const shouldRenderInlineInput =
-    snapshot.visibility.input && (snapshot.visualState !== "confirming_intent" || intentCorrection !== null);
+  const shouldRenderInlineInput = snapshot.visibility.input;
   const inlineInputMode = resolveShellBallInlineInputMode({
     shouldRenderInlineInput,
     snapshotInputBarMode: snapshot.inputBarMode,
