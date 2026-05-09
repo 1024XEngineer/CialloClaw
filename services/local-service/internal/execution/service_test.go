@@ -1976,6 +1976,44 @@ func TestExecuteDirectSidecarPageReadUsesToolExecutor(t *testing.T) {
 	}
 }
 
+func TestExecuteDirectSidecarPageReadPreservesResultPageDelivery(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", stubPlaywrightClient{attachedReadResult: tools.BrowserPageReadResult{
+		BrowserExecutionMetadata: tools.BrowserExecutionMetadata{Attached: true, BrowserKind: "chrome"},
+		Title:                    "Example Page",
+		TextContent:              "page content from sidecar",
+		MIMEType:                 "text/html",
+		TextType:                 "text/html",
+		Source:                   "playwright_worker_cdp",
+	}})
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:               "task_005_result_page",
+		RunID:                "run_005_result_page",
+		Title:                "页面读取",
+		Intent:               map[string]any{"name": "page_read", "arguments": map[string]any{"url": "https://example.com"}},
+		Snapshot:             contextsvc.TaskContextSnapshot{InputType: "text", Text: "请读取页面", BrowserKind: "chrome", PageURL: "https://example.com", PageTitle: "Example Page"},
+		DeliveryType:         "result_page",
+		ResultTitle:          "页面读取结果",
+		ApprovalGranted:      true,
+		ApprovedOperation:    "page_read",
+		ApprovedTargetObject: "https://example.com",
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	deliveryResult := result.DeliveryResult
+	if deliveryResult["type"] != "result_page" {
+		t.Fatalf("expected result_page delivery result, got %+v", deliveryResult)
+	}
+	payload := deliveryResult["payload"].(map[string]any)
+	if payload["path"] != nil {
+		t.Fatalf("expected result_page delivery to keep payload path empty, got %+v", payload)
+	}
+	if payload["url"] != delivery.ResolveResultPageURL("task_005_result_page") {
+		t.Fatalf("expected result_page delivery to expose stable url, got %+v", payload)
+	}
+}
+
 func TestExecuteDirectSidecarPageSearchUsesToolExecutor(t *testing.T) {
 	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", stubPlaywrightClient{searchResult: tools.BrowserPageSearchResult{
 		Matches:    []string{"example text match"},
@@ -2073,6 +2111,47 @@ func TestExecuteDirectSidecarStructuredDOMUsesToolExecutor(t *testing.T) {
 	}
 	if result.ToolOutput["summary_output"] == nil {
 		t.Fatalf("expected summary output, got %+v", result.ToolOutput)
+	}
+}
+
+func TestExecuteDirectBrowserSnapshotPreservesResultPageDelivery(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", stubPlaywrightClient{snapshotResult: tools.BrowserSnapshotResult{
+		BrowserAttachedPageResult: tools.BrowserAttachedPageResult{
+			BrowserExecutionMetadata: tools.BrowserExecutionMetadata{Attached: true, BrowserKind: "chrome"},
+			PageIndex:                1,
+			URL:                      "https://example.com/docs",
+			Title:                    "Docs",
+		},
+		TextContent: "Snapshot body",
+		Headings:    []string{"Docs"},
+	}})
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:          "task_browser_snapshot_result_page",
+		RunID:           "run_browser_snapshot_result_page",
+		Title:           "浏览器快照",
+		Intent:          map[string]any{"name": "browser_snapshot", "arguments": map[string]any{}},
+		Snapshot:        contextsvc.TaskContextSnapshot{InputType: "text", Text: "请总结当前浏览器页", BrowserKind: "chrome", PageURL: "https://example.com/docs", PageTitle: "Docs"},
+		DeliveryType:    "result_page",
+		ResultTitle:     "浏览器快照结果",
+		ApprovalGranted: true,
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if result.ToolName != "browser_snapshot" {
+		t.Fatalf("expected browser_snapshot tool, got %s", result.ToolName)
+	}
+	deliveryResult := result.DeliveryResult
+	if deliveryResult["type"] != "result_page" {
+		t.Fatalf("expected result_page delivery result, got %+v", deliveryResult)
+	}
+	payload := deliveryResult["payload"].(map[string]any)
+	if payload["url"] != delivery.ResolveResultPageURL("task_browser_snapshot_result_page") || payload["path"] != nil {
+		t.Fatalf("expected browser_snapshot delivery payload to expose stable result_page url, got %+v", payload)
+	}
+	if result.ToolOutput["summary_output"] == nil {
+		t.Fatalf("expected browser_snapshot summary output, got %+v", result.ToolOutput)
 	}
 }
 
