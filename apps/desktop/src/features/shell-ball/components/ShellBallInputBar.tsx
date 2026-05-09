@@ -65,6 +65,7 @@ export function ShellBallInputBar({
   const buttonsDisabled = isHidden || isReadonly || isVoice;
   const submitDisabled = !isInteractive || (!allowEmptySubmit && trimmedValue === "" && !hasPendingFiles);
   const auxiliaryActionLabel = auxiliaryAction === "cancel" ? "退出意图修改" : "添加文件";
+  const visibleLabel = label?.trim() ?? "";
 
   useLayoutEffect(() => {
     const field = inputRef.current;
@@ -197,7 +198,7 @@ export function ShellBallInputBar({
           placeholder={isVoice ? "语音输入中" : placeholder ?? ""}
           rows={1}
         />
-        <span>{label}</span>
+        {visibleLabel === "" ? null : <span>{visibleLabel}</span>}
         <i />
       </div>
       <div className="shell-ball-uiverse-actions">

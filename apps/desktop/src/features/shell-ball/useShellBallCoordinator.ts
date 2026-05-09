@@ -41,7 +41,6 @@ import { readClipboardText } from "@/services/clipboardService";
 import { startTaskFromSelectedText } from "@/services/taskService";
 import { requestDashboardTaskDetailOpen } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import {
-  buildShellBallIntentCorrectionLabel,
   buildShellBallIntentCorrectionPlaceholder,
 } from "./shellBallIntentCorrection";
 import {
@@ -149,7 +148,7 @@ type ShellBallIntentCorrectionSession = {
 };
 
 type ShellBallIntentCorrectionViewModel = {
-  label: string;
+  label?: string;
   placeholder: string;
   submitting: boolean;
 };
@@ -1115,8 +1114,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     () => intentCorrection === null
       ? null
       : {
-          label: buildShellBallIntentCorrectionLabel(intentCorrection.intentLabel),
-          placeholder: buildShellBallIntentCorrectionPlaceholder(intentCorrection.intentLabel),
+          placeholder: buildShellBallIntentCorrectionPlaceholder(),
           submitting: intentCorrection.status === "submitting",
         },
     [intentCorrection],
