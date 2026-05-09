@@ -1,5 +1,6 @@
 import {
   ERROR_CODES,
+  type AgentTaskControlResult,
   type AgentTaskConfirmParams,
   type AgentTaskConfirmResult,
   type AgentTaskSteerResult,
@@ -15,7 +16,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { JsonRpcClientError } from "@/rpc/client";
-import { confirmTask, respondSecurityDetailed, steerTask } from "@/rpc/methods";
+import { confirmTask, controlTask, respondSecurityDetailed, steerTask } from "@/rpc/methods";
 import { subscribeAllTaskRuntime, subscribeApprovalPending, subscribeDeliveryReady, subscribeTaskUpdated } from "@/rpc/subscriptions";
 import { submitTextInput } from "@/services/agentInputService";
 import {
@@ -874,6 +875,39 @@ function createShellBallSteerBubbleItem(
   return createShellBallTextBubbleItem({
     role: "agent",
     text: "已记录新的补充要求，后续执行会纳入该指令。",
+    bubbleType: "status",
+    createdAt: fallbackCreatedAt,
+    taskId: result.task.task_id,
+    turnIndex: turnOrder.turnIndex,
+    turnPhase: turnOrder.turnPhase,
+  });
+}
+
+// Task-control replies are plain status acknowledgements too, so shell-ball
+// should surface the backend bubble directly when a user cancels a task.
+function createShellBallTaskControlBubbleItem(
+  result: AgentTaskControlResult,
+  fallbackCreatedAt: string,
+  turnOrder: ShellBallBubbleTurnOrder = {},
+) {
+  const bubbleMessage = result.bubble_message;
+  const bubbleText = bubbleMessage?.text.trim() ?? "";
+
+  if (bubbleMessage !== null && bubbleText !== "") {
+    return {
+      bubble: {
+        ...bubbleMessage,
+        hidden: false,
+        pinned: false,
+      },
+      role: "agent",
+      desktop: createShellBallBubbleDesktopState(turnOrder),
+    } satisfies ShellBallBubbleItem;
+  }
+
+  return createShellBallTextBubbleItem({
+    role: "agent",
+    text: "任务已取消。",
     bubbleType: "status",
     createdAt: fallbackCreatedAt,
     taskId: result.task.task_id,
@@ -2546,12 +2580,9 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
 
       pendingIntentDecisionTaskIdsRef.current.add(normalizedTaskId);
 
-      const importRpcMethods = new Function("return import('../../rpc/methods')") as () => Promise<{
-        confirmTask: (request: AgentTaskConfirmParams) => Promise<AgentTaskConfirmResult>;
-      }>;
       const createdAt = new Date().toISOString();
       const turnIndex = allocateBubbleTurnIndex();
-      const decisionText = payload.decision === "confirm" ? "确认" : "取消";
+      const decisionText = payload.decision === "confirm" ? "确认" : "取消任务";
 
       bindTaskToBubbleTurn(normalizedTaskId, turnIndex);
 
@@ -2573,30 +2604,48 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       const finishPendingTaskRegistration = beginPendingShellBallTaskRegistration();
 
       try {
-        const rpcMethods = await importRpcMethods();
-        const result = await rpcMethods.confirmTask({
-          confirmed: payload.decision === "confirm",
-          corrected_intent: payload.correctedIntent,
-          request_meta: createShellBallRequestMeta(),
-          task_id: normalizedTaskId,
-        });
+        if (payload.decision === "confirm") {
+          const result = await confirmTask({
+            confirmed: true,
+            request_meta: createShellBallRequestMeta(),
+            task_id: normalizedTaskId,
+          });
+          const task = result.task;
 
-        const task = result.task;
+          syncShellBallVisualStateFromTaskStatus(task.status);
+          registerShellBallTask(task.task_id, turnIndex, task.status, task.intent?.name ?? null);
+          setBubbleItems((currentItems) =>
+            sortShellBallBubbleItemsByTimestamp([
+              ...currentItems,
+              createShellBallAgentBubbleItem(result, new Date().toISOString(), {
+                turnIndex,
+                turnPhase: 1,
+              }),
+            ]),
+          );
+          revealBubbleRegionRef.current();
+          void autoOpenShellBallDeliveryResult(task.task_id, result.delivery_result);
+        } else {
+          const result = await controlTask({
+            action: "cancel",
+            request_meta: createShellBallRequestMeta(),
+            task_id: normalizedTaskId,
+          });
+          const task = result.task;
 
-        syncShellBallVisualStateFromTaskStatus(task.status);
-        registerShellBallTask(task.task_id, turnIndex, task.status, task.intent?.name ?? null);
-
-        setBubbleItems((currentItems) =>
-          sortShellBallBubbleItemsByTimestamp([
-            ...currentItems,
-            createShellBallAgentBubbleItem(result, new Date().toISOString(), {
-              turnIndex,
-              turnPhase: 1,
-            }),
-          ]),
-        );
-        revealBubbleRegionRef.current();
-        void autoOpenShellBallDeliveryResult(task.task_id, result.delivery_result);
+          syncShellBallVisualStateFromTaskStatus(task.status);
+          registerShellBallTask(task.task_id, turnIndex, task.status, task.intent?.name ?? null);
+          setBubbleItems((currentItems) =>
+            sortShellBallBubbleItemsByTimestamp([
+              ...currentItems,
+              createShellBallTaskControlBubbleItem(result, new Date().toISOString(), {
+                turnIndex,
+                turnPhase: 1,
+              }),
+            ]),
+          );
+          revealBubbleRegionRef.current();
+        }
       } catch (error) {
         console.warn("shell-ball intent decision failed", error);
         setBubbleItems((currentItems) =>
@@ -3239,7 +3288,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     } satisfies ShellBallIntentDecisionPayload);
   }, [exitIntentCorrectionMode, handlePrimaryAction]);
 
-  const handleCancelIntentBubble = useCallback((taskId: string) => {
+  const handleCancelTaskBubble = useCallback((taskId: string) => {
     const normalizedTaskId = taskId.trim();
     if (
       normalizedTaskId === ""
@@ -3310,7 +3359,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     handleClipboardPrompt,
     handlePrimaryAction,
     handleBubbleAction,
-    handleCancelIntentBubble,
+    handleCancelTaskBubble,
     handleConfirmIntentBubble,
     handleModifyIntentBubble,
     handleCancelIntentCorrection,

@@ -242,7 +242,7 @@ function createSecurityPendingList(): AgentSecurityPendingListResult {
   };
 }
 
-function readStringParam(params: unknown, key: "approval_id" | "task_id"): string | null {
+function readStringParam(params: unknown, key: "action" | "approval_id" | "task_id"): string | null {
   if (!params || typeof params !== "object") {
     return null;
   }
@@ -579,12 +579,36 @@ export async function getTaskDetail(_params?: unknown): Promise<AgentTaskDetailG
   return createTaskDetailResult();
 }
 
-export async function controlTask(_params?: unknown): Promise<AgentTaskControlResult> {
+export async function controlTask(params?: unknown): Promise<AgentTaskControlResult> {
+  const taskId = readStringParam(params, "task_id") ?? "task_stub";
+  const action = readStringParam(params, "action") ?? "pause";
+
+  if (action === "cancel") {
+    return {
+      task: {
+        ...createTask("cancelled", "cancelled"),
+        task_id: taskId,
+      },
+      bubble_message: {
+        bubble_id: "bubble_control_stub",
+        task_id: taskId,
+        type: "status",
+        text: "The task was cancelled.",
+        pinned: false,
+        hidden: false,
+        created_at: new Date().toISOString(),
+      },
+    };
+  }
+
   return {
-    task: createTask("processing", "collect_input"),
+    task: {
+      ...createTask("processing", "collect_input"),
+      task_id: taskId,
+    },
     bubble_message: {
       bubble_id: "bubble_control_stub",
-      task_id: "task_stub",
+      task_id: taskId,
       type: "status",
       text: "The requested task control action was accepted.",
       pinned: false,

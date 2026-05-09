@@ -415,7 +415,7 @@ export function ShellBallApp() {
     handleSelectedTextPrompt: handleCoordinatorSelectedTextPrompt,
     handlePrimaryAction: handleCoordinatorPrimaryAction,
     handleBubbleAction: handleCoordinatorBubbleAction,
-    handleCancelIntentBubble: handleCoordinatorCancelIntentBubble,
+    handleCancelTaskBubble: handleCoordinatorCancelTaskBubble,
     handleConfirmIntentBubble: handleCoordinatorConfirmIntentBubble,
     handleModifyIntentBubble: handleCoordinatorModifyIntentBubble,
     handleCancelIntentCorrection: handleCoordinatorCancelIntentCorrection,
@@ -1233,7 +1233,7 @@ export function ShellBallApp() {
                 <ShellBallBubbleZone
                   visualState={snapshot.visualState}
                   bubbleItems={visibleBubbleItems}
-                  onCancelIntentBubble={handleCoordinatorCancelIntentBubble}
+                  onCancelTaskBubble={handleCoordinatorCancelTaskBubble}
                   onConfirmIntentBubble={handleCoordinatorConfirmIntentBubble}
                   onModifyIntentBubble={handleCoordinatorModifyIntentBubble}
                   onAllowApprovalBubble={(bubbleId) => {

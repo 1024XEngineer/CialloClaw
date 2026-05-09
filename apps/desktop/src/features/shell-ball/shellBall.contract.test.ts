@@ -8997,6 +8997,19 @@ test("shell-ball input bar mode stays aligned with visual states", () => {
   assert.equal(getShellBallInputBarMode("voice_locked"), "hidden");
 });
 
+test("intent confirm cancel action is wired to formal task cancellation", () => {
+  const bubbleMessageSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallBubbleMessage.tsx"), "utf8");
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+
+  assert.match(bubbleMessageSource, />取消任务</);
+  assert.match(bubbleMessageSource, /data-bubble-action="cancel_task"/);
+  assert.match(coordinatorSource, /const decisionText = payload\.decision === "confirm" \? "确认" : "取消任务";/);
+  assert.match(
+    coordinatorSource,
+    /payload\.decision === "confirm"\s*\?\s*await confirmTask\([\s\S]*:\s*await controlTask\(\{[\s\S]*action:\s*"cancel"/,
+  );
+});
+
 test("shell-ball text submit clears drafts before RPC completion and fully restores failed optimistic submits", () => {
   const interactionSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallInteraction.ts"), "utf8");
 

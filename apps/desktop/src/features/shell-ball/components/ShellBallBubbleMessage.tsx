@@ -7,7 +7,7 @@ type ShellBallBubbleMessageProps = {
   onPin?: (bubbleId: string) => void;
   onAllowApproval?: (bubbleId: string) => void;
   onDenyApproval?: (bubbleId: string) => void;
-  onCancelIntent?: (taskId: string) => void;
+  onCancelTask?: (taskId: string) => void;
   onConfirmIntent?: (taskId: string) => void;
   onModifyIntent?: (taskId: string) => void;
 };
@@ -18,7 +18,7 @@ export function ShellBallBubbleMessage({
   onPin,
   onAllowApproval,
   onDenyApproval,
-  onCancelIntent,
+  onCancelTask,
   onConfirmIntent,
   onModifyIntent,
 }: ShellBallBubbleMessageProps) {
@@ -38,7 +38,7 @@ export function ShellBallBubbleMessage({
     && item.bubble.type === "intent_confirm"
     && taskId !== ""
     && onConfirmIntent !== undefined
-    && onCancelIntent !== undefined
+    && onCancelTask !== undefined
     && onModifyIntent !== undefined;
   const shouldShowBubbleControls = !shouldShowInlineApprovalActions && !shouldShowIntentActions;
 
@@ -145,15 +145,15 @@ export function ShellBallBubbleMessage({
             <button
               type="button"
               className="shell-ball-bubble-message__intent-action shell-ball-bubble-message__intent-action--cancel"
-              data-bubble-action="cancel_intent"
+              data-bubble-action="cancel_task"
               data-bubble-id={bubbleId}
               aria-label="取消当前任务"
               disabled={intentConfirmBusy}
               onClick={() => {
-                onCancelIntent?.(taskId);
+                onCancelTask?.(taskId);
               }}
             >
-              取消
+              取消任务
             </button>
             <button
               type="button"
