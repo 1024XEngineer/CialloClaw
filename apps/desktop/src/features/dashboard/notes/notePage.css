@@ -1768,6 +1768,30 @@
   border-color: color-mix(in srgb, var(--note-accent) 40%, var(--note-line) 60%);
 }
 
+.note-detail-card__action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.note-detail-card__action--accent {
+  background: color-mix(in srgb, var(--note-paper-strong) 74%, var(--note-accent) 26%);
+  border-color: color-mix(in srgb, var(--note-accent) 46%, var(--note-line) 54%);
+}
+
+.note-detail-card__action--accent:hover {
+  background: color-mix(in srgb, var(--note-paper-strong) 66%, var(--note-accent) 34%);
+}
+
+.note-detail-card__action--warn {
+  background: color-mix(in srgb, var(--note-paper-strong) 80%, #d58d52 20%);
+  border-color: color-mix(in srgb, #d58d52 40%, var(--note-line) 60%);
+}
+
+.note-detail-card__action--warn:hover {
+  background: color-mix(in srgb, var(--note-paper-strong) 72%, #d58d52 28%);
+}
+
 .note-detail-card__copy,
 .note-empty-state__copy {
   line-height: 1.65;
@@ -1827,6 +1851,10 @@
   font-size: 0.78rem;
   line-height: 1.55;
   margin: 0;
+}
+
+.note-preview-page__board-card-title--spacious {
+  font-size: 1.12rem;
 }
 
 .note-detail-schedule-editor {

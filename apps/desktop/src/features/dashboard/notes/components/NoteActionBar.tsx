@@ -126,12 +126,6 @@ function getActions(item: NoteListItem): NoteActionDescriptor[] {
 
   if (item.item.bucket === "recurring_rule") {
     return [
-      {
-        action: "toggle-recurring",
-        label: item.experience.isRecurringEnabled ? "暂停重复" : "开启重复",
-        tooltip: "暂停或重新开启这条重复规则。",
-      },
-      { action: "edit", label: "修改规则", tooltip: "打开源便签编辑器并修改时间或重复规则。" },
       { action: "cancel-recurring", label: "取消规则", tooltip: "取消整条重复规则。" },
       ...resourceActions,
       ...taskActions,

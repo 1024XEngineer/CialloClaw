@@ -16,6 +16,7 @@ type NoteDetailPanelProps = {
   onClose: () => void;
   onOpenLinkedTask?: () => void;
   onOpenResource?: (resourceId: string) => void;
+  onToggleRecurring?: () => void;
   scheduleActionLabel?: string;
   scheduleDisabledReason?: string | null;
   scheduleDueAt?: string;
@@ -79,6 +80,7 @@ export function NoteDetailPanel({
   onClose,
   onOpenLinkedTask,
   onOpenResource,
+  onToggleRecurring,
   scheduleActionLabel = "安排时间",
   scheduleDisabledReason = null,
   scheduleDueAt = "",
@@ -98,6 +100,11 @@ export function NoteDetailPanel({
   const scheduleRequiresStartTime = scheduleRepeatRule.trim() !== "" && scheduleDueAt.trim() === "";
   const scheduleEditDisabled = scheduleDisabledReason !== null || isSavingSchedule;
   const scheduleSaveDisabled = scheduleEditDisabled || !hasScheduleDraft || scheduleRequiresStartTime;
+  const isRecurringRule = item.item.bucket === "recurring_rule";
+  const recurringToggleLabel = item.experience.isRecurringEnabled ? "暂停重复" : "开启重复";
+  const recurringCollapsedHint = item.experience.isRecurringEnabled
+    ? "当前规则正在生效；可以直接暂停，也可以继续修改首次时间和重复规则。"
+    : "当前规则已暂停，不会继续生成新的巡检实例；点击“开启重复”可立即恢复。";
   const scheduleHelperText = scheduleDisabledReason
     ?? (scheduleRequiresStartTime
       ? "设置重复规则前请先填写首次时间。"
@@ -301,11 +308,29 @@ export function NoteDetailPanel({
                     </motion.div>
                   ) : (
                     <>
-                      <Button className="note-detail-card__action" disabled={scheduleDisabledReason !== null} onClick={onStartScheduleEdit} type="button" variant="outline">
-                        <CalendarClock className="h-4 w-4" />
-                        {scheduleActionLabel}
-                      </Button>
-                      <p className="note-detail-card__hint">{scheduleHelperText}</p>
+                      <div className="note-detail-card__action-row">
+                        <Button className="note-detail-card__action" disabled={scheduleDisabledReason !== null} onClick={onStartScheduleEdit} type="button" variant="outline">
+                          <CalendarClock className="h-4 w-4" />
+                          {scheduleActionLabel}
+                        </Button>
+                        {isRecurringRule && onToggleRecurring ? (
+                          <Button
+                            className={cn(
+                              "note-detail-card__action",
+                              item.experience.isRecurringEnabled
+                                ? "note-detail-card__action--warn"
+                                : "note-detail-card__action--accent",
+                            )}
+                            onClick={onToggleRecurring}
+                            type="button"
+                            variant="outline"
+                          >
+                            <Repeat className="h-4 w-4" />
+                            {recurringToggleLabel}
+                          </Button>
+                        ) : null}
+                      </div>
+                      <p className="note-detail-card__hint">{isRecurringRule ? recurringCollapsedHint : scheduleHelperText}</p>
                     </>
                   )}
                 </div>
