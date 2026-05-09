@@ -27,6 +27,34 @@ func TestTaskIDsFromResponseCollectsNestedIDs(t *testing.T) {
 	}
 }
 
+func TestOwnedTaskIDsForReplayIgnoresAggregateReadResponseTaskIDs(t *testing.T) {
+	response := newSuccessEnvelope(json.RawMessage(`"req-task-list"`), map[string]any{
+		"items": []any{
+			map[string]any{"task_id": "task_list_a"},
+			map[string]any{"task_id": "task_list_b"},
+		},
+	}, "2026-04-08T10:00:00Z")
+
+	taskIDs := ownedTaskIDsForReplay("agent.task.list", nil, response)
+	if taskIDs != nil {
+		t.Fatalf("expected aggregate read response not to claim task ownership, got %v", taskIDs)
+	}
+}
+
+func TestOwnedTaskIDsForReplayClaimsResponseTaskIDsForTaskStart(t *testing.T) {
+	response := newSuccessEnvelope(json.RawMessage(`"req-task-start"`), map[string]any{
+		"task": map[string]any{
+			"task_id": "task_started",
+		},
+	}, "2026-04-08T10:00:00Z")
+
+	taskIDs := ownedTaskIDsForReplay("agent.task.start", nil, response)
+	expected := []string{"task_started"}
+	if !reflect.DeepEqual(taskIDs, expected) {
+		t.Fatalf("expected task.start to claim response task ids %v, got %v", expected, taskIDs)
+	}
+}
+
 func TestRequestRoutingHintsExtractsTaskSessionAndTrace(t *testing.T) {
 	request := requestEnvelope{
 		JSONRPC: "2.0",
