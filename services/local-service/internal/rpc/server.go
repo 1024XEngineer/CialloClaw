@@ -55,10 +55,12 @@ func NewServer(cfg serviceconfig.RPCConfig, orchestrator *orchestrator.Service) 
 	mux.HandleFunc("/events", server.handleDebugEvents)
 	mux.HandleFunc("/events/stream", server.handleDebugEventStream)
 
-	server.debugHTTPServer = &http.Server{
-		Addr:              cfg.DebugHTTPAddress,
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
+	if cfg.DebugHTTPAddress != "" {
+		server.debugHTTPServer = &http.Server{
+			Addr:              cfg.DebugHTTPAddress,
+			Handler:           mux,
+			ReadHeaderTimeout: 5 * time.Second,
+		}
 	}
 
 	return server

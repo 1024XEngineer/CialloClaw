@@ -71,9 +71,12 @@ func pageMap(limit, offset, total int) map[string]any {
 }
 
 func (s *Service) listTasksFromStructuredStorage(group, sortBy, sortOrder string, limit, offset int) ([]runengine.TaskRecord, int, bool) {
-	records, _, err := s.storage.TaskStore().ListTasks(context.Background(), 0, 0)
-	if err != nil || len(records) == 0 {
+	records, total, err := s.storage.TaskStore().ListTasksForTaskList(context.Background(), group, sortBy, sortOrder, limit, offset)
+	if err != nil {
 		return nil, 0, false
+	}
+	if len(records) == 0 {
+		return []runengine.TaskRecord{}, total, total > 0
 	}
 	tasks := make([]runengine.TaskRecord, 0, len(records))
 	for _, record := range records {
@@ -81,24 +84,96 @@ func (s *Service) listTasksFromStructuredStorage(group, sortBy, sortOrder string
 		if !ok {
 			continue
 		}
-		if !matchesTaskGroup(task, group) {
-			continue
-		}
 		tasks = append(tasks, task)
 	}
-	if len(tasks) == 0 {
-		return nil, 0, false
+	return tasks, total, true
+}
+
+func (s *Service) taskListRecords(group, sortBy, sortOrder string, limit, offset int) ([]runengine.TaskRecord, int) {
+	runtimeTasks, _ := s.runEngine.ListTasks(group, sortBy, sortOrder, 0, 0)
+	storageTasks, storageTotal, storageReady := s.listTaskPageFromStorage(group, sortBy, sortOrder, limit, offset, runtimeTasks)
+	if !storageReady {
+		total := len(runtimeTasks)
+		if offset >= total {
+			return []runengine.TaskRecord{}, total
+		}
+		end := offset + limit
+		if limit <= 0 || end > total {
+			end = total
+		}
+		return runtimeTasks[offset:end], total
 	}
-	runengineSortTaskRecords(tasks, sortBy, sortOrder)
-	total := len(tasks)
-	if offset >= total {
-		return []runengine.TaskRecord{}, total, true
+	merged := mergeTaskLists(runtimeTasks, storageTasks)
+	if len(merged) > 0 {
+		runengineSortTaskRecords(merged, sortBy, sortOrder)
+	}
+	total := storageTotal + s.countRuntimeOnlyTasksForList(group, runtimeTasks)
+	if offset >= len(merged) {
+		return []runengine.TaskRecord{}, total
 	}
 	end := offset + limit
-	if limit <= 0 || end > total {
-		end = total
+	if limit <= 0 || end > len(merged) {
+		end = len(merged)
 	}
-	return tasks[offset:end], total, true
+	return merged[offset:end], total
+}
+
+func (s *Service) loadAllTaskListFromStorage() []runengine.TaskRecord {
+	if s.storage == nil {
+		return nil
+	}
+	structuredTasks := []runengine.TaskRecord(nil)
+	if s.storage.TaskStore() != nil {
+		structuredTasks = s.loadAllTasksFromStructuredStorage(false)
+	}
+	if len(structuredTasks) == 0 {
+		return s.loadAllTasksFromTaskRunStorage()
+	}
+	legacyTasks := s.loadLegacyTaskRunsFromStorage(structuredTasks)
+	if len(legacyTasks) == 0 {
+		return structuredTasks
+	}
+	return mergeStructuredTaskListCompatibility(structuredTasks, legacyTasks)
+}
+
+func (s *Service) listTaskPageFromStorage(group, sortBy, sortOrder string, limit, offset int, runtimeTasks []runengine.TaskRecord) ([]runengine.TaskRecord, int, bool) {
+	if s.storage == nil {
+		return nil, 0, false
+	}
+	window := offset + limit + len(runtimeTasks)
+	if limit <= 0 {
+		window = 0
+	}
+	structuredTasks := []runengine.TaskRecord(nil)
+	structuredTotal := 0
+	structuredReady := false
+	if s.storage.TaskStore() != nil {
+		tasks, total, ok := s.listTasksFromStructuredStorage(group, sortBy, sortOrder, window, 0)
+		if ok {
+			structuredTasks = tasks
+			structuredTotal = total
+			structuredReady = true
+		}
+	}
+	legacyTasks := []runengine.TaskRecord(nil)
+	legacyTotal := 0
+	legacyReady := false
+	if s.storage.TaskRunStore() != nil {
+		records, total, err := s.storage.TaskRunStore().ListLegacyTaskRunsForTaskList(context.Background(), group, sortBy, sortOrder, window, 0)
+		if err == nil {
+			legacyTasks = make([]runengine.TaskRecord, 0, len(records))
+			for _, record := range records {
+				legacyTasks = append(legacyTasks, taskRecordFromStorage(record))
+			}
+			legacyTotal = total
+			legacyReady = true
+		}
+	}
+	if structuredReady || legacyReady {
+		return mergeStructuredTaskListCompatibility(structuredTasks, legacyTasks), structuredTotal + legacyTotal, true
+	}
+	storageTasks := filterAndSortTasks(s.loadAllTaskListFromStorage(), group, sortBy, sortOrder)
+	return storageTasks, len(storageTasks), len(storageTasks) != 0
 }
 
 func (s *Service) loadAllTasksFromStorage() []runengine.TaskRecord {
@@ -107,7 +182,7 @@ func (s *Service) loadAllTasksFromStorage() []runengine.TaskRecord {
 	}
 	structuredTasks := []runengine.TaskRecord(nil)
 	if s.storage.TaskStore() != nil {
-		structuredTasks = s.loadAllTasksFromStructuredStorage()
+		structuredTasks = s.loadAllTasksFromStructuredStorage(true)
 	}
 	if len(structuredTasks) == 0 {
 		return s.loadAllTasksFromTaskRunStorage()
@@ -181,20 +256,135 @@ func mergeStructuredTaskListCompatibility(structuredTasks, taskRunTasks []runeng
 	return merged
 }
 
-func (s *Service) loadAllTasksFromStructuredStorage() []runengine.TaskRecord {
+func (s *Service) loadAllTasksFromStructuredStorage(includeCompatibility bool) []runengine.TaskRecord {
 	records, _, err := s.storage.TaskStore().ListTasks(context.Background(), 0, 0)
 	if err != nil || len(records) == 0 {
 		return nil
 	}
 	tasks := make([]runengine.TaskRecord, 0, len(records))
 	for _, record := range records {
-		task, ok := s.structuredTaskRecordToRuntime(record, false)
+		task, ok := s.structuredTaskRecordToRuntime(record, includeCompatibility)
 		if !ok {
 			continue
 		}
 		tasks = append(tasks, task)
 	}
 	return tasks
+}
+
+func (s *Service) countRuntimeOnlyTasksForList(group string, runtimeTasks []runengine.TaskRecord) int {
+	if s == nil || s.storage == nil || s.storage.TaskStore() == nil {
+		return len(runtimeTasks)
+	}
+	structuredStatuses, legacyStatuses, ok := s.taskListStorageStatusesByID(runtimeTasks)
+	if !ok {
+		return s.countRuntimeOnlyTasksForListFallback(group, runtimeTasks)
+	}
+	count := 0
+	for _, runtimeTask := range runtimeTasks {
+		taskID := strings.TrimSpace(runtimeTask.TaskID)
+		if taskID == "" {
+			count++
+			continue
+		}
+		if status, exists := structuredStatuses[taskID]; exists {
+			if !matchesTaskGroup(runengine.TaskRecord{Status: status}, group) {
+				count++
+			}
+			continue
+		}
+		if status, exists := legacyStatuses[taskID]; exists {
+			if !matchesTaskGroup(runengine.TaskRecord{Status: status}, group) {
+				count++
+			}
+			continue
+		}
+		count++
+	}
+	return count
+}
+
+// taskListStorageStatusesByID batches the structured and legacy compatibility
+// lookups needed to decide whether one live runtime task is truly absent from
+// the current task-list group or simply fresher than persisted state.
+func (s *Service) taskListStorageStatusesByID(runtimeTasks []runengine.TaskRecord) (map[string]string, map[string]string, bool) {
+	taskIDs := runtimeTaskIDs(runtimeTasks)
+	if len(taskIDs) == 0 {
+		return map[string]string{}, map[string]string{}, true
+	}
+	structuredStatuses := make(map[string]string, len(taskIDs))
+	if s.storage.TaskStore() != nil {
+		records, err := s.storage.TaskStore().ListTasksByIDs(context.Background(), taskIDs)
+		if err != nil {
+			return nil, nil, false
+		}
+		for _, record := range records {
+			structuredStatuses[strings.TrimSpace(record.TaskID)] = record.Status
+		}
+	}
+	legacyStatuses := make(map[string]string, len(taskIDs))
+	if s.storage.TaskRunStore() != nil {
+		records, err := s.storage.TaskRunStore().LoadLegacyTaskRunsByTaskIDs(context.Background(), taskIDs)
+		if err != nil {
+			return nil, nil, false
+		}
+		for _, record := range records {
+			legacyStatuses[strings.TrimSpace(record.TaskID)] = record.Status
+		}
+	}
+	return structuredStatuses, legacyStatuses, true
+}
+
+func runtimeTaskIDs(runtimeTasks []runengine.TaskRecord) []string {
+	taskIDs := make([]string, 0, len(runtimeTasks))
+	seen := make(map[string]struct{}, len(runtimeTasks))
+	for _, runtimeTask := range runtimeTasks {
+		taskID := strings.TrimSpace(runtimeTask.TaskID)
+		if taskID == "" {
+			continue
+		}
+		if _, duplicate := seen[taskID]; duplicate {
+			continue
+		}
+		seen[taskID] = struct{}{}
+		taskIDs = append(taskIDs, taskID)
+	}
+	return taskIDs
+}
+
+func (s *Service) countRuntimeOnlyTasksForListFallback(group string, runtimeTasks []runengine.TaskRecord) int {
+	if s == nil || s.storage == nil || s.storage.TaskStore() == nil {
+		return len(runtimeTasks)
+	}
+	count := 0
+	for _, runtimeTask := range runtimeTasks {
+		record, err := s.storage.TaskStore().GetTask(context.Background(), runtimeTask.TaskID)
+		if err != nil {
+			if storage.IsTaskRecordNotFound(err) {
+				if s.runtimeTaskExistsOnlyInLegacyStorage(runtimeTask.TaskID, group) {
+					continue
+				}
+				count++
+			}
+			continue
+		}
+		storedTask, ok := s.structuredTaskRecordToRuntime(record, false)
+		if !ok || !matchesTaskGroup(storedTask, group) {
+			count++
+		}
+	}
+	return count
+}
+
+func (s *Service) runtimeTaskExistsOnlyInLegacyStorage(taskID, group string) bool {
+	if s == nil || s.storage == nil || s.storage.TaskRunStore() == nil {
+		return false
+	}
+	records, err := s.storage.TaskRunStore().LoadLegacyTaskRunsByTaskIDs(context.Background(), []string{taskID})
+	if err != nil || len(records) == 0 {
+		return false
+	}
+	return matchesTaskGroup(runengine.TaskRecord{Status: records[0].Status}, group)
 }
 
 // taskQueryViews caches runtime and storage-backed task snapshots for one
@@ -751,19 +941,11 @@ func taskRecordFromStorage(record storage.TaskRunRecord) runengine.TaskRecord {
 	}
 }
 
-// structuredTaskRecordToRuntime hydrates one task-centric read model from the
-// new first-class tasks/task_steps tables while still reusing snapshot_json as
-// the compatibility bridge for fields that are not fully normalized yet.
+// structuredTaskRecordToRuntime builds one task-centric read model. List callers
+// pass includeCompatibility=false so each row only uses first-class task fields;
+// detail callers opt into timeline, formal artifacts, governance, and snapshot
+// compatibility reads.
 func (s *Service) structuredTaskRecordToRuntime(record storage.TaskRecord, includeCompatibility bool) (runengine.TaskRecord, bool) {
-	var snapshotCompatibility runengine.TaskRecord
-	var snapshotCompatibilityOK bool
-	if strings.TrimSpace(record.SnapshotJSON) != "" {
-		snapshot, err := storageTaskRunRecordFromSnapshotJSON(record.SnapshotJSON)
-		if err == nil {
-			snapshotCompatibility = taskRecordFromStorage(snapshot)
-			snapshotCompatibilityOK = true
-		}
-	}
 	startedAt, err := time.Parse(time.RFC3339Nano, record.StartedAt)
 	if err != nil {
 		return runengine.TaskRecord{}, false
@@ -803,12 +985,28 @@ func (s *Service) structuredTaskRecordToRuntime(record storage.TaskRecord, inclu
 		StartedAt:         startedAt,
 		UpdatedAt:         updatedAt,
 		FinishedAt:        finishedAt,
-		Timeline:          s.taskTimelineFromStructuredStorage(record.TaskID),
 		CurrentStepStatus: record.CurrentStepStatus,
 	}
+	if strings.TrimSpace(runtime.Title) == "" || strings.TrimSpace(runtime.SessionID) == "" || strings.TrimSpace(runtime.LoopStopReason) == "" {
+		s.hydrateStructuredTaskSessionAndRun(&runtime)
+	}
+	if !includeCompatibility {
+		return runtime, true
+	}
+
+	runtime.Timeline = s.taskTimelineFromStructuredStorage(record.TaskID)
 	s.hydrateStructuredTaskFormalArtifacts(&runtime)
-	s.hydrateStructuredTaskSessionAndRun(&runtime)
 	s.hydrateStructuredTaskGovernance(&runtime)
+
+	var snapshotCompatibility runengine.TaskRecord
+	var snapshotCompatibilityOK bool
+	if strings.TrimSpace(record.SnapshotJSON) != "" {
+		snapshot, err := storageTaskRunRecordFromSnapshotJSON(record.SnapshotJSON)
+		if err == nil {
+			snapshotCompatibility = taskRecordFromStorage(snapshot)
+			snapshotCompatibilityOK = true
+		}
+	}
 	if snapshotCompatibilityOK {
 		runtime = mergeStructuredTaskDetailCompatibility(runtime, snapshotCompatibility)
 	}

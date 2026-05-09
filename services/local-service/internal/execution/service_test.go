@@ -567,6 +567,255 @@ func TestExecuteAgentLoopReadsFileBeforeReturningAnswer(t *testing.T) {
 	}
 }
 
+func TestExecuteAgentLoopRetriesFalseCapabilityDenialBeforeCallingTool(t *testing.T) {
+	modelClient := &stubModelClient{
+		toolCalls: []model.ToolCallResult{
+			{
+				RequestID:  "req_loop_capability_retry_1",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "I cannot access workspace files in this environment.",
+			},
+			{
+				RequestID: "req_loop_capability_retry_2",
+				Provider:  "openai_responses",
+				ModelID:   "gpt-5.4",
+				ToolCalls: []model.ToolInvocation{{Name: "read_file", Arguments: map[string]any{"path": "notes/source.txt"}}},
+			},
+			{
+				RequestID:  "req_loop_capability_retry_3",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "I checked the file after the retry reminder.",
+			},
+		},
+	}
+	service, workspaceRoot := newTestExecutionServiceWithModelClient(t, modelClient)
+	sourcePath := filepath.Join(workspaceRoot, "notes", "source.txt")
+	if err := os.MkdirAll(filepath.Dir(sourcePath), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	if err := os.WriteFile(sourcePath, []byte("Important retry note"), 0o644); err != nil {
+		t.Fatalf("seed source file: %v", err)
+	}
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_loop_capability_retry",
+		RunID:        "run_loop_capability_retry",
+		Title:        "Loop capability retry test",
+		Intent:       map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "Please inspect the note and tell me the takeaway."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Loop result",
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+
+	if result.Content != "I checked the file after the retry reminder." {
+		t.Fatalf("unexpected loop output: %s", result.Content)
+	}
+	if modelClient.generateToolCallsCount != 3 {
+		t.Fatalf("expected three planning turns after capability retry, got %d", modelClient.generateToolCallsCount)
+	}
+	if len(result.ToolCalls) != 1 || result.ToolCalls[0].ToolName != "read_file" {
+		t.Fatalf("expected one read_file tool call after capability retry, got %+v", result.ToolCalls)
+	}
+	if len(modelClient.plannerInputs) < 2 {
+		t.Fatalf("expected planner inputs for retry flow, got %+v", modelClient.plannerInputs)
+	}
+	if !strings.Contains(modelClient.plannerInputs[0], "当前可用能力：") || !strings.Contains(modelClient.plannerInputs[0], "- read_file") {
+		t.Fatalf("expected first planner input to expose runtime capabilities, got %q", modelClient.plannerInputs[0])
+	}
+	if !strings.Contains(modelClient.plannerInputs[1], "能力提醒：") {
+		t.Fatalf("expected second planner input to include capability reminder, got %q", modelClient.plannerInputs[1])
+	}
+	if !strings.Contains(modelClient.plannerInputs[1], "当前这轮已经开放下列工具能力。") {
+		t.Fatalf("expected second planner input to restate tool availability, got %q", modelClient.plannerInputs[1])
+	}
+	if result.ModelInvocation["request_id"] != "req_loop_capability_retry_3" {
+		t.Fatalf("expected final model invocation metadata, got %+v", result.ModelInvocation)
+	}
+}
+
+func TestExecuteAgentLoopRetriesFalseWebCapabilityDenialsBeforeCallingTool(t *testing.T) {
+	tests := []struct {
+		name           string
+		inputText      string
+		capabilityLine string
+		wantTool       string
+		wantOutput     string
+		playwright     stubPlaywrightClient
+		toolCalls      []model.ToolCallResult
+	}{
+		{
+			name:           "page_read",
+			inputText:      "Please inspect https://example.com and summarize the page.",
+			capabilityLine: "- page_read",
+			wantTool:       "page_read",
+			wantOutput:     "I checked the page after the retry reminder.",
+			playwright: stubPlaywrightClient{readResult: tools.BrowserPageReadResult{
+				Title:       "Example Page",
+				TextContent: "example page content",
+				Source:      "playwright_sidecar",
+			}},
+			toolCalls: []model.ToolCallResult{
+				{
+					RequestID:  "req_loop_page_read_retry_1",
+					Provider:   "openai_responses",
+					ModelID:    "gpt-5.4",
+					OutputText: "I cannot browse websites from here.",
+				},
+				{
+					RequestID: "req_loop_page_read_retry_2",
+					Provider:  "openai_responses",
+					ModelID:   "gpt-5.4",
+					ToolCalls: []model.ToolInvocation{{Name: "page_read", Arguments: map[string]any{"url": "https://example.com"}}},
+				},
+				{
+					RequestID:  "req_loop_page_read_retry_3",
+					Provider:   "openai_responses",
+					ModelID:    "gpt-5.4",
+					OutputText: "I checked the page after the retry reminder.",
+				},
+			},
+		},
+		{
+			name:           "page_search",
+			inputText:      "Please search https://example.com for the word example.",
+			capabilityLine: "- page_search",
+			wantTool:       "page_search",
+			wantOutput:     "I searched the page after the retry reminder.",
+			playwright: stubPlaywrightClient{searchResult: tools.BrowserPageSearchResult{
+				Matches:    []string{"example result"},
+				MatchCount: 1,
+				Source:     "playwright_sidecar",
+			}},
+			toolCalls: []model.ToolCallResult{
+				{
+					RequestID:  "req_loop_page_search_retry_1",
+					Provider:   "openai_responses",
+					ModelID:    "gpt-5.4",
+					OutputText: "I cannot browse websites from here.",
+				},
+				{
+					RequestID: "req_loop_page_search_retry_2",
+					Provider:  "openai_responses",
+					ModelID:   "gpt-5.4",
+					ToolCalls: []model.ToolInvocation{{Name: "page_search", Arguments: map[string]any{"url": "https://example.com", "query": "example"}}},
+				},
+				{
+					RequestID:  "req_loop_page_search_retry_3",
+					Provider:   "openai_responses",
+					ModelID:    "gpt-5.4",
+					OutputText: "I searched the page after the retry reminder.",
+				},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			modelClient := &stubModelClient{toolCalls: append([]model.ToolCallResult(nil), test.toolCalls...)}
+			service, _ := newTestExecutionServiceWithPlaywright(t, "unused", test.playwright)
+			service = service.ReplaceModel(model.NewService(serviceconfig.ModelConfig{}, modelClient))
+
+			result, err := service.Execute(context.Background(), Request{
+				TaskID:               "task_loop_" + test.name + "_retry",
+				RunID:                "run_loop_" + test.name + "_retry",
+				Title:                "Loop " + test.name + " retry test",
+				Intent:               map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}},
+				Snapshot:             contextsvc.TaskContextSnapshot{InputType: "text", Text: test.inputText},
+				DeliveryType:         "bubble",
+				ResultTitle:          "Loop result",
+				ApprovalGranted:      true,
+				ApprovedOperation:    test.wantTool,
+				ApprovedTargetObject: "https://example.com",
+			})
+			if err != nil {
+				t.Fatalf("execute failed: %v", err)
+			}
+
+			if result.Content != test.wantOutput {
+				t.Fatalf("unexpected loop output: %s", result.Content)
+			}
+			if modelClient.generateToolCallsCount != 3 {
+				t.Fatalf("expected three planning turns after capability retry, got %d", modelClient.generateToolCallsCount)
+			}
+			if len(result.ToolCalls) != 1 || result.ToolCalls[0].ToolName != test.wantTool {
+				t.Fatalf("expected one %s tool call after capability retry, got %+v", test.wantTool, result.ToolCalls)
+			}
+			if result.ToolCalls[0].Output["loop_round"] != 2 {
+				t.Fatalf("expected retry-selected tool call to run on round 2, got %+v", result.ToolCalls[0].Output)
+			}
+			if len(modelClient.plannerInputs) < 2 {
+				t.Fatalf("expected planner inputs for retry flow, got %+v", modelClient.plannerInputs)
+			}
+			if !strings.Contains(modelClient.plannerInputs[0], "当前可用能力：") || !strings.Contains(modelClient.plannerInputs[0], test.capabilityLine) {
+				t.Fatalf("expected first planner input to expose runtime capabilities, got %q", modelClient.plannerInputs[0])
+			}
+			if !strings.Contains(modelClient.plannerInputs[1], "能力提醒：") {
+				t.Fatalf("expected second planner input to include capability reminder, got %q", modelClient.plannerInputs[1])
+			}
+			if !strings.Contains(modelClient.plannerInputs[1], "当前这轮已经开放下列工具能力。") || !strings.Contains(modelClient.plannerInputs[1], test.capabilityLine) {
+				t.Fatalf("expected second planner input to restate tool availability, got %q", modelClient.plannerInputs[1])
+			}
+			if result.ModelInvocation["request_id"] != test.toolCalls[2].RequestID {
+				t.Fatalf("expected final model invocation metadata, got %+v", result.ModelInvocation)
+			}
+		})
+	}
+}
+
+func TestExecuteAgentLoopDirectAnswerKeepsBoundedCapabilityCatalog(t *testing.T) {
+	modelClient := &stubModelClient{
+		toolCalls: []model.ToolCallResult{{
+			RequestID:  "req_loop_direct_answer",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "这是直接答复，不需要调用工具。",
+		}},
+	}
+	service, _ := newTestExecutionServiceWithModelClient(t, modelClient)
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_loop_direct_answer",
+		RunID:        "run_loop_direct_answer",
+		Title:        "Loop direct answer",
+		Intent:       map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "请直接回答这个简单问题。"},
+		DeliveryType: "bubble",
+		ResultTitle:  "Loop result",
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if result.Content != "这是直接答复，不需要调用工具。" {
+		t.Fatalf("unexpected loop output: %s", result.Content)
+	}
+	if modelClient.generateToolCallsCount != 1 {
+		t.Fatalf("expected a single planning turn for direct answer, got %d", modelClient.generateToolCallsCount)
+	}
+	if len(result.ToolCalls) != 0 {
+		t.Fatalf("expected no executed tool calls for direct answer, got %+v", result.ToolCalls)
+	}
+	if len(modelClient.plannerInputs) != 1 {
+		t.Fatalf("expected one planner input, got %+v", modelClient.plannerInputs)
+	}
+	if !strings.Contains(modelClient.plannerInputs[0], "当前可用能力：") || !strings.Contains(modelClient.plannerInputs[0], "- read_file") || !strings.Contains(modelClient.plannerInputs[0], "- list_dir") {
+		t.Fatalf("expected builtin capability catalog in planner input, got %q", modelClient.plannerInputs[0])
+	}
+	if !strings.Contains(modelClient.plannerInputs[0], "适用场景：") {
+		t.Fatalf("expected planner input to include capability guidance labels, got %q", modelClient.plannerInputs[0])
+	}
+	if strings.Contains(modelClient.plannerInputs[0], "page_read") || strings.Contains(modelClient.plannerInputs[0], "page_search") {
+		t.Fatalf("expected planner input without playwright tools to stay bounded to builtin tools, got %q", modelClient.plannerInputs[0])
+	}
+	if strings.Contains(modelClient.plannerInputs[0], "能力提醒：") {
+		t.Fatalf("expected direct answer path to avoid capability reminder, got %q", modelClient.plannerInputs[0])
+	}
+}
+
 func TestCompactAgentLoopHistoryKeepsRecentObservations(t *testing.T) {
 	history := []string{
 		"Tool read_file succeeded. Summary: {\"path\":\"notes/1.md\",\"excerpt\":\"alpha alpha alpha alpha alpha\"}",
@@ -983,6 +1232,59 @@ func TestExecuteBudgetDowngradeAllowsReadOnlyAgentLoopTools(t *testing.T) {
 	}
 }
 
+func TestExecuteBudgetDowngradeRetainsReadOnlyWebToolsInPlannerCatalog(t *testing.T) {
+	modelClient := &stubModelClient{
+		toolCalls: []model.ToolCallResult{{
+			RequestID:  "req_loop_budget_web_catalog",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "只读网页能力仍然可见。",
+		}},
+	}
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	service = service.ReplaceModel(model.NewService(serviceconfig.ModelConfig{}, modelClient))
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_budget_web_catalog",
+		RunID:        "run_budget_web_catalog",
+		Title:        "Budget web catalog",
+		Intent:       map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}},
+		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text", Text: "请检查网页读取能力。"},
+		DeliveryType: "bubble",
+		ResultTitle:  "Loop result",
+		BudgetDowngrade: map[string]any{
+			"applied":         true,
+			"trigger_reason":  "failure_pressure",
+			"degrade_actions": []string{"skip_expensive_tools", "lightweight_delivery"},
+			"summary":         "Budget downgrade fallback applied.",
+			"trace": map[string]any{
+				"expensive_tool_categories": []string{"command", "browser_mutation", "media_heavy"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("execute returned error: %v", err)
+	}
+	if result.Content != "只读网页能力仍然可见。" {
+		t.Fatalf("unexpected result content: %q", result.Content)
+	}
+	if len(modelClient.plannerInputs) != 1 {
+		t.Fatalf("expected one planner input, got %+v", modelClient.plannerInputs)
+	}
+	if !strings.Contains(modelClient.plannerInputs[0], "- page_read") || !strings.Contains(modelClient.plannerInputs[0], "- page_search") {
+		t.Fatalf("expected read-only web tools to remain visible under budget downgrade, got %q", modelClient.plannerInputs[0])
+	}
+	if !strings.Contains(modelClient.plannerInputs[0], "网页读取可能触发审批") {
+		t.Fatalf("expected planner input to preserve approval boundary for web tools, got %q", modelClient.plannerInputs[0])
+	}
+	if strings.Contains(modelClient.plannerInputs[0], "page_interact") || strings.Contains(modelClient.plannerInputs[0], "browser_interact") || strings.Contains(modelClient.plannerInputs[0], "browser_navigate") {
+		t.Fatalf("expected planner input to stay bounded to read-only web and browser capabilities, got %q", modelClient.plannerInputs[0])
+	}
+	if result.ModelInvocation["provider"] == "budget_downgrade_fallback" {
+		t.Fatalf("expected read-only web catalog path to avoid hard fallback, got %+v", result.ModelInvocation)
+	}
+}
+
 func TestExecuteBudgetDowngradeBlocksExpensiveDirectToolPath(t *testing.T) {
 	service, _ := newTestExecutionService(t, "executor-backed direct tool budget fallback")
 	result, err := service.Execute(context.Background(), Request{
@@ -1338,7 +1640,7 @@ func TestExecutePromptPathIncludesQueuedSteeringMessages(t *testing.T) {
 	if result.Content != "Prompt runtime finished with steering." {
 		t.Fatalf("unexpected prompt result: %+v", result)
 	}
-	if !strings.Contains(modelClient.input, "Follow-up steering:") || !strings.Contains(modelClient.input, "Focus on the network impact.") {
+	if !strings.Contains(modelClient.input, "Focus on the network impact.") || !strings.Contains(modelClient.input, "补充要求：") {
 		t.Fatalf("expected prompt input to include queued steering, got %q", modelClient.input)
 	}
 }
@@ -1352,6 +1654,51 @@ func TestRunStatusFromStopReasonTreatsToolRetryExhaustedAsFailed(t *testing.T) {
 func TestRunStatusFromStopReasonTreatsNeedUserInputAsWaitingInput(t *testing.T) {
 	if status := runStatusFromStopReason(agentloop.StopReasonNeedUserInput); status != "waiting_input" {
 		t.Fatalf("expected need_user_input to map to waiting_input, got %q", status)
+	}
+}
+
+func TestRunStatusFromStopReasonTreatsNoSupportedToolsAsFailed(t *testing.T) {
+	if status := runStatusFromStopReason(agentloop.StopReasonNoSupportedTools); status != "failed" {
+		t.Fatalf("expected no_supported_tools to map to failed, got %q", status)
+	}
+}
+
+func TestPersistAgentLoopRuntimeTreatsNoSupportedToolsAsFailed(t *testing.T) {
+	service, _ := newTestExecutionService(t, "test output")
+	store := &recordingLoopRuntimeStore{}
+	service = service.WithLoopRuntimeStore(store)
+	request := Request{
+		TaskID:     "task_no_supported_tools",
+		RunID:      "run_no_supported_tools",
+		Intent:     map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}},
+		SourceType: "text",
+	}
+	now := time.Now()
+	service.persistAgentLoopRuntime(request, agentloop.Result{
+		StopReason: agentloop.StopReasonNoSupportedTools,
+		Rounds: []agentloop.PersistedRound{{
+			StepID:       "step_no_tools",
+			RunID:        request.RunID,
+			TaskID:       request.TaskID,
+			AttemptIndex: 1,
+			SegmentKind:  "initial",
+			LoopRound:    1,
+			Name:         "agent_loop_round",
+			Status:       "failed",
+			StartedAt:    now,
+			CompletedAt:  now.Add(5 * time.Second),
+			StopReason:   agentloop.StopReasonNoSupportedTools,
+		}},
+	})
+	if len(store.runs) != 1 {
+		t.Fatalf("expected one run record, got %d", len(store.runs))
+	}
+	run := store.runs[0]
+	if run.Status != "failed" {
+		t.Fatalf("expected run status failed, got %q", run.Status)
+	}
+	if run.FinishedAt == "" {
+		t.Fatal("expected non-empty FinishedAt for no_supported_tools stop reason")
 	}
 }
 
@@ -1560,190 +1907,6 @@ func TestExecuteDirectBuiltinReadFileUsesToolExecutor(t *testing.T) {
 	}
 	if deliveryType, ok := result.DeliveryResult["type"].(string); !ok || deliveryType != "bubble" {
 		t.Fatalf("expected bubble delivery result, got %+v", result.DeliveryResult)
-	}
-}
-
-func TestExecuteDirectBrowserBuiltinsUseToolExecutor(t *testing.T) {
-	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", stubPlaywrightClient{
-		attachResult: tools.BrowserAttachedPageResult{
-			BrowserExecutionMetadata: tools.BrowserExecutionMetadata{Attached: true, BrowserKind: "chrome", BrowserTransport: "cdp", EndpointURL: "http://127.0.0.1:9222"},
-			PageIndex:                1,
-			Title:                    "Current Tab",
-			URL:                      "https://example.com/current",
-			Source:                   "playwright_worker_cdp",
-		},
-		snapshotResult: tools.BrowserSnapshotResult{
-			BrowserAttachedPageResult: tools.BrowserAttachedPageResult{
-				BrowserExecutionMetadata: tools.BrowserExecutionMetadata{Attached: true, BrowserKind: "chrome", BrowserTransport: "cdp", EndpointURL: "http://127.0.0.1:9222"},
-				PageIndex:                1,
-				Title:                    "Current Tab",
-				URL:                      "https://example.com/current",
-				Source:                   "playwright_worker_cdp",
-			},
-			TextContent: "snapshot content from sidecar",
-			Headings:    []string{"Overview"},
-			Links:       []string{"https://example.com/docs"},
-			Buttons:     []string{"Continue"},
-			Inputs:      []string{"search"},
-		},
-		navigateResult: tools.BrowserNavigationResult{
-			BrowserAttachedPageResult: tools.BrowserAttachedPageResult{
-				BrowserExecutionMetadata: tools.BrowserExecutionMetadata{Attached: true, BrowserKind: "chrome", BrowserTransport: "cdp", EndpointURL: "http://127.0.0.1:9222"},
-				PageIndex:                1,
-				Title:                    "Next Page",
-				URL:                      "https://example.com/next",
-				Source:                   "playwright_worker_cdp",
-			},
-			TextContent: "navigated content from sidecar",
-			MIMEType:    "text/html",
-			TextType:    "text/html",
-		},
-		tabsResult: tools.BrowserTabsListResult{
-			BrowserExecutionMetadata: tools.BrowserExecutionMetadata{Attached: true, BrowserKind: "chrome", BrowserTransport: "cdp", EndpointURL: "http://127.0.0.1:9222"},
-			TabCount:                 2,
-			Tabs: []tools.BrowserTabInfo{
-				{PageIndex: 1, Title: "Current Tab", URL: "https://example.com/current"},
-				{PageIndex: 2, Title: "Docs", URL: "https://example.com/docs"},
-			},
-			Source: "playwright_worker_cdp",
-		},
-		interactResult: tools.BrowserPageInteractResult{
-			BrowserExecutionMetadata: tools.BrowserExecutionMetadata{Attached: true, BrowserKind: "chrome", BrowserTransport: "cdp", EndpointURL: "http://127.0.0.1:9222"},
-			URL:                      "https://example.com/form",
-			Title:                    "Form",
-			TextContent:              "after click sidecar content",
-			ActionsApplied:           1,
-			Source:                   "playwright_worker_cdp",
-		},
-	})
-	service.modelMu.Lock()
-	service.model = model.NewService(serviceconfig.ModelConfig{}, &stubModelClient{err: errors.New("model should not be called")})
-	service.modelMu.Unlock()
-
-	tests := []struct {
-		name       string
-		request    Request
-		wantTool   string
-		wantRawKey string
-		wantBubble string
-	}{
-		{
-			name: "browser_attach_current",
-			request: Request{
-				TaskID:       "task_browser_attach",
-				RunID:        "run_browser_attach",
-				DeliveryType: "bubble",
-				ResultTitle:  "浏览器附着结果",
-				Intent:       map[string]any{"name": "browser_attach_current", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "browser_kind": "chrome", "target": map[string]any{"url": "https://example.com/current"}}}},
-			},
-			wantTool:   "browser_attach_current",
-			wantRawKey: "page_index",
-			wantBubble: "browser_attach_current 执行完成。",
-		},
-		{
-			name: "browser_snapshot",
-			request: Request{
-				TaskID:       "task_browser_snapshot",
-				RunID:        "run_browser_snapshot",
-				DeliveryType: "bubble",
-				ResultTitle:  "浏览器快照结果",
-				Intent:       map[string]any{"name": "browser_snapshot", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "target": map[string]any{"url": "https://example.com/current"}}}},
-			},
-			wantTool:   "browser_snapshot",
-			wantRawKey: "text_content",
-			wantBubble: "snapshot content from sidecar",
-		},
-		{
-			name: "browser_navigate",
-			request: Request{
-				TaskID:       "task_browser_navigate",
-				RunID:        "run_browser_navigate",
-				DeliveryType: "bubble",
-				ResultTitle:  "浏览器导航结果",
-				Intent:       map[string]any{"name": "browser_navigate", "arguments": map[string]any{"url": "https://example.com/next", "attach": map[string]any{"mode": "cdp", "browser_kind": "chrome"}}},
-			},
-			wantTool:   "browser_navigate",
-			wantRawKey: "mime_type",
-			wantBubble: "navigated content from sidecar",
-		},
-		{
-			name: "browser_tabs_list",
-			request: Request{
-				TaskID:       "task_browser_tabs",
-				RunID:        "run_browser_tabs",
-				DeliveryType: "bubble",
-				ResultTitle:  "浏览器标签页结果",
-				Intent:       map[string]any{"name": "browser_tabs_list", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "browser_kind": "chrome", "target": map[string]any{"url": "https://example.com/current"}}}},
-			},
-			wantTool:   "browser_tabs_list",
-			wantRawKey: "tab_count",
-			wantBubble: "browser_tabs_list 执行完成。",
-		},
-		{
-			name: "browser_tab_focus",
-			request: Request{
-				TaskID:       "task_browser_focus",
-				RunID:        "run_browser_focus",
-				DeliveryType: "bubble",
-				ResultTitle:  "浏览器聚焦结果",
-				Intent:       map[string]any{"name": "browser_tab_focus", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "target": map[string]any{"page_index": 1, "title_contains": "Current Tab"}}}},
-			},
-			wantTool:   "browser_tab_focus",
-			wantRawKey: "page_index",
-			wantBubble: "browser_tab_focus 执行完成。",
-		},
-		{
-			name: "browser_interact",
-			request: Request{
-				TaskID:       "task_browser_interact",
-				RunID:        "run_browser_interact",
-				DeliveryType: "bubble",
-				ResultTitle:  "浏览器交互结果",
-				Intent: map[string]any{"name": "browser_interact", "arguments": map[string]any{
-					"actions": []any{map[string]any{"type": "click", "selector": "button.submit"}},
-					"attach":  map[string]any{"mode": "cdp", "target": map[string]any{"url": "https://example.com/form"}},
-				}},
-			},
-			wantTool:   "browser_interact",
-			wantRawKey: "actions_applied",
-			wantBubble: "after click sidecar content",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			request := test.request
-			request.ApprovalGranted = true
-			request.ApprovedOperation = test.wantTool
-			request.ApprovedTargetObject = approvedTargetObject(request.Intent, service.workspace)
-
-			result, err := service.Execute(context.Background(), request)
-			if err != nil {
-				t.Fatalf("execute failed: %v", err)
-			}
-			if result.ToolName != test.wantTool {
-				t.Fatalf("expected %s tool, got %s", test.wantTool, result.ToolName)
-			}
-			if len(result.ToolCalls) != 1 || result.ToolCalls[0].ToolName != test.wantTool {
-				t.Fatalf("expected one direct tool call for %s, got %+v", test.wantTool, result.ToolCalls)
-			}
-			attachInput, ok := result.ToolInput["attach"].(map[string]any)
-			if !ok || len(attachInput) == 0 {
-				t.Fatalf("expected %s tool input to preserve attach hints, got %+v", test.wantTool, result.ToolInput)
-			}
-			if result.ToolOutput["summary_output"] == nil {
-				t.Fatalf("expected %s direct execution to include summary_output, got %+v", test.wantTool, result.ToolOutput)
-			}
-			if result.ToolOutput[test.wantRawKey] == nil {
-				t.Fatalf("expected %s direct execution to include raw output key %s, got %+v", test.wantTool, test.wantRawKey, result.ToolOutput)
-			}
-			if result.BubbleText != test.wantBubble {
-				t.Fatalf("expected %s bubble text %q, got %q", test.wantTool, test.wantBubble, result.BubbleText)
-			}
-			if deliveryType, ok := result.DeliveryResult["type"].(string); !ok || deliveryType != "bubble" {
-				t.Fatalf("expected bubble delivery result, got %+v", result.DeliveryResult)
-			}
-		})
 	}
 }
 
@@ -2032,54 +2195,128 @@ func TestResolvePageToolInputMatchesEquivalentRootURLs(t *testing.T) {
 	}
 }
 
-func TestResolvePageToolInputAllowsWorkerDetectedBrowserKind(t *testing.T) {
-	snapshot := contextsvc.TaskContextSnapshot{
-		PageURL:     "https://example.com/current",
-		PageTitle:   "Current Tab",
-		ProcessPath: "C:/Program Files/Google/Chrome/Application/chrome.exe",
-		WindowTitle: "Current Tab - Google Chrome",
-	}
-	input, ok := resolvePageToolInput("page_read", map[string]any{"url": "https://example.com/current", "browser_kind": "edge"}, snapshot)
+func TestResolveBrowserToolInputAllowsSparseDiscoveryTargets(t *testing.T) {
+	input, ok := resolveBrowserToolInput("browser_tabs_list", map[string]any{}, contextsvc.TaskContextSnapshot{BrowserKind: "chrome"})
 	if !ok {
-		t.Fatal("expected page_read tool input to resolve when browser kind is omitted from snapshot")
+		t.Fatal("expected browser_tabs_list to resolve with sparse browser snapshot")
 	}
 	attach, ok := input["attach"].(map[string]any)
 	if !ok {
-		t.Fatalf("expected attach hints with worker-detected browser kind fallback, got %+v", input)
+		t.Fatalf("expected browser tabs list attach hints, got %+v", input)
 	}
-	if _, exists := attach["browser_kind"]; exists {
-		t.Fatalf("expected attach hints to omit browser_kind when snapshot does not classify it, got %+v", attach)
+	if attach["browser_kind"] != "chrome" {
+		t.Fatalf("expected sparse browser attach hints to keep browser kind, got %+v", attach)
 	}
-	target, ok := attach["target"].(map[string]any)
-	if !ok || target["url"] != "https://example.com/current" || target["title_contains"] != "Current Tab" {
-		t.Fatalf("expected attach target to remain based on the trusted page snapshot, got %+v", attach)
+	if _, exists := attach["target"]; exists {
+		t.Fatalf("expected sparse browser discovery attach hints to omit target filters, got %+v", attach)
 	}
 }
 
-func TestResolvePageToolInputIgnoresFragmentsAndHostCase(t *testing.T) {
-	snapshot := contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://EXAMPLE.com/docs#install", PageTitle: "Docs"}
-	input, ok := resolvePageToolInput("page_read", map[string]any{"url": "https://example.com/docs#api"}, snapshot)
+func TestResolveBrowserToolInputRejectsSparseBrowserInteractSnapshotTarget(t *testing.T) {
+	if input, ok := resolveBrowserToolInput("browser_interact", map[string]any{"actions": []any{map[string]any{"type": "click", "selector": "button"}}}, contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageTitle: "Docs"}); ok {
+		t.Fatalf("expected browser_interact snapshot path to require a stable target, got %+v", input)
+	}
+}
+
+func TestResolveBrowserToolInputRequiresTargetHintsForSnapshotAttachCurrent(t *testing.T) {
+	if input, ok := resolveBrowserToolInput("browser_attach_current", map[string]any{}, contextsvc.TaskContextSnapshot{BrowserKind: "chrome"}); ok {
+		t.Fatalf("expected sparse browser_attach_current snapshot path to stay unresolved, got %+v", input)
+	}
+}
+
+func TestResolveBrowserToolInputPrefersExplicitAttachOverSnapshotHints(t *testing.T) {
+	input, ok := resolveBrowserToolInput(
+		"browser_attach_current",
+		map[string]any{"attach": map[string]any{"mode": "cdp", "browser_kind": "edge", "target": map[string]any{"title_contains": "Pinned Tab"}}},
+		contextsvc.TaskContextSnapshot{},
+	)
 	if !ok {
-		t.Fatal("expected page_read tool input to resolve for equivalent live page URLs")
+		t.Fatal("expected explicit browser attach block to resolve without desktop snapshot hints")
 	}
 	attach, ok := input["attach"].(map[string]any)
 	if !ok {
-		t.Fatalf("expected attach hints for equivalent URLs, got %+v", input)
+		t.Fatalf("expected attach block in resolved browser input, got %+v", input)
+	}
+	if attach["browser_kind"] != "edge" {
+		t.Fatalf("expected explicit attach browser kind to be preserved, got %+v", attach)
 	}
 	target, ok := attach["target"].(map[string]any)
-	if !ok || target["url"] != "https://example.com/docs" {
-		t.Fatalf("expected normalized attach target URL without fragment and with lowercase host, got %+v", attach)
+	if !ok || target["title_contains"] != "Pinned Tab" {
+		t.Fatalf("expected explicit attach target to be preserved, got %+v", attach)
 	}
 }
 
-func TestResolvePageToolInputKeepsQueryDifferencesDistinct(t *testing.T) {
-	snapshot := contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com/docs?tab=install", PageTitle: "Docs"}
-	input, ok := resolvePageToolInput("page_read", map[string]any{"url": "https://example.com/docs?tab=api"}, snapshot)
+func TestResolveBrowserToolInputMergesTopLevelSelectorsIntoExplicitAttach(t *testing.T) {
+	input, ok := resolveBrowserToolInput(
+		"browser_snapshot",
+		map[string]any{
+			"attach": map[string]any{
+				"mode":         "cdp",
+				"browser_kind": "chrome",
+				"target":       map[string]any{"url": "https://example.com/stale", "title_contains": "Old"},
+			},
+			"target_url":     "https://example.com/fresh",
+			"title_contains": "Fresh",
+			"page_index":     3,
+		},
+		contextsvc.TaskContextSnapshot{},
+	)
 	if !ok {
-		t.Fatal("expected page_read tool input to resolve")
+		t.Fatal("expected explicit browser snapshot attach to resolve")
 	}
-	if _, exists := input["attach"]; exists {
-		t.Fatalf("expected query changes to remain distinct and skip attach, got %+v", input)
+	attach, ok := input["attach"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected attach block in resolved browser input, got %+v", input)
+	}
+	target, ok := attach["target"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected merged attach target, got %+v", attach)
+	}
+	if target["url"] != "https://example.com/fresh" || target["title_contains"] != "Fresh" || target["page_index"] != 3 {
+		t.Fatalf("expected top-level selectors to override explicit attach target, got %+v", target)
+	}
+}
+
+func TestResolveBrowserToolInputKeepsExplicitNavigateContract(t *testing.T) {
+	input, ok := resolveBrowserToolInput(
+		"browser_navigate",
+		map[string]any{"url": "https://example.com/docs", "attach": map[string]any{"mode": "cdp", "browser_kind": "chrome", "target": map[string]any{"page_index": 1}}},
+		contextsvc.TaskContextSnapshot{},
+	)
+	if !ok {
+		t.Fatal("expected explicit browser navigate attach block to resolve without desktop snapshot hints")
+	}
+	if input["url"] != "https://example.com/docs" {
+		t.Fatalf("expected browser_navigate to preserve destination URL, got %+v", input)
+	}
+}
+
+func TestResolveBrowserToolInputRejectsExplicitTitleOnlyMutatingAttach(t *testing.T) {
+	if input, ok := resolveBrowserToolInput(
+		"browser_interact",
+		map[string]any{"attach": map[string]any{"mode": "cdp", "browser_kind": "chrome", "target": map[string]any{"title_contains": "Pinned Tab"}}, "actions": []any{map[string]any{"type": "click", "selector": "button"}}},
+		contextsvc.TaskContextSnapshot{},
+	); ok {
+		t.Fatalf("expected title-only explicit browser_interact attach to be rejected, got %+v", input)
+	}
+}
+
+func TestResolveBrowserToolInputAcceptsExplicitStableMutatingAttach(t *testing.T) {
+	input, ok := resolveBrowserToolInput(
+		"browser_tab_focus",
+		map[string]any{"attach": map[string]any{"mode": "cdp", "browser_kind": "chrome", "target": map[string]any{"page_index": 2}}},
+		contextsvc.TaskContextSnapshot{},
+	)
+	if !ok {
+		t.Fatal("expected stable explicit browser_tab_focus attach to resolve")
+	}
+	attach, ok := input["attach"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected attach block in resolved browser_tab_focus input, got %+v", input)
+	}
+	target, ok := attach["target"].(map[string]any)
+	if !ok || target["page_index"] != 2 {
+		t.Fatalf("expected stable explicit browser_tab_focus target to be preserved, got %+v", input)
 	}
 }
 
@@ -3185,6 +3422,208 @@ func TestAssessGovernancePageSearchPreservesQueryInput(t *testing.T) {
 	}
 }
 
+func TestAssessGovernanceBrowserSnapshotUsesAttachedPageTarget(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_browser_snapshot_auth",
+		RunID:  "run_browser_snapshot_auth",
+		Intent: map[string]any{"name": "browser_snapshot", "arguments": map[string]any{}},
+		Snapshot: contextsvc.TaskContextSnapshot{
+			BrowserKind: "chrome",
+			PageURL:     "https://example.com/docs",
+			PageTitle:   "Example Docs",
+		},
+		DeliveryType: "bubble",
+		ResultTitle:  "浏览器快照结果",
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected browser_snapshot governance path to be handled")
+	}
+	if assessment.OperationName != "browser_snapshot" || assessment.TargetObject != "https://example.com/docs" {
+		t.Fatalf("unexpected browser_snapshot assessment: %+v", assessment)
+	}
+	if assessment.ApprovalRequired || assessment.RiskLevel != string(risk.RiskLevelGreen) {
+		t.Fatalf("expected browser_snapshot to stay green without approval, got %+v", assessment)
+	}
+	apps, _ := assessment.ImpactScope["apps"].([]string)
+	if len(apps) != 1 || apps[0] != "chrome" {
+		t.Fatalf("expected browser_snapshot app scope, got %+v", assessment.ImpactScope)
+	}
+}
+
+func TestAssessGovernanceBrowserSnapshotKeepsCurrentExplicitTargetGreen(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_browser_snapshot_current_explicit",
+		RunID:  "run_browser_snapshot_current_explicit",
+		Intent: map[string]any{"name": "browser_snapshot", "arguments": map[string]any{
+			"attach": map[string]any{
+				"mode":         "cdp",
+				"browser_kind": "chrome",
+				"target":       map[string]any{"url": "https://example.com/docs"},
+			},
+		}},
+		Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com/docs", PageTitle: "Example Docs"},
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected browser_snapshot explicit current-page governance path to be handled")
+	}
+	if assessment.ApprovalRequired || assessment.RiskLevel != string(risk.RiskLevelGreen) {
+		t.Fatalf("expected browser_snapshot explicit current-page target to stay green, got %+v", assessment)
+	}
+}
+
+func TestAssessGovernanceBrowserSnapshotRequiresApprovalForNonCurrentExplicitTarget(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_browser_snapshot_other_tab",
+		RunID:  "run_browser_snapshot_other_tab",
+		Intent: map[string]any{"name": "browser_snapshot", "arguments": map[string]any{
+			"attach": map[string]any{
+				"mode":         "cdp",
+				"browser_kind": "chrome",
+				"target":       map[string]any{"url": "https://example.com/other"},
+			},
+		}},
+		Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com/docs", PageTitle: "Example Docs"},
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected browser_snapshot explicit off-page governance path to be handled")
+	}
+	if !assessment.ApprovalRequired || assessment.RiskLevel != string(risk.RiskLevelYellow) {
+		t.Fatalf("expected browser_snapshot explicit off-page target to require approval, got %+v", assessment)
+	}
+}
+
+func TestAssessGovernanceBrowserSnapshotRequiresApprovalForTopLevelTargetURL(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_browser_snapshot_top_level_url",
+		RunID:  "run_browser_snapshot_top_level_url",
+		Intent: map[string]any{"name": "browser_snapshot", "arguments": map[string]any{
+			"target_url": "https://example.com/other",
+		}},
+		Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com/docs", PageTitle: "Example Docs"},
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected browser_snapshot top-level target governance path to be handled")
+	}
+	if !assessment.ApprovalRequired || assessment.RiskLevel != string(risk.RiskLevelYellow) {
+		t.Fatalf("expected browser_snapshot top-level target_url to require approval, got %+v", assessment)
+	}
+}
+
+func TestAssessGovernanceBrowserSnapshotRequiresApprovalForExplicitEndpointOverride(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_browser_snapshot_endpoint_override",
+		RunID:  "run_browser_snapshot_endpoint_override",
+		Intent: map[string]any{"name": "browser_snapshot", "arguments": map[string]any{
+			"attach": map[string]any{
+				"mode":         "cdp",
+				"browser_kind": "chrome",
+				"endpoint_url": "http://127.0.0.1:9333",
+			},
+		}},
+		Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com/docs", PageTitle: "Example Docs"},
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected browser_snapshot endpoint override governance path to be handled")
+	}
+	if !assessment.ApprovalRequired || assessment.RiskLevel != string(risk.RiskLevelYellow) {
+		t.Fatalf("expected browser_snapshot explicit endpoint override to require approval, got %+v", assessment)
+	}
+}
+
+func TestAssessGovernanceBrowserAttachCurrentRequiresApprovalForTitleOnlyExplicitTarget(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_browser_attach_title_only",
+		RunID:  "run_browser_attach_title_only",
+		Intent: map[string]any{"name": "browser_attach_current", "arguments": map[string]any{
+			"attach": map[string]any{
+				"mode":         "cdp",
+				"browser_kind": "chrome",
+				"target":       map[string]any{"title_contains": "Pinned Tab"},
+			},
+		}},
+		Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com/docs", PageTitle: "Example Docs"},
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected browser_attach_current explicit title-only governance path to be handled")
+	}
+	if !assessment.ApprovalRequired || assessment.RiskLevel != string(risk.RiskLevelYellow) {
+		t.Fatalf("expected browser_attach_current title-only target to require approval, got %+v", assessment)
+	}
+}
+
+func TestAssessGovernanceBrowserAttachCurrentRequiresApprovalForTopLevelPageIndex(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_browser_attach_page_index",
+		RunID:  "run_browser_attach_page_index",
+		Intent: map[string]any{"name": "browser_attach_current", "arguments": map[string]any{
+			"page_index": 2,
+		}},
+		Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com/docs", PageTitle: "Example Docs"},
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected browser_attach_current top-level page_index governance path to be handled")
+	}
+	if !assessment.ApprovalRequired || assessment.RiskLevel != string(risk.RiskLevelYellow) {
+		t.Fatalf("expected browser_attach_current top-level page_index to require approval, got %+v", assessment)
+	}
+}
+
+func TestAssessGovernanceBrowserNavigateUsesDestinationURL(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_browser_navigate_auth",
+		RunID:  "run_browser_navigate_auth",
+		Intent: map[string]any{"name": "browser_navigate", "arguments": map[string]any{"url": "https://example.com/docs/start"}},
+		Snapshot: contextsvc.TaskContextSnapshot{
+			BrowserKind: "edge",
+			PageURL:     "https://example.com/docs",
+			PageTitle:   "Example Docs",
+		},
+		DeliveryType: "bubble",
+		ResultTitle:  "浏览器导航结果",
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected browser_navigate governance path to be handled")
+	}
+	if assessment.OperationName != "browser_navigate" || assessment.TargetObject != "https://example.com/docs/start" {
+		t.Fatalf("unexpected browser_navigate assessment: %+v", assessment)
+	}
+	if !assessment.ApprovalRequired || assessment.RiskLevel != string(risk.RiskLevelYellow) {
+		t.Fatalf("expected browser_navigate to require approval, got %+v", assessment)
+	}
+}
+
 func TestResolveToolExecutionSupportsWorkerAndInteractiveIntents(t *testing.T) {
 	service, _ := newTestExecutionServiceWithWorkers(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient(), sidecarclient.NewNoopOCRWorkerClient(), sidecarclient.NewNoopMediaWorkerClient())
 	tests := []struct {
@@ -3194,12 +3633,9 @@ func TestResolveToolExecutionSupportsWorkerAndInteractiveIntents(t *testing.T) {
 		wantKey    string
 		wantAttach bool
 	}{
-		{name: "browser_attach_current", request: Request{Intent: map[string]any{"name": "browser_attach_current", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "browser_kind": "chrome"}}}}, wantTool: "browser_attach_current", wantKey: "attach", wantAttach: true},
-		{name: "browser_snapshot", request: Request{Intent: map[string]any{"name": "browser_snapshot", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "target": map[string]any{"url": "https://example.com"}}}}}, wantTool: "browser_snapshot", wantKey: "attach", wantAttach: true},
-		{name: "browser_navigate", request: Request{Intent: map[string]any{"name": "browser_navigate", "arguments": map[string]any{"url": "https://example.com/next", "attach": map[string]any{"mode": "cdp", "browser_kind": "edge"}}}}, wantTool: "browser_navigate", wantKey: "url", wantAttach: true},
-		{name: "browser_tabs_list", request: Request{Intent: map[string]any{"name": "browser_tabs_list", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "browser_kind": "chrome"}}}}, wantTool: "browser_tabs_list", wantKey: "attach", wantAttach: true},
-		{name: "browser_tab_focus", request: Request{Intent: map[string]any{"name": "browser_tab_focus", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "target": map[string]any{"page_index": 1.0}}}}}, wantTool: "browser_tab_focus", wantKey: "attach", wantAttach: true},
-		{name: "browser_interact", request: Request{Intent: map[string]any{"name": "browser_interact", "arguments": map[string]any{"actions": []any{map[string]any{"type": "click", "selector": "button"}}, "attach": map[string]any{"mode": "cdp", "target": map[string]any{"url": "https://example.com"}}}}}, wantTool: "browser_interact", wantKey: "actions", wantAttach: true},
+		{name: "browser_snapshot", request: Request{Intent: map[string]any{"name": "browser_snapshot", "arguments": map[string]any{}}, Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "browser_snapshot", wantKey: "attach", wantAttach: true},
+		{name: "browser_navigate", request: Request{Intent: map[string]any{"name": "browser_navigate", "arguments": map[string]any{"url": "https://example.com/docs"}}, Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "browser_navigate", wantKey: "url", wantAttach: true},
+		{name: "browser_interact", request: Request{Intent: map[string]any{"name": "browser_interact", "arguments": map[string]any{"actions": []any{map[string]any{"type": "click", "selector": "button"}}}}, Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "browser_interact", wantKey: "actions", wantAttach: true},
 		{name: "page_interact", request: Request{Intent: map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com", "actions": []any{map[string]any{"type": "click", "selector": "button"}}}}, Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "page_interact", wantKey: "url", wantAttach: true},
 		{name: "structured_dom", request: Request{Intent: map[string]any{"name": "structured_dom", "arguments": map[string]any{"url": "https://example.com"}}, Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "structured_dom", wantKey: "url", wantAttach: true},
 		{name: "extract_text", request: Request{Intent: map[string]any{"name": "extract_text", "arguments": map[string]any{"path": "notes/demo.txt"}}}, wantTool: "extract_text", wantKey: "path"},
@@ -3231,9 +3667,8 @@ func TestResolveGovernanceToolExecutionSupportsWorkerAndInteractiveIntents(t *te
 		wantTool   string
 		wantAttach bool
 	}{
-		{name: "browser_attach_current", request: Request{TaskID: "task_browser_attach", RunID: "run_browser_attach", DeliveryType: "bubble", ResultTitle: "浏览器附着结果", Intent: map[string]any{"name": "browser_attach_current", "arguments": map[string]any{"attach": map[string]any{"mode": "cdp", "browser_kind": "chrome"}}}}, wantTool: "browser_attach_current", wantAttach: true},
-		{name: "browser_navigate", request: Request{TaskID: "task_browser_nav", RunID: "run_browser_nav", DeliveryType: "bubble", ResultTitle: "浏览器导航结果", Intent: map[string]any{"name": "browser_navigate", "arguments": map[string]any{"url": "https://example.com/next", "attach": map[string]any{"mode": "cdp", "browser_kind": "edge"}}}}, wantTool: "browser_navigate", wantAttach: true},
-		{name: "browser_interact", request: Request{TaskID: "task_browser_interact", RunID: "run_browser_interact", DeliveryType: "bubble", ResultTitle: "浏览器交互结果", Intent: map[string]any{"name": "browser_interact", "arguments": map[string]any{"actions": []any{map[string]any{"type": "click", "selector": "button"}}, "attach": map[string]any{"mode": "cdp", "target": map[string]any{"url": "https://example.com"}}}}}, wantTool: "browser_interact", wantAttach: true},
+		{name: "browser_snapshot", request: Request{TaskID: "task_000", RunID: "run_000", DeliveryType: "bubble", ResultTitle: "浏览器快照结果", Intent: map[string]any{"name": "browser_snapshot", "arguments": map[string]any{}}, Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "browser_snapshot", wantAttach: true},
+		{name: "browser_navigate", request: Request{TaskID: "task_000a", RunID: "run_000a", DeliveryType: "bubble", ResultTitle: "浏览器导航结果", Intent: map[string]any{"name": "browser_navigate", "arguments": map[string]any{"url": "https://example.com/docs"}}, Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "browser_navigate", wantAttach: true},
 		{name: "page_interact", request: Request{TaskID: "task_001", RunID: "run_001", DeliveryType: "bubble", ResultTitle: "页面交互结果", Intent: map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com", "actions": []any{map[string]any{"type": "click", "selector": "button"}}}}, Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "page_interact", wantAttach: true},
 		{name: "structured_dom", request: Request{TaskID: "task_002", RunID: "run_002", DeliveryType: "bubble", ResultTitle: "结构化结果", Intent: map[string]any{"name": "structured_dom", "arguments": map[string]any{"url": "https://example.com"}}, Snapshot: contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "structured_dom", wantAttach: true},
 		{name: "ocr_pdf", request: Request{TaskID: "task_003", RunID: "run_003", DeliveryType: "bubble", ResultTitle: "OCR 结果", Intent: map[string]any{"name": "ocr_pdf", "arguments": map[string]any{"path": "docs/demo.pdf", "language": "eng"}}}, wantTool: "ocr_pdf"},
@@ -3461,14 +3896,29 @@ func TestToolBubbleTextAndGovernanceHelpersSupportNewWorkerFlows(t *testing.T) {
 	if !strings.Contains(searchBubble, "关键词") {
 		t.Fatalf("expected search bubble text, got %s", searchBubble)
 	}
+	attachBubble := toolBubbleText("browser_attach_current", &tools.ToolExecutionResult{SummaryOutput: map[string]any{"title": "Docs"}})
+	if !strings.Contains(attachBubble, "Docs") {
+		t.Fatalf("expected browser attach bubble text, got %s", attachBubble)
+	}
+	focusBubble := toolBubbleText("browser_tab_focus", &tools.ToolExecutionResult{SummaryOutput: map[string]any{"title": "Release Notes"}})
+	if !strings.Contains(focusBubble, "切换") || !strings.Contains(focusBubble, "Release Notes") {
+		t.Fatalf("expected browser tab focus bubble text, got %s", focusBubble)
+	}
+	tabsBubble := toolBubbleText("browser_tabs_list", &tools.ToolExecutionResult{SummaryOutput: map[string]any{"tab_count": 2}})
+	if !strings.Contains(tabsBubble, "2") {
+		t.Fatalf("expected browser tabs bubble text, got %s", tabsBubble)
+	}
 	if governanceTargetObject("page_interact", map[string]any{"url": "https://example.com"}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "https://example.com" {
 		t.Fatalf("expected page_interact governance target url")
 	}
-	if governanceTargetObject("browser_navigate", map[string]any{"url": "https://example.com/next", "attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{"url": "https://example.com/current"}}}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "https://example.com/next" {
-		t.Fatalf("expected browser_navigate governance target to prefer destination url")
+	if governanceTargetObject("browser_snapshot", map[string]any{"attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{"url": "https://example.com/docs"}}}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "https://example.com/docs" {
+		t.Fatalf("expected browser_snapshot governance target url")
 	}
-	if governanceTargetObject("browser_tab_focus", map[string]any{"attach": map[string]any{"target": map[string]any{"page_index": 2}}}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "browser_tab:2" {
-		t.Fatalf("expected browser_tab_focus governance target to use page index")
+	if governanceTargetObject("browser_tab_focus", map[string]any{"attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{"page_index": 2}}}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "browser_tab:2" {
+		t.Fatalf("expected browser_tab_focus governance target to use tab index")
+	}
+	if governanceTargetObject("browser_navigate", map[string]any{"url": "https://example.com/docs/start", "attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{"url": "https://example.com/docs"}}}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "https://example.com/docs/start" {
+		t.Fatalf("expected browser_navigate governance target to prefer destination url")
 	}
 	if governanceTargetObject("extract_text", map[string]any{"path": "notes/demo.txt"}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "notes/demo.txt" {
 		t.Fatalf("expected file-based governance target path")
@@ -3482,8 +3932,11 @@ func TestToolBubbleTextAndGovernanceHelpersSupportNewWorkerFlows(t *testing.T) {
 	if approvedTargetObject(map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com"}}, "/workspace") != "https://example.com" {
 		t.Fatalf("expected webpage intent to preserve approved url target")
 	}
-	if approvedTargetObject(map[string]any{"name": "browser_tab_focus", "arguments": map[string]any{"attach": map[string]any{"target": map[string]any{"page_index": 3.0}}}}, "/workspace") != "browser_tab:3" {
-		t.Fatalf("expected browser_tab_focus approval target to use page index")
+	if approvedTargetObject(map[string]any{"name": "browser_tab_focus", "arguments": map[string]any{"page_index": 3.0, "browser_kind": "chrome"}}, "/workspace") != "browser_tab:3" {
+		t.Fatalf("expected browser_tab_focus approval target to use tab index")
+	}
+	if approvedTargetObject(map[string]any{"name": "browser_snapshot", "arguments": map[string]any{"target_url": "https://example.com/docs", "browser_kind": "chrome"}}, "/workspace") != "https://example.com/docs" {
+		t.Fatalf("expected browser_snapshot approval target to use target_url")
 	}
 	if approvedTargetObject(map[string]any{"name": "transcode_media", "arguments": map[string]any{"path": "clips/demo.mov", "output_path": "exports/demo.mp4"}}, "/workspace") != "/workspace/exports/demo.mp4" {
 		t.Fatalf("expected media intent approval target to follow output_path")
@@ -3573,6 +4026,7 @@ func (s stubPlaywrightClient) SearchPage(_ context.Context, url, query string, l
 	}
 	return result, nil
 }
+
 func (s stubPlaywrightClient) InteractPage(_ context.Context, url string, _ []map[string]any) (tools.BrowserPageInteractResult, error) {
 	if s.err != nil {
 		return tools.BrowserPageInteractResult{}, s.err
@@ -3583,6 +4037,7 @@ func (s stubPlaywrightClient) InteractPage(_ context.Context, url string, _ []ma
 	}
 	return result, nil
 }
+
 func (s stubPlaywrightClient) StructuredDOM(_ context.Context, url string) (tools.BrowserStructuredDOMResult, error) {
 	if s.err != nil {
 		return tools.BrowserStructuredDOMResult{}, s.err
@@ -3855,7 +4310,7 @@ func TestExecutionHelperBranchesAndConfigurationAccessors(t *testing.T) {
 		t.Fatal("expected agentLoopToolDefinitions to expose a bounded tool set")
 	}
 	plannerInput := buildAgentLoopPlannerInput("hello", []string{"obs-1", "obs-2", "obs-3"}, 10, 1)
-	if !strings.Contains(plannerInput, "Observed tool results") || !strings.Contains(summarizeAgentLoopHistory([]string{"obs-1", "obs-2"}, 20), "Compressed earlier observations") || singleLineSummary("a\n b") != "a b" {
+	if !strings.Contains(plannerInput, "已观察到的工具结果：") || !strings.Contains(summarizeAgentLoopHistory([]string{"obs-1", "obs-2"}, 20), "Compressed earlier observations") || singleLineSummary("a\n b") != "a b" {
 		t.Fatal("expected planner input helpers to compact history")
 	}
 	annotated := annotateLoopRound(tools.ToolCallRecord{}, 2)

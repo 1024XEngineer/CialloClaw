@@ -57,6 +57,21 @@ func (t *streamRequestTracker) hasTaskID(taskID string) bool {
 	return t.taskIDs != nil && t.taskIDs[taskID]
 }
 
+func (t *streamRequestTracker) taskIDsSnapshot() map[string]bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if len(t.taskIDs) == 0 {
+		return nil
+	}
+	result := make(map[string]bool, len(t.taskIDs))
+	for taskID, tracked := range t.taskIDs {
+		if tracked {
+			result[taskID] = true
+		}
+	}
+	return result
+}
+
 func (t *streamRequestTracker) matchesTaskStart(sessionID, traceID string) bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()

@@ -70,14 +70,23 @@ func (s *Service) DeliveryOpen(params map[string]any) (map[string]any, error) {
 		result["artifact"] = protocolArtifactMap(artifact)
 		return result, nil
 	}
-	task, ok := s.runEngine.GetTask(taskID)
-	if !ok {
-		task, ok = s.taskDetailFromStorage(taskID)
+	task, ok := s.taskDetailFromStorage(taskID)
+	if runtimeTask, runtimeOK := s.runEngine.TaskDetail(taskID); runtimeOK {
+		if ok {
+			task = mergeRuntimeTaskDetail(task, runtimeTask)
+		} else {
+			task = runtimeTask
+			ok = true
+		}
 	}
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
-	return buildDeliveryOpenResult(nil, cloneMap(task.DeliveryResult), taskID), nil
+	deliveryResult := s.latestAttemptDeliveryResultFromStorage(task)
+	if len(deliveryResult) == 0 {
+		deliveryResult = cloneMap(task.DeliveryResult)
+	}
+	return buildDeliveryOpenResult(nil, deliveryResult, taskID), nil
 }
 
 func inferArtifactDeliveryType(artifact map[string]any) string {
@@ -289,6 +298,18 @@ func resultSpecFromIntent(taskIntent map[string]any) (string, string, string) {
 		return "网页读取结果", "结果已通过气泡返回", "网页主要内容已经整理完成，可直接查看。"
 	case "page_search":
 		return "网页搜索结果", "结果已通过气泡返回", "网页搜索结果已经返回，可直接查看。"
+	case "browser_attach_current":
+		return "浏览器附着结果", "结果已通过气泡返回", "当前浏览器页已经附着成功，可继续操作。"
+	case "browser_snapshot":
+		return "浏览器快照结果", "结果已通过气泡返回", "当前浏览器页的关键信息已经整理完成，可直接查看。"
+	case "browser_tabs_list":
+		return "浏览器标签页结果", "结果已通过气泡返回", "当前浏览器标签页列表已经返回，可直接查看。"
+	case "browser_navigate":
+		return "浏览器导航结果", "结果已通过气泡返回", "当前浏览器页已经导航完成，可继续查看。"
+	case "browser_tab_focus":
+		return "浏览器切页结果", "结果已通过气泡返回", "目标浏览器标签页已经切换完成，可继续查看。"
+	case "browser_interact":
+		return "浏览器交互结果", "结果已通过气泡返回", "当前浏览器页交互已经完成，可继续查看。"
 	case "write_file":
 		return "文件写入结果", "已为你写入文档并打开", "文件已经生成，可直接查看。"
 	default:
@@ -299,7 +320,7 @@ func resultSpecFromIntent(taskIntent map[string]any) (string, string, string) {
 // deliveryTypeFromIntent returns the default delivery type for an intent.
 func deliveryTypeFromIntent(taskIntent map[string]any) string {
 	switch stringValue(taskIntent, "name", "summarize") {
-	case "agent_loop", "translate", "explain", "page_read", "page_search":
+	case "agent_loop", "translate", "explain", "page_read", "page_search", "browser_attach_current", "browser_snapshot", "browser_tabs_list", "browser_navigate", "browser_tab_focus", "browser_interact":
 		return "bubble"
 	default:
 		return "workspace_document"
@@ -385,10 +406,19 @@ func (s *Service) loadAttemptArtifactsFromStorage(task runengine.TaskRecord, lim
 
 func (s *Service) listArtifactsPage(taskID string, limit, offset int) ([]map[string]any, int, error) {
 	task, taskFound := formalReadTask(taskID, s.runEngine, s.taskDetailFromStorage)
-	runIDFilter := ""
 	if taskFound {
-		runIDFilter = taskAttemptRunIDFilter(task)
+		items := s.artifactsForTask(task, task.Artifacts)
+		total := len(items)
+		if offset >= total {
+			return []map[string]any{}, total, nil
+		}
+		end := offset + limit
+		if limit <= 0 || end > total {
+			end = total
+		}
+		return cloneMapSlice(items[offset:end]), total, nil
 	}
+	runIDFilter := ""
 	if s.storage != nil && s.storage.ArtifactStore() != nil {
 		records, total, err := s.storage.ArtifactStore().ListArtifacts(context.Background(), taskID, runIDFilter, limit, offset)
 		if err != nil {
@@ -403,9 +433,6 @@ func (s *Service) listArtifactsPage(taskID string, limit, offset int) ([]map[str
 		}
 	}
 	items := delivery.EnsureArtifactIdentifiers(taskID, currentTaskArtifacts(s.runEngine, taskID))
-	if taskFound {
-		items = s.artifactsForTask(task, task.Artifacts)
-	}
 	total := len(items)
 	if offset >= total {
 		return []map[string]any{}, total, nil
@@ -433,17 +460,13 @@ func (s *Service) findArtifactForTask(taskID, artifactID string) (map[string]any
 		return nil, ErrTaskNotFound
 	}
 	task, taskFound := formalReadTask(taskID, s.runEngine, s.taskDetailFromStorage)
-	exists := false
+	exists := taskFound
+	runIDFilter := ""
 	if taskFound {
-		exists = true
-		for _, artifact := range delivery.EnsureArtifactIdentifiers(taskID, task.Artifacts) {
-			if stringValue(artifact, "artifact_id", "") == artifactID {
-				return cloneMap(artifact), nil
-			}
-		}
+		runIDFilter = taskAttemptRunIDFilter(task)
 	}
 	if s.storage != nil && s.storage.ArtifactStore() != nil {
-		records, _, err := s.storage.ArtifactStore().ListArtifacts(context.Background(), taskID, taskAttemptRunIDFilter(task), 0, 0)
+		records, _, err := s.storage.ArtifactStore().ListArtifacts(context.Background(), taskID, runIDFilter, 0, 0)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrStorageQueryFailed, err)
 		}
@@ -453,6 +476,13 @@ func (s *Service) findArtifactForTask(taskID, artifactID string) (map[string]any
 		for _, record := range records {
 			if record.ArtifactID == artifactID {
 				return artifactMapFromStorage(record), nil
+			}
+		}
+	}
+	if taskFound {
+		for _, artifact := range delivery.EnsureArtifactIdentifiers(taskID, task.Artifacts) {
+			if stringValue(artifact, "artifact_id", "") == artifactID {
+				return cloneMap(artifact), nil
 			}
 		}
 	}
