@@ -9,34 +9,55 @@ type ShellBallBubbleMessageProps = {
   onPin?: (bubbleId: string) => void;
   onAllowApproval?: (bubbleId: string) => void;
   onDenyApproval?: (bubbleId: string) => void;
+  onCancelTask?: (taskId: string) => void;
+  onConfirmIntent?: (taskId: string) => void;
+  onModifyIntent?: (taskId: string) => void;
 };
 
 const useIsomorphicLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
 /**
- * Renders one near-field bubble while keeping approval actions and desktop-only
- * affordances local to the shell-ball presentation layer.
+ * Renders one near-field bubble while keeping approval and intent-confirmation
+ * actions local to the shell-ball presentation layer.
  */
 export function ShellBallBubbleMessage({
   item,
   onDelete,
   onPin: _onPin,
-  onAllowApproval: _onAllowApproval,
-  onDenyApproval: _onDenyApproval,
+  onAllowApproval,
+  onDenyApproval,
+  onCancelTask,
+  onConfirmIntent,
+  onModifyIntent,
 }: ShellBallBubbleMessageProps) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const measureRef = useRef<HTMLParagraphElement>(null);
   const userToggledCollapseRef = useRef(false);
   const bubbleId = item.bubble.bubble_id;
+  const taskId = item.bubble.task_id.trim();
   const bubbleText = item.bubble.text;
   const showMarkdown = item.role === "agent" && item.bubble.type !== "intent_confirm";
   const showLoadingState = item.desktop.presentationHint === "loading";
   const inlineApproval = item.role === "agent" ? item.desktop.inlineApproval : undefined;
-  const shouldShowBubbleControls = inlineApproval === undefined;
+  const intentConfirm = item.role === "agent" ? item.desktop.intentConfirm : undefined;
+  const inlineApprovalBusy = inlineApproval?.status === "submitting";
+  const intentConfirmBusy = intentConfirm?.status === "submitting";
+  const shouldShowInlineApprovalActions =
+    inlineApproval !== undefined && onAllowApproval !== undefined && onDenyApproval !== undefined;
+  const shouldShowIntentActions =
+    item.role === "agent"
+    && item.bubble.type === "intent_confirm"
+    && taskId !== ""
+    && onConfirmIntent !== undefined
+    && onCancelTask !== undefined
+    && onModifyIntent !== undefined;
+  const shouldShowBubbleControls = !shouldShowInlineApprovalActions && !shouldShowIntentActions;
   const loadingText = bubbleText.trim() === "" ? "正在思考..." : bubbleText;
   const [isCollapsible, setIsCollapsible] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const collapsedContent = showLoadingState ? loadingText : bubbleText;
+  const allowApprovalLabel = inlineApprovalBusy && inlineApproval?.pendingDecision === "allow_once" ? "Allowing..." : "Allow";
+  const denyApprovalLabel = inlineApprovalBusy && inlineApproval?.pendingDecision === "deny_once" ? "Denying..." : "Deny";
 
   const syncCollapsedState = useCallback(() => {
     const measure = measureRef.current;
@@ -147,6 +168,83 @@ export function ShellBallBubbleMessage({
               <ChevronUp className="shell-ball-bubble-message__collapse-control-icon" aria-hidden="true" />
             )}
           </button>
+        ) : null}
+        {intentConfirm ? (
+          <p className="shell-ball-bubble-message__intent-summary">
+            当前意图：{intentConfirm.intentLabel}
+          </p>
+        ) : null}
+        {shouldShowInlineApprovalActions ? (
+          <div className="shell-ball-bubble-message__approval-actions">
+            <button
+              type="button"
+              className="shell-ball-bubble-message__approval-action shell-ball-bubble-message__approval-action--deny"
+              data-bubble-action="deny_approval"
+              data-bubble-id={bubbleId}
+              aria-label="Deny approval"
+              disabled={inlineApprovalBusy}
+              onClick={() => {
+                onDenyApproval?.(bubbleId);
+              }}
+            >
+              {denyApprovalLabel}
+            </button>
+            <button
+              type="button"
+              className="shell-ball-bubble-message__approval-action shell-ball-bubble-message__approval-action--allow"
+              data-bubble-action="allow_approval"
+              data-bubble-id={bubbleId}
+              aria-label="Allow approval"
+              disabled={inlineApprovalBusy}
+              onClick={() => {
+                onAllowApproval?.(bubbleId);
+              }}
+            >
+              {allowApprovalLabel}
+            </button>
+          </div>
+        ) : shouldShowIntentActions ? (
+          <div className="shell-ball-bubble-message__intent-actions">
+            <button
+              type="button"
+              className="shell-ball-bubble-message__intent-action shell-ball-bubble-message__intent-action--confirm"
+              data-bubble-action="confirm_intent"
+              data-bubble-id={bubbleId}
+              aria-label="确认当前意图"
+              disabled={intentConfirmBusy}
+              onClick={() => {
+                onConfirmIntent?.(taskId);
+              }}
+            >
+              确认
+            </button>
+            <button
+              type="button"
+              className="shell-ball-bubble-message__intent-action shell-ball-bubble-message__intent-action--cancel"
+              data-bubble-action="cancel_task"
+              data-bubble-id={bubbleId}
+              aria-label="取消当前任务"
+              disabled={intentConfirmBusy}
+              onClick={() => {
+                onCancelTask?.(taskId);
+              }}
+            >
+              取消任务
+            </button>
+            <button
+              type="button"
+              className="shell-ball-bubble-message__intent-action shell-ball-bubble-message__intent-action--modify"
+              data-bubble-action="modify_intent"
+              data-bubble-id={bubbleId}
+              aria-label="修改当前意图"
+              disabled={intentConfirmBusy}
+              onClick={() => {
+                onModifyIntent?.(taskId);
+              }}
+            >
+              修改意图
+            </button>
+          </div>
         ) : null}
       </div>
     </div>

@@ -230,9 +230,19 @@ export function isShellBallClipboardPromptActive(
 export function resolveShellBallInlineInputMode(input: {
   shouldRenderInlineInput: boolean;
   snapshotInputBarMode: ShellBallInputBarMode;
+  forceInteractive?: boolean;
+  forceReadonly?: boolean;
 }): ShellBallInputBarMode {
   if (!input.shouldRenderInlineInput) {
     return "hidden";
+  }
+
+  if (input.forceReadonly) {
+    return "readonly";
+  }
+
+  if (input.forceInteractive) {
+    return "interactive";
   }
 
   if (input.snapshotInputBarMode === "readonly") {
@@ -391,17 +401,30 @@ export function ShellBallApp() {
   });
   const inputFocusRequestRef = useRef<() => void>(() => undefined);
   const shellBallWindowTarget = typeof window === "undefined" ? undefined : window;
+  const focusInlineInputField = useCallback((syncInteraction = true) => {
+    if (syncInteraction) {
+      handleInputFocusRequest();
+    }
+
+    setInputFocusToken((current) => current + 1);
+  }, [handleInputFocusRequest]);
+  inputFocusRequestRef.current = () => focusInlineInputField(false);
   const {
     handleClipboardPrompt: handleCoordinatorClipboardPrompt,
     handleDroppedFiles: handleCoordinatorDroppedFiles,
     handleSelectedTextPrompt: handleCoordinatorSelectedTextPrompt,
     handlePrimaryAction: handleCoordinatorPrimaryAction,
     handleBubbleAction: handleCoordinatorBubbleAction,
+    handleCancelTaskBubble: handleCoordinatorCancelTaskBubble,
+    handleConfirmIntentBubble: handleCoordinatorConfirmIntentBubble,
+    handleModifyIntentBubble: handleCoordinatorModifyIntentBubble,
+    handleCancelIntentCorrection: handleCoordinatorCancelIntentCorrection,
     handleBubbleHoverChange: handleCoordinatorBubbleHoverChange,
     handleInputHoverChange: handleCoordinatorInputHoverChange,
     handleInputFocusChange: handleCoordinatorInputFocusChange,
     handleRegionEnter: handleCoordinatorRegionEnter,
     handleRegionLeave: handleCoordinatorRegionLeave,
+    intentCorrection,
     snapshot,
   } = useShellBallCoordinator({
     getBallClientRect: () => mascotRef.current?.getBoundingClientRect() ?? null,
@@ -426,11 +449,14 @@ export function ShellBallApp() {
     onSubmitVoiceText: handleSubmitVoiceText,
     onAttachFile: handleAttachFile,
     onPrimaryClick: handlePrimaryClick,
+    onRequestInputFocus: () => focusInlineInputField(),
   });
   const shouldRenderInlineInput = snapshot.visibility.input;
   const inlineInputMode = resolveShellBallInlineInputMode({
     shouldRenderInlineInput,
     snapshotInputBarMode: snapshot.inputBarMode,
+    forceInteractive: intentCorrection !== null && !intentCorrection.submitting,
+    forceReadonly: intentCorrection?.submitting === true,
   });
   const visibleBubbleItems = getShellBallVisibleBubbleItems(snapshot.bubbleItems);
   const selectionIndicatorVisible = shouldShowShellBallSelectionIndicator({
@@ -531,15 +557,6 @@ export function ShellBallApp() {
     lastReportedInteractiveRegionsRef.current = signature;
     await setShellBallInteractiveRegions(regions);
   }, [rootRef]);
-
-  const focusInlineInputField = useCallback((syncInteraction = true) => {
-    if (syncInteraction) {
-      handleInputFocusRequest();
-    }
-
-    setInputFocusToken((current) => current + 1);
-  }, [handleInputFocusRequest]);
-  inputFocusRequestRef.current = () => focusInlineInputField(false);
 
   const handleInlineAttachFile = useCallback(() => {
     void (async () => {
@@ -1216,6 +1233,9 @@ export function ShellBallApp() {
                 <ShellBallBubbleZone
                   visualState={snapshot.visualState}
                   bubbleItems={visibleBubbleItems}
+                  onCancelTaskBubble={handleCoordinatorCancelTaskBubble}
+                  onConfirmIntentBubble={handleCoordinatorConfirmIntentBubble}
+                  onModifyIntentBubble={handleCoordinatorModifyIntentBubble}
                   onAllowApprovalBubble={(bubbleId) => {
                     handleCoordinatorBubbleAction({ action: "allow_approval", bubbleId, source: "bubble" });
                   }}
@@ -1247,15 +1267,20 @@ export function ShellBallApp() {
             handleCoordinatorInputHoverChange(false);
           }}
         >
-          <ShellBallAttachmentTray paths={pendingFiles} onRemove={handleRemovePendingFile} />
+          {intentCorrection === null ? <ShellBallAttachmentTray paths={pendingFiles} onRemove={handleRemovePendingFile} /> : null}
           <ShellBallInputBar
             focusToken={inputFocusToken}
             mode={inlineInputMode}
             voicePreview={snapshot.voicePreview}
             value={inputValue}
-            hasPendingFiles={pendingFiles.length > 0}
+            hasPendingFiles={intentCorrection === null && pendingFiles.length > 0}
+            label={intentCorrection?.label}
+            placeholder={intentCorrection?.placeholder}
+            auxiliaryAction={intentCorrection === null ? "attach" : "cancel"}
+            allowEmptySubmit={intentCorrection !== null}
             onValueChange={setInputValue}
             onAttachFile={handleInlineAttachFile}
+            onCancel={handleCoordinatorCancelIntentCorrection}
             onSubmit={() => {
               void handleCoordinatorPrimaryAction("submit");
             }}

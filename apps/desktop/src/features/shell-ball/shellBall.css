@@ -533,6 +533,15 @@ body[data-app-window="shell-ball"],
   -webkit-line-clamp: 2;
 }
 
+.shell-ball-bubble-message__intent-summary {
+  color: rgba(59, 88, 124, 0.94);
+  font-size: 0.64rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.4;
+  margin: 0 0 0.42rem;
+}
+
 .shell-ball-bubble-message__loading {
   align-items: flex-start;
   display: grid;
@@ -804,7 +813,15 @@ body[data-app-window="shell-ball"],
   margin-top: 0.66rem;
 }
 
-.shell-ball-bubble-message__approval-action {
+.shell-ball-bubble-message__intent-actions {
+  display: flex;
+  gap: 0.34rem;
+  justify-content: flex-end;
+  margin-top: 0.48rem;
+}
+
+.shell-ball-bubble-message__approval-action,
+.shell-ball-bubble-message__intent-action {
   align-items: center;
   appearance: none;
   border: 1px solid rgba(132, 118, 99, 0.18);
@@ -827,19 +844,22 @@ body[data-app-window="shell-ball"],
     transform 160ms ease;
 }
 
-.shell-ball-bubble-message__approval-action:hover:not(:disabled) {
+.shell-ball-bubble-message__approval-action:hover:not(:disabled),
+.shell-ball-bubble-message__intent-action:hover:not(:disabled) {
   color: var(--shell-ball-ink);
   transform: translateY(-1px);
 }
 
-.shell-ball-bubble-message__approval-action:focus-visible {
+.shell-ball-bubble-message__approval-action:focus-visible,
+.shell-ball-bubble-message__intent-action:focus-visible {
   box-shadow:
     0 0 0 2px rgba(255, 251, 244, 0.92),
     0 0 0 4px rgba(106, 145, 200, 0.22);
   outline: 0;
 }
 
-.shell-ball-bubble-message__approval-action:disabled {
+.shell-ball-bubble-message__approval-action:disabled,
+.shell-ball-bubble-message__intent-action:disabled {
   cursor: progress;
   opacity: 0.72;
   transform: none;
@@ -861,6 +881,33 @@ body[data-app-window="shell-ball"],
 
 .shell-ball-bubble-message__approval-action--deny:hover:not(:disabled) {
   background: rgba(193, 141, 70, 0.2);
+}
+
+.shell-ball-bubble-message__intent-action--confirm {
+  background: rgba(106, 145, 200, 0.14);
+  border-color: rgba(106, 145, 200, 0.26);
+}
+
+.shell-ball-bubble-message__intent-action--confirm:hover:not(:disabled) {
+  background: rgba(106, 145, 200, 0.22);
+}
+
+.shell-ball-bubble-message__intent-action--cancel {
+  background: rgba(193, 141, 70, 0.14);
+  border-color: rgba(193, 141, 70, 0.22);
+}
+
+.shell-ball-bubble-message__intent-action--cancel:hover:not(:disabled) {
+  background: rgba(193, 141, 70, 0.2);
+}
+
+.shell-ball-bubble-message__intent-action--modify {
+  background: rgba(255, 255, 255, 0.62);
+  border-color: rgba(132, 118, 99, 0.14);
+}
+
+.shell-ball-bubble-message__intent-action--modify:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.86);
 }
 
 .shell-ball-bubble-zone[data-state="waiting_auth"] {

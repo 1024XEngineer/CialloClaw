@@ -13,87 +13,131 @@ import (
 // inferred intent. Object-only starts stay in confirmation unless the caller
 // supplied enough instruction to enter governance and execution immediately.
 func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
+	flow := s.prepareStartTaskFlow(params)
+	if response, handled, err := s.maybeContinueStartTask(&flow); err != nil || handled {
+		return response, err
+	}
+	if response, handled, err := s.maybeHandleExplicitScreenStart(flow); err != nil || handled {
+		return response, err
+	}
+
+	flow.Suggestion = s.suggestStartTaskIntent(flow)
+	if response, handled, err := s.maybeHandleSuggestedScreenStart(flow); err != nil || handled {
+		return response, err
+	}
+
+	flow.PreferredDelivery, flow.FallbackDelivery = startTaskDeliveryPreference(flow)
+	task := s.createTaskFromEntryFlow(flow)
+	return s.finishStartTask(flow, task)
+}
+
+type taskEntryFlow struct {
+	Params               map[string]any
+	Snapshot             contextsvc.TaskContextSnapshot
+	ExplicitIntent       map[string]any
+	Options              map[string]any
+	ConfirmRequired      bool
+	ForceConfirmRequired bool
+	Suggestion           intent.Suggestion
+	PreferredDelivery    string
+	FallbackDelivery     string
+}
+
+func (s *Service) prepareStartTaskFlow(params map[string]any) taskEntryFlow {
 	snapshot := s.context.Capture(params)
 	explicitIntent := mapValue(params, "intent")
 	options := mapValue(params, "options")
 	forceConfirmRequired := boolValue(options, "confirm_required", false)
-	confirmRequired := taskStartConfirmRequired(snapshot, explicitIntent, forceConfirmRequired)
-	if response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(params, snapshot, explicitIntent, taskContinuationOptions{
-		ConfirmRequired:      confirmRequired,
+
+	return taskEntryFlow{
+		Params:               params,
+		Snapshot:             snapshot,
+		ExplicitIntent:       explicitIntent,
+		Options:              options,
+		ConfirmRequired:      taskStartConfirmRequired(snapshot, explicitIntent, forceConfirmRequired),
 		ForceConfirmRequired: forceConfirmRequired,
-	}); err != nil {
-		return nil, err
-	} else if handled {
-		return response, nil
-	} else if strings.TrimSpace(resolvedSessionID) != "" {
-		params = withResolvedSessionID(params, resolvedSessionID)
 	}
-	if handledResponse, handled, err := s.handleScreenAnalyzeStart(params, snapshot, explicitIntent); err != nil {
-		return nil, err
-	} else if handled {
-		return handledResponse, nil
+}
+
+func (s *Service) maybeContinueStartTask(flow *taskEntryFlow) (map[string]any, bool, error) {
+	response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(flow.Params, flow.Snapshot, flow.ExplicitIntent, taskContinuationOptions{
+		ConfirmRequired:      flow.ConfirmRequired,
+		ForceConfirmRequired: flow.ForceConfirmRequired,
+	})
+	if err != nil || handled {
+		return response, handled, err
 	}
-	suggestion := s.intent.Suggest(snapshot, explicitIntent, confirmRequired)
-	fallbackConfirmRequired := confirmRequired
+	if strings.TrimSpace(resolvedSessionID) != "" {
+		flow.Params = withResolvedSessionID(flow.Params, resolvedSessionID)
+	}
+	return nil, false, nil
+}
+
+func (s *Service) maybeHandleExplicitScreenStart(flow taskEntryFlow) (map[string]any, bool, error) {
+	return s.handleScreenAnalyzeStart(flow.Params, flow.Snapshot, flow.ExplicitIntent)
+}
+
+func (s *Service) suggestStartTaskIntent(flow taskEntryFlow) intent.Suggestion {
+	suggestion := s.intent.Suggest(flow.Snapshot, flow.ExplicitIntent, flow.ConfirmRequired)
+	fallbackConfirmRequired := flow.ConfirmRequired
 	// Screen inference already carries its own authorization boundary; only an
 	// explicit caller request should turn an unavailable screen path back into
 	// intent confirmation.
-	if stringValue(suggestion.Intent, "name", "") == "screen_analyze" && !forceConfirmRequired {
+	if stringValue(suggestion.Intent, "name", "") == "screen_analyze" && !flow.ForceConfirmRequired {
 		fallbackConfirmRequired = suggestion.RequiresConfirm
 	}
-	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion, fallbackConfirmRequired)
-	if handledResponse, handled, err := s.handleScreenAnalyzeSuggestion(params, snapshot, suggestion); err != nil {
-		return nil, err
-	} else if handled {
-		return handledResponse, nil
-	}
-	preferredDelivery, fallbackDelivery := deliveryPreferenceFromStart(params)
-	if len(explicitIntent) == 0 && !suggestion.RequiresConfirm {
-		preferredDelivery, fallbackDelivery = mergeSuggestedDeliveryPreference(preferredDelivery, fallbackDelivery, suggestion.DirectDeliveryType)
-	}
+	return s.normalizeSuggestedIntentForAvailability(flow.Snapshot, suggestion, fallbackConfirmRequired)
+}
 
+func (s *Service) maybeHandleSuggestedScreenStart(flow taskEntryFlow) (map[string]any, bool, error) {
+	return s.handleScreenAnalyzeSuggestion(flow.Params, flow.Snapshot, flow.Suggestion)
+}
+
+func startTaskDeliveryPreference(flow taskEntryFlow) (string, string) {
+	preferredDelivery, fallbackDelivery := deliveryPreferenceFromStart(flow.Params)
+	if len(flow.ExplicitIntent) == 0 && !flow.Suggestion.RequiresConfirm {
+		return mergeSuggestedDeliveryPreference(preferredDelivery, fallbackDelivery, flow.Suggestion.DirectDeliveryType)
+	}
+	return preferredDelivery, fallbackDelivery
+}
+
+func (s *Service) createTaskFromEntryFlow(flow taskEntryFlow) runengine.TaskRecord {
+	status := taskStatusForSuggestion(flow.Suggestion.RequiresConfirm)
+	currentStep := currentStepForSuggestion(flow.Suggestion.RequiresConfirm, flow.Suggestion.Intent)
 	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
-		SessionID:         stringValue(params, "session_id", ""),
-		RequestSource:     stringValue(params, "source", ""),
-		RequestTrigger:    stringValue(params, "trigger", ""),
-		Title:             suggestion.TaskTitle,
-		SourceType:        suggestion.TaskSourceType,
-		Status:            taskStatusForSuggestion(suggestion.RequiresConfirm),
-		Intent:            suggestion.Intent,
-		PreferredDelivery: preferredDelivery,
-		FallbackDelivery:  fallbackDelivery,
-		CurrentStep:       currentStepForSuggestion(suggestion.RequiresConfirm, suggestion.Intent),
+		SessionID:         stringValue(flow.Params, "session_id", ""),
+		RequestSource:     stringValue(flow.Params, "source", ""),
+		RequestTrigger:    stringValue(flow.Params, "trigger", ""),
+		Title:             flow.Suggestion.TaskTitle,
+		SourceType:        flow.Suggestion.TaskSourceType,
+		Status:            status,
+		Intent:            flow.Suggestion.Intent,
+		PreferredDelivery: flow.PreferredDelivery,
+		FallbackDelivery:  flow.FallbackDelivery,
+		CurrentStep:       currentStep,
 		RiskLevel:         s.risk.DefaultLevel(),
-		Timeline:          initialTimeline(taskStatusForSuggestion(suggestion.RequiresConfirm), currentStepForSuggestion(suggestion.RequiresConfirm, suggestion.Intent)),
-		Snapshot:          snapshot,
+		Timeline:          initialTimeline(status, currentStep),
+		Snapshot:          flow.Snapshot,
 	})
-	s.publishTaskStart(task.TaskID, task.SessionID, requestTraceID(params))
-	s.attachMemoryReadPlans(task.TaskID, task.RunID, snapshot, suggestion.Intent)
+	s.publishTaskStart(task.TaskID, task.SessionID, requestTraceID(flow.Params))
+	s.attachMemoryReadPlans(task.TaskID, task.RunID, flow.Snapshot, flow.Suggestion.Intent)
+	return task
+}
 
-	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForStart(suggestion), task.StartedAt.Format(dateTimeLayout))
-	response := map[string]any{
-		"task":            taskMap(task),
-		"bubble_message":  bubble,
-		"delivery_result": nil,
-	}
-
-	if suggestion.RequiresConfirm {
-		if _, ok := s.runEngine.SetPresentation(task.TaskID, bubble, nil, nil); ok {
-			task, _ = s.runEngine.GetTask(task.TaskID)
-			response["task"] = taskMap(task)
-		}
-		return response, nil
+func (s *Service) finishStartTask(flow taskEntryFlow, task runengine.TaskRecord) (map[string]any, error) {
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(flow.Suggestion.RequiresConfirm), bubbleTextForStart(flow.Suggestion), task.StartedAt.Format(dateTimeLayout))
+	if flow.Suggestion.RequiresConfirm {
+		task = s.persistTaskPresentation(task, bubble)
+		return buildTaskEntryResponse(task, bubble, nil), nil
 	}
 
 	if queuedTask, queueBubble, queued, queueErr := s.queueTaskIfSessionBusy(task); queueErr != nil {
 		return nil, queueErr
 	} else if queued {
-		response["task"] = taskMap(queuedTask)
-		response["bubble_message"] = queueBubble
-		return response, nil
+		return buildTaskEntryResponse(queuedTask, queueBubble, nil), nil
 	}
 
-	governedTask, governedResponse, handled, governanceErr := s.handleTaskGovernanceDecision(task, suggestion.Intent)
+	governedTask, governedResponse, handled, governanceErr := s.handleTaskGovernanceDecision(task, flow.Suggestion.Intent)
 	if governanceErr != nil {
 		return nil, governanceErr
 	}
@@ -104,18 +148,11 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 
 	deliveryResult := map[string]any(nil)
 	var execErr error
-	task, bubble, deliveryResult, _, execErr = s.executeTask(task, snapshot, suggestion.Intent)
+	task, bubble, deliveryResult, _, execErr = s.executeTask(task, flow.Snapshot, flow.Suggestion.Intent)
 	if execErr != nil {
 		return nil, execErr
 	}
-	response["task"] = taskMap(task)
-	response["bubble_message"] = bubble
-	if len(deliveryResult) > 0 {
-		response["delivery_result"] = deliveryResult
-	} else {
-		response["delivery_result"] = nil
-	}
-	return response, nil
+	return buildTaskEntryResponse(task, bubble, deliveryResult), nil
 }
 
 // taskStartConfirmRequired keeps confirmation as an explicit pre-execution gate.

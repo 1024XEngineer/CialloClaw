@@ -27,6 +27,7 @@ import {
   getTaskPreviewStatusLabel,
   getTaskPriorityLabel,
   getTaskProgress,
+  getTaskRunwayTone,
   getTaskStateVoice,
   getTaskStatusBadgeClass,
   isTaskEnded,
@@ -143,16 +144,16 @@ export function TaskPage() {
   const allTasks = useMemo(() => [...unfinishedTasks, ...finishedTasks], [finishedTasks, unfinishedTasks]);
   const selectedTaskItem = useMemo(() => allTasks.find((item) => item.task.task_id === selectedTaskId) ?? null, [allTasks, selectedTaskId]);
   const departureTasks = useMemo(
-    () => unfinishedTasks.filter((item) => item.task.status === "confirming_intent" || item.task.status === "processing"),
+    () => unfinishedTasks.filter((item) => getTaskRunwayTone(item.task.status) === "departure"),
     [unfinishedTasks],
   );
   const holdingTasks = useMemo(
-    () => unfinishedTasks.filter((item) => item.task.status === "waiting_auth" || item.task.status === "waiting_input" || item.task.status === "paused"),
+    () => unfinishedTasks.filter((item) => getTaskRunwayTone(item.task.status) === "holding"),
     [unfinishedTasks],
   );
-  const irregularTasks = useMemo(() => allTasks.filter((item) => item.task.status === "blocked" || item.task.status === "failed"), [allTasks]);
+  const irregularTasks = useMemo(() => allTasks.filter((item) => getTaskRunwayTone(item.task.status) === "irregular"), [allTasks]);
   const archiveTasks = useMemo(
-    () => finishedTasks.filter((item) => item.task.status === "completed" || item.task.status === "cancelled" || item.task.status === "ended_unfinished"),
+    () => finishedTasks.filter((item) => getTaskRunwayTone(item.task.status) === "archive"),
     [finishedTasks],
   );
   const hasArchiveOlderItems = useMemo(() => {

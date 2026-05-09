@@ -4606,7 +4606,7 @@ test("shell-ball input bar removes keyboard focus stops outside interactive mode
   assert.match(voiceMarkup, /tabindex="-1"/i);
 });
 
-test("shell-ball input bar uses a resizable textarea for focused draft editing", () => {
+test("shell-ball input bar renders the single-line floating input shell", () => {
   const interactiveMarkup = renderToStaticMarkup(
     createElement(ShellBallInputBar, {
       mode: "interactive",
@@ -4621,19 +4621,14 @@ test("shell-ball input bar uses a resizable textarea for focused draft editing",
   const inputBarSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallInputBar.tsx"), "utf8");
   const shellBallStyles = readFileSync(resolve(desktopRoot, "src/features/shell-ball/shellBall.css"), "utf8");
 
-  assert.match(interactiveMarkup, /<textarea/);
-  assert.match(interactiveMarkup, /shell-ball-input-bar__resize-handle/);
+  assert.match(interactiveMarkup, /<input/);
+  assert.match(interactiveMarkup, /shell-ball-uiverse-placeholder/);
   assert.match(inputBarSource, /if \(event\.key !== "Enter" \|\| event\.shiftKey \|\| submitDisabled\) \{/);
-  assert.match(inputBarSource, /focusShellBallInputField\(inputRef\.current\);/);
-  assert.match(inputBarSource, /const restingWidth = measureShellBallInputRestingWidth\(field\);/);
-  assert.doesNotMatch(inputBarSource, /defaultFieldWidthRef/);
-  assert.match(inputBarSource, /!isInteractive \? null : \(/);
-  assert.doesNotMatch(inputBarSource, /inputRef\.current\.select\(\)/);
-  assert.match(shellBallStyles, /\.shell-ball-input-bar__resize-handle \{[\s\S]*cursor:\s*nwse-resize;/);
-  assert.match(shellBallStyles, /\.shell-ball-input-bar__field \{[\s\S]*overflow-y:\s*hidden;/);
-  assert.match(shellBallStyles, /\.shell-ball-input-bar__field::-webkit-scrollbar-thumb \{/);
-  assert.match(shellBallStyles, /\.shell-ball-input-bar--interactive:focus-within \{[\s\S]*border-radius:\s*1rem;/);
-  assert.match(shellBallStyles, /\.shell-ball-input-bar--interactive:focus-within::before \{[\s\S]*border-radius:\s*1rem;/);
+  assert.match(inputBarSource, /function restoreInputFocus\(\) \{/);
+  assert.match(inputBarSource, /const visiblePlaceholder = placeholder\?\.trim\(\) \|\| SHELL_BALL_INPUT_DEFAULT_PLACEHOLDER;/);
+  assert.match(shellBallStyles, /\.shell-ball-uiverse-inputbox::before \{/);
+  assert.match(shellBallStyles, /\.shell-ball-uiverse-fill \{/);
+  assert.match(shellBallStyles, /\.shell-ball-uiverse-placeholder \{/);
 });
 
 test("shell-ball input helpers clamp manual resize and autosize heights", () => {
@@ -5056,9 +5051,9 @@ test("shell-ball pending-approval bubbles render inline allow and deny controls"
     }),
   );
 
-  assert.doesNotMatch(markup, /shell-ball-bubble-message__approval-actions/);
-  assert.doesNotMatch(markup, /data-bubble-action="allow_approval"/);
-  assert.doesNotMatch(markup, /data-bubble-action="deny_approval"/);
+  assert.match(markup, /shell-ball-bubble-message__approval-actions/);
+  assert.equal(markup.match(/data-bubble-action="allow_approval"/g)?.length, 1);
+  assert.equal(markup.match(/data-bubble-action="deny_approval"/g)?.length, 1);
   assert.doesNotMatch(markup, /data-bubble-action="pin"/);
   assert.doesNotMatch(markup, /data-bubble-action="delete"/);
 });
@@ -8991,11 +8986,24 @@ test("shell-ball inline input preserves readonly snapshots and only upgrades hid
 test("shell-ball input bar mode stays aligned with visual states", () => {
   assert.equal(getShellBallInputBarMode("idle"), "interactive");
   assert.equal(getShellBallInputBarMode("hover_input"), "interactive");
-  assert.equal(getShellBallInputBarMode("confirming_intent"), "readonly");
+  assert.equal(getShellBallInputBarMode("confirming_intent"), "interactive");
   assert.equal(getShellBallInputBarMode("waiting_auth"), "readonly");
   assert.equal(getShellBallInputBarMode("processing"), "readonly");
   assert.equal(getShellBallInputBarMode("voice_listening"), "hidden");
   assert.equal(getShellBallInputBarMode("voice_locked"), "hidden");
+});
+
+test("intent confirm cancel action is wired to formal task cancellation", () => {
+  const bubbleMessageSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallBubbleMessage.tsx"), "utf8");
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+
+  assert.match(bubbleMessageSource, />取消任务</);
+  assert.match(bubbleMessageSource, /data-bubble-action="cancel_task"/);
+  assert.match(coordinatorSource, /const decisionText = payload\.decision === "confirm" \? "确认" : "取消任务";/);
+  assert.match(
+    coordinatorSource,
+    /payload\.decision === "confirm"\s*\?\s*await confirmTask\([\s\S]*:\s*await controlTask\(\{[\s\S]*action:\s*"cancel"/,
+  );
 });
 
 test("shell-ball text submit clears drafts before RPC completion and fully restores failed optimistic submits", () => {

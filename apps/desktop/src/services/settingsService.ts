@@ -385,6 +385,24 @@ function syncDesktopSettingsSnapshotSafely(settings: ProtocolSettings) {
   });
 }
 
+function persistDesktopSettingsLocally(settings: DesktopSettings) {
+  saveStoredValue(SETTINGS_KEY, settings);
+}
+
+/**
+ * Persists the latest desktop settings snapshot and waits for the Tauri host
+ * cache to reflect the same payload before returning. Use this only on flows
+ * that immediately retry host-backed reads and therefore cannot tolerate the
+ * normal fire-and-forget sync window.
+ *
+ * @param settings The desktop settings snapshot to store locally and sync.
+ */
+export async function saveSettingsAndSyncDesktopSnapshot(settings: DesktopSettings) {
+  const normalizedSettings = normalizeSettingsSnapshot(settings);
+  persistDesktopSettingsLocally(normalizedSettings);
+  await syncDesktopSettingsSnapshot(toProtocolSettingsSnapshot(normalizedSettings.settings));
+}
+
 /**
  * Persists the latest desktop settings snapshot.
  *
@@ -392,6 +410,6 @@ function syncDesktopSettingsSnapshotSafely(settings: ProtocolSettings) {
  */
 export function saveSettings(settings: DesktopSettings) {
   const normalizedSettings = normalizeSettingsSnapshot(settings);
-  saveStoredValue(SETTINGS_KEY, normalizedSettings);
+  persistDesktopSettingsLocally(normalizedSettings);
   syncDesktopSettingsSnapshotSafely(toProtocolSettingsSnapshot(normalizedSettings.settings));
 }

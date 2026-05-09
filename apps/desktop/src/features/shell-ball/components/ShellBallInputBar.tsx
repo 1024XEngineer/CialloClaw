@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent, CompositionEvent, KeyboardEvent } from "react";
 import styled from "styled-components";
-import { ArrowUp, Paperclip } from "lucide-react";
+import { ArrowUp, Paperclip, X } from "lucide-react";
 import type { ShellBallVoicePreview } from "../shellBall.interaction";
 import type { ShellBallInputBarMode } from "../shellBall.types";
 
@@ -11,8 +11,13 @@ type ShellBallInputBarProps = {
   value: string;
   hasPendingFiles?: boolean;
   focusToken?: number;
+  label?: string;
+  placeholder?: string;
+  auxiliaryAction?: "attach" | "cancel";
+  allowEmptySubmit?: boolean;
   onValueChange: (value: string) => void;
   onAttachFile: () => void;
+  onCancel?: () => void;
   onSubmit: () => void;
   onFocusChange: (focused: boolean) => void;
   onResizeStateChange?: (resizing: boolean) => void;
@@ -20,7 +25,7 @@ type ShellBallInputBarProps = {
   onTransientInputActivity?: () => void;
 };
 
-const SHELL_BALL_INPUT_PLACEHOLDER = "和它说点什么…";
+const SHELL_BALL_INPUT_DEFAULT_PLACEHOLDER = "和它说点什么…";
 const SHELL_BALL_INPUT_COLLAPSED_HEIGHT_PX = 40;
 const SHELL_BALL_INPUT_MIN_HEIGHT_PX = 48;
 
@@ -29,9 +34,6 @@ const SHELL_BALL_INPUT_MIN_HEIGHT_PX = 48;
  * A translucent hover surface upgrades into the filled focus surface by
  * animating the inner paper layer from bottom to top without moving the outer
  * frame or changing the submit behavior.
- *
- * @param props Shell-ball input mode, draft state, and interaction callbacks.
- * @returns The shell-ball input bar UI.
  */
 export function ShellBallInputBar({
   mode,
@@ -39,8 +41,13 @@ export function ShellBallInputBar({
   value,
   hasPendingFiles = false,
   focusToken = 0,
+  label: _label = "输入",
+  placeholder,
+  auxiliaryAction = "attach",
+  allowEmptySubmit = false,
   onValueChange,
   onAttachFile,
+  onCancel,
   onSubmit,
   onFocusChange,
   onResizeStateChange: _onResizeStateChange = () => {},
@@ -58,9 +65,11 @@ export function ShellBallInputBar({
   const isReadonly = mode === "readonly";
   const isVoice = mode === "voice";
   const buttonsDisabled = isHidden || isReadonly || isVoice;
-  const submitDisabled = !isInteractive || (trimmedValue === "" && !hasPendingFiles);
+  const submitDisabled = !isInteractive || (!allowEmptySubmit && trimmedValue === "" && !hasPendingFiles);
   const settledSurface = isReadonly || focusWithin;
   const collapsedSurface = isInteractive && !settledSurface;
+  const auxiliaryActionLabel = auxiliaryAction === "cancel" ? "退出意图修改" : "添加文件";
+  const visiblePlaceholder = placeholder?.trim() || SHELL_BALL_INPUT_DEFAULT_PLACEHOLDER;
 
   useEffect(() => {
     const field = inputRef.current;
@@ -126,7 +135,7 @@ export function ShellBallInputBar({
     onCompositionStateChange(false);
   }
 
-  function restoreTextareaFocus() {
+  function restoreInputFocus() {
     if (!isInteractive) {
       return;
     }
@@ -186,7 +195,7 @@ export function ShellBallInputBar({
             placeholder=""
           />
           <span aria-hidden="true" className="shell-ball-uiverse-placeholder">
-            {SHELL_BALL_INPUT_PLACEHOLDER}
+            {visiblePlaceholder}
           </span>
           <div className="shell-ball-uiverse-actions">
             <button
@@ -197,13 +206,20 @@ export function ShellBallInputBar({
                 event.preventDefault();
               }}
               onClick={() => {
+                if (auxiliaryAction === "cancel") {
+                  onCancel?.();
+                  return;
+                }
+
                 onAttachFile();
-                restoreTextareaFocus();
+                restoreInputFocus();
               }}
               disabled={buttonsDisabled}
-              aria-label="Attach file"
+              aria-label={auxiliaryActionLabel}
             >
-              <Paperclip className="shell-ball-uiverse-action-icon" />
+              {auxiliaryAction === "cancel"
+                ? <X className="shell-ball-uiverse-action-icon" />
+                : <Paperclip className="shell-ball-uiverse-action-icon" />}
             </button>
             <button
               type="button"
@@ -214,10 +230,10 @@ export function ShellBallInputBar({
               }}
               onClick={() => {
                 onSubmit();
-                restoreTextareaFocus();
+                restoreInputFocus();
               }}
               disabled={submitDisabled}
-              aria-label={isReadonly ? "Send disabled" : isVoice ? "Send unavailable during voice capture" : "Send request"}
+              aria-label={isReadonly ? "发送不可用" : isVoice ? "语音输入期间不可发送" : "发送"}
             >
               <ArrowUp className="shell-ball-uiverse-action-icon" />
             </button>
