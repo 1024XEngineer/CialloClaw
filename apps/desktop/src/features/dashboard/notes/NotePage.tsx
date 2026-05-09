@@ -118,6 +118,17 @@ function buildSourceNoteBlockKey(path: string, title: string, sourceLine?: numbe
     : `${normalizeSourceNoteKey(path)}::title:${normalizeSourceNoteTitleKey(title)}`;
 }
 
+/**
+ * A source note can temporarily exist as both a renderer-local fallback card
+ * and a formal notepad item. Keep both the exact block key and the title alias
+ * so the page can collapse them into one visible note during inspector syncs.
+ */
+function buildSourceNoteBlockAliases(path: string, title: string, sourceLine?: number | null) {
+  const exactKey = buildSourceNoteBlockKey(path, title, sourceLine);
+  const titleKey = buildSourceNoteBlockKey(path, title, null);
+  return exactKey === titleKey ? [exactKey] : [exactKey, titleKey];
+}
+
 function readTodoSourcePath(item: NoteListItem["item"]) {
   const sourcePath = (item as NoteListItem["item"] & { source_path?: unknown }).source_path;
   return typeof sourcePath === "string" && sourcePath.trim() !== "" ? sourcePath : null;
@@ -194,6 +205,23 @@ function matchesSourceNotePath(
 ) {
   const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath);
   return matchedPath !== null && normalizeSourceNoteKey(matchedPath) === normalizeSourceNoteKey(sourceNotePath);
+}
+
+function resolveSourceNoteBlockAliases(
+  item: NoteListItem,
+  sourceNotesByPath: Map<string, SourceNoteDocument>,
+  sourceNotesByTitle: Map<string, SourceNoteDocument>,
+) {
+  const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath, sourceNotesByTitle);
+  if (!matchedPath) {
+    return [];
+  }
+
+  return buildSourceNoteBlockAliases(
+    matchedPath,
+    item.sourceNote?.title ?? item.item.title,
+    item.sourceNote?.sourceLine ?? readTodoSourceLine(item.item),
+  );
 }
 
 /**
@@ -356,42 +384,23 @@ export function NotePage() {
     const representedBlocks = new Set<string>();
 
     [...rpcUpcomingItems, ...rpcLaterItems, ...recurringItems, ...closedItems].forEach((item) => {
-      const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath);
-      if (!matchedPath) {
-        return;
-      }
-
-      representedBlocks.add(
-        buildSourceNoteBlockKey(
-          matchedPath,
-          item.item.title,
-          readTodoSourceLine(item.item),
-        ),
-      );
+      resolveSourceNoteBlockAliases(item, sourceNotesByPath, sourceNotesByTitle).forEach((alias) => {
+        representedBlocks.add(alias);
+      });
     });
 
     return representedBlocks;
-  }, [closedItems, recurringItems, rpcLaterItems, rpcUpcomingItems, sourceNotesByPath]);
+  }, [closedItems, recurringItems, rpcLaterItems, rpcUpcomingItems, sourceNotesByPath, sourceNotesByTitle]);
   const sourceNoteFallbackItems = useMemo(
     () =>
       sourceNotes
         .sort((left, right) => (right.modifiedAtMs ?? 0) - (left.modifiedAtMs ?? 0))
         .flatMap((note) => buildSourceNoteFallbackItems(note))
-        .filter((item) => {
-          const path = item.sourceNote?.path ?? readTodoSourcePath(item.item);
-          if (!path) {
-            return true;
-          }
-
-          return !representedSourceNoteBlocks.has(
-            buildSourceNoteBlockKey(
-              path,
-              item.sourceNote?.title ?? item.item.title,
-              item.sourceNote?.sourceLine ?? readTodoSourceLine(item.item),
-            ),
-          );
-        }),
-    [representedSourceNoteBlocks, sourceNotes],
+        .filter(
+          (item) =>
+            !resolveSourceNoteBlockAliases(item, sourceNotesByPath, sourceNotesByTitle).some((alias) => representedSourceNoteBlocks.has(alias)),
+        ),
+    [representedSourceNoteBlocks, sourceNotes, sourceNotesByPath, sourceNotesByTitle],
   );
   const upcomingItems = rpcUpcomingItems;
   const laterItems = useMemo(() => [...sourceNoteFallbackItems, ...rpcLaterItems], [rpcLaterItems, sourceNoteFallbackItems]);
@@ -1286,6 +1295,25 @@ export function NotePage() {
         return current;
       }
 
+      const targetItem = noteItemsById.get(itemId);
+      const targetAliases = targetItem ? resolveSourceNoteBlockAliases(targetItem, sourceNotesByPath, sourceNotesByTitle) : [];
+      if (targetAliases.length > 0) {
+        const replacementIndex = current.findIndex((entry) => {
+          const currentItem = noteItemsById.get(entry.itemId);
+          if (!currentItem) {
+            return false;
+          }
+
+          return resolveSourceNoteBlockAliases(currentItem, sourceNotesByPath, sourceNotesByTitle).some((alias) => targetAliases.includes(alias));
+        });
+
+        if (replacementIndex >= 0) {
+          const next = [...current];
+          next[replacementIndex] = { ...next[replacementIndex], itemId };
+          return next;
+        }
+      }
+
       const seedIndex = current.length % NOTE_CANVAS_SEED_POSITIONS.length;
       const nextPlacement = placement ?? clampCanvasPlacement(
         {
@@ -1867,7 +1895,7 @@ export function NotePage() {
                                     <p className="note-preview-finished-group__description">{group.description}</p>
                                   </div>
                                   <div className={cn("note-preview-shell__list", group.items.length > 1 && "note-preview-shell__list--stacked")}>
-                                    {group.items.map((entry) => (
+                                    {group.items.map((entry, index) => (
                                       <NotePreviewCard
                                         draggableToCanvas
                                         key={entry.item.item_id}
@@ -1877,6 +1905,7 @@ export function NotePage() {
                                         onCanvasDragMove={handleDrawerCardDragMove}
                                         onCanvasDragStart={handleDrawerCardDragStart}
                                         onSelect={openNoteDetail}
+                                        stackOrder={group.items.length > 1 ? index + 1 : undefined}
                                       />
                                     ))}
                                   </div>

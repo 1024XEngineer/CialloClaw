@@ -1008,7 +1008,7 @@
 
 .note-preview-shell__list--stacked .note-preview-card {
   position: relative;
-  z-index: 1;
+  z-index: var(--note-stack-order, 1);
 }
 
 .note-preview-shell__list--stacked .note-preview-card + .note-preview-card {

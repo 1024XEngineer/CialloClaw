@@ -7462,6 +7462,29 @@ test("dashboard home rpc service keeps transport failures visible instead of swi
     },
   );
 });
+
+test("note page deduplicates source-note fallback cards and canvas cards by source block identity", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /function buildSourceNoteBlockAliases\(/);
+  assert.match(notePageSource, /function resolveSourceNoteBlockAliases\(/);
+  assert.match(notePageSource, /resolveSourceNoteBlockAliases\(item, sourceNotesByPath, sourceNotesByTitle\)\.forEach\(\(alias\) => \{/);
+  assert.match(notePageSource, /resolveSourceNoteBlockAliases\(item, sourceNotesByPath, sourceNotesByTitle\)\.some\(\(alias\) => representedSourceNoteBlocks\.has\(alias\)\)/);
+  assert.match(notePageSource, /const targetAliases = targetItem \? resolveSourceNoteBlockAliases\(targetItem, sourceNotesByPath, sourceNotesByTitle\) : \[\];/);
+  assert.match(notePageSource, /next\[replacementIndex\] = \{ \.\.\.next\[replacementIndex\], itemId \};/);
+});
+
+test("note preview stacks assign increasing sidebar z-order so later cards cover earlier cards", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+  const notePreviewSectionSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NotePreviewSection.tsx"), "utf8");
+  const notePreviewCardSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NotePreviewCard.tsx"), "utf8");
+  const notePageStyleSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/notePage.css"), "utf8");
+
+  assert.match(notePreviewSectionSource, /stackOrder=\{stackCards && items\.length > 1 \? index \+ 1 : undefined\}/);
+  assert.match(notePageSource, /stackOrder=\{group\.items\.length > 1 \? index \+ 1 : undefined\}/);
+  assert.match(notePreviewCardSource, /"--note-stack-order": String\(stackOrder\)/);
+  assert.match(notePageStyleSource, /z-index: var\(--note-stack-order, 1\);/);
+});
 test("TaskDetailPanel defers the entire fallback security summary until formal detail arrives", () => {
   const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
 
