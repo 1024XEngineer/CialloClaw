@@ -15,7 +15,8 @@ const (
 	defaultDatabaseFileName     = "cialloclaw.db"
 )
 
-// ModelConfig describes the runtime model configuration.
+// ModelConfig contains the provider defaults and execution budgets used before
+// the settings store applies user overrides.
 type ModelConfig struct {
 	Provider             string
 	ModelID              string
@@ -30,16 +31,32 @@ type ModelConfig struct {
 	ContextKeepRecent    int
 }
 
-// RPCConfig describes the JSON-RPC transport configuration.
+// RPCConfig contains the local JSON-RPC transport defaults. The named-pipe
+// value is used by the desktop bridge, while the debug HTTP address remains an
+// opt-in bootstrap surface.
 type RPCConfig struct {
 	Transport        string
 	NamedPipeName    string
 	DebugHTTPAddress string
 }
 
-// Config contains the assembled local-service runtime configuration.
+// LoadOptions carries optional bootstrap overrides injected before the settings
+// store is available. Unset fields preserve the default environment-derived
+// runtime paths and transport endpoints, while an explicit empty debug HTTP
+// address disables the diagnostics listener.
+type LoadOptions struct {
+	DataDir             string
+	NamedPipeName       string
+	DebugHTTPAddress    string
+	DebugHTTPAddressSet bool
+}
+
+// Config is the immutable bootstrap snapshot consumed by the local service.
+// Runtime paths are resolved before construction so downstream packages do not
+// need to read process environment variables.
 type Config struct {
 	RPC           RPCConfig
+	DataDir       string
 	WorkspaceRoot string
 	DatabasePath  string
 	Model         ModelConfig
@@ -59,8 +76,9 @@ func DefaultRuntimeRoot() string {
 	)
 }
 
-// DefaultWorkspaceRoot resolves the canonical workspace root used by the local
-// service runtime.
+// DefaultWorkspaceRoot resolves the workspace root used for controlled file
+// tools and artifacts. CIALLOCLAW_WORKSPACE_ROOT takes precedence over the
+// profile-scoped runtime directory.
 func DefaultWorkspaceRoot() string {
 	if value := cleanPathEnv("CIALLOCLAW_WORKSPACE_ROOT"); value != "" {
 		return value
@@ -68,8 +86,9 @@ func DefaultWorkspaceRoot() string {
 	return filepath.Join(DefaultRuntimeRoot(), defaultWorkspaceDirName)
 }
 
-// DefaultDatabasePath resolves the canonical SQLite database path used by the
-// local service runtime.
+// DefaultDatabasePath resolves the SQLite database path used by storage
+// bootstrap. CIALLOCLAW_DATABASE_PATH overrides the default data directory but
+// does not create or validate the file.
 func DefaultDatabasePath() string {
 	if value := cleanPathEnv("CIALLOCLAW_DATABASE_PATH"); value != "" {
 		return value
@@ -104,16 +123,55 @@ func defaultRuntimeRootFromValues(goos, runtimeOverride, localAppData, homeDir, 
 	return filepath.Join(defaultRuntimeDirectoryName)
 }
 
-// Load returns the assembled local-service configuration.
-func Load() Config {
+// Load returns the built-in local-service configuration used during bootstrap.
+// It reads path-related environment overrides first, then applies launch-time
+// transport overrides and an optional packaged data root without displacing
+// explicit workspace or database environment overrides.
+func Load(options ...LoadOptions) Config {
+	loadOptions := LoadOptions{}
+	if len(options) > 0 {
+		loadOptions = options[0]
+	}
+
+	dataDir := resolveOptionalPath(loadOptions.DataDir)
+	if dataDir == "" {
+		dataDir = DefaultRuntimeRoot()
+	}
+
+	namedPipeName := resolveOptionalPipeName(loadOptions.NamedPipeName)
+	if namedPipeName == "" {
+		namedPipeName = `\\.\pipe\cialloclaw-rpc`
+	}
+
+	debugHTTPAddress := resolveOptionalDebugHTTPAddress(loadOptions.DebugHTTPAddress)
+	if !loadOptions.DebugHTTPAddressSet {
+		debugHTTPAddress = ":4317"
+	}
+
+	hasDataDirOverride := strings.TrimSpace(loadOptions.DataDir) != ""
+	hasWorkspaceEnvOverride := cleanPathEnv("CIALLOCLAW_WORKSPACE_ROOT") != ""
+	hasDatabaseEnvOverride := cleanPathEnv("CIALLOCLAW_DATABASE_PATH") != ""
+
+	workspaceRoot := DefaultWorkspaceRoot()
+	databasePath := DefaultDatabasePath()
+	// Packaged launches may relocate the runtime root, but explicit operator
+	// workspace/database overrides must keep their documented precedence.
+	if hasDataDirOverride && !hasWorkspaceEnvOverride {
+		workspaceRoot = filepath.Join(dataDir, defaultWorkspaceDirName)
+	}
+	if hasDataDirOverride && !hasDatabaseEnvOverride {
+		databasePath = filepath.Join(dataDir, "data", defaultDatabaseFileName)
+	}
+
 	return Config{
 		RPC: RPCConfig{
 			Transport:        "named_pipe",
-			NamedPipeName:    `\\.\pipe\cialloclaw-rpc`,
-			DebugHTTPAddress: ":4317",
+			NamedPipeName:    namedPipeName,
+			DebugHTTPAddress: debugHTTPAddress,
 		},
-		WorkspaceRoot: DefaultWorkspaceRoot(),
-		DatabasePath:  DefaultDatabasePath(),
+		DataDir:       dataDir,
+		WorkspaceRoot: workspaceRoot,
+		DatabasePath:  databasePath,
 		Model: ModelConfig{
 			Provider:             "openai_responses",
 			ModelID:              "gpt-5.4",
@@ -128,4 +186,34 @@ func Load() Config {
 			ContextKeepRecent:    4,
 		},
 	}
+}
+
+func resolveOptionalPath(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+
+	return filepath.Clean(trimmed)
+}
+
+func resolveOptionalPipeName(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+
+	if strings.HasPrefix(trimmed, `\\.\pipe\`) {
+		return trimmed
+	}
+
+	if strings.HasPrefix(trimmed, `\.\pipe\`) {
+		return `\` + trimmed
+	}
+
+	return trimmed
+}
+
+func resolveOptionalDebugHTTPAddress(raw string) string {
+	return strings.TrimSpace(raw)
 }

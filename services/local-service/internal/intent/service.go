@@ -370,18 +370,6 @@ func containsAny(text string, markers ...string) bool {
 	return false
 }
 
-func isQuestionText(text string) bool {
-	value := strings.TrimSpace(strings.ToLower(text))
-	switch {
-	case strings.Contains(value, "?"), strings.Contains(value, "？"),
-		strings.Contains(value, "why"), strings.Contains(value, "how"),
-		strings.Contains(value, "什么"), strings.Contains(value, "为什么"), strings.Contains(value, "怎么"):
-		return true
-	default:
-		return false
-	}
-}
-
 func isLongContent(text string) bool {
 	trimmed := strings.TrimSpace(text)
 	return strings.Contains(trimmed, "\n") || utf8.RuneCountInString(trimmed) >= 80

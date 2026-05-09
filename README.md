@@ -107,6 +107,24 @@ go run ./services/local-service/cmd/server
 pnpm --dir apps/desktop dev
 ```
 
+### local-service 启动参数
+
+`services/local-service/cmd/server` 现在支持以下进程级启动覆盖参数，方便桌面打包器或本地运维显式指定运行时路径与传输监听：
+
+- `--data-dir=<path>`：覆盖 local-service 的每用户数据目录，并同步作为 runtime root 供默认工作区、数据库与 artifact 路径解析。
+- `--named-pipe=<name>`：覆盖 Windows named pipe 名称，用于打包后的桌面宿主和 sidecar 对接。
+- `--debug-http=<addr>`：覆盖本地调试 HTTP 监听地址，例如 `127.0.0.1:46321`。
+- `--debug-http=`：显式禁用调试 HTTP 监听；当打包环境不应暴露 loopback 调试入口时使用。
+
+示例：
+
+```bash
+go run ./services/local-service/cmd/server \
+  --data-dir="$HOME/.cialloclaw/runtime" \
+  --named-pipe="\\\\.\\pipe\\cialloclaw-desktop" \
+  --debug-http=127.0.0.1:46321
+```
+
 ## 说明
 
 - 当前阶段仍以 `task-centric` 主链路、正式协议边界和治理闭环为最高优先级。

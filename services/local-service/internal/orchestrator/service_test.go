@@ -74,6 +74,16 @@ type stubToolCallingModelClient struct {
 	generateToolCallsCount int
 }
 
+type blockingModelClient struct {
+	started  chan string
+	released chan struct{}
+}
+
+type delayedModelClient struct {
+	delay  time.Duration
+	output string
+}
+
 type failingExecutionBackend struct {
 	err error
 }
@@ -505,6 +515,7 @@ type countingTaskRunStore struct {
 	loadCalls       int
 	loadAllCalls    int
 	legacyLoadCalls int
+	legacyByIDCalls int
 	getCalls        int
 }
 
@@ -515,8 +526,15 @@ type stubStrongholdProvider struct {
 }
 
 type countingTaskStore struct {
-	base      storage.TaskStore
-	listCalls int
+	base                 storage.TaskStore
+	getCalls             int
+	listCalls            int
+	listForTaskListCalls int
+	lastTaskListLimit    int
+	lastTaskListOffset   int
+	lastTaskListGroup    string
+	lastTaskListSortBy   string
+	lastTaskListOrder    string
 }
 
 func (s failingTodoStore) ReplaceTodoState(ctx context.Context, items []storage.TodoItemRecord, rules []storage.RecurringRuleRecord) error {
@@ -566,6 +584,18 @@ func (s *countingTaskRunStore) LoadLegacyTaskRuns(ctx context.Context, structure
 	return s.base.LoadLegacyTaskRuns(ctx, structuredTaskIDs)
 }
 
+func (s *countingTaskRunStore) LoadLegacyTaskRunsByTaskIDs(ctx context.Context, taskIDs []string) ([]storage.TaskRunRecord, error) {
+	s.loadCalls++
+	s.legacyByIDCalls++
+	return s.base.LoadLegacyTaskRunsByTaskIDs(ctx, taskIDs)
+}
+
+func (s *countingTaskRunStore) ListLegacyTaskRunsForTaskList(ctx context.Context, statusGroup, sortBy, sortOrder string, limit, offset int) ([]storage.TaskRunRecord, int, error) {
+	s.loadCalls++
+	s.legacyLoadCalls++
+	return s.base.ListLegacyTaskRunsForTaskList(ctx, statusGroup, sortBy, sortOrder, limit, offset)
+}
+
 func (s *stubStrongholdProvider) Open(context.Context) (storage.SecretStore, error) {
 	if s.err != nil {
 		return nil, s.err
@@ -588,12 +618,27 @@ func (s *countingTaskStore) DeleteTask(ctx context.Context, taskID string) error
 }
 
 func (s *countingTaskStore) GetTask(ctx context.Context, taskID string) (storage.TaskRecord, error) {
+	s.getCalls++
 	return s.base.GetTask(ctx, taskID)
 }
 
 func (s *countingTaskStore) ListTasks(ctx context.Context, limit, offset int) ([]storage.TaskRecord, int, error) {
 	s.listCalls++
 	return s.base.ListTasks(ctx, limit, offset)
+}
+
+func (s *countingTaskStore) ListTasksByIDs(ctx context.Context, taskIDs []string) ([]storage.TaskRecord, error) {
+	return s.base.ListTasksByIDs(ctx, taskIDs)
+}
+
+func (s *countingTaskStore) ListTasksForTaskList(ctx context.Context, statusGroup, sortBy, sortOrder string, limit, offset int) ([]storage.TaskRecord, int, error) {
+	s.listForTaskListCalls++
+	s.lastTaskListGroup = statusGroup
+	s.lastTaskListSortBy = sortBy
+	s.lastTaskListOrder = sortOrder
+	s.lastTaskListLimit = limit
+	s.lastTaskListOffset = offset
+	return s.base.ListTasksForTaskList(ctx, statusGroup, sortBy, sortOrder, limit, offset)
 }
 
 func (s *countingTaskStore) ListTasksBySession(ctx context.Context, sessionID string, limit, offset int) ([]storage.TaskRecord, int, error) {
@@ -644,6 +689,62 @@ func (s *stubToolCallingModelClient) GenerateToolCalls(_ context.Context, reques
 	result := s.toolCalls[0]
 	s.toolCalls = s.toolCalls[1:]
 	return result, nil
+}
+
+func (s *blockingModelClient) GenerateText(ctx context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	if s.started != nil {
+		select {
+		case s.started <- request.TaskID:
+		default:
+		}
+	}
+	<-ctx.Done()
+	if s.released != nil {
+		select {
+		case s.released <- struct{}{}:
+		default:
+		}
+	}
+	return model.GenerateTextResponse{}, ctx.Err()
+}
+
+func (s *blockingModelClient) GenerateToolCalls(ctx context.Context, request model.ToolCallRequest) (model.ToolCallResult, error) {
+	if s.started != nil {
+		select {
+		case s.started <- request.TaskID:
+		default:
+		}
+	}
+	<-ctx.Done()
+	if s.released != nil {
+		select {
+		case s.released <- struct{}{}:
+		default:
+		}
+	}
+	return model.ToolCallResult{}, ctx.Err()
+}
+
+func (s delayedModelClient) GenerateText(ctx context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	select {
+	case <-ctx.Done():
+		return model.GenerateTextResponse{}, ctx.Err()
+	case <-time.After(s.delay):
+	}
+	return model.GenerateTextResponse{
+		TaskID:     request.TaskID,
+		RunID:      request.RunID,
+		RequestID:  "req_delayed",
+		Provider:   "openai_responses",
+		ModelID:    "gpt-5.4",
+		OutputText: s.output,
+		Usage: model.TokenUsage{
+			InputTokens:  12,
+			OutputTokens: 24,
+			TotalTokens:  36,
+		},
+		LatencyMS: int64(s.delay / time.Millisecond),
+	}, nil
 }
 
 func timePointer(value time.Time) *time.Time {
@@ -792,51 +893,6 @@ func newTestServiceWithExecutionWorkersAndScreen(t *testing.T, modelOutput strin
 	return service, workspaceRoot
 }
 
-func newTestServiceWithModelService(t *testing.T, modelService *model.Service) (*Service, string, *storage.Service) {
-	t.Helper()
-
-	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
-	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
-	if err != nil {
-		t.Fatalf("new local path policy: %v", err)
-	}
-	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "service.db")))
-	t.Cleanup(func() { _ = storageService.Close() })
-	auditService := audit.NewService(storageService.AuditWriter())
-	deliveryService := delivery.NewService()
-	toolRegistry := tools.NewRegistry()
-	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
-		t.Fatalf("register builtin tools: %v", err)
-	}
-	if err := sidecarclient.RegisterPlaywrightTools(toolRegistry); err != nil {
-		t.Fatalf("register playwright tools: %v", err)
-	}
-	if err := sidecarclient.RegisterOCRTools(toolRegistry); err != nil {
-		t.Fatalf("register ocr tools: %v", err)
-	}
-	if err := sidecarclient.RegisterMediaTools(toolRegistry); err != nil {
-		t.Fatalf("register media tools: %v", err)
-	}
-	toolExecutor := tools.NewToolExecutor(toolRegistry, tools.WithToolCallRecorder(tools.NewToolCallRecorder(storageService.ToolCallSink())))
-	pluginService := plugin.NewService()
-	seedTestExtensionAssets(t, storageService, pluginService)
-	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
-	executor := execution.NewService(fileSystem, platform.LocalExecutionBackend{}, sidecarclient.NewNoopPlaywrightSidecarClient(), sidecarclient.NewNoopOCRWorkerClient(), sidecarclient.NewNoopMediaWorkerClient(), sidecarclient.NewLocalScreenCaptureClient(fileSystem), modelService, auditService, checkpoint.NewService(storageService.RecoveryPointWriter()), deliveryService, toolRegistry, toolExecutor, pluginService).WithArtifactStore(storageService.ArtifactStore()).WithExtensionAssetCatalog(storageService)
-
-	service := NewService(
-		contextsvc.NewService(),
-		intent.NewService(),
-		mustNewStoredEngine(t, storageService.TaskRunStore()),
-		deliveryService,
-		memory.NewServiceFromStorage(storageService.MemoryStore(), storageService.Capabilities().MemoryRetrievalBackend),
-		risk.NewService(),
-		modelService,
-		toolRegistry,
-		pluginService,
-	).WithAudit(auditService).WithStorage(storageService).WithExecutor(executor).WithTaskInspector(taskinspector.NewService(fileSystem)).WithTraceEval(traceeval.NewService(storageService.TraceStore(), storageService.EvalStore()))
-
-	return service, workspaceRoot, storageService
-}
 func seedTestExtensionAssets(t *testing.T, storageService *storage.Service, pluginService *plugin.Service) {
 	t.Helper()
 	if err := storageService.EnsureBuiltinExecutionAssets(context.Background()); err != nil {
@@ -887,21 +943,6 @@ func mustNewStoredEngine(t *testing.T, taskStore storage.TaskRunStore) *runengin
 		t.Fatalf("new stored engine: %v", err)
 	}
 	return engine
-}
-
-type storageTestAdapter struct {
-	databasePath string
-}
-
-func (s storageTestAdapter) DatabasePath() string {
-	return s.databasePath
-}
-
-func (s storageTestAdapter) SecretStorePath() string {
-	if s.databasePath == "" {
-		return ""
-	}
-	return s.databasePath + ".stronghold"
 }
 
 func newTestService() *Service {
@@ -1320,6 +1361,116 @@ func TestServiceSubmitInputUsesSuggestedWorkspaceDeliveryForLongAgentLoopInput(t
 	if outputPath == "" {
 		t.Fatal("expected workspace delivery to carry a path")
 	}
+	if _, err := os.Stat(filepath.Join(workspaceRoot, strings.TrimPrefix(outputPath, "workspace/"))); err != nil {
+		t.Fatalf("expected workspace delivery file to exist, got %v", err)
+	}
+}
+
+func TestServiceStartTaskFailsAfterExecutionTimeout(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, &blockingModelClient{
+		started:  make(chan string, 1),
+		released: make(chan struct{}, 1),
+	})
+	service.executionTimeout = 20 * time.Millisecond
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_execution_timeout",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Please rewrite this draft.",
+		},
+		"intent": map[string]any{
+			"name":      "rewrite",
+			"arguments": map[string]any{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] != "failed" {
+		t.Fatalf("expected timed out execution to fail the task, got %+v", task)
+	}
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["text"] != "执行失败：本地任务执行超时，请重试。" {
+		t.Fatalf("expected timeout bubble text, got %+v", bubble)
+	}
+	if result["delivery_result"] != nil {
+		t.Fatalf("expected timed out execution not to return delivery result, got %+v", result["delivery_result"])
+	}
+}
+
+func TestShouldBoundTaskExecutionOnlyForSynchronousBubbleSubmits(t *testing.T) {
+	if !shouldBoundTaskExecution(
+		runengine.TaskRecord{SourceType: "hover_input"},
+		contextsvc.TaskContextSnapshot{Trigger: "hover_text_input"},
+		map[string]any{"name": "rewrite"},
+		"bubble",
+	) {
+		t.Fatal("expected hover text submits to use the bounded execution timeout")
+	}
+	if shouldBoundTaskExecution(
+		runengine.TaskRecord{SourceType: "hover_input"},
+		contextsvc.TaskContextSnapshot{Trigger: "hover_text_input"},
+		map[string]any{"name": "screen_analyze_candidate"},
+		"bubble",
+	) {
+		t.Fatal("expected internal screen analysis to skip the short bubble timeout")
+	}
+	if shouldBoundTaskExecution(
+		runengine.TaskRecord{SourceType: "hover_input"},
+		contextsvc.TaskContextSnapshot{Trigger: "hover_text_input"},
+		map[string]any{"name": "rewrite"},
+		"workspace_document",
+	) {
+		t.Fatal("expected workspace_document delivery to skip the short bubble timeout")
+	}
+	if shouldBoundTaskExecution(
+		runengine.TaskRecord{SourceType: "file"},
+		contextsvc.TaskContextSnapshot{Trigger: "file_drop"},
+		map[string]any{"name": "write_file"},
+		"bubble",
+	) {
+		t.Fatal("expected non-bubble task sources to keep their existing execution timing")
+	}
+}
+
+func TestServiceSubmitInputWorkspaceDeliverySkipsShortBubbleTimeout(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithModelClient(t, delayedModelClient{
+		delay:  40 * time.Millisecond,
+		output: "Long-form result body.",
+	})
+	service.executionTimeout = 20 * time.Millisecond
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_long_command_timeout",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Please review the following document notes and prepare a detailed deliverable:\nLine one explains the rollout plan.\nLine two adds implementation details.\nLine three adds follow-up tasks.",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] != "completed" {
+		t.Fatalf("expected long workspace delivery to complete despite the short bubble timeout, got %+v", task)
+	}
+	deliveryResult, ok := result["delivery_result"].(map[string]any)
+	if !ok {
+		t.Fatal("expected long workspace delivery to return delivery_result")
+	}
+	if deliveryResult["type"] != "workspace_document" {
+		t.Fatalf("expected long workspace delivery to preserve workspace_document output, got %v", deliveryResult["type"])
+	}
+	payload := deliveryResult["payload"].(map[string]any)
+	outputPath := payload["path"].(string)
 	if _, err := os.Stat(filepath.Join(workspaceRoot, strings.TrimPrefix(outputPath, "workspace/"))); err != nil {
 		t.Fatalf("expected workspace delivery file to exist, got %v", err)
 	}
@@ -5488,6 +5639,153 @@ func TestServiceTaskListPrefersStructuredTaskStoreFallback(t *testing.T) {
 	arguments := intent["arguments"].(map[string]any)
 	if arguments["style"] != "key_points" {
 		t.Fatalf("expected structured task list to preserve intent arguments, got %+v", intent)
+	}
+}
+
+func TestStructuredTaskRecordToRuntimeSkipsDetailHydrationForLists(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured task list lightweight")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	taskID := "task_structured_lightweight"
+	runID := "run_structured_lightweight"
+	sessionID := "sess_structured_lightweight"
+	startedAt := time.Date(2026, 4, 17, 9, 0, 0, 0, time.UTC)
+	updatedAt := time.Date(2026, 4, 17, 9, 4, 0, 0, time.UTC)
+	finishedAt := time.Date(2026, 4, 17, 9, 6, 0, 0, time.UTC)
+	snapshotJSONBytes, err := json.Marshal(storage.TaskRunRecord{
+		TaskID:           taskID,
+		SessionID:        sessionID,
+		RunID:            runID,
+		Title:            "snapshot title should stay detail-only",
+		SourceType:       "hover_input",
+		Status:           "completed",
+		Intent:           map[string]any{"name": "summarize", "arguments": map[string]any{"style": "snapshot"}},
+		CurrentStep:      "deliver_result",
+		RiskLevel:        "green",
+		StartedAt:        startedAt,
+		UpdatedAt:        updatedAt,
+		FinishedAt:       timePointer(finishedAt),
+		MirrorReferences: []map[string]any{{"memory_id": "mem_structured_lightweight"}},
+	})
+	if err != nil {
+		t.Fatalf("marshal structured snapshot failed: %v", err)
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           sessionID,
+		RunID:               runID,
+		Title:               "structured lightweight task",
+		SourceType:          "hover_input",
+		Status:              "completed",
+		IntentName:          "summarize",
+		IntentArgumentsJSON: `{"style":"key_points"}`,
+		PreferredDelivery:   "workspace_document",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "green",
+		StartedAt:           startedAt.Format(time.RFC3339Nano),
+		UpdatedAt:           updatedAt.Format(time.RFC3339Nano),
+		FinishedAt:          finishedAt.Format(time.RFC3339Nano),
+		SnapshotJSON:        string(snapshotJSONBytes),
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.TaskStepStore().ReplaceTaskSteps(context.Background(), taskID, []storage.TaskStepRecord{{
+		StepID:        "step_structured_lightweight",
+		TaskID:        taskID,
+		Name:          "deliver_result",
+		Status:        "completed",
+		OrderIndex:    1,
+		InputSummary:  "structured input",
+		OutputSummary: "structured output",
+		CreatedAt:     startedAt.Format(time.RFC3339Nano),
+		UpdatedAt:     updatedAt.Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatalf("replace structured task steps failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveRun(context.Background(), storage.RunRecord{
+		RunID:      runID,
+		TaskID:     taskID,
+		SessionID:  sessionID,
+		SourceType: "hover_input",
+		Status:     "completed",
+		IntentName: "summarize",
+		StartedAt:  startedAt.Format(time.RFC3339Nano),
+		UpdatedAt:  updatedAt.Format(time.RFC3339Nano),
+		FinishedAt: finishedAt.Format(time.RFC3339Nano),
+		StopReason: "completed",
+	}); err != nil {
+		t.Fatalf("save structured run failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveDeliveryResult(context.Background(), storage.DeliveryResultRecord{
+		DeliveryResultID: "delivery_structured_lightweight",
+		TaskID:           taskID,
+		RunID:            runID,
+		Type:             "workspace_document",
+		Title:            "Structured lightweight result",
+		PayloadJSON:      `{"path":"workspace/lightweight.md"}`,
+		PreviewText:      "detail-only delivery",
+		CreatedAt:        finishedAt.Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatalf("save structured delivery result failed: %v", err)
+	}
+	if err := service.storage.ArtifactStore().SaveArtifacts(context.Background(), []storage.ArtifactRecord{{
+		ArtifactID:          "art_structured_lightweight",
+		TaskID:              taskID,
+		RunID:               runID,
+		ArtifactType:        "workspace_document",
+		Title:               "Structured lightweight artifact",
+		Path:                "workspace/lightweight.md",
+		MimeType:            "text/markdown",
+		DeliveryType:        "workspace_document",
+		DeliveryPayloadJSON: `{"path":"workspace/lightweight.md"}`,
+		CreatedAt:           finishedAt.Format(time.RFC3339Nano),
+	}}); err != nil {
+		t.Fatalf("save structured artifact failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().ReplaceTaskCitations(context.Background(), taskID, []storage.CitationRecord{{
+		CitationID:   "cit_structured_lightweight",
+		TaskID:       taskID,
+		RunID:        runID,
+		SourceType:   "file",
+		SourceRef:    "art_structured_lightweight",
+		Label:        "workspace artifact",
+		ArtifactID:   "art_structured_lightweight",
+		ArtifactType: "workspace_document",
+		OrderIndex:   1,
+	}}); err != nil {
+		t.Fatalf("save structured citation failed: %v", err)
+	}
+
+	record, err := service.storage.TaskStore().GetTask(context.Background(), taskID)
+	if err != nil {
+		t.Fatalf("get structured task failed: %v", err)
+	}
+	listTask, ok := service.structuredTaskRecordToRuntime(record, false)
+	if !ok {
+		t.Fatal("expected list hydration to succeed")
+	}
+	if listTask.TaskID != taskID || listTask.Title != "structured lightweight task" {
+		t.Fatalf("expected list hydration to preserve top-level task fields, got %+v", listTask)
+	}
+	if len(listTask.Timeline) != 0 || len(listTask.Artifacts) != 0 || len(listTask.Citations) != 0 ||
+		len(listTask.DeliveryResult) != 0 || len(listTask.MirrorReferences) != 0 {
+		t.Fatalf("expected list hydration to skip detail-only fields, got %+v", listTask)
+	}
+	if strings.TrimSpace(listTask.LoopStopReason) != "completed" {
+		t.Fatalf("expected list hydration to keep lightweight run metadata, got %+v", listTask)
+	}
+
+	detailTask, ok := service.structuredTaskRecordToRuntime(record, true)
+	if !ok {
+		t.Fatal("expected detail hydration to succeed")
+	}
+	if len(detailTask.Timeline) != 1 || len(detailTask.Artifacts) != 1 || len(detailTask.Citations) != 1 ||
+		len(detailTask.DeliveryResult) == 0 || strings.TrimSpace(detailTask.LoopStopReason) != "completed" ||
+		len(detailTask.MirrorReferences) != 1 {
+		t.Fatalf("expected detail hydration to include timeline, delivery, evidence, run, and snapshot fields, got %+v", detailTask)
 	}
 }
 
@@ -12151,6 +12449,66 @@ func TestServiceTaskArtifactOpenReturnsStableOpenPayload(t *testing.T) {
 	}
 }
 
+func TestServiceTaskArtifactOpenPrefersStoredArtifactOverRuntimeCompatibility(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "stored artifact open precedence")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	runtimeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_artifact_open_prefer",
+		Title:       "artifact open preference task",
+		SourceType:  "floating_ball",
+		Status:      "completed",
+		Intent:      map[string]any{"name": "summarize"},
+		CurrentStep: "deliver_result",
+		Timeline:    initialTimeline("completed", "deliver_result"),
+	})
+	if _, ok := service.runEngine.SetPresentation(runtimeTask.TaskID, nil, map[string]any{
+		"type":         "workspace_document",
+		"title":        "runtime result",
+		"preview_text": "runtime preview",
+		"payload":      map[string]any{"path": "workspace/runtime.md", "task_id": runtimeTask.TaskID},
+	}, []map[string]any{{
+		"artifact_id":      "art_open_prefer_stored",
+		"task_id":          runtimeTask.TaskID,
+		"artifact_type":    "generated_doc",
+		"title":            "runtime.md",
+		"path":             "workspace/runtime.md",
+		"mime_type":        "text/markdown",
+		"delivery_type":    "open_file",
+		"delivery_payload": map[string]any{"path": "workspace/runtime.md", "task_id": runtimeTask.TaskID},
+		"created_at":       "2026-04-14T10:05:00Z",
+	}}); !ok {
+		t.Fatal("expected runtime presentation to update")
+	}
+	if err := service.storage.ArtifactStore().SaveArtifacts(context.Background(), []storage.ArtifactRecord{{
+		ArtifactID:          "art_open_prefer_stored",
+		TaskID:              runtimeTask.TaskID,
+		ArtifactType:        "generated_doc",
+		Title:               "stored.md",
+		Path:                "workspace/stored.md",
+		MimeType:            "text/markdown",
+		DeliveryType:        "open_file",
+		DeliveryPayloadJSON: `{"path":"workspace/stored.md","task_id":"` + runtimeTask.TaskID + `"}`,
+		CreatedAt:           "2026-04-14T10:06:00Z",
+	}}); err != nil {
+		t.Fatalf("save stored artifact failed: %v", err)
+	}
+
+	result, err := service.TaskArtifactOpen(map[string]any{"task_id": runtimeTask.TaskID, "artifact_id": "art_open_prefer_stored"})
+	if err != nil {
+		t.Fatalf("task artifact open failed: %v", err)
+	}
+	payload := result["resolved_payload"].(map[string]any)
+	if payload["path"] != "workspace/stored.md" {
+		t.Fatalf("expected open payload to use stored artifact path, got %+v", payload)
+	}
+	artifact := result["artifact"].(map[string]any)
+	if artifact["path"] != "workspace/stored.md" || artifact["title"] != "stored.md" {
+		t.Fatalf("expected stored artifact to override runtime compatibility data, got %+v", artifact)
+	}
+}
+
 func TestServiceTaskArtifactOpenReturnsArtifactNotFoundWhenTaskExists(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "artifact not found")
 	startResult, err := service.StartTask(map[string]any{
@@ -12253,6 +12611,77 @@ func TestServiceDeliveryOpenReturnsTaskDeliveryResult(t *testing.T) {
 	}
 }
 
+func TestServiceDeliveryOpenPrefersStoredDeliveryResultOverRuntimeCompatibility(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "delivery open storage precedence")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	runtimeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_delivery_open_prefer",
+		Title:       "delivery open preference task",
+		SourceType:  "floating_ball",
+		Status:      "completed",
+		Intent:      map[string]any{"name": "summarize"},
+		CurrentStep: "deliver_result",
+		Timeline:    initialTimeline("completed", "deliver_result"),
+	})
+	if _, ok := service.runEngine.SetPresentation(runtimeTask.TaskID, nil, map[string]any{
+		"type":         "workspace_document",
+		"title":        "runtime result",
+		"preview_text": "runtime preview",
+		"payload":      map[string]any{"path": "workspace/runtime.md", "task_id": runtimeTask.TaskID},
+	}, nil); !ok {
+		t.Fatal("expected runtime presentation to update")
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:            runtimeTask.TaskID,
+		SessionID:         runtimeTask.SessionID,
+		RunID:             runtimeTask.RunID,
+		PrimaryRunID:      runtimeTask.RunID,
+		Title:             runtimeTask.Title,
+		SourceType:        runtimeTask.SourceType,
+		Status:            runtimeTask.Status,
+		IntentName:        "summarize",
+		PreferredDelivery: "workspace_document",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       runtimeTask.CurrentStep,
+		CurrentStepStatus: "completed",
+		RiskLevel:         "green",
+		RequestSource:     "floating_ball",
+		RequestTrigger:    "hover_text_input",
+		StartedAt:         runtimeTask.StartedAt.Format(time.RFC3339Nano),
+		UpdatedAt:         runtimeTask.UpdatedAt.Format(time.RFC3339Nano),
+		FinishedAt:        runtimeTask.UpdatedAt.Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveDeliveryResult(context.Background(), storage.DeliveryResultRecord{
+		DeliveryResultID: "delivery_open_prefer_stored",
+		TaskID:           runtimeTask.TaskID,
+		RunID:            runtimeTask.RunID,
+		Type:             "workspace_document",
+		Title:            "stored result",
+		PayloadJSON:      `{"path":"workspace/stored.md","task_id":"` + runtimeTask.TaskID + `"}`,
+		PreviewText:      "stored preview",
+		CreatedAt:        runtimeTask.UpdatedAt.Add(time.Second).Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatalf("save stored delivery result failed: %v", err)
+	}
+
+	result, err := service.DeliveryOpen(map[string]any{"task_id": runtimeTask.TaskID})
+	if err != nil {
+		t.Fatalf("delivery open failed: %v", err)
+	}
+	payload := result["resolved_payload"].(map[string]any)
+	if payload["path"] != "workspace/stored.md" {
+		t.Fatalf("expected stored delivery payload to override runtime compatibility data, got %+v", payload)
+	}
+	deliveryResult := result["delivery_result"].(map[string]any)
+	if deliveryResult["title"] != "stored result" || deliveryResult["preview_text"] != "stored preview" {
+		t.Fatalf("expected stored delivery result metadata to override runtime compatibility data, got %+v", deliveryResult)
+	}
+}
+
 func TestServiceDeliveryOpenReturnsArtifactDeliveryResult(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "delivery open artifact")
 	if service.storage == nil {
@@ -12345,6 +12774,95 @@ func TestServiceTaskArtifactListFallsBackToRuntimeArtifactsWhenStoreEmpty(t *tes
 	}
 	if _, ok := items[0]["delivery_type"]; ok {
 		t.Fatalf("expected runtime artifact fallback item to omit undeclared delivery_type, got %+v", items[0])
+	}
+}
+
+func TestServiceTaskArtifactListMergesStoredAndRuntimeArtifacts(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "artifact list merge")
+	if service.storage == nil || service.storage.ArtifactStore() == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_merge_artifact",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请整理 artifact 列表",
+		},
+		"intent": map[string]any{
+			"name": "summarize",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	task, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected runtime task to exist")
+	}
+	if err := service.storage.ArtifactStore().SaveArtifacts(context.Background(), []storage.ArtifactRecord{{
+		ArtifactID:          "art_stored_001",
+		TaskID:              taskID,
+		RunID:               task.RunID,
+		ArtifactType:        "generated_doc",
+		Title:               "stored.md",
+		Path:                "workspace/stored.md",
+		MimeType:            "text/markdown",
+		DeliveryType:        "workspace_document",
+		DeliveryPayloadJSON: `{"path":"workspace/stored.md","task_id":"` + taskID + `"}`,
+		CreatedAt:           "2026-04-15T10:00:00Z",
+	}}); err != nil {
+		t.Fatalf("save stored artifact failed: %v", err)
+	}
+	_, _ = service.runEngine.SetPresentation(taskID, task.BubbleMessage, task.DeliveryResult, []map[string]any{
+		{
+			"artifact_id":      "art_stored_001",
+			"task_id":          taskID,
+			"artifact_type":    "generated_doc",
+			"title":            "runtime stale.md",
+			"path":             "workspace/runtime-stale.md",
+			"mime_type":        "text/markdown",
+			"delivery_type":    "workspace_document",
+			"delivery_payload": map[string]any{"path": "workspace/runtime-stale.md", "task_id": taskID},
+		},
+		{
+			"artifact_id":      "art_runtime_002",
+			"task_id":          taskID,
+			"artifact_type":    "generated_doc",
+			"title":            "runtime-new.md",
+			"path":             "workspace/runtime-new.md",
+			"mime_type":        "text/markdown",
+			"delivery_type":    "workspace_document",
+			"delivery_payload": map[string]any{"path": "workspace/runtime-new.md", "task_id": taskID},
+		},
+	})
+
+	result, err := service.TaskArtifactList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task artifact list failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	byID := make(map[string]map[string]any, len(items))
+	for _, item := range items {
+		byID[item["artifact_id"].(string)] = item
+	}
+	if len(byID) != len(items) {
+		t.Fatalf("expected merged artifact list to de-duplicate duplicate artifact ids, got %+v", items)
+	}
+	if len(items) < 2 {
+		t.Fatalf("expected merged artifact list to include stored and runtime-only entries, got %+v", items)
+	}
+	if byID["art_stored_001"]["path"] != "workspace/stored.md" {
+		t.Fatalf("expected stored artifact to stay authoritative for duplicate ids, got %+v", byID["art_stored_001"])
+	}
+	if byID["art_runtime_002"]["path"] != "workspace/runtime-new.md" {
+		t.Fatalf("expected runtime-only artifact to remain visible, got %+v", items)
+	}
+	page := result["page"].(map[string]any)
+	if page["total"] != len(items) {
+		t.Fatalf("expected page total to match merged artifact count, got %+v", page)
 	}
 }
 
@@ -13445,6 +13963,34 @@ func TestServiceTaskEventsListSupportsTimeWindowFilters(t *testing.T) {
 	}
 }
 
+func TestServiceTaskEventsListKeepsSameSecondNanoEventsAtLowerBound(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "loop event nano lower bound")
+	if service.storage == nil || service.storage.LoopRuntimeStore() == nil {
+		t.Fatal("expected loop runtime store to be wired")
+	}
+	if err := service.storage.LoopRuntimeStore().SaveEvents(context.Background(), []storage.EventRecord{
+		{EventID: "evt_loop_nano_001", RunID: "run_loop_nano_a", TaskID: "task_loop_nano_001", StepID: "step_a", Type: "loop.round.started", Level: "info", PayloadJSON: `{}`, CreatedAt: "2026-04-17T10:00:00.123Z"},
+		{EventID: "evt_loop_nano_002", RunID: "run_loop_nano_b", TaskID: "task_loop_nano_001", StepID: "step_b", Type: "loop.failed", Level: "error", PayloadJSON: `{}`, CreatedAt: "2026-04-17T10:00:01Z"},
+	}); err != nil {
+		t.Fatalf("save loop nano events failed: %v", err)
+	}
+
+	result, err := service.TaskEventsList(map[string]any{
+		"task_id":         "task_loop_nano_001",
+		"created_at_from": "2026-04-17T10:00:00Z",
+		"created_at_to":   "2026-04-17T10:00:00.999Z",
+		"limit":           20,
+		"offset":          0,
+	})
+	if err != nil {
+		t.Fatalf("task events list with nano lower bound failed: %v", err)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["event_id"] != "evt_loop_nano_001" {
+		t.Fatalf("expected same-second nano event to survive lower-bound filtering, got %+v", items)
+	}
+}
+
 func TestServiceTaskToolCallsListReturnsPersistedToolCalls(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "tool call list")
 	if service.storage == nil || service.storage.ToolCallStore() == nil {
@@ -14310,6 +14856,57 @@ func TestServiceSubmitInputConfirmRequiredTextContinuesPendingTask(t *testing.T)
 	}
 }
 
+func TestServiceSubmitInputFallsBackWhenContinuationModelTimesOut(t *testing.T) {
+	originalTimeout := taskContinuationModelTimeout
+	taskContinuationModelTimeout = 20 * time.Millisecond
+	defer func() {
+		taskContinuationModelTimeout = originalTimeout
+	}()
+
+	service, _ := newTestServiceWithModelClient(t, &blockingModelClient{
+		started:  make(chan string, 1),
+		released: make(chan struct{}, 1),
+	})
+
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_timeout_continuation",
+		Title:       "Investigate the current failure",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		CurrentStep: "agent_loop",
+		RiskLevel:   "green",
+	})
+
+	start := time.Now()
+	result, err := service.SubmitInput(map[string]any{
+		"source":  "floating_ball",
+		"trigger": "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "Translate this note into English",
+			"input_mode": "text",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+		"context": map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+	if time.Since(start) > 500*time.Millisecond {
+		t.Fatalf("expected continuation timeout fallback to return quickly, took %s", time.Since(start))
+	}
+
+	task := result["task"].(map[string]any)
+	if task["task_id"] == activeTask.TaskID {
+		t.Fatalf("expected timed out continuation classifier to fall back to a new task, got %+v", task)
+	}
+	if task["status"] != "confirming_intent" {
+		t.Fatalf("expected fallback task to stay in confirming_intent, got %+v", task)
+	}
+}
+
 func TestServiceSubmitInputConfirmRequiredTextContinuesImplicitPendingTask(t *testing.T) {
 	var modelCalled bool
 	service, _ := newTestServiceWithModelClient(t, stubModelClient{
@@ -14537,6 +15134,9 @@ func TestFresherTaskRecordRestoresRuntimeAnchorsWhenStorageProjectionIsNewer(t *
 		Snapshot: contextsvc.TaskContextSnapshot{
 			PageURL:     "https://example.com/build",
 			AppName:     "Chrome",
+			BrowserKind: "chrome",
+			ProcessPath: "C:/Program Files/Google/Chrome/Application/chrome.exe",
+			ProcessID:   4242,
 			WindowTitle: "Browser - Build Dashboard",
 		},
 	}
@@ -14564,6 +15164,9 @@ func TestFresherTaskRecordRestoresRuntimeAnchorsWhenStorageProjectionIsNewer(t *
 	}
 	if selected.Snapshot.PageURL != runtimeTask.Snapshot.PageURL ||
 		selected.Snapshot.AppName != runtimeTask.Snapshot.AppName ||
+		selected.Snapshot.BrowserKind != runtimeTask.Snapshot.BrowserKind ||
+		selected.Snapshot.ProcessPath != runtimeTask.Snapshot.ProcessPath ||
+		selected.Snapshot.ProcessID != runtimeTask.Snapshot.ProcessID ||
 		selected.Snapshot.WindowTitle != runtimeTask.Snapshot.WindowTitle {
 		t.Fatalf("expected runtime snapshot anchors to fill the newer partial storage snapshot, got %+v", selected.Snapshot)
 	}
@@ -14571,6 +15174,26 @@ func TestFresherTaskRecordRestoresRuntimeAnchorsWhenStorageProjectionIsNewer(t *
 		len(selected.Snapshot.Files) != 1 ||
 		selected.Snapshot.Files[0] != storageTask.Snapshot.Files[0] {
 		t.Fatalf("expected newer storage snapshot payload to stay selected, got %+v", selected.Snapshot)
+	}
+}
+
+func TestSnapshotFromTaskPreservesAttachOnlySnapshot(t *testing.T) {
+	attachOnlyTask := runengine.TaskRecord{
+		TaskID: "task_attach_only",
+		Title:  "Resume attached browser task",
+		Snapshot: contextsvc.TaskContextSnapshot{
+			BrowserKind: "edge",
+			ProcessPath: "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+			ProcessID:   5150,
+		},
+	}
+
+	snapshot := snapshotFromTask(attachOnlyTask)
+	if snapshot.BrowserKind != "edge" || snapshot.ProcessPath != attachOnlyTask.Snapshot.ProcessPath || snapshot.ProcessID != 5150 {
+		t.Fatalf("expected attach-only snapshot to survive resume reconstruction, got %+v", snapshot)
+	}
+	if snapshot.InputType != "" || snapshot.Text != "" {
+		t.Fatalf("expected attach-only snapshot to avoid synthetic text fallback, got %+v", snapshot)
 	}
 }
 
@@ -15195,6 +15818,288 @@ func TestServiceTaskListIncludesLoopStopReason(t *testing.T) {
 	}
 }
 
+func TestServiceTaskListBackfillsStructuredLoopStopReasonFromCompatibilityStorage(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured task list compatibility")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	taskID := "task_structured_loop_stop_storage"
+	runID := "run_structured_loop_stop_storage"
+	startedAt := time.Date(2026, 5, 1, 10, 0, 0, 0, time.UTC)
+	updatedAt := startedAt.Add(2 * time.Minute)
+	finishedAt := startedAt.Add(3 * time.Minute)
+
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_structured_loop_stop_storage",
+		RunID:               runID,
+		PrimaryRunID:        runID,
+		Title:               "structured loop stop task",
+		SourceType:          "hover_input",
+		Status:              "failed",
+		IntentName:          "summarize",
+		IntentArgumentsJSON: `{"style":"key_points"}`,
+		PreferredDelivery:   "bubble",
+		FallbackDelivery:    "workspace_document",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "failed",
+		RiskLevel:           "yellow",
+		RequestSource:       "floating_ball",
+		RequestTrigger:      "hover_text_input",
+		StartedAt:           startedAt.Format(time.RFC3339Nano),
+		UpdatedAt:           updatedAt.Format(time.RFC3339Nano),
+		FinishedAt:          finishedAt.Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+
+	if err := service.storage.LoopRuntimeStore().SaveRun(context.Background(), storage.RunRecord{
+		RunID:      runID,
+		TaskID:     taskID,
+		SessionID:  "sess_structured_loop_stop_storage",
+		SourceType: "hover_input",
+		Status:     "failed",
+		IntentName: "summarize",
+		StartedAt:  startedAt.Format(time.RFC3339Nano),
+		UpdatedAt:  updatedAt.Format(time.RFC3339Nano),
+		FinishedAt: finishedAt.Format(time.RFC3339Nano),
+		StopReason: "tool_retry_exhausted",
+	}); err != nil {
+		t.Fatalf("write loop runtime run failed: %v", err)
+	}
+
+	result, err := service.TaskList(map[string]any{"group": "finished", "limit": 20, "offset": 0})
+	if err != nil {
+		t.Fatalf("task list failed: %v", err)
+	}
+	listed := result["items"].([]map[string]any)
+	if len(listed) != 1 {
+		t.Fatalf("expected one finished task, got %+v", listed)
+	}
+	if listed[0]["task_id"] != taskID || listed[0]["loop_stop_reason"] != "tool_retry_exhausted" {
+		t.Fatalf("expected structured storage task list to preserve compatibility stop reason, got %+v", listed[0])
+	}
+}
+
+func TestServiceTaskListBoundsStructuredStoragePagingWindow(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "structured task list paging window")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	originalStore := service.storage.TaskStore()
+	defer replaceTaskStore(t, service.storage, originalStore)
+	countingStore := &countingTaskStore{base: originalStore}
+	replaceTaskStore(t, service.storage, countingStore)
+
+	baseTime := time.Date(2026, 5, 2, 10, 0, 0, 0, time.UTC)
+	for index := 0; index < 6; index++ {
+		taskID := fmt.Sprintf("task_structured_page_%02d", index)
+		timestamp := baseTime.Add(time.Duration(index) * time.Minute)
+		if err := countingStore.WriteTask(context.Background(), storage.TaskRecord{
+			TaskID:              taskID,
+			SessionID:           fmt.Sprintf("sess_structured_page_%02d", index),
+			RunID:               fmt.Sprintf("run_structured_page_%02d", index),
+			PrimaryRunID:        fmt.Sprintf("run_structured_page_%02d", index),
+			Title:               fmt.Sprintf("structured page task %02d", index),
+			SourceType:          "hover_input",
+			Status:              "completed",
+			IntentName:          "summarize",
+			IntentArgumentsJSON: `{"style":"key_points"}`,
+			PreferredDelivery:   "workspace_document",
+			FallbackDelivery:    "bubble",
+			CurrentStep:         "deliver_result",
+			CurrentStepStatus:   "completed",
+			RiskLevel:           "green",
+			RequestSource:       "floating_ball",
+			RequestTrigger:      "hover_text_input",
+			StartedAt:           timestamp.Format(time.RFC3339Nano),
+			UpdatedAt:           timestamp.Format(time.RFC3339Nano),
+			FinishedAt:          timestamp.Add(time.Minute).Format(time.RFC3339Nano),
+		}); err != nil {
+			t.Fatalf("write structured task %d failed: %v", index, err)
+		}
+	}
+
+	result, err := service.TaskList(map[string]any{
+		"group":      "finished",
+		"sort_by":    "updated_at",
+		"sort_order": "desc",
+		"limit":      2,
+		"offset":     2,
+	})
+	if err != nil {
+		t.Fatalf("task list failed: %v", err)
+	}
+	if countingStore.listForTaskListCalls != 1 {
+		t.Fatalf("expected one bounded task-list query, got %d", countingStore.listForTaskListCalls)
+	}
+	if countingStore.lastTaskListLimit != 4 || countingStore.lastTaskListOffset != 0 {
+		t.Fatalf("expected task-list storage query to request a bounded merge window, got limit=%d offset=%d", countingStore.lastTaskListLimit, countingStore.lastTaskListOffset)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 2 || items[0]["task_id"] != "task_structured_page_03" || items[1]["task_id"] != "task_structured_page_02" {
+		t.Fatalf("expected second page from structured storage, got %+v", items)
+	}
+}
+
+func TestServiceTaskListKeepsRuntimeOnlyTasksInPagedMerge(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "runtime merge into paged task list")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	originalStore := service.storage.TaskStore()
+	defer replaceTaskStore(t, service.storage, originalStore)
+	countingStore := &countingTaskStore{base: originalStore}
+	replaceTaskStore(t, service.storage, countingStore)
+
+	baseTime := time.Date(2026, 5, 2, 9, 0, 0, 0, time.UTC)
+	for index := 0; index < 4; index++ {
+		taskID := fmt.Sprintf("task_unfinished_page_%02d", index)
+		timestamp := baseTime.Add(time.Duration(index) * time.Minute)
+		if err := countingStore.WriteTask(context.Background(), storage.TaskRecord{
+			TaskID:              taskID,
+			SessionID:           fmt.Sprintf("sess_unfinished_page_%02d", index),
+			RunID:               fmt.Sprintf("run_unfinished_page_%02d", index),
+			PrimaryRunID:        fmt.Sprintf("run_unfinished_page_%02d", index),
+			Title:               fmt.Sprintf("unfinished page task %02d", index),
+			SourceType:          "hover_input",
+			Status:              "processing",
+			IntentName:          "summarize",
+			IntentArgumentsJSON: `{"style":"key_points"}`,
+			PreferredDelivery:   "workspace_document",
+			FallbackDelivery:    "bubble",
+			CurrentStep:         "generate_output",
+			CurrentStepStatus:   "processing",
+			RiskLevel:           "green",
+			RequestSource:       "floating_ball",
+			RequestTrigger:      "hover_text_input",
+			StartedAt:           timestamp.Format(time.RFC3339Nano),
+			UpdatedAt:           timestamp.Format(time.RFC3339Nano),
+		}); err != nil {
+			t.Fatalf("write structured unfinished task %d failed: %v", index, err)
+		}
+	}
+
+	runtimeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:      "sess_runtime_only_page",
+		RequestSource:  "floating_ball",
+		RequestTrigger: "hover_text_input",
+		Title:          "runtime-only task",
+		SourceType:     "hover_input",
+		Status:         "processing",
+		Intent:         map[string]any{"name": "summarize", "arguments": map[string]any{"style": "key_points"}},
+		CurrentStep:    "generate_output",
+		RiskLevel:      "green",
+	})
+	updatedRuntimeTask, ok := service.runEngine.RecordLoopLifecycle(runtimeTask.TaskID, "loop.round.completed", "paused_by_session", map[string]any{"stop_reason": "paused_by_session"})
+	if !ok {
+		t.Fatal("expected runtime task to update successfully")
+	}
+
+	result, err := service.TaskList(map[string]any{
+		"group":      "unfinished",
+		"sort_by":    "updated_at",
+		"sort_order": "desc",
+		"limit":      2,
+		"offset":     1,
+	})
+	if err != nil {
+		t.Fatalf("task list failed: %v", err)
+	}
+	if countingStore.listForTaskListCalls != 1 {
+		t.Fatalf("expected one structured paging query, got %d", countingStore.listForTaskListCalls)
+	}
+	if countingStore.lastTaskListLimit != 4 || countingStore.lastTaskListOffset != 0 {
+		t.Fatalf("expected runtime merge to expand only the bounded storage window, got limit=%d offset=%d", countingStore.lastTaskListLimit, countingStore.lastTaskListOffset)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 2 {
+		t.Fatalf("expected two unfinished tasks on the second page, got %+v", items)
+	}
+	if items[0]["task_id"] != "task_unfinished_page_03" || items[1]["task_id"] != "task_unfinished_page_02" {
+		t.Fatalf("expected runtime-only task to occupy page one without corrupting later pages, got %+v (runtime task %s)", items, updatedRuntimeTask.TaskID)
+	}
+	page := result["page"].(map[string]any)
+	if page["total"] != 5 {
+		t.Fatalf("expected merged total to include the runtime-only task, got %+v", page)
+	}
+}
+
+func TestServiceTaskListDoesNotDoubleCountRuntimeTasksBackedByLegacyRows(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "runtime legacy total dedupe")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	originalTaskStore := service.storage.TaskStore()
+	originalTaskRunStore := service.storage.TaskRunStore()
+	defer replaceTaskStore(t, service.storage, originalTaskStore)
+	defer replaceTaskRunStore(t, service.storage, originalTaskRunStore)
+
+	countingTaskStore := &countingTaskStore{base: originalTaskStore}
+	countingTaskRunStore := &countingTaskRunStore{base: originalTaskRunStore}
+	replaceTaskStore(t, service.storage, countingTaskStore)
+	replaceTaskRunStore(t, service.storage, countingTaskRunStore)
+
+	runtimeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:      "sess_runtime_legacy_dedupe",
+		RequestSource:  "floating_ball",
+		RequestTrigger: "hover_text_input",
+		Title:          "runtime task with legacy row",
+		SourceType:     "hover_input",
+		Status:         "processing",
+		Intent:         map[string]any{"name": "summarize"},
+		CurrentStep:    "generate_output",
+		RiskLevel:      "green",
+	})
+	updatedRuntimeTask, ok := service.runEngine.RecordLoopLifecycle(runtimeTask.TaskID, "loop.round.completed", "paused_by_session", map[string]any{"stop_reason": "paused_by_session"})
+	if !ok {
+		t.Fatal("expected runtime task to update successfully")
+	}
+	legacyTask := storage.TaskRunRecord{
+		TaskID:            runtimeTask.TaskID,
+		SessionID:         runtimeTask.SessionID,
+		RunID:             "run_runtime_legacy_dedupe",
+		Title:             runtimeTask.Title,
+		SourceType:        runtimeTask.SourceType,
+		Status:            "processing",
+		Intent:            runtimeTask.Intent,
+		CurrentStep:       runtimeTask.CurrentStep,
+		RiskLevel:         runtimeTask.RiskLevel,
+		StartedAt:         updatedRuntimeTask.StartedAt,
+		UpdatedAt:         updatedRuntimeTask.UpdatedAt.Add(-time.Minute),
+		CurrentStepStatus: "processing",
+	}
+	if err := countingTaskRunStore.SaveTaskRun(context.Background(), legacyTask); err != nil {
+		t.Fatalf("save legacy task run failed: %v", err)
+	}
+	if err := service.storage.TaskStore().DeleteTask(context.Background(), runtimeTask.TaskID); err != nil {
+		t.Fatalf("delete structured task failed: %v", err)
+	}
+
+	result, err := service.TaskList(map[string]any{
+		"group":      "unfinished",
+		"sort_by":    "updated_at",
+		"sort_order": "desc",
+		"limit":      20,
+		"offset":     0,
+	})
+	if err != nil {
+		t.Fatalf("task list failed: %v", err)
+	}
+	if countingTaskStore.getCalls != 0 {
+		t.Fatalf("expected runtime total reconciliation to avoid per-task structured lookups, got %d", countingTaskStore.getCalls)
+	}
+	page := result["page"].(map[string]any)
+	if page["total"] != 1 {
+		t.Fatalf("expected legacy-backed runtime task to be counted once, got %+v", page)
+	}
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 || items[0]["task_id"] != runtimeTask.TaskID {
+		t.Fatalf("expected merged task list to return one deduplicated runtime task, got %+v", items)
+	}
+}
+
 func TestServiceStartTaskWithExecutorWritesWorkspaceDocument(t *testing.T) {
 	service, workspaceRoot := newTestServiceWithExecution(t, "第一点\n第二点\n第三点")
 
@@ -15242,18 +16147,18 @@ func TestServiceStartTaskWithExecutorWritesWorkspaceDocument(t *testing.T) {
 	output, ok := record.LatestToolCall["output"].(map[string]any)
 	if !ok {
 		t.Fatalf("expected latest tool call output map, got %+v", record.LatestToolCall)
-		if output["summary_output"] == nil {
-			t.Fatalf("expected write_file tool output to include summary_output, got %+v", output)
-		}
-		if output["model_invocation"] == nil {
-			t.Fatalf("expected latest tool call to include model invocation, got %+v", output)
-		}
-		if output["audit_record"] == nil {
-			t.Fatalf("expected latest tool call to include audit record, got %+v", output)
-		}
-		if output["recovery_point"] != nil {
-			t.Fatalf("expected no recovery_point for create flow, got %+v", output)
-		}
+	}
+	if strings.TrimSpace(stringValue(output, "path", "")) == "" {
+		t.Fatalf("expected write_file tool output to include path, got %+v", output)
+	}
+	if intValueFromAny(output["bytes_written"]) <= 0 {
+		t.Fatalf("expected write_file tool output to include bytes_written, got %+v", output)
+	}
+	if output["created"] != true {
+		t.Fatalf("expected write_file tool output to mark a created file, got %+v", output)
+	}
+	if output["recovery_point"] != nil {
+		t.Fatalf("expected no recovery_point for create flow, got %+v", output)
 	}
 }
 

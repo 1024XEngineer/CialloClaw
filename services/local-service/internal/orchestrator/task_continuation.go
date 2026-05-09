@@ -15,6 +15,8 @@ import (
 
 const implicitSessionReuseWindow = 15 * time.Minute
 
+var taskContinuationModelTimeout = 3 * time.Second
+
 type taskContinuationDecision struct {
 	Decision string `json:"decision"`
 	TaskID   string `json:"task_id"`
@@ -180,7 +182,12 @@ func (s *Service) modelTaskContinuationDecision(snapshot contextsvc.TaskContextS
 	if s == nil || modelService == nil {
 		return taskContinuationDecision{}, false
 	}
-	response, err := modelService.GenerateText(context.Background(), model.GenerateTextRequest{
+	// Continuation classification is a best-effort refinement on top of the local
+	// deterministic heuristics. It must stay bounded so shell-ball submits do not
+	// wait indefinitely for a remote model decision.
+	ctx, cancel := context.WithTimeout(context.Background(), taskContinuationModelTimeout)
+	defer cancel()
+	response, err := modelService.GenerateText(ctx, model.GenerateTextRequest{
 		TaskID: "task_continuation_classifier",
 		RunID:  "run_continuation_classifier",
 		Input:  buildTaskContinuationPrompt(snapshot, explicitIntent, continuationContext, options),

@@ -175,10 +175,7 @@ func (s *inMemoryLoopRuntimeStore) ListDeliveryResults(_ context.Context, taskID
 func (s *inMemoryLoopRuntimeStore) ReplaceTaskCitations(_ context.Context, taskID string, records []CitationRecord) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cloned := make([]CitationRecord, 0, len(records))
-	for _, record := range records {
-		cloned = append(cloned, record)
-	}
+	cloned := append([]CitationRecord(nil), records...)
 	s.citations[taskID] = cloned
 	return nil
 }
@@ -516,11 +513,15 @@ func (s *SQLiteLoopRuntimeStore) ListEvents(ctx context.Context, taskID, runID, 
 		filterArgs = append(filterArgs, eventType)
 	}
 	if strings.TrimSpace(createdAtFrom) != "" {
-		filters = append(filters, `created_at >= ?`)
+		// Events are persisted with mixed RFC3339/RFC3339Nano precision, so text
+		// comparison can drop same-second fractional timestamps. Compare the
+		// parsed instant instead of the raw string to preserve the requested
+		// filter window across both formats.
+		filters = append(filters, `julianday(created_at) >= julianday(?)`)
 		filterArgs = append(filterArgs, createdAtFrom)
 	}
 	if strings.TrimSpace(createdAtTo) != "" {
-		filters = append(filters, `created_at <= ?`)
+		filters = append(filters, `julianday(created_at) <= julianday(?)`)
 		filterArgs = append(filterArgs, createdAtTo)
 	}
 	countQuery := `SELECT COUNT(1) FROM events`
