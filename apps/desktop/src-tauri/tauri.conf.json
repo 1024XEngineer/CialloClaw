@@ -19,10 +19,12 @@
         "type": "downloadBootstrapper"
       },
       "nsis": {
-        "installMode": "currentUser"
+        "installMode": "currentUser",
+        "installerHooks": "windows/installer-hooks.nsh"
       },
       "wix": {
-        "language": "zh-CN"
+        "language": "zh-CN",
+        "fragmentPaths": ["windows/installer-hooks.wxs"]
       }
     }
   },
