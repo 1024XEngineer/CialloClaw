@@ -1,5 +1,7 @@
 import {
   ERROR_CODES,
+  type AgentTaskConfirmParams,
+  type AgentTaskConfirmResult,
   type AgentTaskSteerResult,
   type ApprovalDecision,
   type ApprovalRequest,
@@ -13,7 +15,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { JsonRpcClientError } from "@/rpc/client";
-import { respondSecurityDetailed, steerTask } from "@/rpc/methods";
+import { confirmTask, respondSecurityDetailed, steerTask } from "@/rpc/methods";
 import { subscribeAllTaskRuntime, subscribeApprovalPending, subscribeDeliveryReady, subscribeTaskUpdated } from "@/rpc/subscriptions";
 import { submitTextInput } from "@/services/agentInputService";
 import {
@@ -37,6 +39,11 @@ import { isRpcChannelUnavailable } from "@/rpc/fallback";
 import { readClipboardText } from "@/services/clipboardService";
 import { startTaskFromSelectedText } from "@/services/taskService";
 import { requestDashboardTaskDetailOpen } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
+import {
+  buildShellBallIntentCorrectionLabel,
+  buildShellBallIntentCorrectionPlaceholder,
+  formatShellBallIntentLabel,
+} from "./shellBallIntentCorrection";
 import {
   createDefaultShellBallWindowSnapshot,
   createShellBallWindowSnapshot,
@@ -78,6 +85,7 @@ type ShellBallCoordinatorInput = {
   onSubmitVoiceText?: (text: string) => Promise<ShellBallInputSubmitResult | null> | ShellBallInputSubmitResult | null;
   onAttachFile: () => void;
   onPrimaryClick: () => void;
+  onRequestInputFocus?: () => void;
 };
 
 type QueuedApprovalPendingNotification = {
@@ -97,6 +105,9 @@ type QueuedRuntimeNotification = {
 
 type QueuedTaskUpdatedNotification = TaskUpdatedNotification;
 type ShellBallRuntimeNotification = TaskRuntimeNotification | TaskSteeredNotification;
+type ShellBallIntentCorrectionConfirmParams = AgentTaskConfirmParams & {
+  correction_text?: string;
+};
 type ShellBallTaskOutputServiceModule = {
   openTaskDeliveryForTask: (taskId: string, artifactId: string | undefined, source?: "rpc" | "mock") => Promise<unknown>;
   performTaskOpenExecution: (
@@ -127,6 +138,20 @@ type ShellBallTaskOutputServiceModule = {
     taskId: string | null;
     url: string | null;
   };
+};
+
+type ShellBallIntentCorrectionSession = {
+  taskId: string;
+  intentName: string;
+  intentLabel: string;
+  savedInputValue: string;
+  status: "idle" | "submitting";
+};
+
+type ShellBallIntentCorrectionViewModel = {
+  label: string;
+  placeholder: string;
+  submitting: boolean;
 };
 
 const defaultSubmitVoiceText: NonNullable<ShellBallCoordinatorInput["onSubmitVoiceText"]> = () => null;
@@ -351,6 +376,126 @@ export function compareShellBallBubbleItemsByTimestamp(left: ShellBallBubbleItem
 
 export function sortShellBallBubbleItemsByTimestamp(items: ShellBallBubbleItem[]) {
   return [...items].sort(compareShellBallBubbleItemsByTimestamp);
+}
+
+function setShellBallIntentConfirmBubbleHidden(
+  items: ShellBallBubbleItem[],
+  taskId: string,
+  hidden: boolean,
+): ShellBallBubbleItem[] {
+  let changed = false;
+
+  const nextItems = items.map((item) => {
+    if (item.role !== "agent" || item.bubble.type !== "intent_confirm" || item.bubble.task_id.trim() !== taskId) {
+      return item;
+    }
+
+    if (item.bubble.hidden === hidden) {
+      return item;
+    }
+
+    changed = true;
+    return {
+      ...item,
+      bubble: {
+        ...item.bubble,
+        hidden,
+      },
+    };
+  });
+
+  return changed ? nextItems : items;
+}
+
+function setShellBallIntentConfirmStatus(
+  items: ShellBallBubbleItem[],
+  taskId: string,
+  status: "idle" | "submitting",
+): ShellBallBubbleItem[] {
+  let changed = false;
+
+  const nextItems = items.map((item) => {
+    if (item.role !== "agent" || item.bubble.type !== "intent_confirm" || item.bubble.task_id.trim() !== taskId) {
+      return item;
+    }
+
+    const currentIntentConfirm = item.desktop.intentConfirm;
+    if (currentIntentConfirm === undefined || currentIntentConfirm.status === status) {
+      return item;
+    }
+
+    changed = true;
+    return {
+      ...item,
+      desktop: {
+        ...item.desktop,
+        intentConfirm: {
+          ...currentIntentConfirm,
+          status,
+        },
+      },
+    };
+  });
+
+  return changed ? nextItems : items;
+}
+
+export function replaceShellBallIntentConfirmBubble(
+  items: ShellBallBubbleItem[],
+  taskId: string,
+  replacementItem: ShellBallBubbleItem,
+): ShellBallBubbleItem[] {
+  const normalizedTaskId = taskId.trim();
+  if (
+    normalizedTaskId === ""
+    || replacementItem.role !== "agent"
+    || replacementItem.bubble.type !== "intent_confirm"
+  ) {
+    return items;
+  }
+
+  const normalizedReplacementItem: ShellBallBubbleItem = {
+    ...replacementItem,
+    bubble: {
+      ...replacementItem.bubble,
+      task_id: normalizedTaskId,
+      hidden: false,
+      pinned: false,
+    },
+  };
+
+  let removedExistingBubble = false;
+  const nextItems = items.filter((item) => {
+    const isTargetIntentConfirm =
+      item.role === "agent"
+      && item.bubble.type === "intent_confirm"
+      && item.bubble.task_id.trim() === normalizedTaskId;
+
+    if (isTargetIntentConfirm) {
+      removedExistingBubble = true;
+    }
+
+    return !isTargetIntentConfirm;
+  });
+
+  if (!removedExistingBubble) {
+    return sortShellBallBubbleItemsByTimestamp([...items, normalizedReplacementItem]);
+  }
+
+  return sortShellBallBubbleItemsByTimestamp([...nextItems, normalizedReplacementItem]);
+}
+
+function getLatestVisibleShellBallIntentConfirmBubble(items: ShellBallBubbleItem[], taskId?: string) {
+  const normalizedTaskId = taskId?.trim() ?? "";
+
+  return [...items].reverse().find((item) =>
+    item.role === "agent"
+    && item.bubble.type === "intent_confirm"
+    && !item.bubble.hidden
+    && item.bubble.task_id.trim() !== ""
+    && (normalizedTaskId === "" || item.bubble.task_id.trim() === normalizedTaskId)
+    && item.desktop.intentConfirm !== undefined,
+  );
 }
 
 function isShellBallInputSubmitResult(value: ShellBallInputSubmitResult | null | void): value is ShellBallInputSubmitResult {
@@ -660,6 +805,14 @@ export function createShellBallAgentBubbleItem(
       });
     }
 
+    const intentConfirm = bubbleType === "intent_confirm" && result.task?.intent?.name?.trim()
+      ? {
+          intentName: result.task.intent.name,
+          intentLabel: formatShellBallIntentLabel(result.task.intent.name),
+          status: "idle" as const,
+        }
+      : undefined;
+
     return {
       bubble: {
         ...bubbleMessage,
@@ -667,7 +820,10 @@ export function createShellBallAgentBubbleItem(
         pinned: false,
       },
       role: "agent",
-      desktop: createShellBallBubbleDesktopState(turnOrder),
+      desktop: {
+        ...createShellBallBubbleDesktopState(turnOrder),
+        ...(intentConfirm ? { intentConfirm } : {}),
+      },
     } satisfies ShellBallBubbleItem;
   }
 
@@ -781,6 +937,64 @@ function createShellBallTaskErrorBubbleItem(input: {
   });
 }
 
+function canReplaceShellBallIntentConfirmBubble(input: {
+  result: AgentTaskConfirmResult;
+  taskId: string;
+}) {
+  const normalizedTaskId = input.taskId.trim();
+  if (normalizedTaskId === "") {
+    return false;
+  }
+
+  return input.result.task.task_id === normalizedTaskId
+    && input.result.task.status === "confirming_intent"
+    && input.result.bubble_message?.type === "intent_confirm";
+}
+
+function canContinueShellBallIntentCorrectionOnSameTask(input: {
+  result: AgentTaskConfirmResult;
+  taskId: string;
+}) {
+  const normalizedTaskId = input.taskId.trim();
+  return normalizedTaskId !== ""
+    && input.result.task.task_id === normalizedTaskId
+    && input.result.task.status !== "confirming_intent";
+}
+
+function createShellBallIntentCorrectionUnsupportedBubbleItem(input: {
+  createdAt: string;
+  taskId: string;
+  turnIndex?: number;
+  turnPhase?: number;
+}) {
+  return createShellBallTextBubbleItem({
+    role: "agent",
+    text: "后端暂时还不支持用自然语言直接改意图；当前任务仍保留原来的待确认状态。",
+    bubbleType: "status",
+    createdAt: input.createdAt,
+    taskId: input.taskId,
+    turnIndex: input.turnIndex,
+    turnPhase: input.turnPhase,
+  });
+}
+
+function createShellBallIntentCorrectionAttachmentUnsupportedBubbleItem(input: {
+  createdAt: string;
+  taskId: string;
+  turnIndex?: number;
+  turnPhase?: number;
+}) {
+  return createShellBallTextBubbleItem({
+    role: "agent",
+    text: "意图确认期间暂不支持新增文件。请先确认或取消当前任务，再重新添加文件。",
+    bubbleType: "status",
+    createdAt: input.createdAt,
+    taskId: input.taskId,
+    turnIndex: input.turnIndex,
+    turnPhase: input.turnPhase,
+  });
+}
+
 function createShellBallApprovalErrorBubbleItem(input: {
   createdAt: string;
   error: unknown;
@@ -857,12 +1071,23 @@ export function applyShellBallBubbleAction(
 
 export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const [bubbleItems, setBubbleItems] = useState(() => sortShellBallBubbleItemsByTimestamp(cloneShellBallBubbleItems(SHELL_BALL_LOCAL_BUBBLE_ITEMS)));
+  const [intentCorrection, setIntentCorrection] = useState<ShellBallIntentCorrectionSession | null>(null);
   const appendedVoiceBubbleSequenceRef = useRef(0);
   const handledFinalizedSpeechPayloadRef = useRef<string | null>(null);
   const bubbleTurnIndexRef = useRef(0);
   const [bubbleVisibilityPhase, setBubbleVisibilityPhase] = useState<ShellBallBubbleVisibilityPhase>("hidden");
   const [inputHovered, setInputHovered] = useState(false);
   const helpersVisible = input.helperWindowsVisible ?? true;
+  const intentCorrectionViewModel = useMemo<ShellBallIntentCorrectionViewModel | null>(
+    () => intentCorrection === null
+      ? null
+      : {
+          label: buildShellBallIntentCorrectionLabel(intentCorrection.intentLabel),
+          placeholder: buildShellBallIntentCorrectionPlaceholder(intentCorrection.intentLabel),
+          submitting: intentCorrection.status === "submitting",
+        },
+    [intentCorrection],
+  );
   const snapshot = useMemo(
     () =>
       createShellBallWindowSnapshot({
@@ -887,6 +1112,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const snapshotRef = useRef(snapshot);
   const bubbleItemsRef = useRef(bubbleItems);
   const bubbleVisibilityPhaseRef = useRef<ShellBallBubbleVisibilityPhase>(bubbleVisibilityPhase);
+  const intentCorrectionRef = useRef<ShellBallIntentCorrectionSession | null>(intentCorrection);
   const visibleBubbleCountRef = useRef(getShellBallVisibleBubbleItems(bubbleItems).length);
   const previousVisibleBubbleCountRef = useRef(visibleBubbleCountRef.current);
   const latestVisibleBubbleIdRef = useRef(getLatestVisibleShellBallBubbleId(bubbleItems));
@@ -917,6 +1143,8 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const autoOpenedDeliveryKeysRef = useRef(new Set<string>());
   const shellBallTaskIdsRef = useRef(new Set<string>());
   const shellBallTaskTurnIndexRef = useRef(new Map<string, number>());
+  const pendingIntentDecisionTaskIdsRef = useRef(new Set<string>());
+  const pendingIntentCorrectionTaskIdsRef = useRef(new Set<string>());
   const activeShellBallTaskIdRef = useRef<string | null>(null);
   const activeShellBallTaskIntentNameRef = useRef<string | null>(null);
   const activeShellBallTaskStatusRef = useRef<TaskUpdatedNotification["status"] | null>(null);
@@ -954,11 +1182,13 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     onSubmitVoiceText: input.onSubmitVoiceText ?? defaultSubmitVoiceText,
     onAttachFile: input.onAttachFile,
     onPrimaryClick: input.onPrimaryClick,
+    onRequestInputFocus: input.onRequestInputFocus ?? (() => {}),
   });
 
   snapshotRef.current = snapshot;
   bubbleItemsRef.current = bubbleItems;
   bubbleVisibilityPhaseRef.current = bubbleVisibilityPhase;
+  intentCorrectionRef.current = intentCorrection;
   handlersRef.current = {
     setInputValue: input.setInputValue,
     onAppendPendingFiles: input.onAppendPendingFiles ?? (() => {}),
@@ -972,6 +1202,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     onSubmitVoiceText: input.onSubmitVoiceText ?? defaultSubmitVoiceText,
     onAttachFile: input.onAttachFile,
     onPrimaryClick: input.onPrimaryClick,
+    onRequestInputFocus: input.onRequestInputFocus ?? (() => {}),
   };
 
   const allocateBubbleTurnIndex = useCallback(() => {
@@ -985,6 +1216,52 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
 
   const getTaskBubbleTurnIndex = useCallback((taskId: string) => {
     return shellBallTaskTurnIndexRef.current.get(taskId);
+  }, []);
+
+  const exitIntentCorrectionMode = useCallback((input: {
+    refocus: boolean;
+    restoreValueOverride?: string;
+  }) => {
+    const currentIntentCorrection = intentCorrectionRef.current;
+    if (currentIntentCorrection === null) {
+      return;
+    }
+
+    setIntentCorrection(null);
+    handlersRef.current.setInputValue(input.restoreValueOverride ?? currentIntentCorrection.savedInputValue);
+
+    if (input.refocus) {
+      handlersRef.current.onRequestInputFocus();
+    }
+  }, []);
+
+  const enterIntentCorrectionMode = useCallback((input: {
+    taskId: string;
+    intentName: string;
+    intentLabel: string;
+    draftOverride?: string;
+    savedInputValueOverride?: string;
+  }) => {
+    const normalizedTaskId = input.taskId.trim();
+    if (normalizedTaskId === "") {
+      return;
+    }
+
+    const currentIntentCorrection = intentCorrectionRef.current;
+    const nextSavedInputValue = input.savedInputValueOverride
+      ?? (currentIntentCorrection?.taskId === normalizedTaskId
+        ? currentIntentCorrection.savedInputValue
+        : snapshotRef.current.inputValue);
+
+    setIntentCorrection({
+      taskId: normalizedTaskId,
+      intentName: input.intentName,
+      intentLabel: input.intentLabel,
+      savedInputValue: nextSavedInputValue,
+      status: "idle",
+    });
+    handlersRef.current.setInputValue(input.draftOverride ?? "");
+    handlersRef.current.onRequestInputFocus();
   }, []);
 
   const appendApprovalPendingBubble = useCallback((input: QueuedApprovalPendingNotification) => {
@@ -1329,8 +1606,25 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       return;
     }
 
+    const activeIntentCorrection = intentCorrectionRef.current;
+    if (activeIntentCorrection !== null) {
+      setBubbleItems((currentItems) =>
+        sortShellBallBubbleItemsByTimestamp([
+          ...currentItems,
+          createShellBallIntentCorrectionAttachmentUnsupportedBubbleItem({
+            createdAt: new Date().toISOString(),
+            taskId: activeIntentCorrection.taskId,
+            turnIndex: allocateBubbleTurnIndex(),
+            turnPhase: 0,
+          }),
+        ]),
+      );
+      revealBubbleRegion();
+      return;
+    }
+
     handlersRef.current.onAppendPendingFiles(normalizedPaths);
-  }, []);
+  }, [allocateBubbleTurnIndex, revealBubbleRegion]);
 
   /**
    * Selected-text intake should enter the same formal task pipeline as other
@@ -2246,29 +2540,31 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     let cleanupFns: Array<() => void> = [];
 
     async function handleIntentDecision(payload: ShellBallIntentDecisionPayload) {
+      const normalizedTaskId = payload.taskId.trim();
+      if (normalizedTaskId === "" || pendingIntentDecisionTaskIdsRef.current.has(normalizedTaskId)) {
+        return;
+      }
+
+      pendingIntentDecisionTaskIdsRef.current.add(normalizedTaskId);
+
       const importRpcMethods = new Function("return import('../../rpc/methods')") as () => Promise<{
-        confirmTask: (request: {
-          confirmed: boolean;
-          corrected_intent?: ShellBallIntentDecisionPayload["correctedIntent"];
-          request_meta: ReturnType<typeof createShellBallRequestMeta>;
-          task_id: string;
-        }) => Promise<ShellBallInputSubmitResult>;
+        confirmTask: (request: AgentTaskConfirmParams) => Promise<AgentTaskConfirmResult>;
       }>;
       const createdAt = new Date().toISOString();
       const turnIndex = allocateBubbleTurnIndex();
-      const decisionText = payload.decision === "confirm" ? "确认继续" : "取消";
+      const decisionText = payload.decision === "confirm" ? "确认" : "取消";
 
-      bindTaskToBubbleTurn(payload.taskId, turnIndex);
+      bindTaskToBubbleTurn(normalizedTaskId, turnIndex);
 
       setBubbleItems((currentItems) =>
         sortShellBallBubbleItemsByTimestamp([
-          ...currentItems,
+          ...setShellBallIntentConfirmBubbleHidden(currentItems, normalizedTaskId, true),
           createShellBallTextBubbleItem({
             createdAt,
             role: "user",
             text: decisionText,
             bubbleType: "status",
-            taskId: payload.taskId,
+            taskId: normalizedTaskId,
             turnIndex,
             turnPhase: 0,
           }),
@@ -2283,13 +2579,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           confirmed: payload.decision === "confirm",
           corrected_intent: payload.correctedIntent,
           request_meta: createShellBallRequestMeta(),
-          task_id: payload.taskId,
+          task_id: normalizedTaskId,
         });
 
         const task = result.task;
-        if (!task) {
-          throw new Error("Shell-ball intent confirmation did not return a task.");
-        }
 
         syncShellBallVisualStateFromTaskStatus(task.status);
         registerShellBallTask(task.task_id, turnIndex, task.status, task.intent?.name ?? null);
@@ -2309,11 +2602,11 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         console.warn("shell-ball intent decision failed", error);
         setBubbleItems((currentItems) =>
           sortShellBallBubbleItemsByTimestamp([
-            ...currentItems,
+            ...setShellBallIntentConfirmBubbleHidden(currentItems, normalizedTaskId, false),
             createShellBallTaskErrorBubbleItem({
               createdAt: new Date().toISOString(),
               error,
-              taskId: payload.taskId,
+              taskId: normalizedTaskId,
               turnIndex,
               turnPhase: 1,
             }),
@@ -2321,6 +2614,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         );
         revealBubbleRegionRef.current();
       } finally {
+        pendingIntentDecisionTaskIdsRef.current.delete(normalizedTaskId);
         finishPendingTaskRegistration();
       }
     }
@@ -2393,6 +2687,191 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       case "submit": {
         const submittedText = snapshotRef.current.inputValue.trim();
         const submittedFiles = snapshotRef.current.pendingFiles;
+        const activeIntentCorrection = intentCorrectionRef.current;
+
+        if (activeIntentCorrection !== null) {
+          if (pendingIntentCorrectionTaskIdsRef.current.has(activeIntentCorrection.taskId)) {
+            break;
+          }
+
+          if (submittedText === "") {
+            exitIntentCorrectionMode({
+              refocus: false,
+              restoreValueOverride: "",
+            });
+            void getCurrentWindow().emit(shellBallWindowSyncEvents.intentDecision, {
+              source: "bubble",
+              taskId: activeIntentCorrection.taskId,
+              decision: "confirm",
+            } satisfies ShellBallIntentDecisionPayload);
+            break;
+          }
+
+          pendingIntentCorrectionTaskIdsRef.current.add(activeIntentCorrection.taskId);
+          const createdAt = new Date().toISOString();
+          const turnIndex = allocateBubbleTurnIndex();
+          bindTaskToBubbleTurn(activeIntentCorrection.taskId, turnIndex);
+          const userBubbleItem = createShellBallTextBubbleItem({
+            role: "user",
+            text: submittedText,
+            bubbleType: "result",
+            createdAt,
+            taskId: activeIntentCorrection.taskId,
+            turnIndex,
+            turnPhase: 0,
+          });
+          const pendingAgentBubbleItem = createShellBallAgentLoadingBubbleItem({
+            createdAt,
+            taskId: activeIntentCorrection.taskId,
+            turnIndex,
+            turnPhase: 1,
+          });
+          setIntentCorrection((currentIntentCorrectionState) =>
+            currentIntentCorrectionState?.taskId !== activeIntentCorrection.taskId
+              ? currentIntentCorrectionState
+              : {
+                  ...currentIntentCorrectionState,
+                  status: "submitting",
+                }
+          );
+          setBubbleItems((currentItems) =>
+            sortShellBallBubbleItemsByTimestamp([
+              ...setShellBallIntentConfirmStatus(currentItems, activeIntentCorrection.taskId, "submitting"),
+              userBubbleItem,
+              pendingAgentBubbleItem,
+            ]),
+          );
+          revealBubbleRegion();
+
+          const finishPendingTaskRegistration = beginPendingShellBallTaskRegistration();
+          const request: ShellBallIntentCorrectionConfirmParams = {
+            confirmed: false,
+            correction_text: submittedText,
+            request_meta: createShellBallRequestMeta(),
+            task_id: activeIntentCorrection.taskId,
+          };
+
+          try {
+            const correctionResult = await confirmTask(request);
+            const resultTask = correctionResult.task;
+
+            syncShellBallVisualStateFromTaskStatus(resultTask.status);
+
+            if (canReplaceShellBallIntentConfirmBubble({
+              result: correctionResult,
+              taskId: activeIntentCorrection.taskId,
+            })) {
+              const replacementIntentConfirmBubbleItem = createShellBallAgentBubbleItem(
+                correctionResult,
+                new Date().toISOString(),
+                {
+                  turnIndex,
+                  turnPhase: 1,
+                },
+              );
+
+              if (replacementIntentConfirmBubbleItem.bubble.type !== "intent_confirm") {
+                throw new Error("Shell-ball intent correction did not return a replacement confirm bubble.");
+              }
+
+              registerShellBallTask(resultTask.task_id, turnIndex, resultTask.status, resultTask.intent?.name ?? null);
+              setBubbleItems((currentItems) =>
+                replaceShellBallIntentConfirmBubble(
+                  replaceShellBallPendingBubble(currentItems, pendingAgentBubbleItem.bubble.bubble_id),
+                  activeIntentCorrection.taskId,
+                  replacementIntentConfirmBubbleItem,
+                ),
+              );
+              exitIntentCorrectionMode({
+                refocus: false,
+                restoreValueOverride: "",
+              });
+              revealBubbleRegion();
+              break;
+            }
+
+            if (canContinueShellBallIntentCorrectionOnSameTask({
+              result: correctionResult,
+              taskId: activeIntentCorrection.taskId,
+            })) {
+              registerShellBallTask(resultTask.task_id, turnIndex, resultTask.status, resultTask.intent?.name ?? null);
+              setBubbleItems((currentItems) =>
+                replaceShellBallPendingBubble(
+                  setShellBallIntentConfirmStatus(
+                    setShellBallIntentConfirmBubbleHidden(currentItems, activeIntentCorrection.taskId, true),
+                    activeIntentCorrection.taskId,
+                    "idle",
+                  ),
+                  pendingAgentBubbleItem.bubble.bubble_id,
+                  createShellBallAgentBubbleItem(correctionResult, new Date().toISOString(), {
+                    turnIndex,
+                    turnPhase: 1,
+                  }),
+                ),
+              );
+              exitIntentCorrectionMode({
+                refocus: false,
+                restoreValueOverride: "",
+              });
+              revealBubbleRegion();
+              void autoOpenShellBallDeliveryResult(resultTask.task_id, correctionResult.delivery_result);
+              break;
+            }
+
+            setBubbleItems((currentItems) =>
+              replaceShellBallPendingBubble(
+                setShellBallIntentConfirmStatus(currentItems, activeIntentCorrection.taskId, "idle"),
+                pendingAgentBubbleItem.bubble.bubble_id,
+                createShellBallIntentCorrectionUnsupportedBubbleItem({
+                  createdAt: new Date().toISOString(),
+                  taskId: activeIntentCorrection.taskId,
+                  turnIndex,
+                  turnPhase: 1,
+                }),
+              ),
+            );
+            exitIntentCorrectionMode({
+              refocus: false,
+              restoreValueOverride: "",
+            });
+            revealBubbleRegion();
+          } catch (error) {
+            console.warn("shell-ball intent correction failed", error);
+            setIntentCorrection((currentIntentCorrectionState) =>
+              currentIntentCorrectionState?.taskId !== activeIntentCorrection.taskId
+                ? currentIntentCorrectionState
+                : {
+                    ...currentIntentCorrectionState,
+                    status: "idle",
+                  }
+            );
+            handlersRef.current.setInputValue(submittedText);
+            handlersRef.current.onRequestInputFocus();
+            setBubbleItems((currentItems) =>
+              replaceShellBallPendingBubble(
+                setShellBallIntentConfirmStatus(
+                  setShellBallIntentConfirmBubbleHidden(currentItems, activeIntentCorrection.taskId, false),
+                  activeIntentCorrection.taskId,
+                  "idle",
+                ),
+                pendingAgentBubbleItem.bubble.bubble_id,
+                createShellBallTaskErrorBubbleItem({
+                  createdAt: new Date().toISOString(),
+                  error,
+                  taskId: activeIntentCorrection.taskId,
+                  turnIndex,
+                  turnPhase: 1,
+                }),
+              ),
+            );
+            revealBubbleRegion();
+          } finally {
+            pendingIntentCorrectionTaskIdsRef.current.delete(activeIntentCorrection.taskId);
+            finishPendingTaskRegistration();
+          }
+
+          break;
+        }
 
         if (shouldHandleShellBallWindowCommand({ text: submittedText, files: submittedFiles })) {
           void handleWindowPrompt();
@@ -2730,15 +3209,112 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         handlersRef.current.onPrimaryClick();
         break;
     }
-  }, [allocateBubbleTurnIndex, autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, bindTaskToBubbleTurn, getTaskBubbleTurnIndex, handleScreenshotPrompt, handleWindowPrompt, input.regionActive, registerShellBallTask, revealBubbleRegion]);
+  }, [allocateBubbleTurnIndex, autoOpenShellBallDeliveryResult, beginPendingShellBallTaskRegistration, bindTaskToBubbleTurn, exitIntentCorrectionMode, getTaskBubbleTurnIndex, handleScreenshotPrompt, handleWindowPrompt, input.regionActive, registerShellBallTask, revealBubbleRegion]);
+
+  const handleConfirmIntentBubble = useCallback((taskId: string) => {
+    const normalizedTaskId = taskId.trim();
+    if (
+      normalizedTaskId === ""
+      || pendingIntentDecisionTaskIdsRef.current.has(normalizedTaskId)
+      || pendingIntentCorrectionTaskIdsRef.current.has(normalizedTaskId)
+    ) {
+      return;
+    }
+
+    const activeIntentCorrection = intentCorrectionRef.current;
+    if (activeIntentCorrection?.taskId === normalizedTaskId) {
+      void handlePrimaryAction("submit");
+      return;
+    }
+
+    if (activeIntentCorrection !== null) {
+      exitIntentCorrectionMode({
+        refocus: false,
+      });
+    }
+
+    void getCurrentWindow().emit(shellBallWindowSyncEvents.intentDecision, {
+      source: "bubble",
+      taskId: normalizedTaskId,
+      decision: "confirm",
+    } satisfies ShellBallIntentDecisionPayload);
+  }, [exitIntentCorrectionMode, handlePrimaryAction]);
+
+  const handleCancelIntentBubble = useCallback((taskId: string) => {
+    const normalizedTaskId = taskId.trim();
+    if (
+      normalizedTaskId === ""
+      || pendingIntentDecisionTaskIdsRef.current.has(normalizedTaskId)
+      || pendingIntentCorrectionTaskIdsRef.current.has(normalizedTaskId)
+    ) {
+      return;
+    }
+
+    if (intentCorrectionRef.current !== null) {
+      exitIntentCorrectionMode({
+        refocus: false,
+      });
+    }
+
+    void getCurrentWindow().emit(shellBallWindowSyncEvents.intentDecision, {
+      source: "bubble",
+      taskId: normalizedTaskId,
+      decision: "cancel",
+    } satisfies ShellBallIntentDecisionPayload);
+  }, [exitIntentCorrectionMode]);
+
+  const handleModifyIntentBubble = useCallback((taskId: string) => {
+    const normalizedTaskId = taskId.trim();
+    if (
+      normalizedTaskId === ""
+      || pendingIntentDecisionTaskIdsRef.current.has(normalizedTaskId)
+      || pendingIntentCorrectionTaskIdsRef.current.has(normalizedTaskId)
+    ) {
+      return;
+    }
+
+    const activeIntentCorrection = intentCorrectionRef.current;
+    if (activeIntentCorrection?.taskId === normalizedTaskId) {
+      handlersRef.current.onRequestInputFocus();
+      return;
+    }
+
+    const intentBubble = getLatestVisibleShellBallIntentConfirmBubble(bubbleItemsRef.current, normalizedTaskId);
+    const intentConfirm = intentBubble?.desktop.intentConfirm;
+    if (intentBubble === undefined || intentConfirm === undefined) {
+      return;
+    }
+
+    enterIntentCorrectionMode({
+      taskId: normalizedTaskId,
+      intentName: intentConfirm.intentName,
+      intentLabel: intentConfirm.intentLabel,
+    });
+  }, [enterIntentCorrectionMode]);
+
+  const handleCancelIntentCorrection = useCallback(() => {
+    const activeIntentCorrection = intentCorrectionRef.current;
+    if (activeIntentCorrection === null || activeIntentCorrection.status === "submitting") {
+      return;
+    }
+
+    exitIntentCorrectionMode({
+      refocus: false,
+    });
+  }, [exitIntentCorrectionMode]);
 
   return {
     snapshot,
+    intentCorrection: intentCorrectionViewModel,
     handleDroppedFiles,
     handleSelectedTextPrompt,
     handleClipboardPrompt,
     handlePrimaryAction,
     handleBubbleAction,
+    handleCancelIntentBubble,
+    handleConfirmIntentBubble,
+    handleModifyIntentBubble,
+    handleCancelIntentCorrection,
     handleBubbleHoverChange: handleCoordinatorBubbleHoverChange,
     handleInputHoverChange: handleCoordinatorInputHoverChange,
     handleInputFocusChange: handleCoordinatorInputFocusChange,

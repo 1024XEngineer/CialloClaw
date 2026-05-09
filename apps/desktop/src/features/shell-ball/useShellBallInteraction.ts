@@ -51,6 +51,10 @@ function canStartShellBallVoiceEntry(state: ShellBallVisualState | undefined) {
   return state !== "confirming_intent" && state !== "voice_listening" && state !== "voice_locked";
 }
 
+function canOpenShellBallDashboardFromDoubleClick(state: ShellBallVisualState) {
+  return state === "idle" || state === "hover_input" || state === "confirming_intent";
+}
+
 const SHELL_BALL_NON_RECOVERABLE_VOICE_ERRORS = new Set([
   "audio-capture",
   "language-not-supported",
@@ -239,8 +243,7 @@ export function getShellBallDashboardOpenGesturePolicy(input: {
     return false;
   }
 
-  const canOpenFromState = input.state === "idle" || input.state === "hover_input";
-  return canOpenFromState && !input.interactionConsumed;
+  return canOpenShellBallDashboardFromDoubleClick(input.state) && !input.interactionConsumed;
 }
 
 /**

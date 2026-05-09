@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import type { ChangeEvent, CompositionEvent, KeyboardEvent } from "react";
 import styled from "styled-components";
-import { ArrowUp, Paperclip } from "lucide-react";
+import { ArrowUp, Paperclip, X } from "lucide-react";
 import type { ShellBallVoicePreview } from "../shellBall.interaction";
 import type { ShellBallInputBarMode } from "../shellBall.types";
 
@@ -11,8 +11,13 @@ type ShellBallInputBarProps = {
   value: string;
   hasPendingFiles?: boolean;
   focusToken?: number;
+  label?: string;
+  placeholder?: string;
+  auxiliaryAction?: "attach" | "cancel";
+  allowEmptySubmit?: boolean;
   onValueChange: (value: string) => void;
   onAttachFile: () => void;
+  onCancel?: () => void;
   onSubmit: () => void;
   onFocusChange: (focused: boolean) => void;
   onResizeStateChange?: (resizing: boolean) => void;
@@ -20,7 +25,7 @@ type ShellBallInputBarProps = {
   onTransientInputActivity?: () => void;
 };
 
-const SHELL_BALL_INPUT_LABEL = "Message";
+const SHELL_BALL_INPUT_LABEL = "输入";
 
 /**
  * Renders the floating shell-ball input bar with the supplied Uiverse-inspired
@@ -35,8 +40,13 @@ export function ShellBallInputBar({
   value,
   hasPendingFiles = false,
   focusToken = 0,
+  label = SHELL_BALL_INPUT_LABEL,
+  placeholder,
+  auxiliaryAction = "attach",
+  allowEmptySubmit = false,
   onValueChange,
   onAttachFile,
+  onCancel,
   onSubmit,
   onFocusChange,
   onResizeStateChange: _onResizeStateChange = () => {},
@@ -53,7 +63,8 @@ export function ShellBallInputBar({
   const isReadonly = mode === "readonly";
   const isVoice = mode === "voice";
   const buttonsDisabled = isHidden || isReadonly || isVoice;
-  const submitDisabled = !isInteractive || (trimmedValue === "" && !hasPendingFiles);
+  const submitDisabled = !isInteractive || (!allowEmptySubmit && trimmedValue === "" && !hasPendingFiles);
+  const auxiliaryActionLabel = auxiliaryAction === "cancel" ? "退出意图修改" : "添加文件";
 
   useLayoutEffect(() => {
     const field = inputRef.current;
@@ -183,10 +194,10 @@ export function ShellBallInputBar({
           readOnly={isHidden || isReadonly || isVoice}
           tabIndex={isInteractive ? 0 : -1}
           aria-label="Shell-ball input"
-          placeholder={isVoice ? "Voice capture is active" : ""}
+          placeholder={isVoice ? "语音输入中" : placeholder ?? ""}
           rows={1}
         />
-        <span>{SHELL_BALL_INPUT_LABEL}</span>
+        <span>{label}</span>
         <i />
       </div>
       <div className="shell-ball-uiverse-actions">
@@ -198,13 +209,20 @@ export function ShellBallInputBar({
             event.preventDefault();
           }}
           onClick={() => {
+            if (auxiliaryAction === "cancel") {
+              onCancel?.();
+              return;
+            }
+
             onAttachFile();
             restoreTextareaFocus();
           }}
           disabled={buttonsDisabled}
-          aria-label="Attach file"
+          aria-label={auxiliaryActionLabel}
         >
-          <Paperclip className="shell-ball-uiverse-action-icon" />
+          {auxiliaryAction === "cancel"
+            ? <X className="shell-ball-uiverse-action-icon" />
+            : <Paperclip className="shell-ball-uiverse-action-icon" />}
         </button>
         <button
           type="button"
@@ -218,7 +236,7 @@ export function ShellBallInputBar({
             restoreTextareaFocus();
           }}
           disabled={submitDisabled}
-          aria-label={isReadonly ? "Send disabled" : isVoice ? "Send unavailable during voice capture" : "Send request"}
+          aria-label={isReadonly ? "发送不可用" : isVoice ? "语音输入期间不可发送" : "发送"}
         >
           <ArrowUp className="shell-ball-uiverse-action-icon" />
         </button>

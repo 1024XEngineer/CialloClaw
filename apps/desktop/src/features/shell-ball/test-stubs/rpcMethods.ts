@@ -6,6 +6,7 @@ import type {
   AgentMirrorOverviewGetResult,
   AgentRecommendationFeedbackSubmitResult,
   AgentRecommendationGetResult,
+  AgentTaskConfirmResult,
   AgentTaskControlResult,
   AgentTaskDetailGetResult,
   AgentTaskListResult,
@@ -449,6 +450,55 @@ export async function startTask(_params?: unknown): Promise<AgentTaskStartResult
     task: createTask("processing", "task_start"),
     bubble_message: null,
     delivery_result: null,
+  };
+}
+
+export async function confirmTask(params?: unknown): Promise<AgentTaskConfirmResult> {
+  const taskId = readStringParam(params, "task_id") ?? "task_stub";
+  const confirmed = !!(params && typeof params === "object" && (params as { confirmed?: unknown }).confirmed === true);
+  const correctionText = params && typeof params === "object"
+    ? (params as { correction_text?: unknown }).correction_text
+    : undefined;
+  const hasCorrectionText = typeof correctionText === "string" && correctionText.trim() !== "";
+
+  if (hasCorrectionText) {
+    return {
+      task: {
+        ...createTask("confirming_intent", "intent_confirmation"),
+        task_id: taskId,
+        intent: {
+          name: "summarize",
+          arguments: {},
+        },
+      },
+      bubble_message: {
+        bubble_id: "bubble_confirm_stub",
+        task_id: taskId,
+        type: "intent_confirm",
+        text: "请确认你希望我如何处理当前内容。",
+        pinned: false,
+        hidden: false,
+        created_at: new Date().toISOString(),
+      },
+      delivery_result: null,
+    };
+  }
+
+  return {
+    task: {
+      ...createTask(confirmed ? "completed" : "cancelled", confirmed ? "completed" : "cancelled"),
+      task_id: taskId,
+    },
+    bubble_message: {
+      bubble_id: "bubble_confirm_stub",
+      task_id: taskId,
+      type: confirmed ? "result" : "status",
+      text: confirmed ? "The task confirmation was accepted." : "The task was cancelled.",
+      pinned: false,
+      hidden: false,
+      created_at: new Date().toISOString(),
+    },
+    delivery_result: confirmed ? createTaskDeliveryResult() : null,
   };
 }
 
