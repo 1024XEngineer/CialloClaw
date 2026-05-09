@@ -1,7 +1,6 @@
 import type {
   DeliveryPreference,
   InputContext,
-  IntentPayload,
   PageContext,
   RequestMeta,
   RequestSource,
@@ -19,7 +18,6 @@ import { compactPageContext, mapDesktopWindowSnapshotToPageContext } from "./pag
 type StartTaskContext = {
   context?: InputContext;
   delivery?: DeliveryPreference;
-  intent?: IntentPayload;
   pageContext?: PageContext;
   sessionId?: string;
   source?: RequestSource;
@@ -60,20 +58,26 @@ function hasTaskSpecificPageContextAnchor(pageContext: PageContext | undefined) 
 }
 
 function pageContextAnchorsMatch(left: PageContext | undefined, right: PageContext | undefined) {
-  if (!left?.url || !right?.url) {
+  if (!left || !right) {
     return false;
   }
 
-  return left.url === right.url;
-}
+  if (left.url && right.url) {
+    return left.url === right.url;
+  }
 
-function stripRememberedPageContextAttachHints(pageContext: PageContext): PageContext {
-  return compactPageContext({
-    app_name: pageContext.app_name,
-    title: pageContext.title,
-    url: pageContext.url,
-    window_title: pageContext.window_title,
-  }) ?? pageContext;
+  if (left.hover_target && right.hover_target) {
+    return left.hover_target === right.hover_target;
+  }
+
+  const leftApp = left.app_name?.toLowerCase();
+  const rightApp = right.app_name?.toLowerCase();
+  if (!leftApp || !rightApp || leftApp !== rightApp) {
+    return false;
+  }
+
+  return (left.title && right.title && left.title === right.title)
+    || (left.window_title && right.window_title && left.window_title === right.window_title);
 }
 
 async function readForegroundPageContext(): Promise<PageContext | undefined> {
@@ -86,19 +90,18 @@ async function readForegroundPageContext(): Promise<PageContext | undefined> {
 }
 
 async function hydrateRememberedPageContext(rememberedPageContext: PageContext) {
-  const stableRememberedPageContext = stripRememberedPageContextAttachHints(rememberedPageContext);
   const foregroundPageContext = await readForegroundPageContext();
-  if (!pageContextAnchorsMatch(stableRememberedPageContext, foregroundPageContext)) {
-    return stableRememberedPageContext;
+  if (!pageContextAnchorsMatch(rememberedPageContext, foregroundPageContext)) {
+    return rememberedPageContext;
   }
 
   // The remembered session anchor keeps stable page identity only. When the
   // current foreground snapshot still points at the same page, rehydrate fresh
   // attach hints so follow-up task starts do not replay stale process metadata.
   return compactPageContext({
-    ...stableRememberedPageContext,
+    ...rememberedPageContext,
     ...foregroundPageContext,
-  }) ?? stableRememberedPageContext;
+  }) ?? rememberedPageContext;
 }
 
 async function resolveTaskPageContext(pageContext: PageContext | undefined, sessionId: string | undefined) {
@@ -109,9 +112,7 @@ async function resolveTaskPageContext(pageContext: PageContext | undefined, sess
   }
 
   const rememberedPageContext = getConversationPageContextForSession(sessionId);
-  // URL-less remembered anchors are too weak to reuse safely across follow-up
-  // tasks, so fall back to the shell-ball default context instead.
-  if (rememberedPageContext?.url) {
+  if (rememberedPageContext) {
     return hydrateRememberedPageContext(rememberedPageContext);
   }
 
@@ -223,14 +224,11 @@ export async function startTaskFromErrorSignal(errorMessage: string, context: St
  * Starts a formal task from an accepted recommendation through the standard
  * `recommendation_click` task entrypoint.
  *
- * @param text Recommendation text accepted by the user.
+ * @param text Recommendation text accepted in the desktop shell-ball flow.
  * @param context Optional desktop task-start metadata.
  * @returns The formal task-start response from the local service.
  */
-export async function startTaskFromRecommendation(
-  text: string,
-  context: StartTaskContext = {},
-) {
+export async function startTaskFromRecommendation(text: string, context: StartTaskContext = {}) {
   const normalizedText = text.trim();
   const resolvedSessionId = resolveTaskSessionId(context.sessionId);
   const pageContext = await resolveTaskPageContext(context.pageContext, resolvedSessionId);
@@ -243,7 +241,6 @@ export async function startTaskFromRecommendation(
     ...(resolvedSessionId ? { session_id: resolvedSessionId } : {}),
     source: context.source ?? "floating_ball",
     trigger: "recommendation_click",
-    ...(context.intent ? { intent: context.intent } : {}),
     input: {
       type: "text",
       text: normalizedText,

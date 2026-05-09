@@ -33,21 +33,6 @@
         "recommendation_click"
       ]
     },
-    "intent": {
-      "type": "object",
-      "required": [
-        "name",
-        "arguments"
-      ],
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "arguments": {
-          "type": "object"
-        }
-      }
-    },
     "input": {
       "type": "object",
       "properties": {

@@ -25,9 +25,6 @@ export function areShellBallSelectionSnapshotsEqual(
     && left.page_context.title === right.page_context.title
     && left.page_context.url === right.page_context.url
     && left.page_context.app_name === right.page_context.app_name
-    && left.page_context.window_title === right.page_context.window_title
-    && left.page_context.visible_text === right.page_context.visible_text
-    && left.page_context.hover_target === right.page_context.hover_target
     && left.page_context.browser_kind === right.page_context.browser_kind
     && left.page_context.process_path === right.page_context.process_path
     && left.page_context.process_id === right.page_context.process_id

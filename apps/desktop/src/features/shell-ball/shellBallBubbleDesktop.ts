@@ -1,10 +1,4 @@
-import type {
-  ApprovalDecision,
-  BubbleMessage,
-  IntentPayload,
-  PageContext,
-  RecommendationContext,
-} from "@cialloclaw/protocol";
+import type { ApprovalDecision, BubbleMessage, InputContext, PageContext } from "@cialloclaw/protocol";
 
 export type ShellBallBubbleRole = "user" | "agent";
 
@@ -27,15 +21,27 @@ export type ShellBallBubbleInlineApprovalState = {
   pendingDecision?: ApprovalDecision;
 };
 
+type ShellBallRecommendationRequestContext = InputContext & {
+  app_name: string;
+  page_title: string;
+  error_text?: string;
+  hover_target?: string;
+  last_action?: string;
+  page_url?: string;
+  screen_summary?: string;
+  selection_text?: string;
+  visible_text?: string;
+  window_title?: string;
+};
+
 /**
  * Inline recommendation metadata stays shell-ball-local until the user accepts
  * one suggestion and promotes it into the formal task pipeline.
  */
 export type ShellBallBubbleInlineRecommendationState = {
   recommendationId: string;
-  intent: IntentPayload;
   pageContext: PageContext;
-  requestContext: RecommendationContext;
+  requestContext: ShellBallRecommendationRequestContext;
 };
 
 /**
@@ -48,6 +54,7 @@ export type ShellBallBubbleInlineErrorSignalState = {
   status: "idle" | "submitting";
   pageContext?: PageContext;
 };
+
 export type ShellBallBubbleDesktopState = {
   lifecycleState: ShellBallBubbleDesktopLifecycleState;
   freshnessHint?: ShellBallBubbleDesktopFreshnessHint;
@@ -77,10 +84,6 @@ function cloneShellBallBubbleInlineRecommendationState(
 ): ShellBallBubbleInlineRecommendationState {
   return {
     recommendationId: state.recommendationId,
-    intent: {
-      name: state.intent.name,
-      arguments: { ...state.intent.arguments },
-    },
     pageContext: { ...state.pageContext },
     requestContext: {
       ...state.requestContext,
@@ -102,6 +105,7 @@ function cloneShellBallBubbleInlineErrorSignalState(
     ...(state.pageContext ? { pageContext: { ...state.pageContext } } : {}),
   };
 }
+
 export function cloneShellBallBubbleDesktopState(state: ShellBallBubbleDesktopState): ShellBallBubbleDesktopState {
   return {
     ...state,

@@ -249,7 +249,6 @@ export interface AgentTaskStartParams {
   session_id?: string;
   source: RequestSource;
   trigger: RequestTrigger;
-  intent?: IntentPayload;
   input: {
     type: InputType;
     text?: string;
@@ -286,41 +285,26 @@ export interface AgentTaskConfirmResult {
   delivery_result: DeliveryResult | null;
 }
 
-// RecommendationItem describes a single recommendation candidate returned by
-// the formal recommendation pipeline.
+// RecommendationItem 定义当前模块的接口约束。
 export interface RecommendationItem {
   recommendation_id: string;
   text: string;
   intent: IntentPayload;
 }
 
-// RecommendationContext extends the lightweight input-context envelope with the
-// extra top-level signals that the recommendation pipeline can consume directly
-// without going through a task-start request.
-export interface RecommendationContext extends InputContext {
-  page_title: string;
-  app_name: string;
-  page_url?: string;
-  window_title?: string;
-  visible_text?: string;
-  screen_summary?: string;
-  clipboard_text?: string;
-  clipboard_mime_type?: string;
-  hover_target?: string;
-  error_text?: string;
-}
-
-// AgentRecommendationGetParams describes the formal payload for requesting
-// recommendations from the local orchestrator.
+// AgentRecommendationGetParams 定义当前模块的接口约束。
 export interface AgentRecommendationGetParams {
   request_meta: RequestMeta;
   source: RequestSource;
   scene: RecommendationScene;
-  context: RecommendationContext;
+  context: {
+    page_title: string;
+    app_name: string;
+    selection_text?: string;
+  };
 }
 
-// AgentRecommendationGetResult describes the recommendation response envelope
-// returned by the local orchestrator.
+// AgentRecommendationGetResult 定义当前模块的接口约束。
 export interface AgentRecommendationGetResult {
   cooldown_hit: boolean;
   items: RecommendationItem[];
