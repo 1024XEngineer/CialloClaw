@@ -972,6 +972,20 @@ func newTestService() *Service {
 	)
 }
 
+func activeApprovalIDForTask(t *testing.T, service *Service, taskID string) string {
+	t.Helper()
+
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatalf("expected runtime task %s to exist", taskID)
+	}
+	approvalID, ok := service.activeApprovalIDForTask(record)
+	if !ok {
+		t.Fatalf("expected task %s to expose one active approval request, got %+v", taskID, record)
+	}
+	return approvalID
+}
+
 func mutateRuntimeTask(t *testing.T, engine *runengine.Engine, taskID string, mutate func(record *runengine.TaskRecord)) {
 	t.Helper()
 
@@ -1718,7 +1732,7 @@ func TestServiceSecurityRespondResumesQueuedTaskWithOriginalSnapshot(t *testing.
 
 	if _, err := service.SecurityRespond(map[string]any{
 		"task_id":       firstTaskID,
-		"approval_id":   "appr_snapshot_queue",
+		"approval_id":   activeApprovalIDForTask(t, service, firstTaskID),
 		"decision":      "allow_once",
 		"remember_rule": false,
 	}); err != nil {
@@ -1783,7 +1797,7 @@ func TestServiceSecurityRespondResumesQueuedSessionTask(t *testing.T) {
 
 	if _, err := service.SecurityRespond(map[string]any{
 		"task_id":       firstTaskID,
-		"approval_id":   "appr_resume_queue",
+		"approval_id":   activeApprovalIDForTask(t, service, firstTaskID),
 		"decision":      "allow_once",
 		"remember_rule": false,
 	}); err != nil {
@@ -1858,7 +1872,7 @@ func TestServiceSecurityRespondResumesQueuedScreenAnalyzeTaskThroughApproval(t *
 
 	if _, err := service.SecurityRespond(map[string]any{
 		"task_id":       firstTaskID,
-		"approval_id":   "appr_screen_queue_first",
+		"approval_id":   activeApprovalIDForTask(t, service, firstTaskID),
 		"decision":      "allow_once",
 		"remember_rule": false,
 	}); err != nil {
@@ -1878,7 +1892,7 @@ func TestServiceSecurityRespondResumesQueuedScreenAnalyzeTaskThroughApproval(t *
 
 	screenResult, err := service.SecurityRespond(map[string]any{
 		"task_id":       secondTaskID,
-		"approval_id":   "appr_screen_queue_second",
+		"approval_id":   activeApprovalIDForTask(t, service, secondTaskID),
 		"decision":      "allow_once",
 		"remember_rule": false,
 	})
@@ -4756,7 +4770,7 @@ func TestServiceSecurityRespondAllowOnceResumesAndCompletes(t *testing.T) {
 
 	respondResult, err := service.SecurityRespond(map[string]any{
 		"task_id":       taskID,
-		"approval_id":   "appr_001",
+		"approval_id":   activeApprovalIDForTask(t, service, taskID),
 		"decision":      "allow_once",
 		"remember_rule": false,
 	})
@@ -4853,7 +4867,7 @@ func TestServiceSecurityRespondRespectsFallbackDelivery(t *testing.T) {
 
 	_, err = service.SecurityRespond(map[string]any{
 		"task_id":       taskID,
-		"approval_id":   "appr_001",
+		"approval_id":   activeApprovalIDForTask(t, service, taskID),
 		"decision":      "allow_once",
 		"remember_rule": false,
 	})
@@ -4917,7 +4931,7 @@ func TestServiceSecurityRespondDenyOnceCancelsTask(t *testing.T) {
 
 	respondResult, err := service.SecurityRespond(map[string]any{
 		"task_id":       taskID,
-		"approval_id":   "appr_001",
+		"approval_id":   activeApprovalIDForTask(t, service, taskID),
 		"decision":      "deny_once",
 		"remember_rule": false,
 	})
@@ -4982,7 +4996,7 @@ func TestServiceSecurityRespondPersistsAuthorizationRecord(t *testing.T) {
 
 	respondResult, err := service.SecurityRespond(map[string]any{
 		"task_id":       taskID,
-		"approval_id":   "appr_auth_store",
+		"approval_id":   activeApprovalIDForTask(t, service, taskID),
 		"decision":      "allow_once",
 		"remember_rule": true,
 	})
@@ -5050,9 +5064,11 @@ func TestServiceSecurityRespondReturnsStorageErrorWhenAuthorizationPersistenceFa
 		t.Fatalf("confirm task failed: %v", err)
 	}
 
+	approvalID := activeApprovalIDForTask(t, service, taskID)
 	replaceAuthorizationRecordStore(t, service.storage, failingAuthorizationRecordStore{base: originalStore, err: errors.New("authorization store unavailable")})
 	_, err = service.SecurityRespond(map[string]any{
 		"task_id":       taskID,
+		"approval_id":   approvalID,
 		"decision":      "allow_once",
 		"remember_rule": true,
 	})
@@ -5093,10 +5109,11 @@ func TestServiceSecurityRespondRejectsOutOfPhaseAuthorizationPersistence(t *test
 	}
 
 	taskID := startResult["task"].(map[string]any)["task_id"].(string)
-	if _, err := service.SecurityRespond(map[string]any{"task_id": taskID, "decision": "allow_once"}); err != nil {
+	approvalID := activeApprovalIDForTask(t, service, taskID)
+	if _, err := service.SecurityRespond(map[string]any{"task_id": taskID, "approval_id": approvalID, "decision": "allow_once"}); err != nil {
 		t.Fatalf("first security respond failed: %v", err)
 	}
-	if _, err := service.SecurityRespond(map[string]any{"task_id": taskID, "decision": "allow_once"}); !errors.Is(err, ErrTaskStatusInvalid) {
+	if _, err := service.SecurityRespond(map[string]any{"task_id": taskID, "approval_id": approvalID, "decision": "allow_once"}); !errors.Is(err, ErrTaskStatusInvalid) {
 		t.Fatalf("expected repeated out-of-phase respond to return ErrTaskStatusInvalid, got %v", err)
 	}
 
@@ -5106,6 +5123,64 @@ func TestServiceSecurityRespondRejectsOutOfPhaseAuthorizationPersistence(t *test
 	}
 	if total != 1 || len(items) != 1 {
 		t.Fatalf("expected repeated out-of-phase respond to keep one persisted authorization record, got total=%d items=%+v", total, items)
+	}
+}
+
+func TestServiceSecurityRespondRejectsStaleApprovalIDAfterRebuiltCycle(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "unused")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_stale_approval",
+		Title:       "Analyze current screen",
+		SourceType:  "screen_capture",
+		Status:      "waiting_auth",
+		CurrentStep: "waiting_authorization",
+		RiskLevel:   "yellow",
+		Intent: map[string]any{
+			"name": "screen_analyze",
+			"arguments": map[string]any{
+				"path": "inputs/screen.png",
+			},
+		},
+	})
+
+	staleApproval, stalePendingExecution, _, err := service.buildScreenAnalysisApprovalState(task)
+	if err != nil {
+		t.Fatalf("build stale screen approval state failed: %v", err)
+	}
+	if err := service.persistApprovalRequestState(task.TaskID, staleApproval, mapValue(stalePendingExecution, "impact_scope")); err != nil {
+		t.Fatalf("persist stale approval request failed: %v", err)
+	}
+
+	activeApproval, activePendingExecution, activeBubble, err := service.buildScreenAnalysisApprovalState(task)
+	if err != nil {
+		t.Fatalf("build active screen approval state failed: %v", err)
+	}
+	updatedTask, ok := service.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, activeApproval, activePendingExecution, activeBubble)
+	if !ok {
+		t.Fatalf("mark waiting approval with rebuilt cycle failed for task %s", task.TaskID)
+	}
+	if err := service.persistApprovalRequestState(updatedTask.TaskID, activeApproval, mapValue(activePendingExecution, "impact_scope")); err != nil {
+		t.Fatalf("persist active approval request failed: %v", err)
+	}
+
+	if _, err := service.SecurityRespond(map[string]any{
+		"task_id":     task.TaskID,
+		"approval_id": staleApproval["approval_id"],
+		"decision":    "allow_once",
+	}); !errors.Is(err, ErrTaskStatusInvalid) {
+		t.Fatalf("expected stale approval response to be rejected, got %v", err)
+	}
+
+	items, total, err := service.storage.AuthorizationRecordStore().ListAuthorizationRecords(context.Background(), task.TaskID, "", 20, 0)
+	if err != nil {
+		t.Fatalf("list authorization records failed: %v", err)
+	}
+	if total != 0 || len(items) != 0 {
+		t.Fatalf("expected stale approval rejection not to persist authorization history, got total=%d items=%+v", total, items)
 	}
 }
 
@@ -5141,7 +5216,7 @@ func TestServiceSecurityRespondKeepsAuthorizationHistoryAcrossMultipleCycles(t *
 	}
 	taskID := startResult["task"].(map[string]any)["task_id"].(string)
 
-	if _, err := service.SecurityRespond(map[string]any{"task_id": taskID, "approval_id": taskID, "decision": "allow_once"}); err != nil {
+	if _, err := service.SecurityRespond(map[string]any{"task_id": taskID, "approval_id": activeApprovalIDForTask(t, service, taskID), "decision": "allow_once"}); err != nil {
 		t.Fatalf("security respond for initial write failed: %v", err)
 	}
 	pointsResult, err := service.SecurityRestorePointsList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
@@ -5155,7 +5230,7 @@ func TestServiceSecurityRespondKeepsAuthorizationHistoryAcrossMultipleCycles(t *
 	if _, err := service.SecurityRestoreApply(map[string]any{"task_id": taskID, "recovery_point_id": points[0]["recovery_point_id"]}); err != nil {
 		t.Fatalf("security restore apply failed: %v", err)
 	}
-	if _, err := service.SecurityRespond(map[string]any{"task_id": taskID, "approval_id": "appr_restore_apply_history", "decision": "allow_once"}); err != nil {
+	if _, err := service.SecurityRespond(map[string]any{"task_id": taskID, "approval_id": activeApprovalIDForTask(t, service, taskID), "decision": "allow_once"}); err != nil {
 		t.Fatalf("security respond for restore apply failed: %v", err)
 	}
 
@@ -5328,7 +5403,7 @@ func TestServiceSecurityRespondAllowOnceReturnsStructuredExecutionFailure(t *tes
 	taskID := startResult["task"].(map[string]any)["task_id"].(string)
 	respondResult, err := service.SecurityRespond(map[string]any{
 		"task_id":       taskID,
-		"approval_id":   "appr_exec_fail",
+		"approval_id":   activeApprovalIDForTask(t, service, taskID),
 		"decision":      "allow_once",
 		"remember_rule": false,
 	})
@@ -5390,7 +5465,7 @@ func TestServiceSecurityRespondAllowOnceExecCommandCompletesAfterApproval(t *tes
 	taskID := startResult["task"].(map[string]any)["task_id"].(string)
 	respondResult, err := service.SecurityRespond(map[string]any{
 		"task_id":       taskID,
-		"approval_id":   "appr_exec_allow",
+		"approval_id":   activeApprovalIDForTask(t, service, taskID),
 		"decision":      "allow_once",
 		"remember_rule": false,
 	})
@@ -5438,7 +5513,7 @@ func TestServiceSecurityRespondAllowOnceCompletesDerivedWriteFileAfterApproval(t
 
 	respondResult, err := service.SecurityRespond(map[string]any{
 		"task_id":       taskID,
-		"approval_id":   "appr_derived_write",
+		"approval_id":   activeApprovalIDForTask(t, service, taskID),
 		"decision":      "allow_once",
 		"remember_rule": false,
 	})
@@ -5480,7 +5555,7 @@ func TestServiceSecurityRespondAllowOnceReturnsStructuredRecoveryFailure(t *test
 	taskID := startResult["task"].(map[string]any)["task_id"].(string)
 	respondResult, err := service.SecurityRespond(map[string]any{
 		"task_id":       taskID,
-		"approval_id":   "appr_recovery_fail",
+		"approval_id":   activeApprovalIDForTask(t, service, taskID),
 		"decision":      "allow_once",
 		"remember_rule": false,
 	})
@@ -7430,8 +7505,9 @@ func TestServiceStartTaskHandlesControlledScreenAnalyzeIntent(t *testing.T) {
 		t.Fatalf("expected approval request and pending execution, got %+v", record)
 	}
 	respondResult, err := service.SecurityRespond(map[string]any{
-		"task_id":  task["task_id"],
-		"decision": "allow_once",
+		"task_id":     task["task_id"],
+		"approval_id": activeApprovalIDForTask(t, service, task["task_id"].(string)),
+		"decision":    "allow_once",
 	})
 	if err != nil {
 		t.Fatalf("security respond allow_once failed: %v", err)
@@ -7597,8 +7673,9 @@ func TestServiceStartTaskPreservesClipCaptureModeThroughScreenApproval(t *testin
 		t.Fatalf("expected pending execution to preserve clip capture mode, got %+v", record.PendingExecution)
 	}
 	respondResult, err := service.SecurityRespond(map[string]any{
-		"task_id":  task["task_id"],
-		"decision": "allow_once",
+		"task_id":     task["task_id"],
+		"approval_id": activeApprovalIDForTask(t, service, task["task_id"].(string)),
+		"decision":    "allow_once",
 	})
 	if err != nil {
 		t.Fatalf("security respond allow_once failed: %v", err)
@@ -7808,8 +7885,9 @@ func TestServiceStartTaskHandlesClipScreenAnalyzePath(t *testing.T) {
 		t.Fatalf("start clip screen analyze task failed: %v", err)
 	}
 	result, err = service.SecurityRespond(map[string]any{
-		"task_id":  result["task"].(map[string]any)["task_id"],
-		"decision": "allow_once",
+		"task_id":     result["task"].(map[string]any)["task_id"],
+		"approval_id": activeApprovalIDForTask(t, service, result["task"].(map[string]any)["task_id"].(string)),
+		"decision":    "allow_once",
 	})
 	if err != nil {
 		t.Fatalf("security respond for clip screen analyze failed: %v", err)
@@ -7880,8 +7958,9 @@ func TestServiceScreenAnalyzeStopsSessionAfterSuccessfulApproval(t *testing.T) {
 		t.Fatalf("start screen analyze task failed: %v", err)
 	}
 	_, err = service.SecurityRespond(map[string]any{
-		"task_id":  result["task"].(map[string]any)["task_id"],
-		"decision": "allow_once",
+		"task_id":     result["task"].(map[string]any)["task_id"],
+		"approval_id": activeApprovalIDForTask(t, service, result["task"].(map[string]any)["task_id"].(string)),
+		"decision":    "allow_once",
 	})
 	if err != nil {
 		t.Fatalf("security respond allow_once failed: %v", err)
@@ -7931,8 +8010,9 @@ func TestServiceScreenAnalyzeFailureExpiresAndCleansSession(t *testing.T) {
 		t.Fatalf("start screen analyze task failed: %v", err)
 	}
 	respondResult, err := service.SecurityRespond(map[string]any{
-		"task_id":  result["task"].(map[string]any)["task_id"],
-		"decision": "allow_once",
+		"task_id":     result["task"].(map[string]any)["task_id"],
+		"approval_id": activeApprovalIDForTask(t, service, result["task"].(map[string]any)["task_id"].(string)),
+		"decision":    "allow_once",
 	})
 	if err != nil {
 		t.Fatalf("security respond should surface task-centric failure result, got %v", err)
@@ -7980,8 +8060,9 @@ func TestServiceScreenAnalyzeCaptureFailureExpiresAndCleansSession(t *testing.T)
 		t.Fatalf("start screen analyze task failed: %v", err)
 	}
 	respondResult, err := service.SecurityRespond(map[string]any{
-		"task_id":  result["task"].(map[string]any)["task_id"],
-		"decision": "allow_once",
+		"task_id":     result["task"].(map[string]any)["task_id"],
+		"approval_id": activeApprovalIDForTask(t, service, result["task"].(map[string]any)["task_id"].(string)),
+		"decision":    "allow_once",
 	})
 	if err != nil {
 		t.Fatalf("security respond should surface task-centric capture failure result, got %v", err)
@@ -8183,8 +8264,9 @@ func TestSecurityRespondScreenAnalyzeFailureReconcilesTaskState(t *testing.T) {
 	}
 	taskID := result["task"].(map[string]any)["task_id"].(string)
 	respondResult, err := service.SecurityRespond(map[string]any{
-		"task_id":  taskID,
-		"decision": "allow_once",
+		"task_id":     taskID,
+		"approval_id": activeApprovalIDForTask(t, service, taskID),
+		"decision":    "allow_once",
 	})
 	if err != nil {
 		t.Fatalf("security respond allow_once failed: %v", err)
@@ -8506,7 +8588,7 @@ func TestServiceSecuritySummaryUsesRuntimeTaskState(t *testing.T) {
 	waitingTaskID := waitingResult["task"].(map[string]any)["task_id"].(string)
 	_, err = service.SecurityRespond(map[string]any{
 		"task_id":       waitingTaskID,
-		"approval_id":   "appr_001",
+		"approval_id":   activeApprovalIDForTask(t, service, waitingTaskID),
 		"decision":      "deny_once",
 		"remember_rule": false,
 	})
@@ -9590,7 +9672,7 @@ func TestServiceSecurityRestoreApplyReturnsStorageErrorWhenApprovalPersistenceFa
 		t.Fatalf("start task failed: %v", err)
 	}
 	taskID := startResult["task"].(map[string]any)["task_id"].(string)
-	if _, err := service.SecurityRespond(map[string]any{"task_id": taskID, "decision": "allow_once"}); err != nil {
+	if _, err := service.SecurityRespond(map[string]any{"task_id": taskID, "approval_id": activeApprovalIDForTask(t, service, taskID), "decision": "allow_once"}); err != nil {
 		t.Fatalf("security respond failed: %v", err)
 	}
 	pointsResult, err := service.SecurityRestorePointsList(map[string]any{"task_id": taskID, "limit": 20, "offset": 0})
@@ -10028,7 +10110,7 @@ func TestServiceSecurityRestoreApplyRestoresWorkspaceAndReturnsFormalResult(t *t
 	taskID := startResult["task"].(map[string]any)["task_id"].(string)
 	respondResult, err := service.SecurityRespond(map[string]any{
 		"task_id":     taskID,
-		"approval_id": taskID,
+		"approval_id": activeApprovalIDForTask(t, service, taskID),
 		"decision":    "allow_once",
 	})
 	if err != nil {
@@ -10083,7 +10165,7 @@ func TestServiceSecurityRestoreApplyRestoresWorkspaceAndReturnsFormalResult(t *t
 	}
 	respondApplyResult, err := service.SecurityRespond(map[string]any{
 		"task_id":       taskID,
-		"approval_id":   "appr_restore_apply",
+		"approval_id":   activeApprovalIDForTask(t, service, taskID),
 		"decision":      "allow_once",
 		"remember_rule": false,
 	})
@@ -10148,7 +10230,7 @@ func TestServiceSecurityRestoreApplyReturnsStructuredFailure(t *testing.T) {
 	taskID := startResult["task"].(map[string]any)["task_id"].(string)
 	respondResult, err := service.SecurityRespond(map[string]any{
 		"task_id":     taskID,
-		"approval_id": taskID,
+		"approval_id": activeApprovalIDForTask(t, service, taskID),
 		"decision":    "allow_once",
 	})
 	if err != nil {
@@ -10182,7 +10264,7 @@ func TestServiceSecurityRestoreApplyReturnsStructuredFailure(t *testing.T) {
 	}
 	applyResult, err = service.SecurityRespond(map[string]any{
 		"task_id":       taskID,
-		"approval_id":   "appr_restore_apply_failure",
+		"approval_id":   activeApprovalIDForTask(t, service, taskID),
 		"decision":      "allow_once",
 		"remember_rule": false,
 	})
@@ -10238,7 +10320,7 @@ func TestServiceSecurityRestoreApplySupportsPersistedTaskFallback(t *testing.T) 
 		t.Fatalf("start task failed: %v", err)
 	}
 	taskID := startResult["task"].(map[string]any)["task_id"].(string)
-	respondResult, err := service.SecurityRespond(map[string]any{"task_id": taskID, "approval_id": taskID, "decision": "allow_once"})
+	respondResult, err := service.SecurityRespond(map[string]any{"task_id": taskID, "approval_id": activeApprovalIDForTask(t, service, taskID), "decision": "allow_once"})
 	if err != nil {
 		t.Fatalf("security respond failed: %v", err)
 	}
@@ -10265,7 +10347,7 @@ func TestServiceSecurityRestoreApplySupportsPersistedTaskFallback(t *testing.T) 
 	if applyResult["task"].(map[string]any)["status"] != "waiting_auth" {
 		t.Fatalf("expected restore apply fallback to wait for auth, got %+v", applyResult)
 	}
-	applyResult, err = service.SecurityRespond(map[string]any{"task_id": taskID, "approval_id": "appr_restore_apply_persisted", "decision": "allow_once"})
+	applyResult, err = service.SecurityRespond(map[string]any{"task_id": taskID, "approval_id": activeApprovalIDForTask(t, service, taskID), "decision": "allow_once"})
 	if err != nil {
 		t.Fatalf("security respond failed with persisted fallback: %v", err)
 	}
@@ -16450,7 +16532,7 @@ func TestServiceStartTaskWithExecutorDeliversPageReadBubble(t *testing.T) {
 	}
 	result, err = service.SecurityRespond(map[string]any{
 		"task_id":     result["task"].(map[string]any)["task_id"],
-		"approval_id": result["task"].(map[string]any)["task_id"],
+		"approval_id": activeApprovalIDForTask(t, service, result["task"].(map[string]any)["task_id"].(string)),
 		"decision":    "allow_once",
 	})
 	if err != nil {
@@ -16517,7 +16599,7 @@ func TestServiceStartTaskWithExecutorDeliversPageSearchBubble(t *testing.T) {
 	}
 	result, err = service.SecurityRespond(map[string]any{
 		"task_id":     result["task"].(map[string]any)["task_id"],
-		"approval_id": result["task"].(map[string]any)["task_id"],
+		"approval_id": activeApprovalIDForTask(t, service, result["task"].(map[string]any)["task_id"].(string)),
 		"decision":    "allow_once",
 	})
 	if err != nil {
@@ -16670,7 +16752,7 @@ func TestServiceStartTaskWithExecutorPageReadFailureUsesUnifiedError(t *testing.
 	}
 	result, err = service.SecurityRespond(map[string]any{
 		"task_id":     result["task"].(map[string]any)["task_id"],
-		"approval_id": result["task"].(map[string]any)["task_id"],
+		"approval_id": activeApprovalIDForTask(t, service, result["task"].(map[string]any)["task_id"].(string)),
 		"decision":    "allow_once",
 	})
 	if err != nil {
@@ -16729,7 +16811,7 @@ func TestServiceStartTaskWithRealLocalPageReadDelivery(t *testing.T) {
 	}
 	result, err = service.SecurityRespond(map[string]any{
 		"task_id":     result["task"].(map[string]any)["task_id"],
-		"approval_id": result["task"].(map[string]any)["task_id"],
+		"approval_id": activeApprovalIDForTask(t, service, result["task"].(map[string]any)["task_id"].(string)),
 		"decision":    "allow_once",
 	})
 	if err != nil {

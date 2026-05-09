@@ -245,8 +245,15 @@ func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error)
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
+	requestedApprovalID := strings.TrimSpace(stringValue(params, "approval_id", ""))
+	if requestedApprovalID == "" {
+		return nil, ErrTaskStatusInvalid
+	}
 	approvalID, ok := s.activeApprovalIDForTask(task)
 	if !ok {
+		return nil, ErrTaskStatusInvalid
+	}
+	if requestedApprovalID != approvalID {
 		return nil, ErrTaskStatusInvalid
 	}
 
