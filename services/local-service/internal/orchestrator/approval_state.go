@@ -82,7 +82,7 @@ func (s *Service) persistAuthorizationDecision(task runengine.TaskRecord, author
 	}
 	approvalID := stringValue(authorizationRecord, "approval_id", "")
 	recordID := stringValue(authorizationRecord, "authorization_record_id", "")
-	if approvalID != "" {
+	if recordID == "" && approvalID != "" {
 		recordID = fmt.Sprintf("auth_%s_%d", approvalID, time.Now().UnixNano())
 	}
 	createdAt := stringValue(authorizationRecord, "created_at", time.Now().Format(dateTimeLayout))

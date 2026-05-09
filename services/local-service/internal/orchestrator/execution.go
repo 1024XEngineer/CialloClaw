@@ -211,8 +211,6 @@ func firstNonEmptyString(primary, fallback string) string {
 	return fallback
 }
 
-// dateTimeLayout is the shared timestamp layout exposed by orchestrator RPC
-// payloads.
 func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, []map[string]any, error) {
 	return s.executeTaskAttempt(task, task, snapshot, taskIntent)
 }

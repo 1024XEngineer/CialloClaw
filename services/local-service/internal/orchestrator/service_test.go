@@ -4944,7 +4944,7 @@ func TestServiceSecurityRespondPersistsAuthorizationRecord(t *testing.T) {
 		t.Fatalf("confirm task failed: %v", err)
 	}
 
-	_, err = service.SecurityRespond(map[string]any{
+	respondResult, err := service.SecurityRespond(map[string]any{
 		"task_id":       taskID,
 		"approval_id":   "appr_auth_store",
 		"decision":      "allow_once",
@@ -4960,6 +4960,10 @@ func TestServiceSecurityRespondPersistsAuthorizationRecord(t *testing.T) {
 	}
 	if total != 1 || len(items) != 1 {
 		t.Fatalf("expected one persisted authorization record, got total=%d items=%+v", total, items)
+	}
+	authorizationRecord := respondResult["authorization_record"].(map[string]any)
+	if items[0].AuthorizationRecordID != authorizationRecord["authorization_record_id"] {
+		t.Fatalf("expected stored authorization record ID to match response ID, got stored=%q response=%q", items[0].AuthorizationRecordID, authorizationRecord["authorization_record_id"])
 	}
 	if items[0].TaskID != taskID || items[0].Decision != "allow_once" || !items[0].RememberRule {
 		t.Fatalf("unexpected authorization record: %+v", items[0])
