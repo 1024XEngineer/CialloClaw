@@ -16,16 +16,19 @@ func (s *Service) resumeQueuedControlledTask(task runengine.TaskRecord) (runengi
 	if stringValue(task.Intent, "name", "") != "screen_analyze" {
 		return task, false, nil
 	}
-	approvalRequest, pendingExecution, bubble, err := s.buildScreenAnalysisApprovalState(task)
+	approvalState, err := s.buildScreenAnalysisApprovalState(task)
 	if err != nil {
 		failedTask, _ := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, err)
 		return failedTask, true, nil
 	}
+	approvalRequest := approvalState.approvalRequestMap()
+	pendingExecution := approvalState.pendingExecutionMap()
+	bubble := approvalState.bubbleMessageMap()
 	updatedTask, ok := s.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble)
 	if !ok {
 		return runengine.TaskRecord{}, true, ErrTaskNotFound
 	}
-	if err := s.persistApprovalRequestState(updatedTask.TaskID, approvalRequest, mapValue(pendingExecution, "impact_scope")); err != nil {
+	if err := s.persistApprovalRequestState(updatedTask.TaskID, approvalRequest, approvalState.PendingExecution.ImpactScope.mapValue()); err != nil {
 		return runengine.TaskRecord{}, true, err
 	}
 	return updatedTask, true, nil

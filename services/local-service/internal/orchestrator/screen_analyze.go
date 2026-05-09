@@ -43,15 +43,18 @@ func (s *Service) handleScreenAnalyzeStart(params map[string]any, snapshot conte
 			"delivery_result": nil,
 		}, true, nil
 	}
-	approvalRequest, pendingExecution, bubble, err := s.buildScreenAnalysisApprovalState(task)
+	approvalState, err := s.buildScreenAnalysisApprovalState(task)
 	if err != nil {
 		return nil, false, err
 	}
+	approvalRequest := approvalState.approvalRequestMap()
+	pendingExecution := approvalState.pendingExecutionMap()
+	bubble := approvalState.bubbleMessageMap()
 	updatedTask, ok := s.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble)
 	if !ok {
 		return nil, false, ErrTaskNotFound
 	}
-	if err := s.persistApprovalRequestState(updatedTask.TaskID, approvalRequest, mapValue(pendingExecution, "impact_scope")); err != nil {
+	if err := s.persistApprovalRequestState(updatedTask.TaskID, approvalRequest, approvalState.PendingExecution.ImpactScope.mapValue()); err != nil {
 		return nil, false, err
 	}
 	return map[string]any{
@@ -100,7 +103,7 @@ func inferredScreenFallbackSubject(snapshot contextsvc.TaskContextSnapshot) stri
 // buildScreenAnalysisApprovalState reconstructs the controlled approval plan
 // from the task intent so queued resumes can re-enter the same authorization
 // path instead of falling through to the generic executor.
-func (s *Service) buildScreenAnalysisApprovalState(task runengine.TaskRecord) (map[string]any, map[string]any, map[string]any, error) {
+func (s *Service) buildScreenAnalysisApprovalState(task runengine.TaskRecord) (screenAnalysisApprovalState, error) {
 	arguments := mapValue(task.Intent, "arguments")
 	sourcePath := stringValue(arguments, "path", "")
 	captureMode := screenCaptureModeForIntent(arguments)
@@ -112,28 +115,28 @@ func (s *Service) buildScreenAnalysisApprovalState(task runengine.TaskRecord) (m
 		RiskLevel:     "yellow",
 		Reason:        "screen_capture_requires_authorization",
 	})
-	pendingExecution := map[string]any{
-		"kind":           "screen_analysis",
-		"operation_name": "screen_capture",
-		"source_path":    sourcePath,
-		"capture_mode":   string(captureMode),
-		"source":         source,
-		"target_object":  targetObject,
-		"language":       firstNonEmptyString(stringValue(arguments, "language", ""), "eng"),
-		"evidence_role":  firstNonEmptyString(stringValue(arguments, "evidence_role", ""), "error_evidence"),
-		"delivery_type":  "bubble",
-		"result_title":   "屏幕分析结果",
-		"preview_text":   screenAnalysisPreviewText(captureMode),
-		"impact_scope": map[string]any{
-			"files":                    impactFilesForScreenTarget(sourcePath),
-			"webpages":                 []string{},
-			"apps":                     []string{},
-			"out_of_workspace":         false,
-			"overwrite_or_delete_risk": false,
+	pendingExecution := screenAnalysisPendingExecution{
+		Kind:          "screen_analysis",
+		OperationName: "screen_capture",
+		SourcePath:    sourcePath,
+		CaptureMode:   string(captureMode),
+		Source:        source,
+		TargetObject:  targetObject,
+		Language:      firstNonEmptyString(stringValue(arguments, "language", ""), "eng"),
+		EvidenceRole:  firstNonEmptyString(stringValue(arguments, "evidence_role", ""), "error_evidence"),
+		DeliveryType:  "bubble",
+		ResultTitle:   "屏幕分析结果",
+		PreviewText:   screenAnalysisPreviewText(captureMode),
+		ImpactScope: screenAnalysisImpactScope{
+			Files:                 impactFilesForScreenTarget(sourcePath),
+			Webpages:              []string{},
+			Apps:                  []string{},
+			OutOfWorkspace:        false,
+			OverwriteOrDeleteRisk: false,
 		},
 	}
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "屏幕截图分析属于敏感能力，请先确认授权。", task.UpdatedAt.Format(dateTimeLayout))
-	return approvalRequest, pendingExecution, bubble, nil
+	return newScreenAnalysisApprovalState(approvalRequest, pendingExecution, bubble), nil
 }
 
 func (s *Service) resolveScreenAnalyzeIntent(snapshot contextsvc.TaskContextSnapshot, current map[string]any) map[string]any {

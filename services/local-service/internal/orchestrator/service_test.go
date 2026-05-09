@@ -5146,23 +5146,27 @@ func TestServiceSecurityRespondRejectsStaleApprovalIDAfterRebuiltCycle(t *testin
 		},
 	})
 
-	staleApproval, stalePendingExecution, _, err := service.buildScreenAnalysisApprovalState(task)
+	staleApprovalState, err := service.buildScreenAnalysisApprovalState(task)
 	if err != nil {
 		t.Fatalf("build stale screen approval state failed: %v", err)
 	}
-	if err := service.persistApprovalRequestState(task.TaskID, staleApproval, mapValue(stalePendingExecution, "impact_scope")); err != nil {
+	staleApproval := staleApprovalState.approvalRequestMap()
+	if err := service.persistApprovalRequestState(task.TaskID, staleApproval, staleApprovalState.PendingExecution.ImpactScope.mapValue()); err != nil {
 		t.Fatalf("persist stale approval request failed: %v", err)
 	}
 
-	activeApproval, activePendingExecution, activeBubble, err := service.buildScreenAnalysisApprovalState(task)
+	activeApprovalState, err := service.buildScreenAnalysisApprovalState(task)
 	if err != nil {
 		t.Fatalf("build active screen approval state failed: %v", err)
 	}
+	activeApproval := activeApprovalState.approvalRequestMap()
+	activePendingExecution := activeApprovalState.pendingExecutionMap()
+	activeBubble := activeApprovalState.bubbleMessageMap()
 	updatedTask, ok := service.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, activeApproval, activePendingExecution, activeBubble)
 	if !ok {
 		t.Fatalf("mark waiting approval with rebuilt cycle failed for task %s", task.TaskID)
 	}
-	if err := service.persistApprovalRequestState(updatedTask.TaskID, activeApproval, mapValue(activePendingExecution, "impact_scope")); err != nil {
+	if err := service.persistApprovalRequestState(updatedTask.TaskID, activeApproval, activeApprovalState.PendingExecution.ImpactScope.mapValue()); err != nil {
 		t.Fatalf("persist active approval request failed: %v", err)
 	}
 
@@ -7652,22 +7656,24 @@ func TestBuildScreenAnalysisApprovalStateKeepsApprovalHistory(t *testing.T) {
 		},
 	})
 
-	firstApproval, firstPendingExecution, _, err := service.buildScreenAnalysisApprovalState(task)
+	firstApprovalState, err := service.buildScreenAnalysisApprovalState(task)
 	if err != nil {
 		t.Fatalf("build first screen approval state failed: %v", err)
 	}
-	secondApproval, secondPendingExecution, _, err := service.buildScreenAnalysisApprovalState(task)
+	secondApprovalState, err := service.buildScreenAnalysisApprovalState(task)
 	if err != nil {
 		t.Fatalf("build second screen approval state failed: %v", err)
 	}
+	firstApproval := firstApprovalState.approvalRequestMap()
+	secondApproval := secondApprovalState.approvalRequestMap()
 	if firstApproval["approval_id"] == secondApproval["approval_id"] {
 		t.Fatalf("expected fresh approval ids across screen authorization cycles, got %+v and %+v", firstApproval, secondApproval)
 	}
 
-	if err := service.persistApprovalRequestState(task.TaskID, firstApproval, mapValue(firstPendingExecution, "impact_scope")); err != nil {
+	if err := service.persistApprovalRequestState(task.TaskID, firstApproval, firstApprovalState.PendingExecution.ImpactScope.mapValue()); err != nil {
 		t.Fatalf("persist first approval request failed: %v", err)
 	}
-	if err := service.persistApprovalRequestState(task.TaskID, secondApproval, mapValue(secondPendingExecution, "impact_scope")); err != nil {
+	if err := service.persistApprovalRequestState(task.TaskID, secondApproval, secondApprovalState.PendingExecution.ImpactScope.mapValue()); err != nil {
 		t.Fatalf("persist second approval request failed: %v", err)
 	}
 
@@ -7714,20 +7720,18 @@ func TestBuildScreenAnalysisApprovalStateRetiresAllStalePendingApprovals(t *test
 		},
 	})
 
-	var latestApproval map[string]any
-	var latestPendingExecution map[string]any
+	var latestApprovalState screenAnalysisApprovalState
 	for i := 0; i < 25; i++ {
-		approvalRequest, pendingExecution, _, err := service.buildScreenAnalysisApprovalState(task)
+		approvalState, err := service.buildScreenAnalysisApprovalState(task)
 		if err != nil {
 			t.Fatalf("build paginated screen approval state failed at cycle %d: %v", i, err)
 		}
-		if err := service.persistApprovalRequestState(task.TaskID, approvalRequest, mapValue(pendingExecution, "impact_scope")); err != nil {
+		if err := service.persistApprovalRequestState(task.TaskID, approvalState.approvalRequestMap(), approvalState.PendingExecution.ImpactScope.mapValue()); err != nil {
 			t.Fatalf("persist paginated screen approval state failed at cycle %d: %v", i, err)
 		}
-		latestApproval = approvalRequest
-		latestPendingExecution = pendingExecution
+		latestApprovalState = approvalState
 	}
-	if latestApproval == nil || latestPendingExecution == nil {
+	if latestApprovalState.ApprovalRequest.ApprovalID == "" || latestApprovalState.PendingExecution.Kind == "" {
 		t.Fatal("expected latest approval cycle to be captured")
 	}
 
@@ -7739,7 +7743,7 @@ func TestBuildScreenAnalysisApprovalStateRetiresAllStalePendingApprovals(t *test
 		t.Fatalf("expected every approval cycle to persist, got total=%d items=%+v", total, items)
 	}
 
-	activeApprovalID := stringValue(latestApproval, "approval_id", "")
+	activeApprovalID := latestApprovalState.ApprovalRequest.ApprovalID
 	pendingCount := 0
 	for _, item := range items {
 		if item.Status != "pending" {
