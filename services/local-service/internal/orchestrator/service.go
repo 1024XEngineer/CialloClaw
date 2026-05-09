@@ -4643,10 +4643,10 @@ func (s *Service) maybeEscalateHumanLoop(task runengine.TaskRecord, capture trac
 }
 
 func resumedFromHumanLoop(task runengine.TaskRecord) bool {
-	if task.Status != "processing" || task.CurrentStep != executionStepName(task.Intent) {
+	if task.Status != "processing" {
 		return false
 	}
-	return true
+	return stringValue(task.PendingExecution, "kind", "") == "human_in_loop"
 }
 
 func taskIsBlockedHumanLoop(task runengine.TaskRecord) bool {
