@@ -106,16 +106,12 @@ func (s *Service) buildScreenAnalysisApprovalState(task runengine.TaskRecord) (m
 	captureMode := screenCaptureModeForIntent(arguments)
 	source := firstNonEmptyString(stringValue(arguments, "source", ""), "screen_capture")
 	targetObject := screenTargetObject(arguments)
-	approvalRequest := map[string]any{
-		"approval_id":    fmt.Sprintf("appr_%s", task.TaskID),
-		"task_id":        task.TaskID,
-		"operation_name": "screen_capture",
-		"risk_level":     "yellow",
-		"target_object":  targetObject,
-		"reason":         "screen_capture_requires_authorization",
-		"status":         "pending",
-		"created_at":     time.Now().Format(dateTimeLayout),
-	}
+	approvalRequest := buildApprovalRequest(task.TaskID, task.Intent, execution.GovernanceAssessment{
+		OperationName: "screen_capture",
+		TargetObject:  targetObject,
+		RiskLevel:     "yellow",
+		Reason:        "screen_capture_requires_authorization",
+	})
 	pendingExecution := map[string]any{
 		"kind":           "screen_analysis",
 		"operation_name": "screen_capture",

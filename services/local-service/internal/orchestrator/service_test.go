@@ -7499,6 +7499,58 @@ func TestServiceStartTaskHandlesControlledScreenAnalyzeIntent(t *testing.T) {
 	}
 }
 
+func TestBuildScreenAnalysisApprovalStateKeepsApprovalHistory(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "unused")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_screen_history",
+		Title:       "Analyze current screen",
+		SourceType:  "screen_capture",
+		Status:      "waiting_auth",
+		CurrentStep: "waiting_authorization",
+		RiskLevel:   "yellow",
+		Intent: map[string]any{
+			"name": "screen_analyze",
+			"arguments": map[string]any{
+				"path": "inputs/screen.png",
+			},
+		},
+	})
+
+	firstApproval, firstPendingExecution, _, err := service.buildScreenAnalysisApprovalState(task)
+	if err != nil {
+		t.Fatalf("build first screen approval state failed: %v", err)
+	}
+	secondApproval, secondPendingExecution, _, err := service.buildScreenAnalysisApprovalState(task)
+	if err != nil {
+		t.Fatalf("build second screen approval state failed: %v", err)
+	}
+	if firstApproval["approval_id"] == secondApproval["approval_id"] {
+		t.Fatalf("expected fresh approval ids across screen authorization cycles, got %+v and %+v", firstApproval, secondApproval)
+	}
+
+	if err := service.persistApprovalRequestState(task.TaskID, firstApproval, mapValue(firstPendingExecution, "impact_scope")); err != nil {
+		t.Fatalf("persist first approval request failed: %v", err)
+	}
+	if err := service.persistApprovalRequestState(task.TaskID, secondApproval, mapValue(secondPendingExecution, "impact_scope")); err != nil {
+		t.Fatalf("persist second approval request failed: %v", err)
+	}
+
+	items, total, err := service.storage.ApprovalRequestStore().ListApprovalRequests(context.Background(), task.TaskID, 20, 0)
+	if err != nil {
+		t.Fatalf("list approval request history failed: %v", err)
+	}
+	if total != 2 || len(items) != 2 {
+		t.Fatalf("expected both screen approval cycles to persist, got total=%d items=%+v", total, items)
+	}
+	if items[0].ApprovalID == items[1].ApprovalID {
+		t.Fatalf("expected persisted screen approval history to keep distinct ids, got %+v", items)
+	}
+}
+
 func TestServiceStartTaskPreservesClipCaptureModeThroughScreenApproval(t *testing.T) {
 	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{Path: "temp/screen_local_0001/frame_0001_clip_frames/frame-001.jpg", Text: "fatal clip error", Language: "eng", Source: "ocr_worker_text"}}
 	mediaStub := stubMediaWorkerClient{framesResult: tools.MediaFrameExtractResult{InputPath: "temp/screen_local_0001/frame_0001.webm", OutputDir: "temp/screen_local_0001/frame_0001_clip_frames", FramePaths: []string{"temp/screen_local_0001/frame_0001_clip_frames/frame-001.jpg"}, FrameCount: 1, Source: "media_worker_frames"}}

@@ -44,6 +44,11 @@ type fileSizeViolation struct {
 	maxLines int
 }
 
+type changedGoFile struct {
+	file         string
+	previousFile string
+}
+
 type diffChunk struct {
 	diff         string
 	readFile     fileReader
@@ -192,19 +197,25 @@ func checkChangedFileSizes(root, baseRef string) error {
 	return errors.New(strings.TrimRight(builder.String(), "\n"))
 }
 
-func collectChangedGoFiles(diff string) []string {
+func collectChangedGoFiles(diff string) []changedGoFile {
 	seen := make(map[string]bool)
-	files := make([]string, 0)
+	files := make([]changedGoFile, 0)
+	currentPreviousFile := ""
 	for _, rawLine := range strings.Split(diff, "\n") {
-		if !strings.HasPrefix(rawLine, "+++ ") {
-			continue
+		switch {
+		case strings.HasPrefix(rawLine, "diff --git "):
+			currentPreviousFile = parsePreviousFile(rawLine)
+		case strings.HasPrefix(rawLine, "+++ "):
+			file := parseNewFile(rawLine)
+			if file == "" || seen[file] {
+				continue
+			}
+			seen[file] = true
+			files = append(files, changedGoFile{
+				file:         file,
+				previousFile: currentPreviousFile,
+			})
 		}
-		file := parseNewFile(rawLine)
-		if file == "" || seen[file] {
-			continue
-		}
-		seen[file] = true
-		files = append(files, file)
 	}
 	return files
 }
@@ -371,16 +382,16 @@ func findFileSizeViolations(root string, diffChunks []diffChunk) ([]fileSizeViol
 	violationsByFile := make(map[string]fileSizeViolation)
 	for _, chunk := range diffChunks {
 		for _, file := range collectChangedGoFiles(chunk.diff) {
-			if !shouldCheckGoFileSize(file) {
+			if !shouldCheckGoFileSize(file.file) {
 				continue
 			}
 
-			source, err := chunk.readFile(root, file)
+			source, err := chunk.readFile(root, file.file)
 			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
 			if err != nil {
-				return nil, fmt.Errorf("read %s for size check: %w", file, err)
+				return nil, fmt.Errorf("read %s for size check: %w", file.file, err)
 			}
 
 			lineCount := countLines(source)
@@ -395,12 +406,12 @@ func findFileSizeViolations(root string, diffChunks []diffChunk) ([]fileSizeViol
 				continue
 			}
 			violation := fileSizeViolation{
-				file:     file,
+				file:     file.file,
 				lines:    lineCount,
 				maxLines: maxGoFileLines,
 			}
-			if previous, ok := violationsByFile[file]; !ok || lineCount > previous.lines {
-				violationsByFile[file] = violation
+			if previous, ok := violationsByFile[file.file]; !ok || lineCount > previous.lines {
+				violationsByFile[file.file] = violation
 			}
 		}
 	}
@@ -418,17 +429,21 @@ func findFileSizeViolations(root string, diffChunks []diffChunk) ([]fileSizeViol
 	return violations, nil
 }
 
-func countPreviousLines(root, file string, readFile fileReader) (int, error) {
+func countPreviousLines(root string, file changedGoFile, readFile fileReader) (int, error) {
 	if readFile == nil {
 		return 0, nil
 	}
 
-	source, err := readFile(root, file)
+	previousFile := file.previousFile
+	if previousFile == "" {
+		previousFile = file.file
+	}
+	source, err := readFile(root, previousFile)
 	if errors.Is(err, os.ErrNotExist) {
 		return 0, nil
 	}
 	if err != nil {
-		return 0, fmt.Errorf("read %s for previous size check: %w", file, err)
+		return 0, fmt.Errorf("read %s for previous size check: %w", previousFile, err)
 	}
 	return countLines(source), nil
 }
@@ -510,6 +525,21 @@ func parseNewLine(line string) int {
 		return 0
 	}
 	return value
+}
+
+func parsePreviousFile(line string) string {
+	fields := strings.Fields(line)
+	if len(fields) < 4 {
+		return ""
+	}
+	path := strings.TrimPrefix(fields[2], "a/")
+	if !strings.HasSuffix(path, ".go") {
+		return ""
+	}
+	if !strings.HasPrefix(path, localServicePath+"/") && path != localServicePath {
+		return ""
+	}
+	return path
 }
 
 func scanCommentLines(root, relativePath string, readFile fileReader) (map[int][]string, error) {

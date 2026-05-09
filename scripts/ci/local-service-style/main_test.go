@@ -261,6 +261,52 @@ func TestFindFileSizeViolationsRejectsOversizeGrowth(t *testing.T) {
 	}
 }
 
+func TestFindFileSizeViolationsAllowsOversizeRenameWithoutGrowth(t *testing.T) {
+	const (
+		oldPath = "services/local-service/internal/demo/old_large.go"
+		newPath = "services/local-service/internal/demo/new_large.go"
+	)
+	root := writeTestFile(t, "package demo\n")
+	source := []byte(strings.Repeat("package_line\n", maxGoFileLines+1))
+
+	violations, err := findFileSizeViolations(root, []diffChunk{{
+		diff:         diffForRenamedFile(oldPath, newPath),
+		readFile:     staticFileReader(newPath, source),
+		previousFile: staticFileReader(oldPath, source),
+	}})
+	if err != nil {
+		t.Fatalf("findFileSizeViolations returned error: %v", err)
+	}
+	if len(violations) != 0 {
+		t.Fatalf("expected no violation for unchanged oversize rename, got %#v", violations)
+	}
+}
+
+func TestFindFileSizeViolationsRejectsOversizeRenameGrowth(t *testing.T) {
+	const (
+		oldPath = "services/local-service/internal/demo/old_large.go"
+		newPath = "services/local-service/internal/demo/new_large.go"
+	)
+	root := writeTestFile(t, "package demo\n")
+	before := []byte(strings.Repeat("package_line\n", maxGoFileLines+1))
+	after := []byte(strings.Repeat("package_line\n", maxGoFileLines+2))
+
+	violations, err := findFileSizeViolations(root, []diffChunk{{
+		diff:         diffForRenamedFile(oldPath, newPath),
+		readFile:     staticFileReader(newPath, after),
+		previousFile: staticFileReader(oldPath, before),
+	}})
+	if err != nil {
+		t.Fatalf("findFileSizeViolations returned error: %v", err)
+	}
+	if len(violations) != 1 {
+		t.Fatalf("expected one violation for oversize rename growth, got %d: %#v", len(violations), violations)
+	}
+	if violations[0].file != newPath || violations[0].lines != maxGoFileLines+2 {
+		t.Fatalf("expected renamed growth violation to track new path and grown line count, got %#v", violations[0])
+	}
+}
+
 func TestCountLinesHandlesEmptyAndTrailingNewline(t *testing.T) {
 	for _, tt := range []struct {
 		name string
@@ -308,6 +354,18 @@ func diffForFiles(paths ...string) string {
 		builder.WriteString("\n@@ -1,0 +1 @@\n+package demo\n")
 	}
 	return builder.String()
+}
+
+func diffForRenamedFile(oldPath, newPath string) string {
+	return fmt.Sprintf(`diff --git a/%s b/%s
+similarity index 100%%
+rename from %s
+rename to %s
+--- a/%s
++++ b/%s
+@@ -1,0 +1 @@
++package demo
+`, oldPath, newPath, oldPath, newPath, oldPath, newPath)
 }
 
 func staticFileReader(expectedPath string, source []byte) fileReader {
