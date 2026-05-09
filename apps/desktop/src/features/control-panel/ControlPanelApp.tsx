@@ -48,7 +48,7 @@ import {
 } from "@/features/onboarding/onboardingService";
 import { useDesktopOnboardingActions } from "@/features/onboarding/useDesktopOnboardingActions";
 import { useDesktopOnboardingSession } from "@/features/onboarding/useDesktopOnboardingSession";
-import { openDesktopLocalPath } from "@/platform/desktopLocalPath";
+import { openDesktopRuntimeWorkspaceDirectory } from "@/platform/desktopRuntimeDefaults";
 import { requestCurrentDesktopWindowClose, startCurrentDesktopWindowDragging } from "@/platform/desktopWindowFrame";
 import { ensureOnboardingWindow } from "@/platform/onboardingWindowController";
 import "./controlPanel.css";
@@ -937,7 +937,7 @@ export function ControlPanelApp() {
     }
 
     try {
-      await openDesktopLocalPath(runtimeWorkspacePath);
+      await openDesktopRuntimeWorkspaceDirectory();
       setWorkspaceActionFeedback("已在系统中打开当前工作区目录。");
     } catch (error) {
       const message = error instanceof Error ? error.message : "打开当前工作区目录失败。";
