@@ -306,7 +306,9 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 		}
 		round.PlannerOutput = truncateText(singleLineSummary(plan.OutputText), 240)
 		plannerOutputText := strings.TrimSpace(plan.OutputText)
-		if shouldCarryPlannerOutputText(plannerOutputText) {
+		// Planner text from a tool-call round is a note for the next round. It is
+		// only a final answer when the planner returns without tool calls.
+		if len(plan.ToolCalls) == 0 && shouldCarryPlannerOutputText(plannerOutputText) {
 			lastPlannerOutputText = plannerOutputText
 		}
 
@@ -387,33 +389,6 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 		}
 
 		if len(availableToolNames) == 0 {
-			if plannerOutputText != "" {
-				round.Status = "completed"
-				round.CompletedAt = request.Now()
-				round.StopReason = StopReasonCompleted
-				round.OutputSummary = truncateText(singleLineSummary(plannerOutputText), 160)
-				rounds = append(rounds, round)
-				events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"attempt_index": round.AttemptIndex, "segment_kind": round.SegmentKind, "loop_round": round.LoopRound, "stop_reason": string(StopReasonCompleted)}))
-				if request.Hook != nil {
-					if err := request.Hook.AfterRound(ctx, round); err != nil {
-						return Result{}, true, err
-					}
-				}
-				auditRecord, err := request.BuildAuditRecord(ctx, latestInvocation)
-				if err != nil {
-					return Result{}, true, err
-				}
-				events = appendEvent(events, request, newEvent(request, "loop.completed", map[string]any{"stop_reason": string(StopReasonCompleted)}))
-				return Result{
-					OutputText:      plannerOutputText,
-					ToolCalls:       allToolCalls,
-					ModelInvocation: invocationRecordMap(latestInvocation),
-					AuditRecord:     auditRecord,
-					Events:          events,
-					Rounds:          rounds,
-					StopReason:      StopReasonCompleted,
-				}, true, nil
-			}
 			round.Status = "completed"
 			round.CompletedAt = request.Now()
 			round.StopReason = StopReasonNoSupportedTools
@@ -558,32 +533,9 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 					}))
 					continue
 				}
-				round.Status = "completed"
-				round.CompletedAt = request.Now()
-				round.StopReason = StopReasonCompleted
-				round.OutputSummary = truncateText(singleLineSummary(plannerOutputText), 160)
-				rounds = append(rounds, round)
-				events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"attempt_index": round.AttemptIndex, "segment_kind": round.SegmentKind, "loop_round": round.LoopRound, "stop_reason": string(StopReasonCompleted)}))
-				if request.Hook != nil {
-					if err := request.Hook.AfterRound(ctx, round); err != nil {
-						return Result{}, true, err
-					}
-				}
-				auditRecord, err := request.BuildAuditRecord(ctx, latestInvocation)
-				if err != nil {
-					return Result{}, true, err
-				}
-				events = appendEvent(events, request, newEvent(request, "loop.completed", map[string]any{"stop_reason": string(StopReasonCompleted)}))
-				return Result{
-					OutputText:      plannerOutputText,
-					ToolCalls:       allToolCalls,
-					ModelInvocation: invocationRecordMap(latestInvocation),
-					AuditRecord:     auditRecord,
-					Events:          events,
-					Rounds:          rounds,
-					StopReason:      StopReasonCompleted,
-				}, true, nil
 			}
+			// A round that selected tools is not a final answer, even when every
+			// selected tool was filtered out before execution.
 			round.Status = "completed"
 			round.CompletedAt = request.Now()
 			round.StopReason = StopReasonNoSupportedTools
@@ -642,34 +594,6 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 				}, true, nil
 			}
 		}
-		if turn+1 >= request.MaxTurns && shouldCarryPlannerOutputText(plannerOutputText) {
-			round.Status = "completed"
-			round.CompletedAt = request.Now()
-			round.StopReason = StopReasonCompleted
-			round.OutputSummary = truncateText(singleLineSummary(plannerOutputText), 160)
-			rounds = append(rounds, round)
-			events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"attempt_index": round.AttemptIndex, "segment_kind": round.SegmentKind, "loop_round": round.LoopRound, "stop_reason": string(StopReasonCompleted)}))
-			if request.Hook != nil {
-				if err := request.Hook.AfterRound(ctx, round); err != nil {
-					return Result{}, true, err
-				}
-			}
-			auditRecord, err := request.BuildAuditRecord(ctx, latestInvocation)
-			if err != nil {
-				return Result{}, true, err
-			}
-			events = appendEvent(events, request, newEvent(request, "loop.completed", map[string]any{"stop_reason": string(StopReasonCompleted)}))
-			return Result{
-				OutputText:      plannerOutputText,
-				ToolCalls:       allToolCalls,
-				ModelInvocation: invocationRecordMap(latestInvocation),
-				AuditRecord:     auditRecord,
-				Events:          events,
-				Rounds:          rounds,
-				StopReason:      StopReasonCompleted,
-			}, true, nil
-		}
-
 		history = append(history, observations...)
 		round.Status = "completed"
 		round.CompletedAt = request.Now()
