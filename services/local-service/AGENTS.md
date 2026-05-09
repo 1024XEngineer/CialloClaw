@@ -370,11 +370,13 @@
 
 本地最小检查建议：
 
+- `go run ./scripts/ci/local-service-style`
 - `goimports`
 - 受影响包的 `go test`
 
 提交或 PR 前完整检查建议：
 
+- `go run ./scripts/ci/local-service-style -base origin/main`
 - `go test ./...`
 - `go vet ./...`
 - `staticcheck ./...`

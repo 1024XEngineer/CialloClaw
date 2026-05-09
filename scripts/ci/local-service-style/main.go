@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"unicode"
@@ -21,6 +22,7 @@ const (
 	styleToolPath    = "scripts/ci/local-service-style"
 	goimportsTool    = "golang.org/x/tools/cmd/goimports"
 	goimportsRunCmd  = "go run " + goimportsTool
+	maxGoFileLines   = 2000
 )
 
 var hunkHeaderPattern = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@`)
@@ -36,9 +38,21 @@ type addedLine struct {
 	line int
 }
 
+type fileSizeViolation struct {
+	file     string
+	lines    int
+	maxLines int
+}
+
+type changedGoFile struct {
+	file         string
+	previousFile string
+}
+
 type diffChunk struct {
-	diff     string
-	readFile fileReader
+	diff         string
+	readFile     fileReader
+	previousFile fileReader
 }
 
 type fileReader func(root, relativePath string) ([]byte, error)
@@ -75,6 +89,9 @@ func run() error {
 		if err := checkAddedComments(root, baseRef); err != nil {
 			return err
 		}
+	}
+	if err := checkChangedFileSizes(root, baseRef); err != nil {
+		return err
 	}
 	return nil
 }
@@ -158,12 +175,62 @@ func checkAddedComments(root, baseRef string) error {
 	return errors.New(strings.TrimRight(builder.String(), "\n"))
 }
 
+func checkChangedFileSizes(root, baseRef string) error {
+	diffChunks, err := collectDiffChunks(root, strings.TrimSpace(baseRef))
+	if err != nil {
+		return err
+	}
+
+	violations, err := findFileSizeViolations(root, diffChunks)
+	if err != nil {
+		return err
+	}
+	if len(violations) == 0 {
+		return nil
+	}
+
+	var builder strings.Builder
+	builder.WriteString("changed local-service Go files are too large:\n")
+	for _, item := range violations {
+		fmt.Fprintf(&builder, "%s: %d lines exceeds %d\n", item.file, item.lines, item.maxLines)
+	}
+	return errors.New(strings.TrimRight(builder.String(), "\n"))
+}
+
+func collectChangedGoFiles(diff string) []changedGoFile {
+	seen := make(map[string]bool)
+	files := make([]changedGoFile, 0)
+	currentPreviousFile := ""
+	for _, rawLine := range strings.Split(diff, "\n") {
+		switch {
+		case strings.HasPrefix(rawLine, "diff --git "):
+			currentPreviousFile = parsePreviousFile(rawLine)
+		case strings.HasPrefix(rawLine, "+++ "):
+			file := parseNewFile(rawLine)
+			if file == "" || seen[file] {
+				continue
+			}
+			seen[file] = true
+			files = append(files, changedGoFile{
+				file:         file,
+				previousFile: currentPreviousFile,
+			})
+		}
+	}
+	return files
+}
+
 func collectDiffChunks(root, baseRef string) ([]diffChunk, error) {
 	if baseRef != "" && !isZeroRevision(baseRef) {
+		baseRevision, err := resolveBaseRevision(root, baseRef)
+		if err != nil {
+			return nil, err
+		}
 		if diff, err := gitDiff(root, baseRef+"...HEAD"); err == nil {
 			return []diffChunk{{
-				diff:     diff,
-				readFile: gitRevisionFileReader("HEAD:", "HEAD"),
+				diff:         diff,
+				readFile:     gitRevisionFileReader("HEAD:", "HEAD"),
+				previousFile: gitRevisionFileReader(baseRevision+":", baseRevision),
 			}}, nil
 		}
 		diff, err := gitDiff(root, baseRef, "HEAD")
@@ -171,23 +238,27 @@ func collectDiffChunks(root, baseRef string) ([]diffChunk, error) {
 			return nil, err
 		}
 		return []diffChunk{{
-			diff:     diff,
-			readFile: gitRevisionFileReader("HEAD:", "HEAD"),
+			diff:         diff,
+			readFile:     gitRevisionFileReader("HEAD:", "HEAD"),
+			previousFile: gitRevisionFileReader(baseRef+":", baseRef),
 		}}, nil
 	}
 
 	type localDiffConfig struct {
 		args     []string
 		readFile fileReader
+		previous fileReader
 	}
 	configs := []localDiffConfig{
 		{
 			args:     []string{"diff", "--cached", "--unified=0", "--", localServicePath},
 			readFile: gitRevisionFileReader(":", "index"),
+			previous: gitRevisionFileReader("HEAD:", "HEAD"),
 		},
 		{
 			args:     []string{"diff", "--unified=0", "--", localServicePath},
 			readFile: workingTreeFileReader,
+			previous: gitRevisionFileReader(":", "index"),
 		},
 	}
 
@@ -198,11 +269,20 @@ func collectDiffChunks(root, baseRef string) ([]diffChunk, error) {
 			return nil, fmt.Errorf("collect local diff: %w\n%s", err, strings.TrimSpace(output))
 		}
 		chunks = append(chunks, diffChunk{
-			diff:     output,
-			readFile: config.readFile,
+			diff:         output,
+			readFile:     config.readFile,
+			previousFile: config.previous,
 		})
 	}
 	return chunks, nil
+}
+
+func resolveBaseRevision(root, baseRef string) (string, error) {
+	output, err := commandOutput(root, "git", "merge-base", baseRef, "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("resolve merge-base for %s: %w\n%s", baseRef, err, strings.TrimSpace(output))
+	}
+	return strings.TrimSpace(output), nil
 }
 
 func collectNameOnlyDiff(root, baseRef string, paths ...string) (string, error) {
@@ -298,6 +378,94 @@ func findCommentViolations(root string, diffChunks []diffChunk) ([]violation, er
 	return violations, nil
 }
 
+func findFileSizeViolations(root string, diffChunks []diffChunk) ([]fileSizeViolation, error) {
+	violationsByFile := make(map[string]fileSizeViolation)
+	for _, chunk := range diffChunks {
+		for _, file := range collectChangedGoFiles(chunk.diff) {
+			if !shouldCheckGoFileSize(file.file) {
+				continue
+			}
+
+			source, err := chunk.readFile(root, file.file)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return nil, fmt.Errorf("read %s for size check: %w", file.file, err)
+			}
+
+			lineCount := countLines(source)
+			if lineCount <= maxGoFileLines {
+				continue
+			}
+			previousLineCount, err := countPreviousLines(root, file, chunk.previousFile)
+			if err != nil {
+				return nil, err
+			}
+			if previousLineCount >= lineCount {
+				continue
+			}
+			violation := fileSizeViolation{
+				file:     file.file,
+				lines:    lineCount,
+				maxLines: maxGoFileLines,
+			}
+			if previous, ok := violationsByFile[file.file]; !ok || lineCount > previous.lines {
+				violationsByFile[file.file] = violation
+			}
+		}
+	}
+
+	files := make([]string, 0, len(violationsByFile))
+	for file := range violationsByFile {
+		files = append(files, file)
+	}
+	sort.Strings(files)
+
+	violations := make([]fileSizeViolation, 0, len(files))
+	for _, file := range files {
+		violations = append(violations, violationsByFile[file])
+	}
+	return violations, nil
+}
+
+func countPreviousLines(root string, file changedGoFile, readFile fileReader) (int, error) {
+	if readFile == nil {
+		return 0, nil
+	}
+
+	previousFile := file.previousFile
+	if previousFile == "" {
+		previousFile = file.file
+	}
+	source, err := readFile(root, previousFile)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("read %s for previous size check: %w", previousFile, err)
+	}
+	return countLines(source), nil
+}
+
+func shouldCheckGoFileSize(file string) bool {
+	return strings.HasPrefix(file, localServicePath+"/") &&
+		strings.HasSuffix(file, ".go") &&
+		!strings.HasSuffix(file, "_test.go")
+}
+
+func countLines(source []byte) int {
+	if len(source) == 0 {
+		return 0
+	}
+
+	lines := bytes.Count(source, []byte{'\n'})
+	if source[len(source)-1] != '\n' {
+		lines++
+	}
+	return lines
+}
+
 func collectAddedLines(diff string) []addedLine {
 	var addedLines []addedLine
 	var (
@@ -359,6 +527,21 @@ func parseNewLine(line string) int {
 	return value
 }
 
+func parsePreviousFile(line string) string {
+	fields := strings.Fields(line)
+	if len(fields) < 4 {
+		return ""
+	}
+	path := strings.TrimPrefix(fields[2], "a/")
+	if !strings.HasSuffix(path, ".go") {
+		return ""
+	}
+	if !strings.HasPrefix(path, localServicePath+"/") && path != localServicePath {
+		return ""
+	}
+	return path
+}
+
 func scanCommentLines(root, relativePath string, readFile fileReader) (map[int][]string, error) {
 	source, err := readFile(root, relativePath)
 	if err != nil {
@@ -400,10 +583,18 @@ func gitRevisionFileReader(prefix, label string) fileReader {
 	return func(root, relativePath string) ([]byte, error) {
 		output, err := commandOutput(root, "git", "show", prefix+relativePath)
 		if err != nil {
+			if isMissingGitRevisionPath(output) {
+				return nil, os.ErrNotExist
+			}
 			return nil, fmt.Errorf("read %s from %s for comment scan: %w\n%s", relativePath, label, err, strings.TrimSpace(output))
 		}
 		return []byte(output), nil
 	}
+}
+
+func isMissingGitRevisionPath(output string) bool {
+	return strings.Contains(output, "does not exist in") ||
+		strings.Contains(output, "exists on disk, but not in")
 }
 
 func filterReportedPaths(output string, expected []string) []string {

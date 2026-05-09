@@ -190,6 +190,51 @@ func TestInMemoryGovernanceAndToolStoresCoverHelpers(t *testing.T) {
 	}
 }
 
+func TestInMemoryApprovalRequestStoreListsLatestPendingPerTask(t *testing.T) {
+	approvalStore := newInMemoryApprovalRequestStore()
+	for _, record := range []ApprovalRequestRecord{
+		{
+			ApprovalID:    "appr_old",
+			TaskID:        "task_duplicate",
+			OperationName: "screen_capture",
+			Status:        "pending",
+			CreatedAt:     "2026-04-18T10:00:00Z",
+			UpdatedAt:     "2026-04-18T10:00:00Z",
+		},
+		{
+			ApprovalID:    "appr_new",
+			TaskID:        "task_duplicate",
+			OperationName: "screen_capture",
+			Status:        "pending",
+			CreatedAt:     "2026-04-18T10:01:00Z",
+			UpdatedAt:     "2026-04-18T10:01:00Z",
+		},
+		{
+			ApprovalID:    "appr_other",
+			TaskID:        "task_other",
+			OperationName: "restore_apply",
+			Status:        "pending",
+			CreatedAt:     "2026-04-18T10:02:00Z",
+			UpdatedAt:     "2026-04-18T10:02:00Z",
+		},
+	} {
+		if err := approvalStore.WriteApprovalRequest(context.Background(), record); err != nil {
+			t.Fatalf("write approval request failed: %v", err)
+		}
+	}
+
+	items, total, err := approvalStore.ListPendingApprovalRequests(context.Background(), 10, 0)
+	if err != nil {
+		t.Fatalf("list pending approval requests failed: %v", err)
+	}
+	if total != 2 || len(items) != 2 {
+		t.Fatalf("expected pending approvals to be deduplicated per task, got total=%d items=%+v", total, items)
+	}
+	if items[0].ApprovalID != "appr_other" || items[1].ApprovalID != "appr_new" {
+		t.Fatalf("expected latest pending approvals per task, got %+v", items)
+	}
+}
+
 func TestInMemoryAuthorizationDecisionIsAtomic(t *testing.T) {
 	state := &inMemoryGovernanceState{
 		approvalRequests:     make([]ApprovalRequestRecord, 0),
