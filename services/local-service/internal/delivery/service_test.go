@@ -53,6 +53,37 @@ func TestBuildDeliveryResultWithTargetPath(t *testing.T) {
 	}
 }
 
+// TestBuildDeliveryResultForResultPage verifies result_page delivery resolves a
+// stable dashboard URL instead of a workspace path.
+func TestBuildDeliveryResultForResultPage(t *testing.T) {
+	service := NewService()
+	deliveryResult := service.BuildDeliveryResultWithTargetPath(
+		"task result/001",
+		"result_page",
+		"网页读取结果",
+		"结果已生成，正在打开结果页",
+		"ignored.md",
+	)
+
+	payload := deliveryResult["payload"].(map[string]any)
+	if payload["path"] != nil {
+		t.Fatalf("expected result_page delivery to skip workspace path, got %v", payload["path"])
+	}
+	if payload["url"] != "./dashboard.html#/tasks/delivery/task%20result%2F001" {
+		t.Fatalf("expected result_page delivery to expose stable dashboard url, got %v", payload["url"])
+	}
+	if payload["task_id"] != "task result/001" {
+		t.Fatalf("expected result_page delivery to preserve task id, got %v", payload["task_id"])
+	}
+
+	if artifacts := service.BuildArtifact("task result/001", "网页读取结果", deliveryResult); artifacts != nil {
+		t.Fatalf("expected result_page delivery to skip file artifacts, got %+v", artifacts)
+	}
+	if plan := service.BuildStorageWritePlan("task result/001", deliveryResult); plan != nil {
+		t.Fatalf("expected result_page delivery to skip workspace write plan, got %+v", plan)
+	}
+}
+
 func TestBuildArtifactPersistPlansBackfillsDeliveryPayloadAndCreatedAt(t *testing.T) {
 	service := NewService()
 	plans := service.BuildArtifactPersistPlans("task_001", []map[string]any{{
