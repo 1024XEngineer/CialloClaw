@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { MouseEvent, PointerEvent as ReactPointerEvent } from "react";
+import type { CSSProperties, MouseEvent, PointerEvent as ReactPointerEvent } from "react";
 import { motion } from "motion/react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/utils/cn";
@@ -25,13 +25,26 @@ type NotePreviewCardProps = {
     },
   ) => void;
   onSelect: (itemId: string) => void;
+  stackOrder?: number;
 };
 
-export function NotePreviewCard({ draggableToCanvas = false, isActive, item, onCanvasDragEnd, onCanvasDragMove, onCanvasDragStart, onSelect }: NotePreviewCardProps) {
+export function NotePreviewCard({
+  draggableToCanvas = false,
+  isActive,
+  item,
+  onCanvasDragEnd,
+  onCanvasDragMove,
+  onCanvasDragStart,
+  onSelect,
+  stackOrder,
+}: NotePreviewCardProps) {
   const buttonRef = useRef<HTMLButtonElement | null>(null);
   const cleanupPointerListenersRef = useRef<(() => void) | null>(null);
   const suppressClickRef = useRef(false);
   const pointerDragRef = useRef<{ dragging: boolean; pointerId: number | null; startX: number; startY: number } | null>(null);
+  const stackStyle = typeof stackOrder === "number"
+    ? { "--note-stack-order": String(stackOrder) } as CSSProperties
+    : undefined;
 
   useEffect(() => {
     return () => {
@@ -131,6 +144,7 @@ export function NotePreviewCard({ draggableToCanvas = false, isActive, item, onC
       className={cn("note-preview-card", draggableToCanvas && "note-preview-card--draggable", isActive && "note-preview-card--active", item.item.bucket === "closed" && "note-preview-card--closed")}
       onClick={handleClick}
       onPointerDown={handlePointerDown}
+      style={stackStyle}
       type="button"
       whileHover={{ y: -2 }}
       whileTap={{ scale: 0.995 }}

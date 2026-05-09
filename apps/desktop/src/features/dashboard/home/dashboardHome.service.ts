@@ -443,11 +443,11 @@ function buildTaskState(
 
   if (focusSummary.status === "confirming_intent") {
     state.anomaly = {
-      actionLabel: "确认继续",
-      desc: `当前建议动作是：${focusSummary.next_action}。确认后会继续推进这条任务链。`,
+      actionLabel: "前往处理",
+      desc: `当前建议动作是：${focusSummary.next_action}。这条任务还在等待你确认处理方式。`,
       dismissLabel: "稍后处理",
       severity: "info",
-      title: "当前任务正在等待你确认",
+      title: "当前任务仍在等待确认处理方式",
     };
   } else if (focusSummary.status === "waiting_auth") {
     state.anomaly = {

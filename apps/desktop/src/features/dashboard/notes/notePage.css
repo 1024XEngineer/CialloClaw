@@ -561,7 +561,7 @@
 
 .note-source-studio__editor--single {
   gap: 1rem;
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
 }
 
 .note-source-studio__field-grid {
@@ -996,6 +996,7 @@
 .note-preview-finished-groups,
 .note-detail-list,
 .note-detail-resource-list {
+  align-content: start;
   display: grid;
   gap: 0.75rem;
 }
@@ -1008,7 +1009,7 @@
 
 .note-preview-shell__list--stacked .note-preview-card {
   position: relative;
-  z-index: 1;
+  z-index: var(--note-stack-order, 1);
 }
 
 .note-preview-shell__list--stacked .note-preview-card + .note-preview-card {
@@ -1090,6 +1091,7 @@
 }
 
 .note-preview-card {
+  align-self: start;
   background:
     linear-gradient(180deg, rgba(255, 252, 247, 0.9), rgba(246, 239, 231, 0.86)),
     color-mix(in srgb, var(--note-paper) 88%, var(--note-accent) 12%);
@@ -1468,6 +1470,22 @@
   z-index: 72;
 }
 
+.note-schedule-modal__backdrop {
+  z-index: 72;
+}
+
+.note-resource-modal__backdrop {
+  z-index: 72;
+}
+
+.note-detail-modal--schedule {
+  z-index: 74;
+}
+
+.note-detail-modal--resource {
+  z-index: 74;
+}
+
 .note-detail-modal--source {
   z-index: 74;
 }
@@ -1482,6 +1500,114 @@
   min-height: 0;
   pointer-events: auto;
   width: 100%;
+}
+
+.note-schedule-modal {
+  display: grid;
+  gap: 1rem;
+  margin: auto;
+  max-width: min(34rem, calc(100vw - 2rem));
+  min-height: 0;
+  padding: 1.2rem;
+  pointer-events: auto;
+  width: 100%;
+}
+
+.note-schedule-modal__header {
+  align-items: start;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+
+.note-schedule-modal__title {
+  color: var(--note-ink);
+  font-family: var(--cc-font-display);
+  font-size: clamp(1.18rem, 1.5vw, 1.45rem);
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  margin: 0.25rem 0 0;
+}
+
+.note-schedule-modal__subtitle {
+  line-height: 1.6;
+  margin: 0.35rem 0 0;
+}
+
+.note-schedule-modal__close {
+  background: color-mix(in srgb, var(--note-paper-strong) 86%, var(--note-accent) 14%);
+  border: 1px solid color-mix(in srgb, var(--note-line) 74%, var(--note-accent) 26%);
+  border-radius: 999px;
+}
+
+.note-schedule-modal__body {
+  display: grid;
+  gap: 0.9rem;
+}
+
+.note-schedule-modal__field {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.note-schedule-modal__label {
+  align-items: center;
+  color: var(--note-ink);
+  display: inline-flex;
+  font-size: 0.86rem;
+  font-weight: 600;
+  gap: 0.45rem;
+}
+
+.note-schedule-modal__input {
+  background: rgba(255, 252, 247, 0.92);
+  border: 1px solid color-mix(in srgb, var(--note-line) 76%, var(--note-accent) 24%);
+  border-radius: 1rem;
+  color: var(--note-ink);
+  font: inherit;
+  min-height: 3rem;
+  outline: none;
+  padding: 0.72rem 0.88rem;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.note-schedule-modal__input:focus {
+  border-color: color-mix(in srgb, var(--note-accent) 46%, rgba(255, 255, 255, 0.44));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--note-accent) 12%, rgba(255, 255, 255, 0.3));
+}
+
+.note-schedule-modal__input:disabled {
+  cursor: not-allowed;
+  opacity: 0.66;
+}
+
+.note-schedule-modal__hint {
+  font-size: 0.8rem;
+  line-height: 1.6;
+  margin: 0;
+}
+
+.note-schedule-modal__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  justify-content: flex-end;
+}
+
+.note-resource-modal__body {
+  display: grid;
+  gap: 0.85rem;
+  max-height: min(26rem, 60vh);
+  overflow: auto;
+  padding-right: 0.1rem;
+}
+
+.note-schedule-modal__button--primary {
+  background: color-mix(in srgb, var(--note-accent) 22%, var(--note-paper-strong) 78%);
+  box-shadow:
+    0 18px 34px -28px rgba(122, 84, 50, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
 }
 
 .note-source-modal__header {
@@ -1622,6 +1748,50 @@
   margin-bottom: 0.85rem;
 }
 
+.note-detail-card__actions {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 0.95rem;
+}
+
+.note-detail-card__action {
+  background: color-mix(in srgb, var(--note-paper-strong) 88%, var(--note-accent) 12%);
+  border-color: color-mix(in srgb, var(--note-line) 72%, var(--note-accent) 28%);
+  box-shadow:
+    0 14px 28px -24px rgba(98, 68, 42, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  justify-self: start;
+}
+
+.note-detail-card__action:hover {
+  background: color-mix(in srgb, var(--note-paper-strong) 80%, var(--note-accent) 20%);
+  border-color: color-mix(in srgb, var(--note-accent) 40%, var(--note-line) 60%);
+}
+
+.note-detail-card__action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+}
+
+.note-detail-card__action--accent {
+  background: color-mix(in srgb, var(--note-paper-strong) 74%, var(--note-accent) 26%);
+  border-color: color-mix(in srgb, var(--note-accent) 46%, var(--note-line) 54%);
+}
+
+.note-detail-card__action--accent:hover {
+  background: color-mix(in srgb, var(--note-paper-strong) 66%, var(--note-accent) 34%);
+}
+
+.note-detail-card__action--warn {
+  background: color-mix(in srgb, var(--note-paper-strong) 80%, #d58d52 20%);
+  border-color: color-mix(in srgb, #d58d52 40%, var(--note-line) 60%);
+}
+
+.note-detail-card__action--warn:hover {
+  background: color-mix(in srgb, var(--note-paper-strong) 72%, #d58d52 28%);
+}
+
 .note-detail-card__copy,
 .note-empty-state__copy {
   line-height: 1.65;
@@ -1633,6 +1803,31 @@
   display: flex;
   gap: 0.75rem;
   padding: 0.9rem 1rem;
+}
+
+.note-detail-resource-item--button {
+  align-items: flex-start;
+  appearance: none;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition:
+    background 180ms ease,
+    border-color 180ms ease,
+    transform 180ms ease;
+  width: 100%;
+}
+
+.note-detail-resource-item--button:hover {
+  background: color-mix(in srgb, var(--note-paper-strong) 76%, var(--note-accent) 24%);
+  border-color: color-mix(in srgb, var(--note-accent) 40%, var(--note-line) 60%);
+  transform: translateY(-1px);
+}
+
+.note-detail-resource-item--button:disabled {
+  cursor: not-allowed;
+  opacity: 0.7;
+  transform: none;
 }
 
 .note-detail-list__label,
@@ -1650,6 +1845,31 @@
   font-weight: 600;
   line-height: 1.5;
   margin: 0;
+}
+
+.note-detail-card__hint {
+  font-size: 0.78rem;
+  line-height: 1.55;
+  margin: 0;
+}
+
+.note-preview-page__board-card-title--spacious {
+  font-size: 1.12rem;
+}
+
+.note-detail-schedule-editor {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.note-detail-schedule-editor__grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.note-detail-schedule-editor__actions {
+  justify-content: flex-start;
 }
 
 .note-detail-actions {
@@ -1802,6 +2022,11 @@
   .note-source-modal {
     max-width: min(92vw, 1240px);
   }
+
+  .note-schedule-modal {
+    max-width: min(32rem, calc(100vw - 2rem));
+    padding: 1rem;
+  }
 }
 
 @media (max-width: 720px) {
@@ -1843,8 +2068,14 @@
   .note-source-studio__body,
   .note-source-studio__field-grid,
   .note-detail-shell__meta-grid,
-  .note-detail-grid {
+   .note-detail-grid,
+   .note-detail-schedule-editor__grid {
     grid-template-columns: 1fr;
+  }
+
+  .note-schedule-modal__header {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .note-preview-page__workspace {
