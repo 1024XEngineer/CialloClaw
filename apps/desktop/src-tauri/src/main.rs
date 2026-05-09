@@ -122,6 +122,7 @@ struct NamedPipeBridgeState {
     pending: Mutex<HashMap<String, mpsc::Sender<Result<Value, String>>>>,
     subscriptions: Mutex<HashMap<String, HashMap<u32, JsonChannel>>>,
     next_subscription_id: AtomicU32,
+    isolated_transport_degraded: AtomicBool,
 }
 
 impl Default for NamedPipeBridgeState {
@@ -132,6 +133,7 @@ impl Default for NamedPipeBridgeState {
             pending: Mutex::new(HashMap::new()),
             subscriptions: Mutex::new(HashMap::new()),
             next_subscription_id: AtomicU32::new(1),
+            isolated_transport_degraded: AtomicBool::new(false),
         }
     }
 }
@@ -214,6 +216,7 @@ impl NamedPipeBridgeState {
             .lock()
             .map_err(|_| "named pipe session lock poisoned".to_string())?;
         *session = None;
+        self.clear_isolated_transport_degraded();
 
         Ok(())
     }
@@ -242,7 +245,7 @@ impl NamedPipeBridgeState {
         payload: Value,
         timeout: Option<Duration>,
     ) -> Result<Value, String> {
-        if should_use_isolated_named_pipe_payload(&payload) {
+        if self.should_use_isolated_transport(&payload) {
             return self.request_via_isolated_connection(payload, timeout);
         }
 
@@ -316,10 +319,13 @@ impl NamedPipeBridgeState {
             Some(timeout) => response_rx
                 .recv_timeout(timeout)
                 .map_err(|error| match error {
-                    mpsc::RecvTimeoutError::Timeout => format!(
-                        "isolated named pipe response wait timed out after {}ms",
-                        timeout.as_millis()
-                    ),
+                    mpsc::RecvTimeoutError::Timeout => {
+                        self.mark_isolated_transport_degraded();
+                        format!(
+                            "isolated named pipe response wait timed out after {}ms",
+                            timeout.as_millis()
+                        )
+                    }
                     mpsc::RecvTimeoutError::Disconnected => {
                         "isolated named pipe response wait failed: channel disconnected".to_string()
                     }
@@ -328,6 +334,24 @@ impl NamedPipeBridgeState {
                 .recv()
                 .map_err(|error| format!("isolated named pipe response wait failed: {error}"))?,
         }
+    }
+
+    fn should_use_isolated_transport(&self, payload: &Value) -> bool {
+        should_use_isolated_named_pipe_payload(payload) && !self.isolated_transport_degraded()
+    }
+
+    fn isolated_transport_degraded(&self) -> bool {
+        self.isolated_transport_degraded.load(Ordering::Relaxed)
+    }
+
+    fn mark_isolated_transport_degraded(&self) {
+        self.isolated_transport_degraded
+            .store(true, Ordering::Relaxed);
+    }
+
+    fn clear_isolated_transport_degraded(&self) {
+        self.isolated_transport_degraded
+            .store(false, Ordering::Relaxed);
     }
 
     fn subscribe(self: &Arc<Self>, topic: String, channel: JsonChannel) -> Result<u32, String> {
@@ -389,6 +413,7 @@ impl NamedPipeBridgeState {
 
         let session = BridgeSession { writer_tx };
         *session_guard = Some(session.clone());
+        self.clear_isolated_transport_degraded();
         Ok(session)
     }
 
@@ -1628,6 +1653,28 @@ mod named_pipe_routing_tests {
     }
 
     #[test]
+    fn isolated_transport_degradation_forces_floating_ball_submit_back_to_shared() {
+        let bridge_state = NamedPipeBridgeState::default();
+        let payload = json!({
+            "jsonrpc": "2.0",
+            "id": "req_submit",
+            "method": "agent.input.submit",
+            "params": {
+                "source": "floating_ball",
+                "options": {
+                    "preferred_delivery": "bubble"
+                }
+            }
+        });
+
+        assert!(bridge_state.should_use_isolated_transport(&payload));
+
+        bridge_state.mark_isolated_transport_degraded();
+
+        assert!(!bridge_state.should_use_isolated_transport(&payload));
+    }
+
+    #[test]
     fn isolated_named_pipe_message_classification_marks_matching_response() {
         let message = json!({
             "jsonrpc": "2.0",
@@ -1676,51 +1723,6 @@ mod named_pipe_routing_tests {
             }
             _ => panic!("expected isolated notification to be forwarded"),
         }
-    }
-}
-
-#[cfg(test)]
-mod named_pipe_routing_tests {
-    use super::{requires_shared_named_pipe_request, should_use_isolated_named_pipe_payload};
-    use serde_json::json;
-
-    #[test]
-    fn isolated_payload_routing_keeps_floating_ball_bubble_submit_isolated() {
-        let payload = json!({
-            "jsonrpc": "2.0",
-            "id": "req_submit",
-            "method": "agent.input.submit",
-            "params": {
-                "source": "floating_ball",
-                "options": {
-                    "preferred_delivery": "bubble"
-                }
-            }
-        });
-
-        assert!(should_use_isolated_named_pipe_payload(&payload));
-    }
-
-    #[test]
-    fn isolated_payload_routing_keeps_non_bubble_submit_shared() {
-        let dashboard_payload = json!({
-            "jsonrpc": "2.0",
-            "id": "req_submit_dashboard",
-            "method": "agent.input.submit",
-            "params": {
-                "source": "dashboard"
-            }
-        });
-        let task_start_payload = json!({
-            "jsonrpc": "2.0",
-            "id": "req_task_start",
-            "method": "agent.task.start",
-            "params": {}
-        });
-
-        assert!(!should_use_isolated_named_pipe_payload(&dashboard_payload));
-        assert!(!should_use_isolated_named_pipe_payload(&task_start_payload));
-        assert!(requires_shared_named_pipe_request("agent.task.start"));
     }
 }
 
