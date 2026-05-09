@@ -3,12 +3,15 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/execution"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 )
+
+var approvalIDSequence atomic.Uint64
 
 // buildApprovalRequest creates the normalized approval_request payload. The
 // object must already be protocol-facing here because it is persisted, replayed
@@ -19,16 +22,17 @@ func buildApprovalRequest(taskID string, taskIntent map[string]any, assessment e
 	if targetObject == "" {
 		targetObject = "workspace_document"
 	}
+	now := time.Now()
 
 	return map[string]any{
-		"approval_id":    fmt.Sprintf("appr_%s_%d", taskID, time.Now().UnixNano()),
+		"approval_id":    fmt.Sprintf("appr_%s_%d_%d", taskID, now.UnixNano(), approvalIDSequence.Add(1)),
 		"task_id":        taskID,
 		"operation_name": firstNonEmptyString(assessment.OperationName, firstNonEmptyString(stringValue(taskIntent, "name", ""), "write_file")),
 		"risk_level":     firstNonEmptyString(assessment.RiskLevel, "red"),
 		"target_object":  targetObject,
 		"reason":         firstNonEmptyString(assessment.Reason, "policy_requires_authorization"),
 		"status":         "pending",
-		"created_at":     time.Now().Format(dateTimeLayout),
+		"created_at":     now.Format(dateTimeLayout),
 	}
 }
 

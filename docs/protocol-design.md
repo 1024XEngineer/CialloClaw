@@ -329,7 +329,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 ### 5.14 授权决策 / 状态
 
 - `approval_decision`：`allow_once / deny_once`
-- `approval_status`：`pending / approved / denied`
+- `approval_status`：`pending / approved / denied / resolved`
 
 ### 5.15 设置相关
 

@@ -81,6 +81,7 @@ func (s *inMemoryApprovalRequestStore) ListPendingApprovalRequests(_ context.Con
 	s.state.mu.Lock()
 	defer s.state.mu.Unlock()
 	items := filterApprovalRequests(s.state.approvalRequests, "", "pending")
+	items = latestApprovalRequestPerTask(items)
 	return pageApprovalRequests(items, limit, offset), len(items), nil
 }
 
@@ -398,11 +399,12 @@ func (s *SQLiteApprovalRequestStore) ListApprovalRequests(ctx context.Context, t
 }
 
 func (s *SQLiteApprovalRequestStore) ListPendingApprovalRequests(ctx context.Context, limit, offset int) ([]ApprovalRequestRecord, int, error) {
-	items, total, err := s.listApprovalRequests(ctx, "", "pending", limit, offset)
+	items, _, err := s.listApprovalRequests(ctx, "", "pending", 0, 0)
 	if err != nil {
 		return nil, 0, err
 	}
-	return items, total, nil
+	items = latestApprovalRequestPerTask(items)
+	return pageApprovalRequests(items, limit, offset), len(items), nil
 }
 
 func (s *SQLiteApprovalRequestStore) listApprovalRequests(ctx context.Context, taskID string, status string, limit, offset int) ([]ApprovalRequestRecord, int, error) {
@@ -744,6 +746,23 @@ func filterApprovalRequests(records []ApprovalRequestRecord, taskID string, stat
 	sort.SliceStable(items, func(i, j int) bool {
 		return parseGovernanceTime(items[i].CreatedAt).After(parseGovernanceTime(items[j].CreatedAt))
 	})
+	return items
+}
+
+func latestApprovalRequestPerTask(records []ApprovalRequestRecord) []ApprovalRequestRecord {
+	items := make([]ApprovalRequestRecord, 0, len(records))
+	seenTasks := make(map[string]struct{}, len(records))
+	for _, record := range records {
+		key := strings.TrimSpace(record.TaskID)
+		if key == "" {
+			key = strings.TrimSpace(record.ApprovalID)
+		}
+		if _, ok := seenTasks[key]; ok {
+			continue
+		}
+		seenTasks[key] = struct{}{}
+		items = append(items, record)
+	}
 	return items
 }
 

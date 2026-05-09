@@ -73,7 +73,32 @@ func (s *Service) persistApprovalRequest(taskID string, approvalRequest map[stri
 		CreatedAt:       stringValue(approvalRequest, "created_at", time.Now().Format(dateTimeLayout)),
 		UpdatedAt:       firstNonEmptyString(stringValue(approvalRequest, "updated_at", ""), stringValue(approvalRequest, "created_at", time.Now().Format(dateTimeLayout))),
 	}
-	return s.storage.ApprovalRequestStore().WriteApprovalRequest(context.Background(), record)
+	ctx := context.Background()
+	if err := s.storage.ApprovalRequestStore().WriteApprovalRequest(ctx, record); err != nil {
+		return err
+	}
+	return s.retireStalePendingApprovalRequests(ctx, record.TaskID, record.ApprovalID, record.UpdatedAt)
+}
+
+func (s *Service) retireStalePendingApprovalRequests(ctx context.Context, taskID, activeApprovalID, updatedAt string) error {
+	if strings.TrimSpace(taskID) == "" || strings.TrimSpace(activeApprovalID) == "" {
+		return nil
+	}
+	records, _, err := s.storage.ApprovalRequestStore().ListApprovalRequests(ctx, taskID, 0, 0)
+	if err != nil {
+		return err
+	}
+	for _, record := range records {
+		if record.Status != "pending" || record.ApprovalID == activeApprovalID {
+			continue
+		}
+		// A rebuilt authorization cycle replaces stale pending records without
+		// implying that the user approved or denied those old requests.
+		if err := s.storage.ApprovalRequestStore().UpdateApprovalRequestStatus(ctx, record.ApprovalID, "resolved", updatedAt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Service) persistAuthorizationDecision(task runengine.TaskRecord, authorizationRecord map[string]any) error {

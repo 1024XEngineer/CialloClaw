@@ -7549,6 +7549,16 @@ func TestBuildScreenAnalysisApprovalStateKeepsApprovalHistory(t *testing.T) {
 	if items[0].ApprovalID == items[1].ApprovalID {
 		t.Fatalf("expected persisted screen approval history to keep distinct ids, got %+v", items)
 	}
+	statuses := map[string]string{}
+	for _, item := range items {
+		statuses[item.ApprovalID] = item.Status
+	}
+	if statuses[stringValue(secondApproval, "approval_id", "")] != "pending" {
+		t.Fatalf("expected newest screen approval to remain pending, got %+v", items)
+	}
+	if statuses[stringValue(firstApproval, "approval_id", "")] != "resolved" {
+		t.Fatalf("expected stale screen approval to be resolved, got %+v", items)
+	}
 }
 
 func TestServiceStartTaskPreservesClipCaptureModeThroughScreenApproval(t *testing.T) {
@@ -9452,6 +9462,60 @@ func TestServiceSecurityPendingListFallsBackToApprovalRequestStore(t *testing.T)
 	page := result["page"].(map[string]any)
 	if page["total"] != 1 || page["has_more"] != false {
 		t.Fatalf("expected storage-backed page metadata, got %+v", page)
+	}
+}
+
+func TestServiceSecurityPendingListDeduplicatesStoredTaskApprovals(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "security pending approval store dedupe")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	records := []storage.ApprovalRequestRecord{
+		{
+			ApprovalID:    "appr_store_older",
+			TaskID:        "task_store_duplicate",
+			OperationName: "screen_capture",
+			RiskLevel:     "yellow",
+			TargetObject:  "current_screen",
+			Reason:        "stale pending approval should stay out of pending list",
+			Status:        "pending",
+			CreatedAt:     "2026-04-18T10:00:00Z",
+			UpdatedAt:     "2026-04-18T10:00:00Z",
+		},
+		{
+			ApprovalID:    "appr_store_newer",
+			TaskID:        "task_store_duplicate",
+			OperationName: "screen_capture",
+			RiskLevel:     "yellow",
+			TargetObject:  "current_screen",
+			Reason:        "current pending approval should win",
+			Status:        "pending",
+			CreatedAt:     "2026-04-18T10:01:00Z",
+			UpdatedAt:     "2026-04-18T10:01:00Z",
+		},
+	}
+	for _, record := range records {
+		if err := service.storage.ApprovalRequestStore().WriteApprovalRequest(context.Background(), record); err != nil {
+			t.Fatalf("write approval request failed: %v", err)
+		}
+	}
+
+	result, err := service.SecurityPendingList(map[string]any{"limit": float64(20), "offset": float64(0)})
+	if err != nil {
+		t.Fatalf("security pending list failed: %v", err)
+	}
+
+	items := result["items"].([]map[string]any)
+	if len(items) != 1 {
+		t.Fatalf("expected one current pending authorization, got %+v", items)
+	}
+	if items[0]["approval_id"] != "appr_store_newer" {
+		t.Fatalf("expected newest pending approval to win, got %+v", items[0])
+	}
+	page := result["page"].(map[string]any)
+	if page["total"] != 1 || page["has_more"] != false {
+		t.Fatalf("expected deduplicated page metadata, got %+v", page)
 	}
 }
 

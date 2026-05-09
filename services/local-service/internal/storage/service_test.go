@@ -524,6 +524,63 @@ func TestApprovalAndAuthorizationStoresPersistStructuredGovernanceRecords(t *tes
 	}
 }
 
+func TestSQLiteApprovalRequestStoreListsLatestPendingPerTask(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "approval-pending-dedupe.db")
+	service := NewService(stubAdapter{databasePath: path})
+	defer func() { _ = service.Close() }()
+
+	for _, record := range []ApprovalRequestRecord{
+		{
+			ApprovalID:    "appr_sql_old",
+			TaskID:        "task_sql_duplicate",
+			OperationName: "screen_capture",
+			RiskLevel:     "yellow",
+			TargetObject:  "current_screen",
+			Reason:        "older pending approval",
+			Status:        "pending",
+			CreatedAt:     "2026-04-18T10:00:00Z",
+			UpdatedAt:     "2026-04-18T10:00:00Z",
+		},
+		{
+			ApprovalID:    "appr_sql_new",
+			TaskID:        "task_sql_duplicate",
+			OperationName: "screen_capture",
+			RiskLevel:     "yellow",
+			TargetObject:  "current_screen",
+			Reason:        "newer pending approval",
+			Status:        "pending",
+			CreatedAt:     "2026-04-18T10:01:00Z",
+			UpdatedAt:     "2026-04-18T10:01:00Z",
+		},
+		{
+			ApprovalID:    "appr_sql_other",
+			TaskID:        "task_sql_other",
+			OperationName: "restore_apply",
+			RiskLevel:     "red",
+			TargetObject:  "workspace/result.md",
+			Reason:        "other task pending approval",
+			Status:        "pending",
+			CreatedAt:     "2026-04-18T10:02:00Z",
+			UpdatedAt:     "2026-04-18T10:02:00Z",
+		},
+	} {
+		if err := service.ApprovalRequestStore().WriteApprovalRequest(context.Background(), record); err != nil {
+			t.Fatalf("write approval request failed: %v", err)
+		}
+	}
+
+	items, total, err := service.ApprovalRequestStore().ListPendingApprovalRequests(context.Background(), 10, 0)
+	if err != nil {
+		t.Fatalf("list pending approval requests failed: %v", err)
+	}
+	if total != 2 || len(items) != 2 {
+		t.Fatalf("expected pending approvals to be deduplicated per task, got total=%d items=%+v", total, items)
+	}
+	if items[0].ApprovalID != "appr_sql_other" || items[1].ApprovalID != "appr_sql_new" {
+		t.Fatalf("expected latest pending approvals per task, got %+v", items)
+	}
+}
+
 func TestTaskStoresCloseAndErrorHelpers(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "task-store-close.db")
 	taskStore, err := NewSQLiteTaskStore(path)
