@@ -525,7 +525,7 @@ export function ShellBallApp() {
     const scaleFactor = await currentWindow.scaleFactor();
     const regionElements = [
       mascotRef.current?.querySelector<HTMLElement>(".shell-ball-mascot__hotspot") ?? null,
-      rootRef.current?.querySelector<HTMLElement>(".shell-ball-window--input input") ?? null,
+      rootRef.current?.querySelector<HTMLElement>(".shell-ball-window--input textarea") ?? null,
       ...Array.from(rootRef.current?.querySelectorAll<HTMLElement>(".shell-ball-window--input .shell-ball-uiverse-action") ?? []),
       ...Array.from(rootRef.current?.querySelectorAll<HTMLElement>(".shell-ball-attachment-tray__item") ?? []),
       ...Array.from(rootRef.current?.querySelectorAll<HTMLElement>(".shell-ball-attachment-tray__remove") ?? []),

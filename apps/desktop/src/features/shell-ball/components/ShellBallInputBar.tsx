@@ -54,7 +54,7 @@ export function ShellBallInputBar({
   onCompositionStateChange = () => {},
   onTransientInputActivity = () => {},
 }: ShellBallInputBarProps) {
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const compositionActiveRef = useRef(false);
   const appliedFocusTokenRef = useRef(0);
   const [focusWithin, setFocusWithin] = useState(false);
@@ -103,7 +103,7 @@ export function ShellBallInputBar({
     }
   }, [focusToken, isInteractive, onFocusChange]);
 
-  function handleChange(event: ChangeEvent<HTMLInputElement>) {
+  function handleChange(event: ChangeEvent<HTMLTextAreaElement>) {
     if (!isInteractive) {
       return;
     }
@@ -111,7 +111,7 @@ export function ShellBallInputBar({
     onValueChange(event.target.value);
   }
 
-  function handleKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+  function handleKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (!event.ctrlKey && !event.metaKey && !event.altKey && (event.key.length === 1 || event.key === "Enter")) {
       onTransientInputActivity();
     }
@@ -124,13 +124,13 @@ export function ShellBallInputBar({
     onSubmit();
   }
 
-  function handleCompositionStart(_event: CompositionEvent<HTMLInputElement>) {
+  function handleCompositionStart(_event: CompositionEvent<HTMLTextAreaElement>) {
     compositionActiveRef.current = true;
     onTransientInputActivity();
     onCompositionStateChange(true);
   }
 
-  function handleCompositionEnd(_event: CompositionEvent<HTMLInputElement>) {
+  function handleCompositionEnd(_event: CompositionEvent<HTMLTextAreaElement>) {
     compositionActiveRef.current = false;
     onCompositionStateChange(false);
   }
@@ -167,11 +167,10 @@ export function ShellBallInputBar({
       <div className="shell-ball-uiverse-inputbox">
         <div aria-hidden="true" className="shell-ball-uiverse-fill" />
         <div className="shell-ball-uiverse-content">
-          <input
+          <textarea
             ref={inputRef}
             data-shell-ball-interactive="true"
             required
-            type="text"
             value={value}
             onChange={handleChange}
             onCompositionStart={handleCompositionStart}
@@ -193,6 +192,7 @@ export function ShellBallInputBar({
             tabIndex={isInteractive ? 0 : -1}
             aria-label="Shell-ball input"
             placeholder=""
+            rows={1}
           />
           <span aria-hidden="true" className="shell-ball-uiverse-placeholder">
             {visiblePlaceholder}
@@ -355,7 +355,7 @@ const StyledInputBar = styled.div`
     z-index: 1;
   }
 
-  .shell-ball-uiverse-content input {
+  .shell-ball-uiverse-content textarea {
     background: transparent;
     border: 0;
     box-shadow: none;
@@ -367,7 +367,10 @@ const StyledInputBar = styled.div`
     line-height: 1.45;
     min-height: var(--shell-ball-input-height);
     outline: none;
+    overflow-y: auto;
     padding: 13px 76px 13px 16px;
+    resize: none;
+    scrollbar-width: none;
     transition:
       color 160ms ease,
       opacity 160ms ease;
@@ -375,8 +378,12 @@ const StyledInputBar = styled.div`
     z-index: 1;
   }
 
-  .shell-ball-uiverse-content input::placeholder {
+  .shell-ball-uiverse-content textarea::placeholder {
     color: transparent;
+  }
+
+  .shell-ball-uiverse-content textarea::-webkit-scrollbar {
+    display: none;
   }
 
   .shell-ball-uiverse-placeholder {
@@ -427,7 +434,7 @@ const StyledInputBar = styled.div`
       0 0 0 1px rgba(255, 255, 255, 0.72) inset;
   }
 
-  &[data-collapsed="true"] .shell-ball-uiverse-content input {
+  &[data-collapsed="true"] .shell-ball-uiverse-content textarea {
     color: transparent;
     min-height: ${SHELL_BALL_INPUT_COLLAPSED_HEIGHT_PX}px;
     padding-bottom: 2px;
@@ -568,8 +575,8 @@ const StyledInputBar = styled.div`
     transition-delay: 0ms;
   }
 
-  &:focus-within .shell-ball-uiverse-content input,
-  &[data-settled="true"] .shell-ball-uiverse-content input {
+  &:focus-within .shell-ball-uiverse-content textarea,
+  &[data-settled="true"] .shell-ball-uiverse-content textarea {
     color: var(--shell-ball-input-ink);
     padding-right: 76px;
   }

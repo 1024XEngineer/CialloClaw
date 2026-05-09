@@ -4606,7 +4606,7 @@ test("shell-ball input bar removes keyboard focus stops outside interactive mode
   assert.match(voiceMarkup, /tabindex="-1"/i);
 });
 
-test("shell-ball input bar renders the single-line floating input shell", () => {
+test("shell-ball input bar renders the floating textarea shell", () => {
   const interactiveMarkup = renderToStaticMarkup(
     createElement(ShellBallInputBar, {
       mode: "interactive",
@@ -4621,7 +4621,7 @@ test("shell-ball input bar renders the single-line floating input shell", () => 
   const inputBarSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallInputBar.tsx"), "utf8");
   const shellBallStyles = readFileSync(resolve(desktopRoot, "src/features/shell-ball/shellBall.css"), "utf8");
 
-  assert.match(interactiveMarkup, /<input/);
+  assert.match(interactiveMarkup, /<textarea/);
   assert.match(interactiveMarkup, /shell-ball-uiverse-placeholder/);
   assert.match(inputBarSource, /if \(event\.key !== "Enter" \|\| event\.shiftKey \|\| submitDisabled\) \{/);
   assert.match(inputBarSource, /function restoreInputFocus\(\) \{/);
