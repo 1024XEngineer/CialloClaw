@@ -1,4 +1,4 @@
-// 该文件负责模型接入层的结构或实现。
+// Package model coordinates configured provider clients for local-service runs.
 package model
 
 import (
@@ -9,7 +9,8 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 )
 
-// Service 提供当前模块的服务能力。
+// Service keeps the selected provider, model configuration, and provider client
+// behind the backend model boundary.
 type Service struct {
 	provider             string
 	modelID              string
@@ -22,7 +23,7 @@ type Service struct {
 	contextKeepRecent    int
 }
 
-// ErrClientNotConfigured 定义当前模块的基础变量。
+// ErrClientNotConfigured reports that a model service has no provider client.
 var ErrClientNotConfigured = errors.New("model client not configured")
 var ErrToolCallingNotSupported = errors.New("model client does not support tool calling")
 
@@ -32,21 +33,19 @@ const (
 	defaultContextKeepRecent    = 4
 )
 
-// ErrModelProviderRequired 定义当前模块的基础变量。
+// ErrModelProviderRequired reports a missing provider name in model config.
 var ErrModelProviderRequired = errors.New("model provider is required")
 
-// ErrModelProviderUnsupported 定义当前模块的基础变量。
+// ErrModelProviderUnsupported reports a provider name without a registered adapter.
 var ErrModelProviderUnsupported = errors.New("model provider unsupported")
 
-// ErrSecretSourceFailed 定义当前模块的基础变量。
+// ErrSecretSourceFailed wraps failures while resolving provider credentials.
 var ErrSecretSourceFailed = errors.New("model secret source failed")
 
 // ErrSecretNotFound reports that no secret could be resolved for the requested provider.
 var ErrSecretNotFound = errors.New("model secret not found")
 
-// SecretSource 是面向 Stronghold 等机密存储能力的最小接口。
-//
-// 当前阶段只定义边界，不绑定具体实现。
+// SecretSource is the minimal credential-resolution boundary for model providers.
 type SecretSource interface {
 	ResolveModelAPIKey(provider string) (string, error)
 }
@@ -74,14 +73,15 @@ func (s *StaticSecretSource) ResolveModelAPIKey(provider string) (string, error)
 	return s.store.ResolveModelAPIKey(strings.TrimSpace(provider))
 }
 
-// ServiceConfig 描述当前模块配置。
+// ServiceConfig combines provider config, explicit credentials, and optional
+// secret resolution.
 type ServiceConfig struct {
 	ModelConfig  config.ModelConfig
 	APIKey       string
 	SecretSource SecretSource
 }
 
-// NewService 创建并返回Service。
+// NewService returns a model service around the supplied config and optional client.
 func NewService(cfg config.ModelConfig, clients ...Client) *Service {
 	var client Client
 	if len(clients) > 0 {
@@ -101,7 +101,7 @@ func NewService(cfg config.ModelConfig, clients ...Client) *Service {
 	}
 }
 
-// NewServiceFromConfig 创建并返回ServiceFromConfig。
+// NewServiceFromConfig validates config, resolves credentials, and builds a client.
 func NewServiceFromConfig(cfg ServiceConfig) (*Service, error) {
 	if err := ValidateModelConfig(cfg.ModelConfig); err != nil {
 		return nil, err
@@ -115,22 +115,22 @@ func NewServiceFromConfig(cfg ServiceConfig) (*Service, error) {
 	return NewService(cfg.ModelConfig, client), nil
 }
 
-// Descriptor 处理当前模块的相关逻辑。
+// Descriptor returns the provider:model identifier used in diagnostics.
 func (s *Service) Descriptor() string {
 	return s.provider + ":" + s.modelID
 }
 
-// Provider 处理当前模块的相关逻辑。
+// Provider returns the configured provider identifier.
 func (s *Service) Provider() string {
 	return s.provider
 }
 
-// ModelID 处理当前模块的相关逻辑。
+// ModelID returns the configured model identifier.
 func (s *Service) ModelID() string {
 	return s.modelID
 }
 
-// Endpoint 处理当前模块的相关逻辑。
+// Endpoint returns the configured provider endpoint.
 func (s *Service) Endpoint() string {
 	return s.endpoint
 }
@@ -179,7 +179,7 @@ func (s *Service) ToolRetryBudget() int {
 	return 1
 }
 
-// GenerateText 处理当前模块的相关逻辑。
+// GenerateText delegates one generation request to the configured provider client.
 func (s *Service) GenerateText(ctx context.Context, request GenerateTextRequest) (GenerateTextResponse, error) {
 	if s.client == nil {
 		return GenerateTextResponse{}, ErrClientNotConfigured
@@ -208,7 +208,7 @@ func (s *Service) GenerateToolCalls(ctx context.Context, request ToolCallRequest
 	return client.GenerateToolCalls(ctx, request)
 }
 
-// ValidateModelConfig 处理当前模块的相关逻辑。
+// ValidateModelConfig enforces the minimal provider fields required to build a client.
 func ValidateModelConfig(cfg config.ModelConfig) error {
 	provider := strings.TrimSpace(cfg.Provider)
 	endpoint := strings.TrimSpace(cfg.Endpoint)
@@ -220,7 +220,7 @@ func ValidateModelConfig(cfg config.ModelConfig) error {
 	return validateProviderConfig(config.ModelConfig{Provider: provider, Endpoint: endpoint, ModelID: modelID})
 }
 
-// buildClient 处理当前模块的相关逻辑。
+// buildClient resolves credentials and constructs the configured provider client.
 func buildClient(cfg ServiceConfig) (Client, error) {
 	apiKey := strings.TrimSpace(cfg.APIKey)
 	if apiKey == "" && cfg.SecretSource != nil {

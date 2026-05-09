@@ -1,9 +1,10 @@
-// 该文件负责模型接入层的结构或实现。
+// Package model defines provider extension contracts for streaming and tool calls.
 package model
 
 import "context"
 
-// GenerateTextStreamRequest 描述当前模块请求结构。
+// GenerateTextStreamRequest carries one streaming text-generation request.
+// TaskID and RunID keep provider output attributable to one task/run pair.
 type GenerateTextStreamRequest struct {
 	TaskID string
 	RunID  string
@@ -18,26 +19,27 @@ const (
 	StreamEventError StreamEventType = "error"
 )
 
-// GenerateTextStreamEvent 定义当前模块的数据结构。
+// GenerateTextStreamEvent is one provider stream event. DeltaText is only set
+// on delta events; Error is only set on terminal error events.
 type GenerateTextStreamEvent struct {
 	Type      StreamEventType
 	DeltaText string
 	Error     string
 }
 
-// StreamClient 定义当前模块的接口约束。
+// StreamClient is the optional provider boundary for streaming text generation.
 type StreamClient interface {
 	GenerateTextStream(ctx context.Context, request GenerateTextStreamRequest) (<-chan GenerateTextStreamEvent, error)
 }
 
-// ToolDefinition 定义当前模块的数据结构。
+// ToolDefinition describes one model-visible tool contract.
 type ToolDefinition struct {
 	Name        string
 	Description string
 	InputSchema map[string]any
 }
 
-// ToolCallRequest 描述当前模块请求结构。
+// ToolCallRequest asks a provider to choose tools and/or produce text for a run.
 type ToolCallRequest struct {
 	TaskID string
 	RunID  string
@@ -45,7 +47,7 @@ type ToolCallRequest struct {
 	Tools  []ToolDefinition
 }
 
-// ToolCallResult 描述当前模块结果结构。
+// ToolCallResult is the normalized provider output after tool-call planning.
 type ToolCallResult struct {
 	RequestID  string
 	Provider   string
@@ -56,13 +58,13 @@ type ToolCallResult struct {
 	LatencyMS  int64
 }
 
-// ToolInvocation 定义当前模块的数据结构。
+// ToolInvocation captures one provider-selected tool name and argument payload.
 type ToolInvocation struct {
 	Name      string
 	Arguments map[string]any
 }
 
-// ToolCallingClient 定义当前模块的接口约束。
+// ToolCallingClient is implemented by providers that return structured tool calls.
 type ToolCallingClient interface {
 	GenerateToolCalls(ctx context.Context, request ToolCallRequest) (ToolCallResult, error)
 }

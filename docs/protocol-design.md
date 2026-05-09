@@ -329,7 +329,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 ### 5.14 授权决策 / 状态
 
 - `approval_decision`：`allow_once / deny_once`
-- `approval_status`：`pending / approved / denied`
+- `approval_status`：`pending / approved / denied / resolved`
 
 ### 5.15 设置相关
 
@@ -3162,6 +3162,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - 普通审批流返回 `authorization_record`、`task`、`bubble_message`，并可按需附带 `impact_scope`
 - 若当前审批对应的是 `agent.security.restore.apply` 的第二阶段执行，则返回形状切换为 `applied`、`task`、`recovery_point`、`audit_record`、`bubble_message`
 - `agent.security.respond` 不再额外暴露 `delivery_result`；正式交付结果仍以任务运行态、`delivery.ready` 通知和交付相关接口为准
+- `approval_id` 必须匹配该 `task` 当前仍处于活跃态的待授权请求；过期审批或错绑审批不得恢复新的授权周期
 
 ### agent.security.respond 入参说明
 

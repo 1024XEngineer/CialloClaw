@@ -1,4 +1,4 @@
-// 该文件负责记忆层接入与检索后端声明。
+// Package memory owns backend memory summary writes and retrieval queries.
 package memory
 
 import (
@@ -51,7 +51,8 @@ func NewServiceFromStorage(store storagesvc.MemoryStore, backend string) *Servic
 	}
 }
 
-// RetrievalBackend 处理当前模块的相关逻辑。
+// RetrievalBackend returns the configured retrieval backend name, falling back
+// to the local SQLite FTS/vector backend when configuration is empty.
 func (s *Service) RetrievalBackend() string {
 	if strings.TrimSpace(s.backend) == "" {
 		return retrievalBackend
