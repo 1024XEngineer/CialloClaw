@@ -42,7 +42,6 @@ import { requestDashboardTaskDetailOpen } from "@/features/dashboard/shared/dash
 import {
   buildShellBallIntentCorrectionLabel,
   buildShellBallIntentCorrectionPlaceholder,
-  formatShellBallIntentLabel,
 } from "./shellBallIntentCorrection";
 import {
   createDefaultShellBallWindowSnapshot,
@@ -808,7 +807,7 @@ export function createShellBallAgentBubbleItem(
     const intentConfirm = bubbleType === "intent_confirm" && result.task?.intent?.name?.trim()
       ? {
           intentName: result.task.intent.name,
-          intentLabel: formatShellBallIntentLabel(result.task.intent.name),
+          intentLabel: result.task.intent.name,
           status: "idle" as const,
         }
       : undefined;

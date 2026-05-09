@@ -1,29 +1,3 @@
-const SHELL_BALL_INTENT_LABELS: Record<string, string> = {
-  agent_loop: "执行任务",
-  explain: "解释",
-  rewrite: "改写",
-  summarize: "总结",
-  translate: "翻译",
-  write_file: "写文档",
-};
-
-/**
- * Formats a formal intent name into a compact Chinese label for shell-ball.
- *
- * @param intentName Formal intent name returned by the backend task payload.
- * @returns Localized label for the confirmation bubble and correction input.
- */
-export function formatShellBallIntentLabel(intentName: string): string {
-  const normalizedIntentName = intentName.trim().toLowerCase();
-
-  if (normalizedIntentName === "") {
-    return "当前任务";
-  }
-
-  return SHELL_BALL_INTENT_LABELS[normalizedIntentName]
-    ?? normalizedIntentName.replace(/[_-]+/gu, " ");
-}
-
 /**
  * Builds the temporary input label shown while shell-ball borrows the inline
  * composer for natural-language intent correction.
