@@ -20,6 +20,7 @@ type Server struct {
 	namedPipeName            string
 	debugHTTPServer          *http.Server
 	handlers                 map[string]methodHandler
+	methodSpecs              map[string]methodSpec
 	orchestrator             *orchestrator.Service
 	serveNamedPipe           func(ctx context.Context, pipeName string, handler func(net.Conn)) error
 	now                      func() time.Time
