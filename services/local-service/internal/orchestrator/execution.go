@@ -312,6 +312,7 @@ func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, sn
 			"trace":           cloneMap(budgetDecision.Trace),
 		},
 	})
+	executionResult = s.normalizeExecutionFormalDeliveryResult(processingTask.TaskID, deliveryType, resultTitle, executionResult)
 	processingTask = s.recordExecutionToolCalls(processingTask, executionResult.ToolCalls)
 	s.persistExecutionToolCallEvents(processingTask, taskIntent, executionResult.ToolCalls)
 	auditDeliveryResult := executionResult.DeliveryResult
@@ -360,6 +361,26 @@ func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, sn
 	updatedTask = s.attachFormalCitations(processingTask, updatedTask, executionResult.ToolCalls, executionResult.ToolOutput, executionResult.DeliveryResult, executionArtifacts)
 	s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshot, taskIntent, executionResult.DeliveryResult, executionArtifacts)
 	return updatedTask, resultBubble, executionResult.DeliveryResult, executionArtifacts, nil
+}
+
+// normalizeExecutionFormalDeliveryResult keeps result-page delivery semantics at
+// the orchestrator boundary even when legacy direct-tool execution helpers still
+// emit bubble-shaped delivery results.
+func (s *Service) normalizeExecutionFormalDeliveryResult(taskID, deliveryType, resultTitle string, result execution.Result) execution.Result {
+	if strings.TrimSpace(deliveryType) != "result_page" {
+		return result
+	}
+	if stringValue(result.DeliveryResult, "type", "") == "result_page" {
+		return result
+	}
+	result.DeliveryResult = s.delivery.BuildDeliveryResultWithTargetPath(
+		taskID,
+		deliveryType,
+		resultTitle,
+		previewTextForDeliveryType(deliveryType),
+		"",
+	)
+	return result
 }
 
 // shouldBoundTaskExecution limits the outer orchestrator timeout to synchronous
