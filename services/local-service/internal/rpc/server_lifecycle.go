@@ -3,29 +3,17 @@ package rpc
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"net/http"
 	"sync"
 	"time"
 )
 
-const defaultTransportShutdownTimeout = 5 * time.Second
-
-var errTransportShutdownIncomplete = errors.New("rpc transport shutdown incomplete")
-var errServerAlreadyRunning = errors.New("rpc server already running")
-
 // Start serves configured transports until one fails or ctx is canceled.
-// Shutdown always runs before Start returns; if a transport misses the shutdown
-// window, the server is fenced into a terminal state instead of being reusable.
+// Shutdown always runs before Start returns, and the supervisor waits for
+// transport goroutines so callers do not inherit a partially stopped server.
 func (s *Server) Start(ctx context.Context) error {
-	runCtx, err := s.beginServeRun(ctx)
-	if err != nil {
-		return err
-	}
-
-	supervisor := newTransportSupervisor(runCtx, 2)
-	defer s.clearServeRun()
+	supervisor := newTransportSupervisor(ctx, 2)
 
 	if s.debugHTTPServer != nil {
 		supervisor.Go(func(context.Context) error {
@@ -39,7 +27,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	if s.transport == "named_pipe" {
 		supervisor.Go(func(ctx context.Context) error {
-			err := s.serveNamedPipeWithShutdown(ctx)
+			err := serveNamedPipe(ctx, s.namedPipeName, s.handleStreamConn)
 			if errors.Is(err, errNamedPipeUnsupported) || ctx.Err() != nil {
 				return nil
 			}
@@ -47,53 +35,47 @@ func (s *Server) Start(ctx context.Context) error {
 		})
 	}
 
-	if err := supervisor.Wait(s.shutdownTimeout(), s.Shutdown); err != nil {
-		if isTransportShutdownIncomplete(err) {
-			return s.markTransportTerminal(err)
-		}
-		return err
-	}
-	return nil
+	return supervisor.Wait(func() error {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		return s.Shutdown(shutdownCtx)
+	})
 }
 
 // Shutdown gracefully closes the debug HTTP server and terminates active stream
-// handlers. Any incomplete stop fences this Server instance from future reuse.
+// handlers so Start does not hand a half-stopped transport back to callers.
 func (s *Server) Shutdown(ctx context.Context) error {
 	var shutdownErr error
 
-	runCancel, namedPipeCancel, conns := s.beginTransportShutdown()
-	if runCancel != nil {
-		runCancel()
+	if s.debugHTTPServer == nil {
+	} else if err := s.debugHTTPServer.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		shutdownErr = err
 	}
-	if namedPipeCancel != nil {
-		namedPipeCancel()
-	}
+
+	conns := s.beginStreamShutdown()
 	for _, conn := range conns {
 		_ = conn.Close()
 	}
 
-	if s.debugHTTPServer != nil {
-		if err := s.debugHTTPServer.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			shutdownErr = err
-		}
-	}
+	done := make(chan struct{})
+	go func() {
+		s.streamWG.Wait()
+		close(done)
+	}()
 
-	if err := waitWithContext(ctx, s.streamWG.Wait); err != nil {
+	select {
+	case <-done:
+		return shutdownErr
+	case <-ctx.Done():
 		if shutdownErr != nil {
-			return s.markTransportTerminal(shutdownErr)
+			return shutdownErr
 		}
-		return s.markTransportTerminal(err)
+		return ctx.Err()
 	}
-
-	if shutdownErr != nil {
-		return s.markTransportTerminal(shutdownErr)
-	}
-	s.finishTransportShutdown()
-	return nil
 }
 
-// transportSupervisor owns the per-Start run context and coordinates transport
-// cancellation, graceful shutdown, and bounded worker joins.
+// transportSupervisor owns the per-Start run context and joins all transport
+// workers before the caller regains control.
 type transportSupervisor struct {
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -126,10 +108,9 @@ func (s *transportSupervisor) Go(run func(context.Context) error) {
 	}()
 }
 
-// Wait returns the first transport error after canceling sibling transports and
-// running shutdown. A worker that misses the bounded shutdown window returns the
-// context error so callers can fence the owning server before reuse.
-func (s *transportSupervisor) Wait(timeout time.Duration, shutdown func(context.Context) error) error {
+// Wait returns the first transport error after canceling sibling transports,
+// running shutdown, and joining every started transport goroutine.
+func (s *transportSupervisor) Wait(shutdown func() error) error {
 	var transportErr error
 	select {
 	case transportErr = <-s.errCh:
@@ -137,140 +118,29 @@ func (s *transportSupervisor) Wait(timeout time.Duration, shutdown func(context.
 	}
 
 	s.cancel()
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-	shutdownErr := shutdown(shutdownCtx)
-	waitErr := waitWithContext(shutdownCtx, s.wg.Wait)
+	shutdownErr := shutdown()
 
-	if waitErr != nil {
-		return waitErr
-	}
-	if shutdownErr != nil {
-		return shutdownErr
-	}
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+	<-done
+
 	if transportErr != nil {
 		return transportErr
 	}
-	return nil
+	return shutdownErr
 }
 
-func (s *Server) beginServeRun(parent context.Context) (context.Context, error) {
-	runCtx, runCancel := context.WithCancel(parent)
-
-	s.streamMu.Lock()
-	defer s.streamMu.Unlock()
-
-	if s.terminalErr != nil {
-		runCancel()
-		return nil, s.terminalErr
-	}
-	// The serve-run cancel handles are instance-scoped, so a second Start must
-	// fail fast instead of replacing the active run's shutdown ownership.
-	if s.serveRunning || s.shuttingDown {
-		runCancel()
-		return nil, errServerAlreadyRunning
-	}
-
-	s.serveRunning = true
-	s.runCancel = runCancel
-	s.namedPipeCancel = nil
-	s.shuttingDown = false
-	return runCtx, nil
-}
-
-func (s *Server) clearServeRun() {
-	s.streamMu.Lock()
-	s.serveRunning = false
-	s.runCancel = nil
-	s.namedPipeCancel = nil
-	if s.terminalErr == nil {
-		s.shuttingDown = false
-	}
-	s.streamMu.Unlock()
-}
-
-func (s *Server) serveNamedPipeWithShutdown(parent context.Context) error {
-	listenerCtx, listenerCancel := context.WithCancel(parent)
-
-	s.streamMu.Lock()
-	s.namedPipeCancel = listenerCancel
-	s.streamMu.Unlock()
-
-	defer func() {
-		s.streamMu.Lock()
-		s.namedPipeCancel = nil
-		s.streamMu.Unlock()
-	}()
-
-	return s.serveNamedPipe(listenerCtx, s.namedPipeName, s.handleStreamConn)
-}
-
-func (s *Server) beginTransportShutdown() (context.CancelFunc, context.CancelFunc, []net.Conn) {
+func (s *Server) beginStreamShutdown() []net.Conn {
 	s.streamMu.Lock()
 	defer s.streamMu.Unlock()
 
 	s.shuttingDown = true
-	runCancel := s.runCancel
-	namedPipeCancel := s.namedPipeCancel
-	s.runCancel = nil
-	s.namedPipeCancel = nil
 	conns := make([]net.Conn, 0, len(s.streamConns))
 	for conn := range s.streamConns {
 		conns = append(conns, conn)
 	}
-	return runCancel, namedPipeCancel, conns
-}
-
-func (s *Server) finishTransportShutdown() {
-	s.streamMu.Lock()
-	defer s.streamMu.Unlock()
-	if s.terminalErr == nil {
-		s.shuttingDown = false
-	}
-}
-
-func (s *Server) shutdownTimeout() time.Duration {
-	if s.transportShutdownTimeout > 0 {
-		return s.transportShutdownTimeout
-	}
-	return defaultTransportShutdownTimeout
-}
-
-func (s *Server) markTransportTerminal(cause error) error {
-	if cause == nil {
-		return nil
-	}
-
-	terminalErr := cause
-	if !errors.Is(cause, errTransportShutdownIncomplete) {
-		terminalErr = fmt.Errorf("%w: %w", errTransportShutdownIncomplete, cause)
-	}
-
-	s.streamMu.Lock()
-	defer s.streamMu.Unlock()
-	if s.terminalErr == nil {
-		s.terminalErr = terminalErr
-	}
-	return s.terminalErr
-}
-
-func isTransportShutdownIncomplete(err error) bool {
-	return errors.Is(err, errTransportShutdownIncomplete) ||
-		errors.Is(err, context.Canceled) ||
-		errors.Is(err, context.DeadlineExceeded)
-}
-
-func waitWithContext(ctx context.Context, wait func()) error {
-	done := make(chan struct{})
-	go func() {
-		wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
+	return conns
 }
