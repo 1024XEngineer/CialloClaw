@@ -1640,7 +1640,7 @@ func TestExecutePromptPathIncludesQueuedSteeringMessages(t *testing.T) {
 	if result.Content != "Prompt runtime finished with steering." {
 		t.Fatalf("unexpected prompt result: %+v", result)
 	}
-	if !strings.Contains(modelClient.input, "Focus on the network impact.") || !strings.Contains(modelClient.input, "Follow-up steering:") {
+	if !strings.Contains(modelClient.input, "Focus on the network impact.") || !strings.Contains(modelClient.input, "补充要求：") {
 		t.Fatalf("expected prompt input to include queued steering, got %q", modelClient.input)
 	}
 }
@@ -3896,6 +3896,18 @@ func TestToolBubbleTextAndGovernanceHelpersSupportNewWorkerFlows(t *testing.T) {
 	if !strings.Contains(searchBubble, "关键词") {
 		t.Fatalf("expected search bubble text, got %s", searchBubble)
 	}
+	attachBubble := toolBubbleText("browser_attach_current", &tools.ToolExecutionResult{SummaryOutput: map[string]any{"title": "Docs"}})
+	if !strings.Contains(attachBubble, "Docs") {
+		t.Fatalf("expected browser attach bubble text, got %s", attachBubble)
+	}
+	focusBubble := toolBubbleText("browser_tab_focus", &tools.ToolExecutionResult{SummaryOutput: map[string]any{"title": "Release Notes"}})
+	if !strings.Contains(focusBubble, "切换") || !strings.Contains(focusBubble, "Release Notes") {
+		t.Fatalf("expected browser tab focus bubble text, got %s", focusBubble)
+	}
+	tabsBubble := toolBubbleText("browser_tabs_list", &tools.ToolExecutionResult{SummaryOutput: map[string]any{"tab_count": 2}})
+	if !strings.Contains(tabsBubble, "2") {
+		t.Fatalf("expected browser tabs bubble text, got %s", tabsBubble)
+	}
 	if governanceTargetObject("page_interact", map[string]any{"url": "https://example.com"}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "https://example.com" {
 		t.Fatalf("expected page_interact governance target url")
 	}
@@ -4292,9 +4304,6 @@ func TestExecutionHelperBranchesAndConfigurationAccessors(t *testing.T) {
 	}
 	if agentloopAppendSteeringInput("base", []string{" ", "first", "second"}) == "base" || !isAgentLoopIntent(map[string]any{"name": defaultAgentLoopIntentName}) {
 		t.Fatal("expected steering and intent helpers to cover follow-up guidance branches")
-	}
-	if !strings.Contains(appendPromptSteeringInput("base", []string{"follow up"}), "Follow-up steering:") {
-		t.Fatal("expected prompt steering helper to preserve the follow-up steering label")
 	}
 	definitions := configuredService.agentLoopToolDefinitions()
 	if len(definitions) == 0 {

@@ -1879,6 +1879,32 @@ func toolBubbleText(toolName string, result *tools.ToolExecutionResult) string {
 			return fmt.Sprintf("页面搜索完成，关键词 %q 共匹配 %v 处。", query, count)
 		}
 	}
+	if toolName == "browser_attach_current" {
+		title := stringValue(result.SummaryOutput, "title", "")
+		if title == "" {
+			title = stringValue(result.RawOutput, "title", "")
+		}
+		if title != "" {
+			return fmt.Sprintf("已定位浏览器标签页：%s。", title)
+		}
+		return "已定位当前浏览器标签页。"
+	}
+	if toolName == "browser_tab_focus" {
+		title := stringValue(result.SummaryOutput, "title", "")
+		if title == "" {
+			title = stringValue(result.RawOutput, "title", "")
+		}
+		if title != "" {
+			return fmt.Sprintf("已切换到浏览器标签页：%s。", title)
+		}
+		return "目标浏览器标签页已经切换完成。"
+	}
+	if toolName == "browser_tabs_list" {
+		if count, ok := result.SummaryOutput["tab_count"]; ok {
+			return fmt.Sprintf("当前浏览器共有 %v 个标签页可用。", count)
+		}
+		return "当前浏览器标签页列表已经返回。"
+	}
 	if count, ok := result.SummaryOutput["entry_count"]; ok {
 		return fmt.Sprintf("%s 执行完成，当前目录条目数：%v。", toolName, count)
 	}
@@ -2038,7 +2064,7 @@ func (s *Service) generateOutput(ctx context.Context, request Request, inputText
 		// Prompt-only execution does not have a live loop poller, so queued
 		// steering must be folded into this generation request before the task
 		// resumes from authorization or a session queue.
-		promptInputText = appendPromptSteeringInput(inputText, request.SteeringMessages)
+		promptInputText = agentloopAppendSteeringInput(inputText, request.SteeringMessages)
 	}
 	trace, err := s.generateOutputWithPrompt(ctx, request, promptInputText)
 	if err != nil {
@@ -2743,24 +2769,6 @@ func (noopAgentLoopHook) BeforeTool(_ context.Context, _ agentloop.PersistedRoun
 
 func (noopAgentLoopHook) AfterTool(_ context.Context, _ agentloop.PersistedRound, _ tools.ToolCallRecord, _ string) error {
 	return nil
-}
-
-func appendPromptSteeringInput(inputText string, steeringMessages []string) string {
-	if len(steeringMessages) == 0 {
-		return inputText
-	}
-	steeringLines := make([]string, 0, len(steeringMessages))
-	for _, item := range steeringMessages {
-		trimmed := strings.TrimSpace(item)
-		if trimmed == "" {
-			continue
-		}
-		steeringLines = append(steeringLines, "- "+trimmed)
-	}
-	if len(steeringLines) == 0 {
-		return inputText
-	}
-	return strings.TrimSpace(inputText) + "\n\nFollow-up steering:\n" + strings.Join(steeringLines, "\n")
 }
 
 func agentloopAppendSteeringInput(inputText string, steeringMessages []string) string {

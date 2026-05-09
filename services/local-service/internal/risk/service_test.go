@@ -146,6 +146,47 @@ func TestServiceAssess(t *testing.T) {
 			want: AssessmentResult{RiskLevel: RiskLevelYellow, ApprovalRequired: true, Reason: ReasonWebpageApproval, ImpactScope: ImpactScope{Webpages: []string{"Example Docs"}}},
 		},
 		{
+			name: "browser_snapshot_is_low_risk_observation",
+			input: AssessmentInput{
+				OperationName:       "browser_snapshot",
+				TargetObject:        "https://example.com/demo",
+				CapabilityAvailable: true,
+				ImpactScope: ImpactScope{
+					Webpages: []string{"https://example.com/demo"},
+					Apps:     []string{"chrome"},
+				},
+			},
+			want: AssessmentResult{
+				RiskLevel: RiskLevelGreen,
+				Reason:    ReasonNormal,
+				ImpactScope: ImpactScope{
+					Webpages: []string{"https://example.com/demo"},
+					Apps:     []string{"chrome"},
+				},
+			},
+		},
+		{
+			name: "browser_navigate_requires_approval",
+			input: AssessmentInput{
+				OperationName:       "browser_navigate",
+				TargetObject:        "https://example.com/next",
+				CapabilityAvailable: true,
+				ImpactScope: ImpactScope{
+					Webpages: []string{"https://example.com/next"},
+					Apps:     []string{"edge"},
+				},
+			},
+			want: AssessmentResult{
+				RiskLevel:        RiskLevelYellow,
+				ApprovalRequired: true,
+				Reason:           ReasonWebpageApproval,
+				ImpactScope: ImpactScope{
+					Webpages: []string{"https://example.com/next"},
+					Apps:     []string{"edge"},
+				},
+			},
+		},
+		{
 			name: "write_file_unknown_workspace_requires_approval",
 			input: AssessmentInput{
 				OperationName:       "write_file",
