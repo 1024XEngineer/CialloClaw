@@ -13,6 +13,7 @@ import { DashboardEntranceOrb } from "@/features/dashboard/home/components/Dashb
 import { DashboardEventOrb } from "@/features/dashboard/home/components/DashboardEventOrb";
 import { DashboardEventPanel } from "@/features/dashboard/home/components/DashboardEventPanel";
 import { DashboardOrbitRings } from "@/features/dashboard/home/components/DashboardOrbitRings";
+import { useDashboardEscapeHandler } from "@/features/dashboard/shared/dashboardEscapeCoordinator";
 import { resolveDashboardModuleRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { buildDesktopOnboardingPresentation } from "@/features/onboarding/onboardingGeometry";
 import { setDesktopOnboardingPresentation } from "@/features/onboarding/onboardingService";
@@ -126,23 +127,11 @@ export function DashboardHome({
     };
   }, [data.summonTemplates.length, scheduleSummon]);
 
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      const tag = target?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA") {
-        return;
-      }
-
-      if (event.key === "Escape" && activeStateKey) {
-        event.preventDefault();
-        setActiveStateKey(null);
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [activeStateKey]);
+  useDashboardEscapeHandler({
+    enabled: activeStateKey !== null,
+    handleEscape: () => setActiveStateKey(null),
+    priority: 200,
+  });
 
   const centerVisualState = voiceOpen ? "voice_locked" : getCenterState(activeStateKey);
   const pageStyle = {
