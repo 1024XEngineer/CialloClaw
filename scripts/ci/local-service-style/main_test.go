@@ -185,8 +185,9 @@ func TestFindFileSizeViolationsRejectsLargeImplementationFiles(t *testing.T) {
 	}
 
 	violations, err := findFileSizeViolations(root, []diffChunk{{
-		diff:     diffForFiles(path, "services/local-service/internal/demo/large_test.go"),
-		readFile: workingTreeFileReader,
+		diff:         diffForFiles(path, "services/local-service/internal/demo/large_test.go"),
+		readFile:     workingTreeFileReader,
+		previousFile: staticFileReader(path, []byte("package demo\n")),
 	}})
 	if err != nil {
 		t.Fatalf("findFileSizeViolations returned error: %v", err)
@@ -205,8 +206,9 @@ func TestFindFileSizeViolationsReadsDiffSnapshot(t *testing.T) {
 	stagedSource := []byte(strings.Repeat("package_line\n", maxGoFileLines+1))
 
 	violations, err := findFileSizeViolations(root, []diffChunk{{
-		diff:     diffForFiles(path),
-		readFile: staticFileReader(path, stagedSource),
+		diff:         diffForFiles(path),
+		readFile:     staticFileReader(path, stagedSource),
+		previousFile: staticFileReader(path, []byte("package demo\n")),
 	}})
 	if err != nil {
 		t.Fatalf("findFileSizeViolations returned error: %v", err)
@@ -216,6 +218,46 @@ func TestFindFileSizeViolationsReadsDiffSnapshot(t *testing.T) {
 	}
 	if violations[0].file != path {
 		t.Fatalf("unexpected violation file: %#v", violations[0])
+	}
+}
+
+func TestFindFileSizeViolationsAllowsPreexistingOversizeFilesWithoutGrowth(t *testing.T) {
+	const path = "services/local-service/internal/demo/large.go"
+	root := writeTestFile(t, "package demo\n")
+	source := []byte(strings.Repeat("package_line\n", maxGoFileLines+1))
+
+	violations, err := findFileSizeViolations(root, []diffChunk{{
+		diff:         diffForFiles(path),
+		readFile:     staticFileReader(path, source),
+		previousFile: staticFileReader(path, source),
+	}})
+	if err != nil {
+		t.Fatalf("findFileSizeViolations returned error: %v", err)
+	}
+	if len(violations) != 0 {
+		t.Fatalf("expected no violation for unchanged oversize file, got %#v", violations)
+	}
+}
+
+func TestFindFileSizeViolationsRejectsOversizeGrowth(t *testing.T) {
+	const path = "services/local-service/internal/demo/large.go"
+	root := writeTestFile(t, "package demo\n")
+	before := []byte(strings.Repeat("package_line\n", maxGoFileLines+1))
+	after := []byte(strings.Repeat("package_line\n", maxGoFileLines+2))
+
+	violations, err := findFileSizeViolations(root, []diffChunk{{
+		diff:         diffForFiles(path),
+		readFile:     staticFileReader(path, after),
+		previousFile: staticFileReader(path, before),
+	}})
+	if err != nil {
+		t.Fatalf("findFileSizeViolations returned error: %v", err)
+	}
+	if len(violations) != 1 {
+		t.Fatalf("expected one violation for oversize growth, got %d: %#v", len(violations), violations)
+	}
+	if violations[0].lines != maxGoFileLines+2 {
+		t.Fatalf("expected grown line count, got %#v", violations[0])
 	}
 }
 

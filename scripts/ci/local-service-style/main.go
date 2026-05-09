@@ -45,8 +45,9 @@ type fileSizeViolation struct {
 }
 
 type diffChunk struct {
-	diff     string
-	readFile fileReader
+	diff         string
+	readFile     fileReader
+	previousFile fileReader
 }
 
 type fileReader func(root, relativePath string) ([]byte, error)
@@ -210,10 +211,15 @@ func collectChangedGoFiles(diff string) []string {
 
 func collectDiffChunks(root, baseRef string) ([]diffChunk, error) {
 	if baseRef != "" && !isZeroRevision(baseRef) {
+		baseRevision, err := resolveBaseRevision(root, baseRef)
+		if err != nil {
+			return nil, err
+		}
 		if diff, err := gitDiff(root, baseRef+"...HEAD"); err == nil {
 			return []diffChunk{{
-				diff:     diff,
-				readFile: gitRevisionFileReader("HEAD:", "HEAD"),
+				diff:         diff,
+				readFile:     gitRevisionFileReader("HEAD:", "HEAD"),
+				previousFile: gitRevisionFileReader(baseRevision+":", baseRevision),
 			}}, nil
 		}
 		diff, err := gitDiff(root, baseRef, "HEAD")
@@ -221,23 +227,27 @@ func collectDiffChunks(root, baseRef string) ([]diffChunk, error) {
 			return nil, err
 		}
 		return []diffChunk{{
-			diff:     diff,
-			readFile: gitRevisionFileReader("HEAD:", "HEAD"),
+			diff:         diff,
+			readFile:     gitRevisionFileReader("HEAD:", "HEAD"),
+			previousFile: gitRevisionFileReader(baseRef+":", baseRef),
 		}}, nil
 	}
 
 	type localDiffConfig struct {
 		args     []string
 		readFile fileReader
+		previous fileReader
 	}
 	configs := []localDiffConfig{
 		{
 			args:     []string{"diff", "--cached", "--unified=0", "--", localServicePath},
 			readFile: gitRevisionFileReader(":", "index"),
+			previous: gitRevisionFileReader("HEAD:", "HEAD"),
 		},
 		{
 			args:     []string{"diff", "--unified=0", "--", localServicePath},
 			readFile: workingTreeFileReader,
+			previous: gitRevisionFileReader(":", "index"),
 		},
 	}
 
@@ -248,11 +258,20 @@ func collectDiffChunks(root, baseRef string) ([]diffChunk, error) {
 			return nil, fmt.Errorf("collect local diff: %w\n%s", err, strings.TrimSpace(output))
 		}
 		chunks = append(chunks, diffChunk{
-			diff:     output,
-			readFile: config.readFile,
+			diff:         output,
+			readFile:     config.readFile,
+			previousFile: config.previous,
 		})
 	}
 	return chunks, nil
+}
+
+func resolveBaseRevision(root, baseRef string) (string, error) {
+	output, err := commandOutput(root, "git", "merge-base", baseRef, "HEAD")
+	if err != nil {
+		return "", fmt.Errorf("resolve merge-base for %s: %w\n%s", baseRef, err, strings.TrimSpace(output))
+	}
+	return strings.TrimSpace(output), nil
 }
 
 func collectNameOnlyDiff(root, baseRef string, paths ...string) (string, error) {
@@ -368,6 +387,13 @@ func findFileSizeViolations(root string, diffChunks []diffChunk) ([]fileSizeViol
 			if lineCount <= maxGoFileLines {
 				continue
 			}
+			previousLineCount, err := countPreviousLines(root, file, chunk.previousFile)
+			if err != nil {
+				return nil, err
+			}
+			if previousLineCount >= lineCount {
+				continue
+			}
 			violation := fileSizeViolation{
 				file:     file,
 				lines:    lineCount,
@@ -390,6 +416,21 @@ func findFileSizeViolations(root string, diffChunks []diffChunk) ([]fileSizeViol
 		violations = append(violations, violationsByFile[file])
 	}
 	return violations, nil
+}
+
+func countPreviousLines(root, file string, readFile fileReader) (int, error) {
+	if readFile == nil {
+		return 0, nil
+	}
+
+	source, err := readFile(root, file)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("read %s for previous size check: %w", file, err)
+	}
+	return countLines(source), nil
 }
 
 func shouldCheckGoFileSize(file string) bool {
@@ -512,10 +553,18 @@ func gitRevisionFileReader(prefix, label string) fileReader {
 	return func(root, relativePath string) ([]byte, error) {
 		output, err := commandOutput(root, "git", "show", prefix+relativePath)
 		if err != nil {
+			if isMissingGitRevisionPath(output) {
+				return nil, os.ErrNotExist
+			}
 			return nil, fmt.Errorf("read %s from %s for comment scan: %w\n%s", relativePath, label, err, strings.TrimSpace(output))
 		}
 		return []byte(output), nil
 	}
+}
+
+func isMissingGitRevisionPath(output string) bool {
+	return strings.Contains(output, "does not exist in") ||
+		strings.Contains(output, "exists on disk, but not in")
 }
 
 func filterReportedPaths(output string, expected []string) []string {
