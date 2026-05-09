@@ -82,11 +82,49 @@ func (s *Service) DeliveryOpen(params map[string]any) (map[string]any, error) {
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
+	deliveryResult := s.resolveFormalTaskDeliveryResult(task)
+	return buildDeliveryOpenResult(nil, deliveryResult, taskID), nil
+}
+
+// resolveFormalTaskDeliveryResult restores the best task-scoped formal delivery
+// result across first-class rows, runtime compatibility snapshots, and the
+// narrow result_page fallback needed while legacy completed tasks are still
+// being backfilled into the dedicated delivery_result store.
+func (s *Service) resolveFormalTaskDeliveryResult(task runengine.TaskRecord) map[string]any {
 	deliveryResult := s.latestAttemptDeliveryResultFromStorage(task)
 	if len(deliveryResult) == 0 {
 		deliveryResult = cloneMap(task.DeliveryResult)
 	}
-	return buildDeliveryOpenResult(nil, deliveryResult, taskID), nil
+	if len(deliveryResult) == 0 {
+		deliveryResult = synthesizeSparseResultPageDeliveryResult(task)
+	}
+	return deliveryResult
+}
+
+func synthesizeSparseResultPageDeliveryResult(task runengine.TaskRecord) map[string]any {
+	if normalizeDeliveryType(task.PreferredDelivery) != "result_page" {
+		return nil
+	}
+	if task.Status != "completed" {
+		return nil
+	}
+	title, _, _ := resultSpecFromIntent(task.Intent)
+	if strings.TrimSpace(title) == "" {
+		title = strings.TrimSpace(task.Title)
+	}
+	if strings.TrimSpace(title) == "" {
+		title = "任务交付结果"
+	}
+	return map[string]any{
+		"type":         "result_page",
+		"title":        title,
+		"preview_text": previewTextForDeliveryType("result_page"),
+		"payload": map[string]any{
+			"path":    nil,
+			"task_id": task.TaskID,
+			"url":     delivery.ResolveResultPageURL(task.TaskID),
+		},
+	}
 }
 
 func inferArtifactDeliveryType(artifact map[string]any) string {

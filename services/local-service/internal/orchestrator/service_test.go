@@ -12682,6 +12682,65 @@ func TestServiceDeliveryOpenPrefersStoredDeliveryResultOverRuntimeCompatibility(
 	}
 }
 
+func TestServiceResultPageFallbackWithoutFormalDeliveryRowKeepsOpenAndDetailStable(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "result_page fallback without formal row")
+	if service.storage == nil || service.storage.TaskStore() == nil {
+		t.Fatal("expected structured task storage to be wired")
+	}
+	taskID := "task_result_page_sparse"
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_result_page_sparse",
+		RunID:               "run_result_page_sparse",
+		PrimaryRunID:        "run_result_page_sparse",
+		Title:               "read docs task",
+		SourceType:          "floating_ball",
+		Status:              "completed",
+		IntentName:          "page_read",
+		IntentArgumentsJSON: `{"url":"https://example.com/docs"}`,
+		PreferredDelivery:   "result_page",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "green",
+		RequestSource:       "floating_ball",
+		RequestTrigger:      "hover_text_input",
+		StartedAt:           "2026-04-15T14:00:00Z",
+		UpdatedAt:           "2026-04-15T14:05:00Z",
+		FinishedAt:          "2026-04-15T14:05:00Z",
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	detailDeliveryResult, ok := detailResult["delivery_result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected task detail to synthesize result_page delivery result, got %+v", detailResult["delivery_result"])
+	}
+	if detailDeliveryResult["type"] != "result_page" || detailDeliveryResult["title"] != "网页读取结果" {
+		t.Fatalf("unexpected synthesized detail delivery result, got %+v", detailDeliveryResult)
+	}
+	detailPayload := detailDeliveryResult["payload"].(map[string]any)
+	if detailPayload["path"] != nil || detailPayload["url"] != delivery.ResolveResultPageURL(taskID) {
+		t.Fatalf("expected synthesized task detail payload to expose stable result_page url, got %+v", detailPayload)
+	}
+
+	openResult, err := service.DeliveryOpen(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("delivery open failed: %v", err)
+	}
+	if openResult["open_action"] != "result_page" {
+		t.Fatalf("expected sparse result_page fallback to preserve open action, got %+v", openResult)
+	}
+	resolvedPayload := openResult["resolved_payload"].(map[string]any)
+	if resolvedPayload["path"] != nil || resolvedPayload["url"] != delivery.ResolveResultPageURL(taskID) {
+		t.Fatalf("expected sparse result_page fallback to preserve resolved url payload, got %+v", resolvedPayload)
+	}
+}
+
 func TestServiceDeliveryOpenReturnsArtifactDeliveryResult(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "delivery open artifact")
 	if service.storage == nil {
@@ -12756,6 +12815,26 @@ func TestTaskDeliveryHelpersSupportResultPage(t *testing.T) {
 	}
 	if payload["url"] != delivery.ResolveResultPageURL("task_result_page") {
 		t.Fatalf("expected result_page normalization to backfill stable url, got %+v", payload)
+	}
+	sparse := synthesizeSparseResultPageDeliveryResult(runengine.TaskRecord{
+		TaskID:            "task_result_page",
+		Title:             "fallback title",
+		Status:            "completed",
+		Intent:            map[string]any{"name": "page_search"},
+		PreferredDelivery: "result_page",
+	})
+	if sparse == nil || sparse["type"] != "result_page" || sparse["title"] != "网页搜索结果" {
+		t.Fatalf("expected sparse result_page helper to synthesize formal delivery result, got %+v", sparse)
+	}
+	sparsePayload := sparse["payload"].(map[string]any)
+	if sparsePayload["url"] != delivery.ResolveResultPageURL("task_result_page") || sparsePayload["path"] != nil {
+		t.Fatalf("expected sparse result_page helper to synthesize stable payload, got %+v", sparsePayload)
+	}
+	if got := synthesizeSparseResultPageDeliveryResult(runengine.TaskRecord{TaskID: "task_processing", Status: "processing", PreferredDelivery: "result_page"}); got != nil {
+		t.Fatalf("expected incomplete result_page task not to synthesize delivery result, got %+v", got)
+	}
+	if got := synthesizeSparseResultPageDeliveryResult(runengine.TaskRecord{TaskID: "task_workspace", Status: "completed", PreferredDelivery: "workspace_document"}); got != nil {
+		t.Fatalf("expected non-result_page task not to synthesize delivery result, got %+v", got)
 	}
 }
 
