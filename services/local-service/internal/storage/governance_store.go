@@ -81,6 +81,7 @@ func (s *inMemoryApprovalRequestStore) ListPendingApprovalRequests(_ context.Con
 	s.state.mu.Lock()
 	defer s.state.mu.Unlock()
 	items := filterApprovalRequests(s.state.approvalRequests, "", "pending")
+	items = latestApprovalRequestPerTask(items)
 	return pageApprovalRequests(items, limit, offset), len(items), nil
 }
 
@@ -398,7 +399,7 @@ func (s *SQLiteApprovalRequestStore) ListApprovalRequests(ctx context.Context, t
 }
 
 func (s *SQLiteApprovalRequestStore) ListPendingApprovalRequests(ctx context.Context, limit, offset int) ([]ApprovalRequestRecord, int, error) {
-	items, total, err := s.listApprovalRequests(ctx, "", "pending", limit, offset)
+	items, total, err := s.listLatestPendingApprovalRequests(ctx, limit, offset)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -450,6 +451,66 @@ func (s *SQLiteApprovalRequestStore) listApprovalRequests(ctx context.Context, t
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, fmt.Errorf("iterate approval requests: %w", err)
+	}
+	return items, total, nil
+}
+
+func (s *SQLiteApprovalRequestStore) listLatestPendingApprovalRequests(ctx context.Context, limit, offset int) ([]ApprovalRequestRecord, int, error) {
+	countQuery := `
+		SELECT COUNT(1)
+		FROM approval_requests current
+		WHERE current.status = 'pending'
+			AND NOT EXISTS (
+				SELECT 1
+				FROM approval_requests newer
+				WHERE newer.status = 'pending'
+					AND newer.task_id = current.task_id
+					AND (
+						newer.created_at > current.created_at
+						OR (newer.created_at = current.created_at AND newer.approval_id > current.approval_id)
+					)
+			)
+	`
+	query := `
+		SELECT current.approval_id, current.task_id, current.operation_name, current.risk_level, current.target_object, current.reason, current.status, current.impact_scope_json, current.created_at, current.updated_at
+		FROM approval_requests current
+		WHERE current.status = 'pending'
+			AND NOT EXISTS (
+				SELECT 1
+				FROM approval_requests newer
+				WHERE newer.status = 'pending'
+					AND newer.task_id = current.task_id
+					AND (
+						newer.created_at > current.created_at
+						OR (newer.created_at = current.created_at AND newer.approval_id > current.approval_id)
+					)
+			)
+		ORDER BY current.created_at DESC, current.approval_id DESC
+	`
+	queryArgs := make([]any, 0, 2)
+	if limit > 0 {
+		query += ` LIMIT ? OFFSET ?`
+		queryArgs = append(queryArgs, limit, offset)
+	}
+	var total int
+	if err := s.db.QueryRowContext(ctx, countQuery).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count latest pending approval requests: %w", err)
+	}
+	rows, err := s.db.QueryContext(ctx, query, queryArgs...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list latest pending approval requests: %w", err)
+	}
+	defer rows.Close()
+	items := make([]ApprovalRequestRecord, 0)
+	for rows.Next() {
+		var record ApprovalRequestRecord
+		if err := rows.Scan(&record.ApprovalID, &record.TaskID, &record.OperationName, &record.RiskLevel, &record.TargetObject, &record.Reason, &record.Status, &record.ImpactScopeJSON, &record.CreatedAt, &record.UpdatedAt); err != nil {
+			return nil, 0, fmt.Errorf("scan latest pending approval request: %w", err)
+		}
+		items = append(items, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate latest pending approval requests: %w", err)
 	}
 	return items, total, nil
 }
@@ -744,6 +805,23 @@ func filterApprovalRequests(records []ApprovalRequestRecord, taskID string, stat
 	sort.SliceStable(items, func(i, j int) bool {
 		return parseGovernanceTime(items[i].CreatedAt).After(parseGovernanceTime(items[j].CreatedAt))
 	})
+	return items
+}
+
+func latestApprovalRequestPerTask(records []ApprovalRequestRecord) []ApprovalRequestRecord {
+	items := make([]ApprovalRequestRecord, 0, len(records))
+	seenTasks := make(map[string]struct{}, len(records))
+	for _, record := range records {
+		key := strings.TrimSpace(record.TaskID)
+		if key == "" {
+			key = strings.TrimSpace(record.ApprovalID)
+		}
+		if _, ok := seenTasks[key]; ok {
+			continue
+		}
+		seenTasks[key] = struct{}{}
+		items = append(items, record)
+	}
 	return items
 }
 
