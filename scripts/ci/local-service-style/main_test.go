@@ -38,6 +38,33 @@ index 1111111..2222222 100644
 	}
 }
 
+func TestFindAllCommentViolationsRejectsExistingChineseComments(t *testing.T) {
+	root := writeTestFile(t, "package demo\n// existing 中文 comment.\nconst message = \"中文 string is allowed\"\n")
+
+	violations, err := findAllCommentViolations(root)
+	if err != nil {
+		t.Fatalf("findAllCommentViolations returned error: %v", err)
+	}
+	if len(violations) != 1 {
+		t.Fatalf("expected one violation, got %d: %#v", len(violations), violations)
+	}
+	if violations[0].line != 2 {
+		t.Fatalf("expected violation on line 2, got %d", violations[0].line)
+	}
+}
+
+func TestFindAllCommentViolationsIgnoresChineseStringLiterals(t *testing.T) {
+	root := writeTestFile(t, "package demo\nconst message = \"中文 // not a comment\"\nconst raw = `中文 /* not a comment */`\n")
+
+	violations, err := findAllCommentViolations(root)
+	if err != nil {
+		t.Fatalf("findAllCommentViolations returned error: %v", err)
+	}
+	if len(violations) != 0 {
+		t.Fatalf("expected no violations, got %#v", violations)
+	}
+}
+
 func TestFindCommentViolationsIgnoresChineseStringLiterals(t *testing.T) {
 	root := writeTestFile(t, "package demo\nconst message = \"中文 // not a comment\"\nconst raw = `中文 /* not a comment */`\n")
 	diff := `diff --git a/services/local-service/internal/demo/demo.go b/services/local-service/internal/demo/demo.go
