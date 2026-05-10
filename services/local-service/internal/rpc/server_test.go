@@ -412,10 +412,14 @@ func TestHandleStreamConnStreamsLoopLifecycleNotificationsBeforeResponseForSubmi
 		Method:  "agent.input.submit",
 		Params: mustMarshal(t, map[string]any{
 			"session_id": "sess_input_submit_loop_stream",
+			"source":     "floating_ball",
+			"trigger":    "hover_text_input",
 			"input": map[string]any{
-				"type": "text",
-				"text": "inspect this workspace and answer directly",
+				"type":       "text",
+				"text":       "inspect this workspace and answer directly",
+				"input_mode": "text",
 			},
+			"context": map[string]any{},
 			"options": map[string]any{
 				"confirm_required": false,
 			},
@@ -498,10 +502,14 @@ func TestHandleStreamConnDoesNotReplayStreamedRuntimeNotificationsAfterResponse(
 		Method:  "agent.input.submit",
 		Params: mustMarshal(t, map[string]any{
 			"session_id": "sess_input_submit_no_replay",
+			"source":     "floating_ball",
+			"trigger":    "hover_text_input",
 			"input": map[string]any{
-				"type": "text",
-				"text": "inspect this workspace and answer directly",
+				"type":       "text",
+				"text":       "inspect this workspace and answer directly",
+				"input_mode": "text",
 			},
+			"context": map[string]any{},
 			"options": map[string]any{
 				"confirm_required": false,
 			},
@@ -1266,17 +1274,25 @@ func TestHandleStreamConnSerializesTaskStartingRequestsOnSharedConnection(t *tes
 			method: "agent.input.submit",
 			firstParams: map[string]any{
 				"session_id": "sess_serialized_submit",
+				"source":     "floating_ball",
+				"trigger":    "hover_text_input",
 				"input": map[string]any{
-					"type": "text",
-					"text": "first submit",
+					"type":       "text",
+					"text":       "first submit",
+					"input_mode": "text",
 				},
+				"context": map[string]any{},
 			},
 			secondParams: map[string]any{
 				"session_id": "sess_serialized_submit",
+				"source":     "floating_ball",
+				"trigger":    "hover_text_input",
 				"input": map[string]any{
-					"type": "text",
-					"text": "second submit",
+					"type":       "text",
+					"text":       "second submit",
+					"input_mode": "text",
 				},
+				"context": map[string]any{},
 			},
 		},
 		{

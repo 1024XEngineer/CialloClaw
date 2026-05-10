@@ -193,6 +193,7 @@ func StartTaskRequestFromParams(params map[string]any) StartTaskRequest {
 	if intent := mapValue(params, "intent"); len(intent) > 0 {
 		request.Intent = cloneMap(intent)
 	}
+	request.raw = cloneMap(params)
 	return request
 }
 
@@ -201,6 +202,7 @@ func StartTaskRequestFromParams(params map[string]any) StartTaskRequest {
 func SubmitInputRequestFromParams(params map[string]any) SubmitInputRequest {
 	var request SubmitInputRequest
 	decodeProtocolMap(params, &request)
+	request.raw = cloneMap(params)
 	return request
 }
 
@@ -209,10 +211,14 @@ func SubmitInputRequestFromParams(params map[string]any) SubmitInputRequest {
 func TaskDetailGetRequestFromParams(params map[string]any) TaskDetailGetRequest {
 	var request TaskDetailGetRequest
 	decodeProtocolMap(params, &request)
+	request.raw = cloneMap(params)
 	return request
 }
 
 func (r StartTaskRequest) paramsMap() map[string]any {
+	if r.raw != nil {
+		return cloneMap(r.raw)
+	}
 	params := structToProtocolMap(r)
 	if len(r.Intent) > 0 {
 		params["intent"] = cloneMap(r.Intent)
@@ -221,10 +227,16 @@ func (r StartTaskRequest) paramsMap() map[string]any {
 }
 
 func (r SubmitInputRequest) paramsMap() map[string]any {
+	if r.raw != nil {
+		return cloneMap(r.raw)
+	}
 	return structToProtocolMap(r)
 }
 
 func (r TaskDetailGetRequest) paramsMap() map[string]any {
+	if r.raw != nil {
+		return cloneMap(r.raw)
+	}
 	return structToProtocolMap(r)
 }
 

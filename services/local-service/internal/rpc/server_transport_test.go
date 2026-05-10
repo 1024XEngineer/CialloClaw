@@ -98,10 +98,14 @@ func TestHandleStreamConnSkipsBufferedLiveRuntimeReplay(t *testing.T) {
 		Method:  "agent.input.submit",
 		Params: mustMarshal(t, map[string]any{
 			"session_id": "sess_stream_runtime_no_replay",
+			"source":     "floating_ball",
+			"trigger":    "hover_text_input",
 			"input": map[string]any{
-				"type": "text",
-				"text": "inspect this workspace and answer directly",
+				"type":       "text",
+				"text":       "inspect this workspace and answer directly",
+				"input_mode": "text",
 			},
+			"context": map[string]any{},
 			"options": map[string]any{
 				"confirm_required": false,
 			},

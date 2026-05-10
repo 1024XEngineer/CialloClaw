@@ -83,6 +83,65 @@ func TestAgentTaskStartDTOOmitsUnsupportedIntentField(t *testing.T) {
 	}
 }
 
+func TestAgentInputSubmitDTORejectsMissingStableFields(t *testing.T) {
+	_, rpcErr := decodeAgentInputSubmitParams(mustMarshal(t, map[string]any{
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "inspect the page",
+			"input_mode": "text",
+		},
+	}))
+	if rpcErr == nil {
+		t.Fatal("expected missing source/trigger/context to return invalid params")
+	}
+	if rpcErr.Code != errInvalidParams || rpcErr.Message != "INVALID_PARAMS" {
+		t.Fatalf("expected invalid params error, got %+v", rpcErr)
+	}
+}
+
+func TestAgentInputSubmitDTORejectsOutOfDomainEnums(t *testing.T) {
+	_, rpcErr := decodeAgentInputSubmitParams(mustMarshal(t, map[string]any{
+		"request_meta": map[string]any{
+			"trace_id":    "trace_input_submit_invalid_enum",
+			"client_time": "2026-05-09T12:00:00+08:00",
+		},
+		"source":  "floating_ball",
+		"trigger": "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "inspect the page",
+			"input_mode": "dictation",
+		},
+		"context": map[string]any{
+			"page": map[string]any{
+				"browser_kind": "firefox",
+			},
+		},
+	}))
+	if rpcErr == nil {
+		t.Fatal("expected invalid enum domains to return invalid params")
+	}
+	if rpcErr.Code != errInvalidParams || rpcErr.Message != "INVALID_PARAMS" {
+		t.Fatalf("expected invalid params error, got %+v", rpcErr)
+	}
+}
+
+func TestAgentTaskDetailGetDTORejectsBlankTaskID(t *testing.T) {
+	_, rpcErr := decodeAgentTaskDetailGetParams(mustMarshal(t, map[string]any{
+		"request_meta": map[string]any{
+			"trace_id":    "trace_task_detail_blank_id",
+			"client_time": "2026-05-09T12:00:00+08:00",
+		},
+		"task_id": "",
+	}))
+	if rpcErr == nil {
+		t.Fatal("expected blank task_id to return invalid params")
+	}
+	if rpcErr.Code != errInvalidParams || rpcErr.Message != "INVALID_PARAMS" {
+		t.Fatalf("expected invalid params error, got %+v", rpcErr)
+	}
+}
+
 func protocolStableMethodBlock(source string) string {
 	start := strings.Index(source, "RPC_METHODS_STABLE")
 	end := strings.Index(source, "RPC_METHODS_PLANNED")
