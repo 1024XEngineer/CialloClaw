@@ -83,6 +83,7 @@ type TaskRecord struct {
 	LoopStopReason    string
 	SteeringMessages  []string
 	CurrentStepStatus string
+	titleRefreshToken uint64
 }
 
 // TaskStepRecord represents one task-facing timeline step.
@@ -175,6 +176,7 @@ type Engine struct {
 	tasks         map[string]*TaskRecord
 	taskOrder     []string
 	sessionOrder  []string
+	titleRefresh  uint64
 	inspector     InspectorConfig
 	settings      map[string]any
 	notepadItems  []map[string]any
@@ -588,11 +590,31 @@ func (e *Engine) UpdateIntent(taskID, title string, intent map[string]any) (Task
 	return record.clone(), true
 }
 
+// ReserveTitleRefresh records the latest async title-refresh attempt that is
+// allowed to update a task. Each new reservation invalidates older goroutines
+// so equal fallback titles cannot let stale model output win races.
+func (e *Engine) ReserveTitleRefresh(taskID, expectedTitle string) (uint64, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return 0, false
+	}
+	if strings.TrimSpace(expectedTitle) == "" || strings.TrimSpace(record.Title) != strings.TrimSpace(expectedTitle) {
+		return 0, false
+	}
+
+	e.titleRefresh++
+	record.titleRefreshToken = e.titleRefresh
+	return record.titleRefreshToken, true
+}
+
 // UpdateTitleIfCurrent applies an asynchronously generated title only when the
-// task still presents the expected fallback title. This prevents stale model
-// responses from overwriting newer user-confirmed or continuation-updated
-// titles after the lifecycle has already moved on.
-func (e *Engine) UpdateTitleIfCurrent(taskID, expectedTitle, title string) (TaskRecord, bool) {
+// task still presents the expected fallback title and the caller still owns the
+// latest refresh reservation. This prevents stale model responses from
+// overwriting newer continuation- or confirmation-driven refreshes.
+func (e *Engine) UpdateTitleIfCurrent(taskID, expectedTitle string, expectedToken uint64, title string) (TaskRecord, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -600,7 +622,10 @@ func (e *Engine) UpdateTitleIfCurrent(taskID, expectedTitle, title string) (Task
 	if !ok {
 		return TaskRecord{}, false
 	}
-	if strings.TrimSpace(title) == "" || strings.TrimSpace(record.Title) != strings.TrimSpace(expectedTitle) {
+	if strings.TrimSpace(title) == "" ||
+		strings.TrimSpace(record.Title) != strings.TrimSpace(expectedTitle) ||
+		expectedToken == 0 ||
+		record.titleRefreshToken != expectedToken {
 		return TaskRecord{}, false
 	}
 

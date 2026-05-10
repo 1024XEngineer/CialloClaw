@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
@@ -31,6 +32,10 @@ func (s *Service) scheduleTaskTitleRefresh(taskID string, snapshot taskcontext.T
 	if taskID == "" || fallbackTitle == "" {
 		return
 	}
+	refreshToken, ok := s.runEngine.ReserveTitleRefresh(taskID, fallbackTitle)
+	if !ok {
+		return
+	}
 	intentValue := cloneMap(taskIntent)
 	go func() {
 		intentName := strings.TrimSpace(stringValue(intentValue, "name", ""))
@@ -38,7 +43,7 @@ func (s *Service) scheduleTaskTitleRefresh(taskID string, snapshot taskcontext.T
 		if generatedTitle == "" || generatedTitle == fallbackTitle {
 			return
 		}
-		updatedTask, ok := s.runEngine.UpdateTitleIfCurrent(taskID, fallbackTitle, generatedTitle)
+		updatedTask, ok := s.runEngine.UpdateTitleIfCurrent(taskID, fallbackTitle, refreshToken, generatedTitle)
 		if !ok {
 			return
 		}
@@ -50,6 +55,17 @@ func (s *Service) scheduleTaskTitleRefresh(taskID string, snapshot taskcontext.T
 			"status":     updatedTask.Status,
 		})
 	}()
+}
+
+// refreshTitleAfterGovernance starts model-backed title refinement only after a
+// task has cleared queueing, confirmation, and governance gates for real
+// execution. Title prettification must not export raw task context before those
+// owner-controlled boundaries decide the task may proceed.
+func (s *Service) refreshTitleAfterGovernance(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any) {
+	if s == nil {
+		return
+	}
+	s.scheduleTaskTitleRefresh(task.TaskID, snapshot, taskIntent, task.Title)
 }
 
 func nonEmptySessionID(sessionID string) any {

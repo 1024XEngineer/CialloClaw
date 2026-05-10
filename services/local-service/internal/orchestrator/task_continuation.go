@@ -750,8 +750,6 @@ func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot taskco
 			"delivery_result": nil,
 		}, nil
 	}
-	s.scheduleTaskTitleRefresh(updatedTask.TaskID, snapshotFromTask(updatedTask), suggestion.Intent, updatedTask.Title)
-
 	governedTask, governedResponse, handled, governanceErr := s.handleTaskGovernanceDecision(updatedTask, suggestion.Intent)
 	if governanceErr != nil {
 		return nil, governanceErr
@@ -759,6 +757,7 @@ func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot taskco
 	if handled {
 		return governedResponse, nil
 	}
+	s.refreshTitleAfterGovernance(governedTask, mergedSnapshot, suggestion.Intent)
 	executedTask, resultBubble, deliveryResult, _, execErr := s.executeTask(governedTask, mergedSnapshot, suggestion.Intent)
 	if execErr != nil {
 		return nil, execErr

@@ -123,9 +123,6 @@ func (s *Service) createTaskFromEntryFlow(flow taskEntryFlow) runengine.TaskReco
 	})
 	s.publishTaskStart(task.TaskID, task.SessionID, requestTraceID(flow.Params))
 	s.attachMemoryReadPlans(task.TaskID, task.RunID, flow.Snapshot, flow.Suggestion.Intent)
-	if !flow.Suggestion.RequiresConfirm {
-		s.scheduleTaskTitleRefresh(task.TaskID, flow.Snapshot, flow.Suggestion.Intent, task.Title)
-	}
 	return task
 }
 
@@ -150,6 +147,7 @@ func (s *Service) finishStartTask(flow taskEntryFlow, task runengine.TaskRecord)
 		return governedResponse, nil
 	}
 	task = governedTask
+	s.refreshTitleAfterGovernance(task, flow.Snapshot, flow.Suggestion.Intent)
 
 	deliveryResult := map[string]any(nil)
 	var execErr error

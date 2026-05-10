@@ -62,7 +62,6 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
-	s.scheduleTaskTitleRefresh(updatedTask.TaskID, snapshotFromTask(updatedTask), intentValue, updatedTask.Title)
 	s.attachMemoryReadPlans(updatedTask.TaskID, updatedTask.RunID, snapshotFromTask(updatedTask), intentValue)
 	if queuedTask, queueBubble, queued, queueErr := s.queueTaskIfSessionBusy(updatedTask); queueErr != nil {
 		return nil, queueErr
@@ -87,6 +86,7 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		return nil, ErrTaskNotFound
 	}
 	snapshot = snapshotFromTask(updatedTask)
+	s.refreshTitleAfterGovernance(updatedTask, snapshot, intentValue)
 
 	updatedTask, resultBubble, deliveryResult, _, err := s.executeTask(updatedTask, snapshot, intentValue)
 	if err != nil {

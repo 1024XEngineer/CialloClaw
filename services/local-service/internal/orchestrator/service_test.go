@@ -93,6 +93,19 @@ type blockingModelClient struct {
 	released chan struct{}
 }
 
+type titleBlockingModelClient struct {
+	started         chan string
+	released        chan struct{}
+	immediateOutput string
+}
+
+type stagedTitleModelClient struct {
+	mu              sync.Mutex
+	titleCallCount  int
+	firstStarted    chan struct{}
+	allowFirstReply chan struct{}
+}
+
 type delayedModelClient struct {
 	delay  time.Duration
 	output string
@@ -737,6 +750,79 @@ func (s *blockingModelClient) GenerateToolCalls(ctx context.Context, request mod
 		}
 	}
 	return model.ToolCallResult{}, ctx.Err()
+}
+
+func (s *titleBlockingModelClient) GenerateText(ctx context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	if request.TaskID != "task_title_generator" {
+		return model.GenerateTextResponse{
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			RequestID:  "req_immediate_text",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: s.immediateOutput,
+		}, nil
+	}
+	if s.started != nil {
+		select {
+		case s.started <- request.TaskID:
+		default:
+		}
+	}
+	<-ctx.Done()
+	if s.released != nil {
+		select {
+		case s.released <- struct{}{}:
+		default:
+		}
+	}
+	return model.GenerateTextResponse{}, ctx.Err()
+}
+
+func (s *titleBlockingModelClient) GenerateToolCalls(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+	return model.ToolCallResult{
+		RequestID:  "req_tool_unused",
+		Provider:   "openai_responses",
+		ModelID:    "gpt-5.4",
+		OutputText: s.immediateOutput,
+	}, nil
+}
+
+func (s *stagedTitleModelClient) GenerateText(_ context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	if request.TaskID != "task_title_generator" {
+		return model.GenerateTextResponse{
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			RequestID:  "req_staged_immediate",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "执行结果",
+		}, nil
+	}
+	s.mu.Lock()
+	s.titleCallCount++
+	callIndex := s.titleCallCount
+	s.mu.Unlock()
+	if callIndex == 1 {
+		if s.firstStarted != nil {
+			close(s.firstStarted)
+		}
+		<-s.allowFirstReply
+		return model.GenerateTextResponse{OutputText: `{"title":"旧上下文标题"}`}, nil
+	}
+	if s.allowFirstReply != nil {
+		close(s.allowFirstReply)
+	}
+	return model.GenerateTextResponse{OutputText: `{"title":"最新上下文标题"}`}, nil
+}
+
+func (s *stagedTitleModelClient) GenerateToolCalls(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+	return model.ToolCallResult{
+		RequestID:  "req_tool_unused",
+		Provider:   "openai_responses",
+		ModelID:    "gpt-5.4",
+		OutputText: "执行结果",
+	}, nil
 }
 
 func (s delayedModelClient) GenerateText(ctx context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
@@ -2190,7 +2276,7 @@ func TestServiceStartTaskUsesGeneratedTaskTitleFromFullContext(t *testing.T) {
 			if request.TaskID == "task_title_generator" {
 				return model.GenerateTextResponse{OutputText: `{"title":"发布复盘风险跟进"}`}, nil
 			}
-			return model.GenerateTextResponse{OutputText: "unused"}, nil
+			return model.GenerateTextResponse{OutputText: "执行结果"}, nil
 		},
 	})
 	service.WithTitleGenerator(titlegen.NewService(service.model))
@@ -2200,10 +2286,7 @@ func TestServiceStartTaskUsesGeneratedTaskTitleFromFullContext(t *testing.T) {
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
 		"intent": map[string]any{
-			"name": "write_file",
-			"arguments": map[string]any{
-				"require_authorization": true,
-			},
+			"name": "summarize",
 		},
 		"input": map[string]any{
 			"type": "text",
@@ -2264,11 +2347,13 @@ func TestServiceStartTaskConfirmingIntentDoesNotGenerateTitleBeforeConfirmation(
 }
 
 func TestServiceStartTaskDoesNotBlockOnAsyncTitleGeneration(t *testing.T) {
-	modelClient := &blockingModelClient{
-		started:  make(chan string, 1),
-		released: make(chan struct{}, 1),
-	}
-	service, _ := newTestServiceWithModelClient(t, modelClient)
+	titleStarted := make(chan string, 1)
+	titleReleased := make(chan struct{}, 1)
+	service, _ := newTestServiceWithModelClient(t, &titleBlockingModelClient{
+		started:         titleStarted,
+		released:        titleReleased,
+		immediateOutput: "执行结果",
+	})
 	service.WithTitleGenerator(titlegen.NewService(service.model))
 
 	resultCh := make(chan map[string]any, 1)
@@ -2279,10 +2364,7 @@ func TestServiceStartTaskDoesNotBlockOnAsyncTitleGeneration(t *testing.T) {
 			"source":     "floating_ball",
 			"trigger":    "hover_text_input",
 			"intent": map[string]any{
-				"name": "write_file",
-				"arguments": map[string]any{
-					"require_authorization": true,
-				},
+				"name": "summarize",
 			},
 			"input": map[string]any{
 				"type": "text",
@@ -2297,7 +2379,7 @@ func TestServiceStartTaskDoesNotBlockOnAsyncTitleGeneration(t *testing.T) {
 	}()
 
 	select {
-	case <-modelClient.started:
+	case <-titleStarted:
 	case <-time.After(200 * time.Millisecond):
 		t.Fatal("expected async title generation to start")
 	}
@@ -2315,10 +2397,211 @@ func TestServiceStartTaskDoesNotBlockOnAsyncTitleGeneration(t *testing.T) {
 	}
 
 	select {
-	case <-modelClient.released:
+	case <-titleReleased:
 	case <-time.After(4 * time.Second):
 		t.Fatal("expected background title generation to exit after its timeout")
 	}
+}
+
+func TestServiceStartTaskAuthorizationGateDefersTitleGenerationUntilApproval(t *testing.T) {
+	titleStarted := make(chan string, 2)
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			if request.TaskID == "task_title_generator" {
+				select {
+				case titleStarted <- request.TaskID:
+				default:
+				}
+				return model.GenerateTextResponse{OutputText: `{"title":"发布复盘风险跟进"}`}, nil
+			}
+			return model.GenerateTextResponse{OutputText: "授权后执行完成"}, nil
+		},
+	})
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_title_waiting_auth_start",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+		"input": map[string]any{
+			"type": "text",
+			"text": "请帮我整理这次发布复盘，并补齐风险项和后续跟进安排",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	task := startResult["task"].(map[string]any)
+	taskID := task["task_id"].(string)
+	if task["status"] != "waiting_auth" {
+		t.Fatalf("expected authorization-gated task to pause before execution, got %+v", task)
+	}
+
+	select {
+	case startedTaskID := <-titleStarted:
+		t.Fatalf("expected waiting_auth start to avoid title generation before approval, got %s", startedTaskID)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	if _, err := service.SecurityRespond(map[string]any{
+		"task_id":     taskID,
+		"approval_id": activeApprovalIDForTask(t, service, taskID),
+		"decision":    "allow_once",
+	}); err != nil {
+		t.Fatalf("security respond failed: %v", err)
+	}
+
+	select {
+	case <-titleStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected title generation to start after approval")
+	}
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		record, ok := service.runEngine.GetTask(taskID)
+		if ok && record.Title == "发布复盘风险跟进" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	record, _ := service.runEngine.GetTask(taskID)
+	t.Fatalf("expected approved task title refinement, got %+v", record)
+}
+
+func TestServiceConfirmTaskAuthorizationGateDefersTitleGenerationUntilApproval(t *testing.T) {
+	titleStarted := make(chan string, 2)
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			if request.TaskID == "task_title_generator" {
+				select {
+				case titleStarted <- request.TaskID:
+				default:
+				}
+				return model.GenerateTextResponse{OutputText: `{"title":"发布复盘风险跟进"}`}, nil
+			}
+			return model.GenerateTextResponse{OutputText: "授权后执行完成"}, nil
+		},
+	})
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_title_waiting_auth_confirm",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"options":    map[string]any{"confirm_required": true},
+		"input": map[string]any{
+			"type": "text",
+			"text": "请帮我整理这次发布复盘，并补齐风险项和后续跟进安排",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+
+	confirmResult, err := service.ConfirmTask(map[string]any{
+		"task_id":   taskID,
+		"confirmed": false,
+		"corrected_intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("confirm task failed: %v", err)
+	}
+	task := confirmResult["task"].(map[string]any)
+	if task["status"] != "waiting_auth" {
+		t.Fatalf("expected confirm path to stop at waiting_auth, got %+v", task)
+	}
+
+	select {
+	case startedTaskID := <-titleStarted:
+		t.Fatalf("expected confirm path to avoid title generation before approval, got %s", startedTaskID)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	if _, err := service.SecurityRespond(map[string]any{
+		"task_id":     taskID,
+		"approval_id": activeApprovalIDForTask(t, service, taskID),
+		"decision":    "allow_once",
+	}); err != nil {
+		t.Fatalf("security respond failed: %v", err)
+	}
+
+	select {
+	case <-titleStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected title generation to start after approval")
+	}
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		record, ok := service.runEngine.GetTask(taskID)
+		if ok && record.Title == "发布复盘风险跟进" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	record, _ := service.runEngine.GetTask(taskID)
+	t.Fatalf("expected confirmed task title refinement after approval, got %+v", record)
+}
+
+func TestServiceTaskTitleRefreshKeepsLatestReservation(t *testing.T) {
+	client := &stagedTitleModelClient{
+		firstStarted:    make(chan struct{}),
+		allowFirstReply: make(chan struct{}),
+	}
+	service, _ := newTestServiceWithModelClient(t, client)
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_title_refresh_race",
+		Title:       "构建失败分析",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+		Snapshot: taskcontext.TaskContextSnapshot{
+			InputType: "text",
+			Text:      "请分析构建失败",
+			Trigger:   "hover_text_input",
+		},
+	})
+
+	service.scheduleTaskTitleRefresh(task.TaskID, task.Snapshot, task.Intent, task.Title)
+	select {
+	case <-client.firstStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected first title refresh to start")
+	}
+
+	service.scheduleTaskTitleRefresh(task.TaskID, taskcontext.TaskContextSnapshot{
+		InputType: "text",
+		Text:      "请分析构建失败，并补充最新客户影响",
+		Trigger:   "hover_text_input",
+	}, task.Intent, task.Title)
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		record, ok := service.runEngine.GetTask(task.TaskID)
+		if ok && record.Title == "最新上下文标题" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	record, _ := service.runEngine.GetTask(task.TaskID)
+	t.Fatalf("expected newest async title refresh to win, got %+v", record)
 }
 
 func TestServiceConfirmTaskIgnoresCorrectedIntentWhenConfirmedTrue(t *testing.T) {
