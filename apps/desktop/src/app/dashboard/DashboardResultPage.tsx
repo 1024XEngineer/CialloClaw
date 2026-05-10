@@ -1,5 +1,5 @@
 import { ArrowUpRight, FileSearch, PanelRightOpen } from "lucide-react";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { DashboardBackHomeLink } from "@/features/dashboard/shared/DashboardBackHomeLink";
 import { navigateToDashboardTaskDetail } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
@@ -21,14 +21,32 @@ function isAllowedDashboardResultPageUrl(url: string) {
 function isEmbeddableDashboardResultPageUrl(url: string) {
   try {
     const parsed = new URL(url);
-    if (!isLoopbackHost(parsed.hostname)) {
+    if (!isTrustedDashboardResultPageOrigin(parsed)) {
       return false;
     }
 
-    return parsed.protocol === "https:" || parsed.protocol === "http:";
+    return true;
   } catch {
     return false;
   }
+}
+
+function isTrustedDashboardResultPageOrigin(url: URL) {
+  const trustedOrigins = new Set<string>();
+
+  if (typeof window !== "undefined") {
+    try {
+      const currentOrigin = new URL(window.location.href).origin;
+      const currentOriginUrl = new URL(currentOrigin);
+      if ((currentOriginUrl.protocol === "http:" || currentOriginUrl.protocol === "https:") && isLoopbackHost(currentOriginUrl.hostname)) {
+        trustedOrigins.add(currentOriginUrl.origin);
+      }
+    } catch {
+      // Ignore invalid desktop shell origins and fall back to browser handoff.
+    }
+  }
+
+  return trustedOrigins.has(url.origin);
 }
 
 /**
@@ -47,6 +65,7 @@ export function DashboardResultPage() {
     }),
     [location.state],
   );
+  const browserFallbackOpenedRef = useRef(false);
   const resultUrl = routeState?.url ?? null;
   const canOpenExternally = resultUrl ? isAllowedDashboardResultPageUrl(resultUrl) : false;
   const canEmbed = resultUrl ? isEmbeddableDashboardResultPageUrl(resultUrl) : false;
@@ -61,6 +80,16 @@ export function DashboardResultPage() {
       return null;
     }
   }, [canOpenExternally, resultUrl]);
+  const showBrowserOnlyFallback = canOpenExternally && !canEmbed;
+
+  useEffect(() => {
+    if (!showBrowserOnlyFallback || !resultUrl || browserFallbackOpenedRef.current) {
+      return;
+    }
+
+    browserFallbackOpenedRef.current = true;
+    window.open(resultUrl, "_blank", "noopener,noreferrer");
+  }, [resultUrl, showBrowserOnlyFallback]);
 
   if (!resultUrl || !canOpenExternally) {
     return (
@@ -79,8 +108,6 @@ export function DashboardResultPage() {
       </main>
     );
   }
-
-  const showBrowserOnlyFallback = !canEmbed;
 
   return (
     <main className="dashboard-page dashboard-result-page">

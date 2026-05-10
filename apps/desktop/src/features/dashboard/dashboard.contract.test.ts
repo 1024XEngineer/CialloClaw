@@ -2063,6 +2063,17 @@ test("dashboard home randomizes summons while preferring a different module when
   assert.match(dashboardHomeSource, /onClose=\{closeActiveOverlay\}/);
 });
 
+test("dashboard result page only embeds trusted loopback shell origins and auto-opens browser fallback", () => {
+  const resultPageSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/DashboardResultPage.tsx"), "utf8");
+
+  assert.match(resultPageSource, /function isTrustedDashboardResultPageOrigin/);
+  assert.match(resultPageSource, /trustedOrigins\.add\(currentOriginUrl\.origin\)/);
+  assert.match(resultPageSource, /return trustedOrigins\.has\(url\.origin\)/);
+  assert.match(resultPageSource, /window\.open\(resultUrl, "_blank", "noopener,noreferrer"\)/);
+  assert.match(resultPageSource, /browserFallbackOpenedRef/);
+  assert.match(resultPageSource, /不在站内可信嵌入白名单内，已切换为浏览器承接模式/);
+});
+
 test("mirror page stays RPC-only instead of exposing a page-level mock toggle", () => {
   const mirrorAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/MirrorApp.tsx"), "utf8");
 
