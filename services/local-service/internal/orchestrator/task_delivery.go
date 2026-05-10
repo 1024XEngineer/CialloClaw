@@ -329,7 +329,11 @@ func normalizeFormalDeliveryPayload(payload map[string]any, taskID, deliveryType
 		// so open flows backfill the stable dashboard route instead of surfacing a
 		// sparse or stale file-style payload.
 		normalized["path"] = nil
-		if strings.TrimSpace(taskID) != "" && strings.TrimSpace(stringValue(normalized, "url", "")) == "" {
+		if strings.TrimSpace(taskID) == "" {
+			normalized["task_id"] = nil
+			normalized["url"] = nil
+		} else {
+			normalized["task_id"] = taskID
 			normalized["url"] = delivery.ResolveResultPageURL(taskID)
 		}
 	}

@@ -13294,6 +13294,74 @@ func TestServiceLegacyResultPageSnapshotOverridesBubbleCompatShape(t *testing.T)
 	}
 }
 
+func TestServiceResultPagePayloadNormalizationOverridesLegacyBadValues(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "legacy result_page payload normalization")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+	taskID := "task_result_page_bad_payload"
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           "sess_result_page_bad_payload",
+		RunID:               "run_result_page_bad_payload",
+		PrimaryRunID:        "run_result_page_bad_payload",
+		Title:               "legacy payload task",
+		SourceType:          "floating_ball",
+		Status:              "completed",
+		IntentName:          "page_read",
+		IntentArgumentsJSON: `{"url":"https://example.com/legacy-payload"}`,
+		PreferredDelivery:   "result_page",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         "deliver_result",
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "green",
+		RequestSource:       "floating_ball",
+		RequestTrigger:      "hover_text_input",
+		StartedAt:           "2026-04-15T15:00:00Z",
+		UpdatedAt:           "2026-04-15T15:05:00Z",
+		FinishedAt:          "2026-04-15T15:05:00Z",
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+	if err := service.storage.LoopRuntimeStore().SaveDeliveryResult(context.Background(), storage.DeliveryResultRecord{
+		DeliveryResultID: "delivery_result_bad_payload",
+		TaskID:           taskID,
+		RunID:            "run_result_page_bad_payload",
+		Type:             "result_page",
+		Title:            "legacy payload result",
+		PayloadJSON:      `{"path":"workspace/legacy.md","task_id":"","url":"./dashboard.html#/tasks/legacy/123"}`,
+		PreviewText:      "legacy payload preview",
+		CreatedAt:        "2026-04-15T15:05:00Z",
+	}); err != nil {
+		t.Fatalf("save delivery result failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	detailDeliveryResult, ok := detailResult["delivery_result"].(map[string]any)
+	if !ok || detailDeliveryResult["type"] != "result_page" {
+		t.Fatalf("expected bad legacy payload to remain a result_page detail, got %+v", detailResult["delivery_result"])
+	}
+	detailPayload := detailDeliveryResult["payload"].(map[string]any)
+	if detailPayload["path"] != nil || detailPayload["task_id"] != taskID || detailPayload["url"] != delivery.ResolveResultPageURL(taskID) {
+		t.Fatalf("expected bad legacy payload detail to normalize to authoritative result_page values, got %+v", detailPayload)
+	}
+
+	openResult, err := service.DeliveryOpen(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("delivery open failed: %v", err)
+	}
+	if openResult["open_action"] != "result_page" {
+		t.Fatalf("expected bad legacy payload open action to remain result_page, got %+v", openResult)
+	}
+	resolvedPayload := openResult["resolved_payload"].(map[string]any)
+	if resolvedPayload["path"] != nil || resolvedPayload["task_id"] != taskID || resolvedPayload["url"] != delivery.ResolveResultPageURL(taskID) {
+		t.Fatalf("expected bad legacy payload open payload to normalize to authoritative result_page values, got %+v", resolvedPayload)
+	}
+}
+
 func TestServiceDeliveryOpenReturnsArtifactDeliveryResult(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "delivery open artifact")
 	if service.storage == nil {
