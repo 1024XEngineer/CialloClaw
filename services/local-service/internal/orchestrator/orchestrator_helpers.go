@@ -77,20 +77,13 @@ func notepadSnapshotText(item map[string]any) string {
 		return noteText
 	}
 
-	// ClaimNotepadItemTask normalizes title-only notes by synthesizing note_text
-	// for dashboard display. The conversion flow should still feed the original
-	// user title into task routing when no real note body exists.
-	if noteText == syntheticNotepadDisplayText(title, strings.TrimSpace(stringValue(item, "agent_suggestion", ""))) {
+	// Title-only notes receive a synthetic note_text for dashboard display, but
+	// task routing must only collapse back to title when the note body was
+	// synthesized by runtime normalization instead of authored by the user.
+	if strings.TrimSpace(stringValue(item, "note_text_origin", "")) == "derived_default" {
 		return title
 	}
 	return noteText
-}
-
-func syntheticNotepadDisplayText(title, suggestion string) string {
-	if suggestion != "" {
-		return title + "。当前建议：" + suggestion + "。"
-	}
-	return title + "。当前处于便签巡检域，等待进入正式执行。"
 }
 
 func notepadTaskTitle(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) string {
