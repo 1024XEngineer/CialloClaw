@@ -220,11 +220,17 @@ function matchAutoLink(text: string): InlineMatch | null {
 
 function trimTrailingUrlPunctuation(value: string) {
   let href = value;
-  while (/[.,!?;:'"，。！？；：】》〉」』、】【>\]]$/.test(href)) {
+  while (/[.,!?;:'"，。！？；：】》〉」』、】【>\]）]$/.test(href)) {
     href = href.slice(0, -1);
   }
 
   while (href.endsWith(")") && countUrlCharacters(href, "(") < countUrlCharacters(href, ")")) {
+    href = href.slice(0, -1);
+  }
+
+  // Trim full-width closing parentheses only when they are unbalanced so
+  // Chinese wrapping like （https://example.com） still preserves valid hrefs.
+  while (href.endsWith("）") && countUrlCharacters(href, "（") < countUrlCharacters(href, "）")) {
     href = href.slice(0, -1);
   }
 
