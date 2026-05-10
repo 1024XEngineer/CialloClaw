@@ -229,7 +229,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 ### 5.1 任务状态 `task_status`
 
 - `processing`：任务正在执行。
-- `waiting_auth`：命中高风险动作，等待授权。
+- `waiting_auth`：命中高风险动作，等待授权；既包括执行前的治理预检，也包括 `agent_loop` 在运行中选中具体工具后触发的正式授权暂停。
 - `waiting_input`：等待用户补充必要输入。
 - `confirming_intent`：系统已识别出候选意图，等待用户确认或纠偏。
 - `paused`：任务被用户或系统主动暂停。
@@ -4359,7 +4359,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - `task.updated`：任务主状态或关键摘要变化；通知参数至少包含 `task_id`、`session_id`、`status`
 - `delivery.ready`：正式交付已可被前端承接
-- `approval.pending`：出现待授权动作
+- `approval.pending`：出现待授权动作；既可来自执行前治理预检，也可来自 `agent_loop` 运行中命中的具体工具调用
 - `task.steered`：运行中补充要求已经写入任务链
 - `task.session_queued`：同一 `session` 下的新任务进入串行等待
 - `task.session_resumed`：队列中的任务重新恢复执行
