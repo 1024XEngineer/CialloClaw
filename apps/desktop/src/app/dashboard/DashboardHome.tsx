@@ -83,6 +83,20 @@ function pickNextSummonIndex(
   return (nextIndex + 1) % total;
 }
 
+function buildSummonTemplateSignature(templates: Array<Omit<DashboardHomeSummonEvent, "id">>) {
+  return templates
+    .map((template) => [
+      template.stateKey,
+      template.module,
+      template.message,
+      template.reason,
+      template.nextStep ?? "",
+      template.priority,
+      template.recommendationId ?? "",
+    ].join("::"))
+    .join("||");
+}
+
 type DashboardHomeProps = {
   data: DashboardHomeData;
   onVoiceOpen: () => void;
@@ -108,6 +122,8 @@ export function DashboardHome({
   const lastSummonIndexRef = useRef(-1);
   const lastSummonModuleRef = useRef<DashboardHomeModuleKey | null>(null);
   const summonTimerRef = useRef<number | null>(null);
+  const summonTemplatesRef = useRef(data.summonTemplates);
+  const summonTemplateSignature = buildSummonTemplateSignature(data.summonTemplates);
 
   const activeState = activeExpandedState ?? (activeStateKey ? data.stateMap[activeStateKey] : null);
   const activeModule = hoveredEntranceKey
@@ -124,19 +140,20 @@ export function DashboardHome({
   }, []);
 
   const scheduleSummon = useCallback(() => {
-    if (data.summonTemplates.length === 0) {
+    const templates = summonTemplatesRef.current;
+    if (templates.length === 0) {
       return;
     }
 
     // Summons are local presentation state, so balancing the module order here
     // does not change the formal dashboard data contract or backend ranking.
     const nextIndex = pickNextSummonIndex(
-      data.summonTemplates,
+      templates,
       lastSummonIndexRef.current,
       lastSummonModuleRef.current,
     );
     lastSummonIndexRef.current = nextIndex;
-    const template = data.summonTemplates[nextIndex];
+    const template = templates[nextIndex];
     lastSummonModuleRef.current = template.module;
 
     setSummons((current) => {
@@ -155,6 +172,10 @@ export function DashboardHome({
 
     const gap = (template.duration ?? 5_000) + 7_000;
     summonTimerRef.current = window.setTimeout(scheduleSummon, gap);
+  }, []);
+
+  useEffect(() => {
+    summonTemplatesRef.current = data.summonTemplates;
   }, [data.summonTemplates]);
 
   useEffect(() => {
@@ -174,7 +195,7 @@ export function DashboardHome({
         window.clearTimeout(summonTimerRef.current);
       }
     };
-  }, [data.summonTemplates.length, scheduleSummon]);
+  }, [data.summonTemplates.length, scheduleSummon, summonTemplateSignature]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
