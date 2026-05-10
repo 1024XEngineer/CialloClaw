@@ -39,21 +39,17 @@ func (s *Service) TaskList(params map[string]any) (map[string]any, error) {
 // It keeps structured storage authoritative for formal evidence while allowing
 // live runtime state to fill task status fields that have not persisted yet.
 func (s *Service) TaskDetailGet(request TaskDetailGetRequest) (TaskDetailGetResponse, error) {
-	return s.TaskDetailGetFromParams(request.ProtocolParamsMap())
+	return s.taskDetailGet(request)
 }
 
-// TaskDetailGetFromParams lets the RPC layer pass its normalized stable payload
-// straight into task-detail assembly without rebuilding the same protocol map.
+// TaskDetailGetFromParams adapts the RPC-decoded request map once, then keeps
+// task-detail assembly typed through the orchestrator response boundary.
 func (s *Service) TaskDetailGetFromParams(params map[string]any) (TaskDetailGetResponse, error) {
-	response, err := s.taskDetailGet(params)
-	if err != nil {
-		return TaskDetailGetResponse{}, err
-	}
-	return newTaskDetailGetResponse(response)
+	return s.TaskDetailGet(TaskDetailGetRequestFromParams(params))
 }
 
-func (s *Service) taskDetailGet(params map[string]any) (map[string]any, error) {
-	taskID := stringValue(params, "task_id", "")
+func (s *Service) taskDetailGet(request TaskDetailGetRequest) (TaskDetailGetResponse, error) {
+	taskID := request.TaskID
 	task, ok := s.taskDetailFromStorage(taskID)
 	if runtimeTask, runtimeOK := s.runEngine.TaskDetail(taskID); runtimeOK {
 		if ok {
@@ -64,7 +60,7 @@ func (s *Service) taskDetailGet(params map[string]any) (map[string]any, error) {
 		}
 	}
 	if !ok {
-		return nil, ErrTaskNotFound
+		return TaskDetailGetResponse{}, ErrTaskNotFound
 	}
 
 	securitySummary := cloneMap(task.SecuritySummary)
@@ -125,19 +121,235 @@ func (s *Service) taskDetailGet(params map[string]any) (map[string]any, error) {
 		deliveryResultValue = normalizedDelivery
 	}
 
-	return map[string]any{
-		"task":                 taskMap(task),
-		"timeline":             protocolTaskStepList(timelineMap(task.Timeline)),
-		"delivery_result":      deliveryResultValue,
-		"artifacts":            protocolArtifactList(s.artifactsForTask(task, task.Artifacts)),
-		"citations":            protocolCitationList(s.citationsForTask(task, task.Citations)),
-		"mirror_references":    protocolMirrorReferenceList(task.MirrorReferences),
-		"approval_request":     approvalRequestValue,
-		"authorization_record": authorizationRecordValue,
-		"audit_record":         auditRecordValue,
-		"security_summary":     securitySummary,
-		"runtime_summary":      runtimeSummary,
+	deliveryResultDTO, err := deliveryResultDTOPointerFromValue(deliveryResultValue)
+	if err != nil {
+		return TaskDetailGetResponse{}, fmt.Errorf("delivery_result: %w", err)
+	}
+	artifacts, err := artifactDTOListFromValues(s.artifactsForTask(task, task.Artifacts))
+	if err != nil {
+		return TaskDetailGetResponse{}, err
+	}
+	citations, err := citationDTOListFromValues(s.citationsForTask(task, task.Citations))
+	if err != nil {
+		return TaskDetailGetResponse{}, err
+	}
+	mirrorReferences, err := mirrorReferenceDTOListFromValues(task.MirrorReferences)
+	if err != nil {
+		return TaskDetailGetResponse{}, err
+	}
+	approvalRequestDTO, err := approvalRequestDTOPointerFromValue(approvalRequestValue)
+	if err != nil {
+		return TaskDetailGetResponse{}, fmt.Errorf("approval_request: %w", err)
+	}
+	authorizationRecordDTO, err := authorizationRecordDTOPointerFromValue(authorizationRecordValue)
+	if err != nil {
+		return TaskDetailGetResponse{}, fmt.Errorf("authorization_record: %w", err)
+	}
+	auditRecordDTO, err := auditRecordDTOPointerFromValue(auditRecordValue)
+	if err != nil {
+		return TaskDetailGetResponse{}, fmt.Errorf("audit_record: %w", err)
+	}
+	securitySummaryDTO, err := securitySummaryDTOFromMap(securitySummary)
+	if err != nil {
+		return TaskDetailGetResponse{}, fmt.Errorf("security_summary: %w", err)
+	}
+	runtimeSummaryDTO, err := runtimeSummaryDTOFromMap(runtimeSummary)
+	if err != nil {
+		return TaskDetailGetResponse{}, fmt.Errorf("runtime_summary: %w", err)
+	}
+
+	return TaskDetailGetResponse{
+		Task:                taskDTOFromRecord(task),
+		Timeline:            taskStepDTOListFromRecords(task.Timeline),
+		DeliveryResult:      deliveryResultDTO,
+		Artifacts:           artifacts,
+		Citations:           citations,
+		MirrorReferences:    mirrorReferences,
+		ApprovalRequest:     approvalRequestDTO,
+		AuthorizationRecord: authorizationRecordDTO,
+		AuditRecord:         auditRecordDTO,
+		SecuritySummary:     securitySummaryDTO,
+		RuntimeSummary:      runtimeSummaryDTO,
 	}, nil
+}
+
+func taskDTOFromRecord(record runengine.TaskRecord) TaskDTO {
+	return TaskDTO{
+		TaskID:         record.TaskID,
+		SessionID:      trimmedStringPointer(record.SessionID),
+		Title:          record.Title,
+		SourceType:     record.SourceType,
+		Status:         record.Status,
+		Intent:         intentPayloadFromTaskIntent(record.Intent),
+		CurrentStep:    record.CurrentStep,
+		RiskLevel:      record.RiskLevel,
+		LoopStopReason: trimmedStringPointer(record.LoopStopReason),
+		StartedAt:      stringPointer(record.StartedAt.Format(dateTimeLayout)),
+		UpdatedAt:      record.UpdatedAt.Format(dateTimeLayout),
+		FinishedAt:     timePointerString(record.FinishedAt),
+	}
+}
+
+func intentPayloadFromTaskIntent(intent map[string]any) *IntentPayload {
+	if len(intent) == 0 {
+		return nil
+	}
+	name := stringValue(intent, "name", "")
+	arguments := cloneMap(mapValue(intent, "arguments"))
+	if strings.TrimSpace(name) == "" && len(arguments) == 0 {
+		return nil
+	}
+	return &IntentPayload{Name: name, Arguments: arguments}
+}
+
+func taskStepDTOListFromRecords(timeline []runengine.TaskStepRecord) []TaskStepDTO {
+	if len(timeline) == 0 {
+		return []TaskStepDTO{}
+	}
+	result := make([]TaskStepDTO, 0, len(timeline))
+	for _, step := range timeline {
+		result = append(result, TaskStepDTO{
+			StepID:        step.StepID,
+			TaskID:        step.TaskID,
+			Name:          step.Name,
+			Status:        step.Status,
+			OrderIndex:    step.OrderIndex,
+			InputSummary:  step.InputSummary,
+			OutputSummary: step.OutputSummary,
+		})
+	}
+	return result
+}
+
+func deliveryResultDTOPointerFromValue(value any) (*DeliveryResultDTO, error) {
+	if value == nil {
+		return nil, nil
+	}
+	deliveryResult, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("must be object, got %T", value)
+	}
+	if len(deliveryResult) == 0 {
+		return nil, nil
+	}
+	dto, err := deliveryResultDTOFromMap(deliveryResult)
+	if err != nil {
+		return nil, err
+	}
+	return &dto, nil
+}
+
+func artifactDTOListFromValues(artifacts []map[string]any) ([]ArtifactDTO, error) {
+	normalized := protocolArtifactList(artifacts)
+	result := make([]ArtifactDTO, 0, len(normalized))
+	for index, artifact := range normalized {
+		dto, err := artifactDTOFromMap(artifact)
+		if err != nil {
+			return nil, fmt.Errorf("artifacts[%d]: %w", index, err)
+		}
+		result = append(result, dto)
+	}
+	return result, nil
+}
+
+func citationDTOListFromValues(citations []map[string]any) ([]CitationDTO, error) {
+	normalized := protocolCitationList(citations)
+	result := make([]CitationDTO, 0, len(normalized))
+	for index, citation := range normalized {
+		dto, err := citationDTOFromMap(citation)
+		if err != nil {
+			return nil, fmt.Errorf("citations[%d]: %w", index, err)
+		}
+		result = append(result, dto)
+	}
+	return result, nil
+}
+
+func mirrorReferenceDTOListFromValues(references []map[string]any) ([]MirrorReferenceDTO, error) {
+	normalized := protocolMirrorReferenceList(references)
+	result := make([]MirrorReferenceDTO, 0, len(normalized))
+	for index, reference := range normalized {
+		dto, err := mirrorReferenceDTOFromMap(reference)
+		if err != nil {
+			return nil, fmt.Errorf("mirror_references[%d]: %w", index, err)
+		}
+		result = append(result, dto)
+	}
+	return result, nil
+}
+
+func approvalRequestDTOPointerFromValue(value any) (*ApprovalRequestDTO, error) {
+	if value == nil {
+		return nil, nil
+	}
+	approvalRequest, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("must be object, got %T", value)
+	}
+	if len(approvalRequest) == 0 {
+		return nil, nil
+	}
+	dto, err := approvalRequestDTOFromMap(approvalRequest)
+	if err != nil {
+		return nil, err
+	}
+	return &dto, nil
+}
+
+func authorizationRecordDTOPointerFromValue(value any) (*AuthorizationRecordDTO, error) {
+	if value == nil {
+		return nil, nil
+	}
+	authorizationRecord, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("must be object, got %T", value)
+	}
+	if len(authorizationRecord) == 0 {
+		return nil, nil
+	}
+	dto, err := authorizationRecordDTOFromMap(authorizationRecord)
+	if err != nil {
+		return nil, err
+	}
+	return &dto, nil
+}
+
+func auditRecordDTOPointerFromValue(value any) (*AuditRecordDTO, error) {
+	if value == nil {
+		return nil, nil
+	}
+	auditRecord, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("must be object, got %T", value)
+	}
+	if len(auditRecord) == 0 {
+		return nil, nil
+	}
+	dto, err := auditRecordDTOFromMap(auditRecord)
+	if err != nil {
+		return nil, err
+	}
+	return &dto, nil
+}
+
+func trimmedStringPointer(value string) *string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
+func stringPointer(value string) *string {
+	return &value
+}
+
+func timePointerString(value *time.Time) *string {
+	if value == nil {
+		return nil
+	}
+	formatted := value.Format(dateTimeLayout)
+	return &formatted
 }
 
 // mergeRuntimeTaskDetail keeps first-class structured evidence authoritative but

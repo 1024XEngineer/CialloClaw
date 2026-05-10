@@ -318,81 +318,6 @@ func newTaskEntryResponse(payload map[string]any) (TaskEntryResponse, error) {
 	}, nil
 }
 
-func newTaskDetailGetResponse(payload map[string]any) (TaskDetailGetResponse, error) {
-	taskPayload, ok, err := protocolMapField(payload, "task")
-	if err != nil {
-		return TaskDetailGetResponse{}, err
-	}
-	if !ok {
-		return TaskDetailGetResponse{}, fmt.Errorf("task must be object")
-	}
-	task, err := taskDTOFromMap(taskPayload)
-	if err != nil {
-		return TaskDetailGetResponse{}, fmt.Errorf("task: %w", err)
-	}
-	timeline, err := taskStepDTOListFromMap(payload, "timeline")
-	if err != nil {
-		return TaskDetailGetResponse{}, err
-	}
-	deliveryResult, err := deliveryResultDTOPointerFromMap(payload, "delivery_result")
-	if err != nil {
-		return TaskDetailGetResponse{}, err
-	}
-	artifacts, err := artifactDTOListFromMap(payload, "artifacts")
-	if err != nil {
-		return TaskDetailGetResponse{}, err
-	}
-	citations, err := citationDTOListFromMap(payload, "citations")
-	if err != nil {
-		return TaskDetailGetResponse{}, err
-	}
-	mirrorReferences, err := mirrorReferenceDTOListFromMap(payload, "mirror_references")
-	if err != nil {
-		return TaskDetailGetResponse{}, err
-	}
-	approvalRequest, err := approvalRequestDTOPointerFromMap(payload, "approval_request")
-	if err != nil {
-		return TaskDetailGetResponse{}, err
-	}
-	authorizationRecord, err := authorizationRecordDTOPointerFromMap(payload, "authorization_record")
-	if err != nil {
-		return TaskDetailGetResponse{}, err
-	}
-	auditRecord, err := auditRecordDTOPointerFromMap(payload, "audit_record")
-	if err != nil {
-		return TaskDetailGetResponse{}, err
-	}
-	securitySummaryPayload, err := requireProtocolMapField(payload, "security_summary")
-	if err != nil {
-		return TaskDetailGetResponse{}, err
-	}
-	securitySummary, err := securitySummaryDTOFromMap(securitySummaryPayload)
-	if err != nil {
-		return TaskDetailGetResponse{}, fmt.Errorf("security_summary: %w", err)
-	}
-	runtimeSummaryPayload, err := requireProtocolMapField(payload, "runtime_summary")
-	if err != nil {
-		return TaskDetailGetResponse{}, err
-	}
-	runtimeSummary, err := runtimeSummaryDTOFromMap(runtimeSummaryPayload)
-	if err != nil {
-		return TaskDetailGetResponse{}, fmt.Errorf("runtime_summary: %w", err)
-	}
-	return TaskDetailGetResponse{
-		Task:                task,
-		Timeline:            timeline,
-		DeliveryResult:      deliveryResult,
-		Artifacts:           artifacts,
-		Citations:           citations,
-		MirrorReferences:    mirrorReferences,
-		ApprovalRequest:     approvalRequest,
-		AuthorizationRecord: authorizationRecord,
-		AuditRecord:         auditRecord,
-		SecuritySummary:     securitySummary,
-		RuntimeSummary:      runtimeSummary,
-	}, nil
-}
-
 // Map returns the protocol payload as a map for package tests that assert
 // individual fields. Production callers should consume the typed DTO directly.
 func (r TaskEntryResponse) Map() map[string]any {
@@ -627,22 +552,6 @@ func deliveryPayloadDTOFromMap(values map[string]any) (DeliveryPayloadDTO, error
 	return DeliveryPayloadDTO{Path: path, URL: url, TaskID: taskID}, nil
 }
 
-func taskStepDTOListFromMap(values map[string]any, key string) ([]TaskStepDTO, error) {
-	items, err := requireProtocolMapSliceField(values, key)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]TaskStepDTO, 0, len(items))
-	for index, item := range items {
-		dto, err := taskStepDTOFromMap(item)
-		if err != nil {
-			return nil, fmt.Errorf("%s[%d]: %w", key, index, err)
-		}
-		result = append(result, dto)
-	}
-	return result, nil
-}
-
 func taskStepDTOFromMap(values map[string]any) (TaskStepDTO, error) {
 	stepID, err := requireProtocolStringField(values, "step_id")
 	if err != nil {
@@ -683,22 +592,6 @@ func taskStepDTOFromMap(values map[string]any) (TaskStepDTO, error) {
 	}, nil
 }
 
-func artifactDTOListFromMap(values map[string]any, key string) ([]ArtifactDTO, error) {
-	items, err := requireProtocolMapSliceField(values, key)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]ArtifactDTO, 0, len(items))
-	for index, item := range items {
-		dto, err := artifactDTOFromMap(item)
-		if err != nil {
-			return nil, fmt.Errorf("%s[%d]: %w", key, index, err)
-		}
-		result = append(result, dto)
-	}
-	return result, nil
-}
-
 func artifactDTOFromMap(values map[string]any) (ArtifactDTO, error) {
 	artifactID, err := requireProtocolStringField(values, "artifact_id")
 	if err != nil {
@@ -732,22 +625,6 @@ func artifactDTOFromMap(values map[string]any) (ArtifactDTO, error) {
 		Path:         path,
 		MimeType:     mimeType,
 	}, nil
-}
-
-func citationDTOListFromMap(values map[string]any, key string) ([]CitationDTO, error) {
-	items, err := requireProtocolMapSliceField(values, key)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]CitationDTO, 0, len(items))
-	for index, item := range items {
-		dto, err := citationDTOFromMap(item)
-		if err != nil {
-			return nil, fmt.Errorf("%s[%d]: %w", key, index, err)
-		}
-		result = append(result, dto)
-	}
-	return result, nil
 }
 
 func citationDTOFromMap(values map[string]any) (CitationDTO, error) {
@@ -808,22 +685,6 @@ func citationDTOFromMap(values map[string]any) (CitationDTO, error) {
 		ExcerptText:     excerptText,
 		ScreenSessionID: screenSessionID,
 	}, nil
-}
-
-func mirrorReferenceDTOListFromMap(values map[string]any, key string) ([]MirrorReferenceDTO, error) {
-	items, err := requireProtocolMapSliceField(values, key)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]MirrorReferenceDTO, 0, len(items))
-	for index, item := range items {
-		dto, err := mirrorReferenceDTOFromMap(item)
-		if err != nil {
-			return nil, fmt.Errorf("%s[%d]: %w", key, index, err)
-		}
-		result = append(result, dto)
-	}
-	return result, nil
 }
 
 func mirrorReferenceDTOFromMap(values map[string]any) (MirrorReferenceDTO, error) {
@@ -1153,41 +1014,6 @@ func requireProtocolMapField(values map[string]any, key string) (map[string]any,
 		return nil, fmt.Errorf("%s must be object", key)
 	}
 	return value, nil
-}
-
-func protocolMapSliceField(values map[string]any, key string) ([]map[string]any, error) {
-	rawValue, ok := values[key]
-	if !ok || rawValue == nil {
-		return nil, nil
-	}
-	switch value := rawValue.(type) {
-	case []map[string]any:
-		result := make([]map[string]any, 0, len(value))
-		for _, item := range value {
-			result = append(result, cloneProtocolMap(item))
-		}
-		return result, nil
-	case []any:
-		result := make([]map[string]any, 0, len(value))
-		for index, rawItem := range value {
-			item, ok := rawItem.(map[string]any)
-			if !ok {
-				return nil, protocolIndexedTypeError(key, index, "object", rawItem)
-			}
-			result = append(result, cloneProtocolMap(item))
-		}
-		return result, nil
-	default:
-		return nil, protocolTypeError(key, "array of objects", rawValue)
-	}
-}
-
-func requireProtocolMapSliceField(values map[string]any, key string) ([]map[string]any, error) {
-	rawValue, ok := values[key]
-	if !ok || rawValue == nil {
-		return nil, fmt.Errorf("%s must be array of objects", key)
-	}
-	return protocolMapSliceField(values, key)
 }
 
 func protocolStringField(values map[string]any, key string) (string, error) {
