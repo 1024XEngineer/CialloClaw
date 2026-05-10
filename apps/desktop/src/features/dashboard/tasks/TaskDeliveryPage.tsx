@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { CSSProperties, MouseEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ArrowLeft, ArrowUpRight, FolderOutput, Link2, RefreshCcw } from "lucide-react";
 import { Link, NavLink, Navigate, useNavigate, useParams } from "react-router-dom";
@@ -238,6 +238,27 @@ export function TaskDeliveryPage() {
     });
   }
 
+  async function handleFormalDeliveryUrlClick(event: MouseEvent<HTMLAnchorElement>) {
+    event.preventDefault();
+
+    if (!formalDeliveryUrl) {
+      return;
+    }
+
+    if (!formalDeliveryUrlIsAllowed) {
+      showFeedback("已拦截不受支持的结果链接。");
+      return;
+    }
+
+    showFeedback(await performTaskOpenExecution({
+      feedback: "已打开结果链接。",
+      mode: "open_url",
+      path: formalDeliveryResult?.payload.path ?? null,
+      taskId,
+      url: formalDeliveryUrl,
+    }));
+  }
+
   async function handleResolvedOpen(result: TaskDeliveryOpenResult) {
     const plan = resolveTaskOpenExecutionPlan(result);
 
@@ -436,7 +457,14 @@ export function TaskDeliveryPage() {
                 <dd>
                   {formalDeliveryUrl ? (
                     formalDeliveryUrlIsAllowed ? (
-                      <a href={formalDeliveryUrl} rel="noreferrer noopener" target="_blank">
+                      <a
+                        href={formalDeliveryUrl}
+                        rel="noreferrer noopener"
+                        target="_blank"
+                        onClick={(event) => {
+                          void handleFormalDeliveryUrlClick(event);
+                        }}
+                      >
                         {formalDeliveryUrl}
                       </a>
                     ) : (

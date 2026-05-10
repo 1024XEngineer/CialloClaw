@@ -5545,6 +5545,8 @@ test("task workspace routes formal delivery through a dedicated page and keeps l
   assert.match(taskDeliverySource, /buildDashboardTaskDetailRouteState/);
   assert.match(taskDeliverySource, /isAllowedTaskOpenUrl/);
   assert.match(taskDeliverySource, /formalDeliveryUrlIsAllowed/);
+  assert.match(taskDeliverySource, /handleFormalDeliveryUrlClick/);
+  assert.match(taskDeliverySource, /performTaskOpenExecution\(\{/);
   assert.doesNotMatch(taskDeliverySource, /href=\{formalDeliveryResult\.payload\.url\}/);
   assert.match(taskDeliverySource, /当前正式结果已经在交付页中展示/);
 
