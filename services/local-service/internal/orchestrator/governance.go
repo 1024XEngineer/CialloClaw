@@ -151,11 +151,7 @@ func (s *Service) maybePauseForRuntimeApproval(task runengine.TaskRecord, taskIn
 	if err := s.persistApprovalRequestState(updatedTask.TaskID, approvalRequest, assessment.ImpactScope); err != nil {
 		return task, nil, false, err
 	}
-	return updatedTask, map[string]any{
-		"task":            taskMap(updatedTask),
-		"bubble_message":  bubble,
-		"delivery_result": nil,
-	}, true, nil
+	return updatedTask, bubble, true, nil
 }
 
 // runtimeApprovalAssessment reconstructs the formal approval_request boundary

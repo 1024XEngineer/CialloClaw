@@ -4309,15 +4309,15 @@ func TestServiceAgentLoopToolApprovalPausesWaitingAuth(t *testing.T) {
 	}
 	service, _ := newTestServiceWithModelClient(t, modelClient)
 
-	startResult, err := service.StartTask(map[string]any{
-		"session_id": "sess_agent_loop_auth",
-		"source":     "floating_ball",
-		"trigger":    "hover_text_input",
-		"input": map[string]any{
-			"type": "text",
-			"text": "去 https://example.com 看一下页面内容",
+	startResult, err := startTaskForTest(service, StartTaskRequest{
+		SessionID: "sess_agent_loop_auth",
+		Source:    "floating_ball",
+		Trigger:   "hover_text_input",
+		Input: TaskStartInput{
+			Type: "text",
+			Text: "去 https://example.com 看一下页面内容",
 		},
-		"intent": map[string]any{
+		Intent: map[string]any{
 			"name":      "agent_loop",
 			"arguments": map[string]any{},
 		},
@@ -4399,15 +4399,15 @@ func TestServiceRuntimeApprovalResumeRejectsChangedToolInput(t *testing.T) {
 	}
 	service, _ := newTestServiceWithModelClient(t, modelClient)
 
-	startResult, err := service.StartTask(map[string]any{
-		"session_id": "sess_agent_loop_exec_auth",
-		"source":     "floating_ball",
-		"trigger":    "hover_text_input",
-		"input": map[string]any{
-			"type": "text",
-			"text": "先看看当前仓库状态",
+	startResult, err := startTaskForTest(service, StartTaskRequest{
+		SessionID: "sess_agent_loop_exec_auth",
+		Source:    "floating_ball",
+		Trigger:   "hover_text_input",
+		Input: TaskStartInput{
+			Type: "text",
+			Text: "先看看当前仓库状态",
 		},
-		"intent": map[string]any{
+		Intent: map[string]any{
 			"name":      "agent_loop",
 			"arguments": map[string]any{},
 		},
