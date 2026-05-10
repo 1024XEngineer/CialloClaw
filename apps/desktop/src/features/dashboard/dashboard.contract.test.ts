@@ -2126,7 +2126,7 @@ test("security board cards keep CJK headlines and status badges readable", () =>
   assert.match(securityAppSource, /className="security-page__status-strip"/);
   assert.match(securityAppSource, /className="security-page__status-badge"/);
   assert.match(securityAppSource, /className="security-page__card-badge"/);
-  assert.match(securityBoardSource, /--security-font-display: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun"/);
+  assert.match(securityBoardSource, /--security-font-display: var\(--cc-font-display\);/);
   assert.match(securityBoardSource, /\.security-page__card-line \{[\s\S]*line-height: 1\.18;/);
   assert.match(securityBoardSource, /\.security-page__card-line \{[\s\S]*overflow-wrap: anywhere;/);
   assert.match(securityBoardSource, /\.security-page__status-badge,[\s\S]*white-space: normal;/);
@@ -2191,7 +2191,7 @@ test("security audit cards and mirror cards stay aligned with the v6 frontend pr
 test("mirror cards use CJK-friendly display typography without clipped line clamps", () => {
   const mirrorStyleSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/mirror.css"), "utf8");
 
-  assert.match(mirrorStyleSource, /--mirror-font-display: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun"/);
+  assert.match(mirrorStyleSource, /--mirror-font-display: var\(--cc-font-display\);/);
   assert.match(mirrorStyleSource, /\.mirror-page__card-line \{[\s\S]*line-height: 1\.28;/);
   assert.match(mirrorStyleSource, /\.mirror-page__card-line \{[\s\S]*padding-bottom: 0\.12em;/);
   assert.match(mirrorStyleSource, /\.mirror-page__card-line--memory \{[\s\S]*word-break: break-word;/);
@@ -4211,8 +4211,8 @@ test("dashboard settings snapshot hydrates runtime defaults before merging scope
       };
     };
 
-    assert.equal(snapshot.settings.general.download.workspace_path, "/runtime/workspace");
-    assert.deepEqual(snapshot.settings.task_automation.task_sources, ["/runtime/workspace/todos"]);
+    assert.equal(snapshot.settings.general.download.workspace_path, "workspace");
+    assert.deepEqual(snapshot.settings.task_automation.task_sources, ["workspace/todos"]);
     assert.equal(snapshot.settings.memory.enabled, false);
     assert.equal(snapshot.settings.memory.lifecycle, "session");
   } finally {
@@ -6346,7 +6346,7 @@ test("task workspace routes formal delivery through a dedicated page and keeps l
   assert.match(taskPageSource, /buildDashboardTaskArtifactQueryKey/);
   assert.match(taskPageSource, /loadTaskArtifactPage/);
   assert.match(taskPageSource, /openTaskArtifactForTask/);
-  assert.match(taskPageSource, /resolveDashboardTaskDeliveryRoutePath/);
+  assert.match(taskPageSource, /navigateToDashboardResultPage/);
   assert.match(taskPageSource, /readDashboardTaskDetailRouteState/);
   assert.match(taskPageSource, /subscribeTaskUpdated\(\(payload\) =>/);
   assert.match(taskPageSource, /subscribeDeliveryReady\(\(payload\) =>/);
@@ -6385,7 +6385,7 @@ test("task workspace routes formal delivery through a dedicated page and keeps l
   assert.doesNotMatch(taskDetailSource, /当前协议尚未提供稳定的 artifact\.open 能力/);
   assert.match(taskDetailSource, /onOpenArtifact/);
   assert.match(taskDetailSource, /onOpenLatestDelivery/);
-  assert.match(taskDetailSource, /打开结果页/);
+  assert.match(taskDetailSource, /getTaskDeliveryOpenLabel\(formalDeliveryResult\)/);
   assert.doesNotMatch(taskDetailSource, /查看结果页/);
   assert.doesNotMatch(taskDetailSource, /文件舱门/);
   assert.match(taskDetailSource, /artifactItems/);
@@ -9683,7 +9683,8 @@ test("TaskDetailPanel keeps evidence artifacts scoped to formal citation links",
   assert.match(panelSource, /if \(!isScreenTask \|\| detail === null \|\| !hasEvidenceContent\) \{/);
   assert.match(panelSource, /该区域只在屏幕类任务中展示正式截图、OCR 摘要与引用片段。/);
   assert.match(panelSource, /return sourceRef\.length > 0 \? sourceRef : citation\.citation_id/);
-  assert.doesNotMatch(panelSource, /artifactItems\.map\(\(artifact\) => \(/);
+  assert.match(panelSource, /evidenceArtifacts\.map\(\(artifact\) => \(/);
+  assert.match(panelSource, /outputArtifacts\.map\(\(artifact\) => \(/);
   assert.doesNotMatch(panelSource, /当前没有可展示的正式证据链/);
 });
 
