@@ -107,26 +107,18 @@ func (s *Service) defaultIntent(snapshot taskcontext.TaskContextSnapshot) map[st
 	return intentPayload(defaultAgentLoopIntent)
 }
 
-// ComposeTaskTitle creates the fallback user-facing task title that appears in
-// task lists, dashboard modules, and later memory summaries before model-backed
-// title generation can refine it.
-func ComposeTaskTitle(snapshot taskcontext.TaskContextSnapshot, intentName string, subject string) string {
-	subject = strings.TrimSpace(subject)
-	if subject == "" {
-		subject = subjectText(snapshot)
-	}
-	switch intentName {
-	case "screen_analyze":
-		return screenSubjectText(snapshot)
-	default:
-		return subject
-	}
-}
-
 // buildTaskTitle creates the user-facing task title that appears in task lists,
 // dashboard modules, and later memory summaries.
 func (s *Service) buildTaskTitle(snapshot taskcontext.TaskContextSnapshot, intentName string) string {
-	return ComposeTaskTitle(snapshot, intentName, subjectText(snapshot))
+	subject := subjectText(snapshot)
+	if intentName == "screen_analyze" {
+		subject = screenSubjectText(snapshot)
+	}
+	return presentation.TaskTitle(intentName, presentation.TaskTitleOptions{
+		Subject:  subject,
+		HasError: snapshot.ErrorText != "" || snapshot.InputType == "error",
+		IsFile:   len(snapshot.Files) > 0 || snapshot.InputType == "file",
+	})
 }
 
 // buildResultTitle creates the formal delivery title used by delivery_result
@@ -255,8 +247,6 @@ func subjectText(snapshot taskcontext.TaskContextSnapshot) string {
 		return truncateText(snapshot.PageTitle, subjectPreviewMaxLength)
 	case strings.TrimSpace(snapshot.WindowTitle) != "":
 		return truncateText(snapshot.WindowTitle, subjectPreviewMaxLength)
-	case strings.TrimSpace(snapshot.ScreenSummary) != "":
-		return truncateText(snapshot.ScreenSummary, subjectPreviewMaxLength)
 	default:
 		return "当前内容"
 	}
@@ -338,7 +328,7 @@ func isLongContent(text string) bool {
 }
 
 func truncateText(value string, maxLength int) string {
-	return textutil.TruncateGraphemes(strings.Join(strings.Fields(value), " "), maxLength)
+	return textutil.TruncateGraphemes(value, maxLength)
 }
 
 // stringValue safely reads a string field from an intent payload.

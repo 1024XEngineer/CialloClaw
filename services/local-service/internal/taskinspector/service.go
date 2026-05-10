@@ -3,7 +3,6 @@
 package taskinspector
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -16,8 +15,6 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textdecode"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/titlegen"
 )
 
 const defaultStaleInterval = 15 * time.Minute
@@ -32,19 +29,17 @@ const (
 // Service builds inspection results from workspace, notepad, and runtime task state.
 type Service struct {
 	fileSystem platform.FileSystemAdapter
-	titlegen   *titlegen.Service
 	now        func() time.Time
 }
 
 // RunInput carries runtime state required by one inspection pass.
 type RunInput struct {
-	Reason               string
-	AllowGeneratedTitles bool
-	TargetSources        []string
-	Config               map[string]any
-	UnfinishedTasks      []runengine.TaskRecord
-	FinishedTasks        []runengine.TaskRecord
-	NotepadItems         []map[string]any
+	Reason          string
+	TargetSources   []string
+	Config          map[string]any
+	UnfinishedTasks []runengine.TaskRecord
+	FinishedTasks   []runengine.TaskRecord
+	NotepadItems    []map[string]any
 }
 
 // RunResult carries the protocol-compatible result of one inspection pass.
@@ -79,15 +74,6 @@ func NewService(fileSystem platform.FileSystemAdapter) *Service {
 	}
 }
 
-// WithTitleGenerator attaches model-backed note-title generation to source
-// normalization while keeping inspection parsing synchronous.
-func (s *Service) WithTitleGenerator(generator *titlegen.Service) *Service {
-	if s != nil && generator != nil {
-		s.titlegen = generator
-	}
-	return s
-}
-
 // Run executes one inspection pass and fails explicitly when configured sources
 // cannot be read from the current runtime workspace.
 func (s *Service) Run(input RunInput) (RunResult, error) {
@@ -96,7 +82,7 @@ func (s *Service) Run(input RunInput) (RunResult, error) {
 		return RunResult{}, ErrInspectionFileSystemUnavailable
 	}
 	sourceSynced := len(sources) > 0 && s.fileSystem != nil
-	parsedFiles, parsedNotepadItems, err := s.inspectSources(sources, input.AllowGeneratedTitles)
+	parsedFiles, parsedNotepadItems, err := s.inspectSources(sources)
 	if err != nil {
 		return RunResult{}, err
 	}
@@ -124,7 +110,7 @@ func (s *Service) Run(input RunInput) (RunResult, error) {
 	}, nil
 }
 
-func (s *Service) inspectSources(sources []string, allowGeneratedTitles bool) (int, []map[string]any, error) {
+func (s *Service) inspectSources(sources []string) (int, []map[string]any, error) {
 	if s.fileSystem == nil || len(sources) == 0 {
 		return 0, nil, nil
 	}
@@ -175,7 +161,7 @@ func (s *Service) inspectSources(sources []string, allowGeneratedTitles bool) (i
 				}
 				return fmt.Errorf("decode task source file %s: %w", currentPath, err)
 			}
-			identifiedItems = append(identifiedItems, s.parseNotepadItemsFromMarkdown(sourcePathFromFSPath(currentPath), decoded.Text, s.now(), allowGeneratedTitles)...)
+			identifiedItems = append(identifiedItems, parseNotepadItemsFromMarkdown(sourcePathFromFSPath(currentPath), decoded.Text, s.now())...)
 			return nil
 		}); err != nil {
 			return 0, nil, fmt.Errorf("%w: %s: %v", ErrInspectionSourceUnreadable, strings.TrimSpace(source), err)
@@ -404,7 +390,7 @@ func countChecklistItems(content string) int {
 	return count
 }
 
-func (s *Service) parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time, allowGeneratedTitles bool) []map[string]any {
+func parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time) []map[string]any {
 	lines := strings.Split(content, "\n")
 	items := make([]map[string]any, 0)
 	var current map[string]any
@@ -416,7 +402,7 @@ func (s *Service) parseNotepadItemsFromMarkdown(sourcePath, content string, now 
 		if len(noteLines) > 0 && stringValue(current, "note_text") == "" {
 			current["note_text"] = strings.Join(noteLines, "\n")
 		}
-		items = append(items, s.normalizeParsedNotepadItem(current, sourcePath, now, allowGeneratedTitles))
+		items = append(items, normalizeParsedNotepadItem(current, sourcePath, now))
 		current = nil
 		noteLines = noteLines[:0]
 	}
@@ -524,7 +510,7 @@ func splitMetadataLine(line string) (string, string, bool) {
 	return key, value, true
 }
 
-func (s *Service) normalizeParsedNotepadItem(item map[string]any, sourcePath string, now time.Time, allowGeneratedTitles bool) map[string]any {
+func normalizeParsedNotepadItem(item map[string]any, sourcePath string, now time.Time) map[string]any {
 	if stringValue(item, "bucket") == notepadBucketRecurringRule {
 		item["type"] = "recurring"
 		if stringValue(item, "repeat_rule_text") == "" {
@@ -548,16 +534,6 @@ func (s *Service) normalizeParsedNotepadItem(item map[string]any, sourcePath str
 	}
 	if stringValue(item, "note_text") == "" {
 		item["note_text"] = stringValue(item, "title")
-	}
-	fallbackTitle := textutil.TruncateGraphemes(firstNonEmpty(
-		stringValue(item, "note_text"),
-		stringValue(item, "title"),
-		"待办事项",
-	), 24)
-	if allowGeneratedTitles && s != nil && s.titlegen != nil && shouldGenerateNoteTitle(item) {
-		item["title"] = s.titlegen.GenerateNoteTitle(context.Background(), item, fallbackTitle)
-	} else {
-		item["title"] = fallbackTitle
 	}
 	if stringValue(item, "planned_at") == "" {
 		item["planned_at"] = stringValue(item, "due_at")
@@ -773,26 +749,6 @@ func fnvHash(value string) uint32 {
 	hasher := fnv.New32a()
 	_, _ = hasher.Write([]byte(value))
 	return hasher.Sum32()
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if strings.TrimSpace(value) != "" {
-			return strings.TrimSpace(value)
-		}
-	}
-	return ""
-}
-
-func shouldGenerateNoteTitle(item map[string]any) bool {
-	title := strings.TrimSpace(stringValue(item, "title"))
-	noteText := strings.TrimSpace(stringValue(item, "note_text"))
-	agentSuggestion := strings.TrimSpace(stringValue(item, "agent_suggestion"))
-	prerequisite := strings.TrimSpace(stringValue(item, "prerequisite"))
-	if agentSuggestion != "" || prerequisite != "" {
-		return true
-	}
-	return noteText != "" && noteText != title
 }
 
 func countOpenNotepadItems(items []map[string]any) int {

@@ -11,10 +11,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/titlegen"
 )
 
 type nonFlusherResponseWriter struct {
@@ -49,27 +45,6 @@ type flushRecorder struct {
 func (r *flushRecorder) Flush() {
 	if r.onFlush != nil {
 		r.onFlush()
-	}
-}
-
-type asyncTitleModelClient struct {
-	started chan struct{}
-	release chan struct{}
-}
-
-func (c *asyncTitleModelClient) GenerateText(ctx context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
-	if request.TaskID != "task_title_generator" {
-		return model.GenerateTextResponse{OutputText: "unused"}, nil
-	}
-	select {
-	case c.started <- struct{}{}:
-	default:
-	}
-	select {
-	case <-c.release:
-		return model.GenerateTextResponse{OutputText: `{"title":"发布复盘风险跟进"}`}, nil
-	case <-ctx.Done():
-		return model.GenerateTextResponse{}, ctx.Err()
 	}
 }
 
@@ -186,94 +161,6 @@ func TestHandleStreamConnSkipsBufferedLiveRuntimeReplay(t *testing.T) {
 	}
 	if err := right.SetReadDeadline(time.Time{}); err != nil {
 		t.Fatalf("clear replay deadline: %v", err)
-	}
-}
-
-func TestHandleStreamConnStreamsAsyncTaskTitleUpdatesAfterResponse(t *testing.T) {
-	modelClient := &asyncTitleModelClient{
-		started: make(chan struct{}, 1),
-		release: make(chan struct{}),
-	}
-	server := newTestServerWithModelClient(modelClient)
-	server.orchestrator.WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{
-		Provider: "openai_responses",
-		ModelID:  "gpt-5.4",
-		Endpoint: "https://api.openai.com/v1/responses",
-	}, modelClient)))
-	left, right := net.Pipe()
-	defer left.Close()
-	defer right.Close()
-
-	go server.handleStreamConn(left)
-
-	encoder := json.NewEncoder(right)
-	decoder := json.NewDecoder(right)
-	request := requestEnvelope{
-		JSONRPC: "2.0",
-		ID:      json.RawMessage(`"req-stream-async-title"`),
-		Method:  "agent.task.start",
-		Params: mustMarshal(t, map[string]any{
-			"session_id": "sess_stream_async_title",
-			"source":     "floating_ball",
-			"trigger":    "hover_text_input",
-			"intent":     map[string]any{"name": "translate"},
-			"options":    map[string]any{"confirm_required": true},
-			"input": map[string]any{
-				"type": "text",
-				"text": "请帮我翻译这次发布复盘，并补齐风险项和后续跟进安排",
-			},
-		}),
-	}
-
-	if err := encoder.Encode(request); err != nil {
-		t.Fatalf("encode stream request: %v", err)
-	}
-	select {
-	case <-modelClient.started:
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected async title generation to start")
-	}
-
-	var response successEnvelope
-	if err := decoder.Decode(&response); err != nil {
-		t.Fatalf("decode stream response: %v", err)
-	}
-	resultData, ok := response.Result.Data.(map[string]any)
-	if !ok {
-		t.Fatalf("expected response data map, got %+v", response.Result.Data)
-	}
-	taskData := mapValue(resultData, "task")
-	taskID := stringValue(taskData, "task_id", "")
-	if taskID == "" {
-		t.Fatalf("expected task start response to include task_id, got %+v", response)
-	}
-
-	close(modelClient.release)
-
-	if err := right.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
-		t.Fatalf("set async notification deadline: %v", err)
-	}
-	defer right.SetReadDeadline(time.Time{})
-
-	for {
-		var envelope notificationEnvelope
-		if err := decoder.Decode(&envelope); err != nil {
-			t.Fatalf("decode async notification: %v", err)
-		}
-		if envelope.Method != "task.updated" {
-			continue
-		}
-		params, ok := envelope.Params.(map[string]any)
-		if !ok {
-			t.Fatalf("expected task.updated params map, got %+v", envelope)
-		}
-		if stringValue(params, "task_id", "") != taskID {
-			continue
-		}
-		if stringValue(params, "status", "") == "" {
-			t.Fatalf("expected task.updated payload to carry status, got %+v", params)
-		}
-		return
 	}
 }
 

@@ -1,8 +1,8 @@
 package orchestrator
 
-// SubscribeRuntimeNotifications registers a temporary tap for live task/runtime
-// notifications so transports can mirror in-flight loop events and late task
-// refinements without waiting for the next explicit query.
+// SubscribeRuntimeNotifications registers a temporary tap for execution-time
+// runtime notifications so transports can mirror in-flight loop events without
+// waiting for the enclosing RPC response to finish.
 func (s *Service) SubscribeRuntimeNotifications(listener func(taskID, method string, params map[string]any)) func() {
 	if s == nil || listener == nil {
 		return func() {}

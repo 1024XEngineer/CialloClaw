@@ -53,16 +53,13 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		}
 		return nil, ErrTaskNotFound
 	}
-	snapshot := snapshotFromTask(task)
-	fallbackTitle := s.intent.Suggest(snapshot, intentValue, false).TaskTitle
-	updatedTitle := s.fallbackTaskTitle(snapshot, intentValue, fallbackTitle)
+	updatedTitle := s.intent.Suggest(snapshotFromTask(task), intentValue, false).TaskTitle
 
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleConfirmStarted, nil), task.UpdatedAt.Format(dateTimeLayout))
 	updatedTask, ok := s.runEngine.UpdateIntent(task.TaskID, updatedTitle, intentValue)
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
-	s.scheduleTaskTitleRefresh(updatedTask.TaskID, snapshotFromTask(updatedTask), intentValue, updatedTask.Title)
 	s.attachMemoryReadPlans(updatedTask.TaskID, updatedTask.RunID, snapshotFromTask(updatedTask), intentValue)
 	if queuedTask, queueBubble, queued, queueErr := s.queueTaskIfSessionBusy(updatedTask); queueErr != nil {
 		return nil, queueErr
@@ -86,7 +83,7 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
-	snapshot = snapshotFromTask(updatedTask)
+	snapshot := snapshotFromTask(updatedTask)
 
 	updatedTask, resultBubble, deliveryResult, _, err := s.executeTask(updatedTask, snapshot, intentValue)
 	if err != nil {
