@@ -76,7 +76,7 @@ func CaptureContextSignals(source, scene string, context map[string]any) SignalS
 		ClipboardMimeType: firstNonEmpty(stringValue(context, "clipboard_mime_type"), stringValue(clipboard, "mime_type")),
 		HoverTarget:       firstNonEmpty(stringValue(context, "hover_target"), stringValue(page, "hover_target"), stringValue(screen, "hover_target")),
 		LastAction:        firstNonEmpty(stringValue(context, "last_action"), stringValue(behavior, "last_action")),
-		ErrorText:         firstNonEmpty(stringValue(context, "error_text"), stringValue(errorValue, "message")),
+		ErrorText:         stringValue(errorValue, "message"),
 		DwellMillis:       intValue(context, "dwell_millis", intValue(behavior, "dwell_millis", 0)),
 		WindowSwitchCount: intValue(context, "window_switch_count", intValue(behavior, "window_switch_count", 0)),
 		PageSwitchCount:   intValue(context, "page_switch_count", intValue(behavior, "page_switch_count", 0)),

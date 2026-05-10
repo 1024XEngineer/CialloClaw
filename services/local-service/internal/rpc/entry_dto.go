@@ -125,6 +125,9 @@ func decodeTypedProtocolParams(raw json.RawMessage, target any, validate func(ma
 			TraceID: "trace_rpc_params",
 		}
 	}
+	if normalized, ok := target.(interface{ ProtocolParamsMap() map[string]any }); ok {
+		return normalized.ProtocolParamsMap(), nil
+	}
 	return protocolParamsMap(target)
 }
 

@@ -31,6 +31,9 @@ func TestCaptureContextSignalsNormalizesNestedSignals(t *testing.T) {
 			"page_switch_count":   2,
 			"copy_count":          2,
 		},
+		"error": map[string]any{
+			"message": " build failed ",
+		},
 	})
 
 	if snapshot.PageTitle != "Article" || snapshot.PageURL != "https://example.com/article" || snapshot.AppName != "browser" {
@@ -44,6 +47,9 @@ func TestCaptureContextSignalsNormalizesNestedSignals(t *testing.T) {
 	}
 	if snapshot.HoverTarget != "warning banner" {
 		t.Fatalf("expected hover target to be normalized, got %+v", snapshot)
+	}
+	if snapshot.ErrorText != "build failed" {
+		t.Fatalf("expected structured error message to be normalized, got %+v", snapshot)
 	}
 }
 
