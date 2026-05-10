@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
@@ -21,6 +22,16 @@ var errTaskConfirmCorrectionPayloadInvalid = errors.New("task confirm correction
 type taskIntentCorrection struct {
 	Intent map[string]any `json:"intent"`
 	Reason string         `json:"reason"`
+}
+
+var supportedTaskConfirmIntents = map[string]struct{}{
+	"agent_loop":     {},
+	"summarize":      {},
+	"translate":      {},
+	"explain":        {},
+	"rewrite":        {},
+	"write_file":     {},
+	"screen_analyze": {},
 }
 
 func validateTaskConfirmCorrectionPayload(confirmed bool, correctedIntent map[string]any, correctionText string) error {
@@ -41,18 +52,7 @@ func validateTaskConfirmCorrectionPayload(confirmed bool, correctedIntent map[st
 func (s *Service) reinferTaskIntentFromCorrection(task runengine.TaskRecord, correctionText string) (map[string]any, error) {
 	snapshot := snapshotFromTask(task)
 	intentValue := s.inferTaskIntentFromCorrection(task, snapshot, correctionText)
-	if strings.TrimSpace(stringValue(intentValue, "name", "")) == "" {
-		updatedTask, err := s.revertTaskToIntentConfirmation(task)
-		if err != nil {
-			return nil, err
-		}
-		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "intent_confirm", bubbleTextForStart(s.intent.Suggest(snapshot, nil, true)), time.Now().Format(dateTimeLayout))
-		updatedTask = s.persistTaskPresentation(updatedTask, bubble)
-		return buildTaskEntryResponse(updatedTask, bubble, nil), nil
-	}
-
-	suggestion := s.intent.Suggest(snapshot, intentValue, true)
-	suggestion.RequiresConfirm = true
+	suggestion := s.normalizedTaskConfirmSuggestion(snapshot, intentValue, true)
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "intent_confirm", bubbleTextForStart(suggestion), time.Now().Format(dateTimeLayout))
 	updatedTask, ok := s.runEngine.UpdateIntent(task.TaskID, suggestion.TaskTitle, suggestion.Intent)
 	if !ok {
@@ -153,6 +153,9 @@ func normalizeCorrectionIntent(intentValue map[string]any) (map[string]any, bool
 	if name == "" {
 		return nil, false
 	}
+	if _, ok := supportedTaskConfirmIntents[name]; !ok {
+		return nil, false
+	}
 	arguments := cloneMap(mapValue(intentValue, "arguments"))
 	if arguments == nil {
 		arguments = map[string]any{}
@@ -171,4 +174,14 @@ func fallbackTaskConfirmCorrectionIntent(correctionText string) map[string]any {
 			"correction_text": strings.TrimSpace(correctionText),
 		},
 	}
+}
+
+// normalizedTaskConfirmSuggestion reuses the same intent normalization and
+// capability downgrade path as task creation so confirmation edits cannot
+// persist unsupported intent names or unavailable screen-only intents.
+func (s *Service) normalizedTaskConfirmSuggestion(snapshot taskcontext.TaskContextSnapshot, intentValue map[string]any, confirmRequired bool) intent.Suggestion {
+	suggestion := s.intent.Suggest(snapshot, intentValue, confirmRequired)
+	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion, confirmRequired)
+	suggestion.RequiresConfirm = confirmRequired
+	return suggestion
 }

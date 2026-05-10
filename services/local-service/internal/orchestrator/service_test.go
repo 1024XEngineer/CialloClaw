@@ -2331,6 +2331,123 @@ func TestServiceConfirmTaskRejectsCorrectionPayloadConflicts(t *testing.T) {
 	}
 }
 
+func TestServiceConfirmTaskRejectsUnsupportedCorrectedIntent(t *testing.T) {
+	service := newTestService()
+
+	startResult, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_invalid_corrected_intent",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "你好",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	confirmResult, err := service.ConfirmTask(map[string]any{
+		"task_id":   taskID,
+		"confirmed": false,
+		"corrected_intent": map[string]any{
+			"name":      "browser_navigate",
+			"arguments": map[string]any{"url": "https://example.test"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("confirm task failed: %v", err)
+	}
+
+	task := confirmResult["task"].(map[string]any)
+	if task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
+		t.Fatalf("expected unsupported corrected intent to keep confirmation gate, got %+v", task)
+	}
+	if task["intent"] != nil {
+		intentValue, ok := task["intent"].(map[string]any)
+		if !ok || len(intentValue) != 0 {
+			t.Fatalf("expected unsupported corrected intent to clear current intent, got %+v", task["intent"])
+		}
+	}
+	bubble := confirmResult["bubble_message"].(map[string]any)
+	if bubble["text"] != "这不是我该做的处理方式。请重新说明你的目标，或给我一个更准确的处理意图。" {
+		t.Fatalf("expected reconfirm bubble for unsupported corrected intent, got %v", bubble["text"])
+	}
+	if confirmResult["delivery_result"] != nil {
+		t.Fatalf("expected unsupported corrected intent not to return delivery_result, got %+v", confirmResult["delivery_result"])
+	}
+}
+
+func TestServiceConfirmTaskDowngradesUnavailableCorrectionTextIntent(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_screen_correction",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: `{"intent":{"name":"screen_analyze","arguments":{"language":"eng"}},"reason":"user asked to inspect the current page"}`,
+			}, nil
+		},
+	})
+	service.attachExecutor(nil)
+
+	startResult, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_screen_correction_fallback",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "帮我总结这个构建问题",
+		},
+		"context": map[string]any{
+			"page": map[string]any{
+				"title":        "Build Dashboard",
+				"window_title": "Browser - Build Dashboard",
+				"visible_text": "Fatal build error: missing release asset",
+			},
+			"screen_summary": "release validation failed on current screen",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	confirmResult, err := service.ConfirmTask(map[string]any{
+		"task_id":         taskID,
+		"confirmed":       false,
+		"correction_text": "改成查看当前页面的错误",
+	})
+	if err != nil {
+		t.Fatalf("confirm task correction failed: %v", err)
+	}
+
+	task := confirmResult["task"].(map[string]any)
+	if task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
+		t.Fatalf("expected downgraded correction to stay in confirmation, got %+v", task)
+	}
+	intentValue := task["intent"].(map[string]any)
+	if intentValue["name"] != "agent_loop" {
+		t.Fatalf("expected unavailable screen correction to downgrade into agent_loop, got %+v", intentValue)
+	}
+	bubble := confirmResult["bubble_message"].(map[string]any)
+	if bubble["type"] != "intent_confirm" {
+		t.Fatalf("expected downgraded correction to return intent_confirm bubble, got %+v", bubble)
+	}
+	if confirmResult["delivery_result"] != nil {
+		t.Fatalf("expected downgraded correction not to return delivery_result, got %+v", confirmResult["delivery_result"])
+	}
+}
+
 // TestServiceConfirmTaskRejectsOutOfPhaseRequest ensures stale confirm requests
 // cannot rewrite tasks that already moved beyond the confirmation phase.
 func TestServiceConfirmTaskRejectsOutOfPhaseRequest(t *testing.T) {

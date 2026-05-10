@@ -456,12 +456,16 @@ export async function startTask(_params?: unknown): Promise<AgentTaskStartResult
 export async function confirmTask(params?: unknown): Promise<AgentTaskConfirmResult> {
   const taskId = readStringParam(params, "task_id") ?? "task_stub";
   const confirmed = !!(params && typeof params === "object" && (params as { confirmed?: unknown }).confirmed === true);
+  const correctedIntent = params && typeof params === "object"
+    ? (params as { corrected_intent?: unknown }).corrected_intent
+    : undefined;
   const correctionText = params && typeof params === "object"
     ? (params as { correction_text?: unknown }).correction_text
     : undefined;
+  const hasCorrectedIntent = !!correctedIntent && typeof correctedIntent === "object" && !Array.isArray(correctedIntent);
   const hasCorrectionText = typeof correctionText === "string" && correctionText.trim() !== "";
 
-  if (hasCorrectionText) {
+  if (hasCorrectionText || (!confirmed && !hasCorrectedIntent)) {
     return {
       task: {
         ...createTask("confirming_intent", "intent_confirmation"),
@@ -474,8 +478,8 @@ export async function confirmTask(params?: unknown): Promise<AgentTaskConfirmRes
       bubble_message: {
         bubble_id: "bubble_confirm_stub",
         task_id: taskId,
-        type: "intent_confirm",
-        text: "请确认你希望我如何处理当前内容。",
+        type: hasCorrectionText ? "intent_confirm" : "status",
+        text: hasCorrectionText ? "请确认你希望我如何处理当前内容。" : "This was not the right action. Please clarify the goal or provide a corrected intent.",
         pinned: false,
         hidden: false,
         created_at: new Date().toISOString(),

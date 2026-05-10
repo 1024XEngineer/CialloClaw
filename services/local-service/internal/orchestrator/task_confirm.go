@@ -28,9 +28,31 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	if !confirmed && correctionText != "" {
 		return s.reinferTaskIntentFromCorrection(task, correctionText)
 	}
+	snapshot := snapshotFromTask(task)
 	intentValue := cloneMap(task.Intent)
+	updatedTitle := task.Title
 	if !confirmed && len(correctedIntent) > 0 {
-		intentValue = correctedIntent
+		if normalizedIntent, ok := normalizeCorrectionIntent(correctedIntent); ok {
+			suggestion := s.normalizedTaskConfirmSuggestion(snapshot, normalizedIntent, false)
+			intentValue = suggestion.Intent
+			updatedTitle = suggestion.TaskTitle
+		} else {
+			updatedTask, err := s.revertTaskToIntentConfirmation(task)
+			if err != nil {
+				return nil, err
+			}
+			bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleConfirmRejected, nil), updatedTask.UpdatedAt.Format(dateTimeLayout))
+			if presentedTask, ok := s.runEngine.SetPresentation(task.TaskID, bubble, nil, nil); ok {
+				updatedTask = presentedTask
+			} else {
+				return nil, ErrTaskNotFound
+			}
+			return map[string]any{
+				"task":            taskMap(updatedTask),
+				"bubble_message":  bubble,
+				"delivery_result": nil,
+			}, nil
+		}
 	}
 	if !confirmed && len(correctedIntent) == 0 {
 		updatedTask, err := s.revertTaskToIntentConfirmation(task)
@@ -60,7 +82,9 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		}
 		return nil, ErrTaskNotFound
 	}
-	updatedTitle := s.intent.Suggest(snapshotFromTask(task), intentValue, false).TaskTitle
+	if confirmed {
+		updatedTitle = s.intent.Suggest(snapshot, intentValue, false).TaskTitle
+	}
 
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleConfirmStarted, nil), task.UpdatedAt.Format(dateTimeLayout))
 	updatedTask, ok := s.runEngine.UpdateIntent(task.TaskID, updatedTitle, intentValue)
@@ -90,9 +114,9 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
-	snapshot := snapshotFromTask(updatedTask)
+	executionSnapshot := snapshotFromTask(updatedTask)
 
-	updatedTask, resultBubble, deliveryResult, _, err := s.executeTask(updatedTask, snapshot, intentValue)
+	updatedTask, resultBubble, deliveryResult, _, err := s.executeTask(updatedTask, executionSnapshot, intentValue)
 	if err != nil {
 		return nil, err
 	}
