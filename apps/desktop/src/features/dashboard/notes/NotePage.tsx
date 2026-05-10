@@ -15,6 +15,8 @@ import { Button } from "@/components/ui/button";
 import { navigateToDashboardTaskDetail } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
+import { navigateToDashboardTaskDelivery } from "@/features/dashboard/tasks/taskDeliveryNavigation";
+import { openTaskDeliveryForTask, performTaskOpenExecution, resolveTaskOpenExecutionPlan } from "@/features/dashboard/tasks/taskOutput.service";
 import { cn } from "@/utils/cn";
 import { buildNoteSummary, describeNotePreview, formatNoteBoardTimeHint, formatNoteDisplayPath, getNoteBucketLabel, getNoteStatusBadgeClass, groupClosedNotes, sortClosedNotes, sortNotesByUrgency } from "./notePage.mapper";
 import { buildDashboardNoteBucketInvalidateKeys, buildDashboardNoteBucketQueryKey, dashboardNoteBucketGroups, getDashboardNoteRefreshPlan } from "./notePage.query";
@@ -181,6 +183,21 @@ function getNoteConvertSuccessFeedback(status: Task["status"]) {
   }
 
   return "已按这条便签生成任务，正在打开任务详情。";
+}
+
+async function openNoteConvertDelivery(taskId: string, source: NotePageDataMode, navigate: ReturnType<typeof useNavigate>) {
+  const result = await openTaskDeliveryForTask(taskId, undefined, source);
+  const plan = resolveTaskOpenExecutionPlan(result);
+  return performTaskOpenExecution(plan, {
+    onOpenTaskDelivery: ({ taskId: resolvedTaskId }) => {
+      navigateToDashboardTaskDelivery(navigate, resolvedTaskId);
+      return plan.feedback;
+    },
+    onOpenTaskDetail: ({ taskId: resolvedTaskId }) => {
+      navigateToDashboardTaskDetail(navigate, resolvedTaskId);
+      return plan.feedback;
+    },
+  });
 }
 
 function registerSourceNoteLookupKey(
@@ -1629,7 +1646,18 @@ export function NotePage() {
     mutationFn: (itemId: string) => convertNoteToTask(itemId, dataMode),
     onSuccess: async (outcome) => {
       await invalidateNoteBuckets(outcome.result.refresh_groups);
-      showFeedback(getNoteConvertSuccessFeedback(outcome.result.task.status));
+      if (outcome.result.delivery_result) {
+        try {
+          showFeedback(await openNoteConvertDelivery(outcome.result.task.task_id, dataMode, navigate));
+          return;
+        } catch (error) {
+          showFeedback(error instanceof Error ? `结果已生成，但打开交付失败：${error.message}` : "结果已生成，但打开交付失败，请稍后再试。");
+          navigateToDashboardTaskDetail(navigate, outcome.result.task.task_id);
+          return;
+        }
+      }
+
+      showFeedback(outcome.result.bubble_message?.text ?? getNoteConvertSuccessFeedback(outcome.result.task.status));
       navigateToDashboardTaskDetail(navigate, outcome.result.task.task_id);
     },
     onError: (error) => {

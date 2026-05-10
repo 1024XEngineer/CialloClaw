@@ -326,6 +326,10 @@ func deriveNotepadNoteText(item map[string]any) string {
 	}
 	title := strings.TrimSpace(stringValue(item, "title", "待办事项"))
 	suggestion := strings.TrimSpace(stringValue(item, "agent_suggestion", ""))
+	return deriveSyntheticNotepadNoteText(title, suggestion)
+}
+
+func deriveSyntheticNotepadNoteText(title, suggestion string) string {
 	if suggestion != "" {
 		return title + "。当前建议：" + suggestion + "。"
 	}

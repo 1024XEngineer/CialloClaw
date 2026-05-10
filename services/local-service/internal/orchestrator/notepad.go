@@ -83,7 +83,9 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 	}()
 
 	snapshot := notepadSnapshot(item)
-	suggestion := s.intent.Suggest(snapshot, nil, false)
+	confirmRequired := taskStartConfirmRequired(snapshot, nil, false)
+	suggestion := s.intent.Suggest(snapshot, nil, confirmRequired)
+	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion, confirmRequired)
 	suggestion.TaskTitle = notepadTaskTitle(snapshot, suggestion)
 	task := s.createNotepadTask(snapshot, suggestion, requestTraceID(params))
 	updatedItem, ok := s.runEngine.LinkNotepadItemTask(itemID, task.TaskID)

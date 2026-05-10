@@ -49,14 +49,11 @@ func cloneTimePointer(value *time.Time) *time.Time {
 
 // notepadSnapshot rebuilds a free-text task snapshot from one notepad item so
 // convert_to_task can reuse the normal task pipeline without narrowing the
-// user's goal into a notepad-specific intent bucket first. related_resources
-// remain display/open context on the source note; they are not formal execution
-// inputs until a separate explicit attachment channel records that intent.
+// user's goal into a notepad-specific intent bucket first. Title-only notes
+// must stay anchored on the original title instead of the synthetic note_text
+// fallback that the dashboard uses for display-only notepad cards.
 func notepadSnapshot(item map[string]any) taskcontext.TaskContextSnapshot {
-	text := firstNonEmptyString(
-		stringValue(item, "note_text", ""),
-		stringValue(item, "title", ""),
-	)
+	text := notepadSnapshotText(item)
 
 	return taskcontext.TaskContextSnapshot{
 		Source:    "dashboard",
@@ -68,6 +65,32 @@ func notepadSnapshot(item map[string]any) taskcontext.TaskContextSnapshot {
 		PageTitle: "notepad",
 		AppName:   "dashboard",
 	}
+}
+
+func notepadSnapshotText(item map[string]any) string {
+	title := strings.TrimSpace(stringValue(item, "title", ""))
+	noteText := strings.TrimSpace(stringValue(item, "note_text", ""))
+	if noteText == "" {
+		return title
+	}
+	if title == "" {
+		return noteText
+	}
+
+	// ClaimNotepadItemTask normalizes title-only notes by synthesizing note_text
+	// for dashboard display. The conversion flow should still feed the original
+	// user title into task routing when no real note body exists.
+	if noteText == syntheticNotepadDisplayText(title, strings.TrimSpace(stringValue(item, "agent_suggestion", ""))) {
+		return title
+	}
+	return noteText
+}
+
+func syntheticNotepadDisplayText(title, suggestion string) string {
+	if suggestion != "" {
+		return title + "。当前建议：" + suggestion + "。"
+	}
+	return title + "。当前处于便签巡检域，等待进入正式执行。"
 }
 
 func notepadTaskTitle(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) string {
