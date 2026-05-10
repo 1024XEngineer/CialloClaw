@@ -433,7 +433,7 @@ func taskDTOPointerFromMap(values map[string]any, key string) (*TaskDTO, error) 
 }
 
 func taskDTOFromMap(values map[string]any) (TaskDTO, error) {
-	taskID, err := protocolStringField(values, "task_id")
+	taskID, err := requireProtocolStringField(values, "task_id")
 	if err != nil {
 		return TaskDTO{}, err
 	}
@@ -441,15 +441,15 @@ func taskDTOFromMap(values map[string]any) (TaskDTO, error) {
 	if err != nil {
 		return TaskDTO{}, err
 	}
-	title, err := protocolStringField(values, "title")
+	title, err := requireProtocolStringField(values, "title")
 	if err != nil {
 		return TaskDTO{}, err
 	}
-	sourceType, err := protocolStringField(values, "source_type")
+	sourceType, err := requireProtocolStringField(values, "source_type")
 	if err != nil {
 		return TaskDTO{}, err
 	}
-	status, err := protocolStringField(values, "status")
+	status, err := requireProtocolStringField(values, "status")
 	if err != nil {
 		return TaskDTO{}, err
 	}
@@ -457,11 +457,11 @@ func taskDTOFromMap(values map[string]any) (TaskDTO, error) {
 	if err != nil {
 		return TaskDTO{}, err
 	}
-	currentStep, err := protocolStringField(values, "current_step")
+	currentStep, err := requireProtocolStringField(values, "current_step")
 	if err != nil {
 		return TaskDTO{}, err
 	}
-	riskLevel, err := protocolStringField(values, "risk_level")
+	riskLevel, err := requireProtocolStringField(values, "risk_level")
 	if err != nil {
 		return TaskDTO{}, err
 	}
@@ -473,7 +473,7 @@ func taskDTOFromMap(values map[string]any) (TaskDTO, error) {
 	if err != nil {
 		return TaskDTO{}, err
 	}
-	updatedAt, err := protocolStringField(values, "updated_at")
+	updatedAt, err := requireProtocolStringField(values, "updated_at")
 	if err != nil {
 		return TaskDTO{}, err
 	}
@@ -540,31 +540,31 @@ func bubbleMessageDTOPointerFromMap(values map[string]any, key string) (*BubbleM
 }
 
 func bubbleMessageDTOFromMap(values map[string]any) (BubbleMessageDTO, error) {
-	bubbleID, err := protocolStringField(values, "bubble_id")
+	bubbleID, err := requireProtocolStringField(values, "bubble_id")
 	if err != nil {
 		return BubbleMessageDTO{}, err
 	}
-	taskID, err := protocolStringField(values, "task_id")
+	taskID, err := requireProtocolStringField(values, "task_id")
 	if err != nil {
 		return BubbleMessageDTO{}, err
 	}
-	messageType, err := protocolStringField(values, "type")
+	messageType, err := requireProtocolStringField(values, "type")
 	if err != nil {
 		return BubbleMessageDTO{}, err
 	}
-	text, err := protocolStringField(values, "text")
+	text, err := requireProtocolStringField(values, "text")
 	if err != nil {
 		return BubbleMessageDTO{}, err
 	}
-	pinned, err := protocolBoolField(values, "pinned")
+	pinned, err := requireProtocolBoolField(values, "pinned")
 	if err != nil {
 		return BubbleMessageDTO{}, err
 	}
-	hidden, err := protocolBoolField(values, "hidden")
+	hidden, err := requireProtocolBoolField(values, "hidden")
 	if err != nil {
 		return BubbleMessageDTO{}, err
 	}
-	createdAt, err := protocolStringField(values, "created_at")
+	createdAt, err := requireProtocolStringField(values, "created_at")
 	if err != nil {
 		return BubbleMessageDTO{}, err
 	}
@@ -640,7 +640,7 @@ func deliveryPayloadDTOFromMap(values map[string]any) (DeliveryPayloadDTO, error
 }
 
 func taskStepDTOListFromMap(values map[string]any, key string) ([]TaskStepDTO, error) {
-	items, err := protocolMapSliceField(values, key)
+	items, err := requireProtocolMapSliceField(values, key)
 	if err != nil {
 		return nil, err
 	}
@@ -656,31 +656,31 @@ func taskStepDTOListFromMap(values map[string]any, key string) ([]TaskStepDTO, e
 }
 
 func taskStepDTOFromMap(values map[string]any) (TaskStepDTO, error) {
-	stepID, err := protocolStringField(values, "step_id")
+	stepID, err := requireProtocolStringField(values, "step_id")
 	if err != nil {
 		return TaskStepDTO{}, err
 	}
-	taskID, err := protocolStringField(values, "task_id")
+	taskID, err := requireProtocolStringField(values, "task_id")
 	if err != nil {
 		return TaskStepDTO{}, err
 	}
-	name, err := protocolStringField(values, "name")
+	name, err := requireProtocolStringField(values, "name")
 	if err != nil {
 		return TaskStepDTO{}, err
 	}
-	status, err := protocolStringField(values, "status")
+	status, err := requireProtocolStringField(values, "status")
 	if err != nil {
 		return TaskStepDTO{}, err
 	}
-	orderIndex, err := protocolIntField(values, "order_index")
+	orderIndex, err := requireProtocolIntField(values, "order_index")
 	if err != nil {
 		return TaskStepDTO{}, err
 	}
-	inputSummary, err := protocolStringField(values, "input_summary")
+	inputSummary, err := requireProtocolStringField(values, "input_summary")
 	if err != nil {
 		return TaskStepDTO{}, err
 	}
-	outputSummary, err := protocolStringField(values, "output_summary")
+	outputSummary, err := requireProtocolStringField(values, "output_summary")
 	if err != nil {
 		return TaskStepDTO{}, err
 	}
@@ -696,7 +696,7 @@ func taskStepDTOFromMap(values map[string]any) (TaskStepDTO, error) {
 }
 
 func artifactDTOListFromMap(values map[string]any, key string) ([]ArtifactDTO, error) {
-	items, err := protocolMapSliceField(values, key)
+	items, err := requireProtocolMapSliceField(values, key)
 	if err != nil {
 		return nil, err
 	}
@@ -712,27 +712,27 @@ func artifactDTOListFromMap(values map[string]any, key string) ([]ArtifactDTO, e
 }
 
 func artifactDTOFromMap(values map[string]any) (ArtifactDTO, error) {
-	artifactID, err := protocolStringField(values, "artifact_id")
+	artifactID, err := requireProtocolStringField(values, "artifact_id")
 	if err != nil {
 		return ArtifactDTO{}, err
 	}
-	taskID, err := protocolStringField(values, "task_id")
+	taskID, err := requireProtocolStringField(values, "task_id")
 	if err != nil {
 		return ArtifactDTO{}, err
 	}
-	artifactType, err := protocolStringField(values, "artifact_type")
+	artifactType, err := requireProtocolStringField(values, "artifact_type")
 	if err != nil {
 		return ArtifactDTO{}, err
 	}
-	title, err := protocolStringField(values, "title")
+	title, err := requireProtocolStringField(values, "title")
 	if err != nil {
 		return ArtifactDTO{}, err
 	}
-	path, err := protocolStringField(values, "path")
+	path, err := requireProtocolStringField(values, "path")
 	if err != nil {
 		return ArtifactDTO{}, err
 	}
-	mimeType, err := protocolStringField(values, "mime_type")
+	mimeType, err := requireProtocolStringField(values, "mime_type")
 	if err != nil {
 		return ArtifactDTO{}, err
 	}
@@ -747,7 +747,7 @@ func artifactDTOFromMap(values map[string]any) (ArtifactDTO, error) {
 }
 
 func citationDTOListFromMap(values map[string]any, key string) ([]CitationDTO, error) {
-	items, err := protocolMapSliceField(values, key)
+	items, err := requireProtocolMapSliceField(values, key)
 	if err != nil {
 		return nil, err
 	}
@@ -763,27 +763,27 @@ func citationDTOListFromMap(values map[string]any, key string) ([]CitationDTO, e
 }
 
 func citationDTOFromMap(values map[string]any) (CitationDTO, error) {
-	citationID, err := protocolStringField(values, "citation_id")
+	citationID, err := requireProtocolStringField(values, "citation_id")
 	if err != nil {
 		return CitationDTO{}, err
 	}
-	taskID, err := protocolStringField(values, "task_id")
+	taskID, err := requireProtocolStringField(values, "task_id")
 	if err != nil {
 		return CitationDTO{}, err
 	}
-	runID, err := protocolStringField(values, "run_id")
+	runID, err := requireProtocolStringField(values, "run_id")
 	if err != nil {
 		return CitationDTO{}, err
 	}
-	sourceType, err := protocolStringField(values, "source_type")
+	sourceType, err := requireProtocolStringField(values, "source_type")
 	if err != nil {
 		return CitationDTO{}, err
 	}
-	sourceRef, err := protocolStringField(values, "source_ref")
+	sourceRef, err := requireProtocolStringField(values, "source_ref")
 	if err != nil {
 		return CitationDTO{}, err
 	}
-	label, err := protocolStringField(values, "label")
+	label, err := requireProtocolStringField(values, "label")
 	if err != nil {
 		return CitationDTO{}, err
 	}
@@ -823,7 +823,7 @@ func citationDTOFromMap(values map[string]any) (CitationDTO, error) {
 }
 
 func mirrorReferenceDTOListFromMap(values map[string]any, key string) ([]MirrorReferenceDTO, error) {
-	items, err := protocolMapSliceField(values, key)
+	items, err := requireProtocolMapSliceField(values, key)
 	if err != nil {
 		return nil, err
 	}
@@ -839,15 +839,15 @@ func mirrorReferenceDTOListFromMap(values map[string]any, key string) ([]MirrorR
 }
 
 func mirrorReferenceDTOFromMap(values map[string]any) (MirrorReferenceDTO, error) {
-	memoryID, err := protocolStringField(values, "memory_id")
+	memoryID, err := requireProtocolStringField(values, "memory_id")
 	if err != nil {
 		return MirrorReferenceDTO{}, err
 	}
-	reason, err := protocolStringField(values, "reason")
+	reason, err := requireProtocolStringField(values, "reason")
 	if err != nil {
 		return MirrorReferenceDTO{}, err
 	}
-	summary, err := protocolStringField(values, "summary")
+	summary, err := requireProtocolStringField(values, "summary")
 	if err != nil {
 		return MirrorReferenceDTO{}, err
 	}
@@ -870,35 +870,35 @@ func approvalRequestDTOPointerFromMap(values map[string]any, key string) (*Appro
 }
 
 func approvalRequestDTOFromMap(values map[string]any) (ApprovalRequestDTO, error) {
-	approvalID, err := protocolStringField(values, "approval_id")
+	approvalID, err := requireProtocolStringField(values, "approval_id")
 	if err != nil {
 		return ApprovalRequestDTO{}, err
 	}
-	taskID, err := protocolStringField(values, "task_id")
+	taskID, err := requireProtocolStringField(values, "task_id")
 	if err != nil {
 		return ApprovalRequestDTO{}, err
 	}
-	operationName, err := protocolStringField(values, "operation_name")
+	operationName, err := requireProtocolStringField(values, "operation_name")
 	if err != nil {
 		return ApprovalRequestDTO{}, err
 	}
-	riskLevel, err := protocolStringField(values, "risk_level")
+	riskLevel, err := requireProtocolStringField(values, "risk_level")
 	if err != nil {
 		return ApprovalRequestDTO{}, err
 	}
-	targetObject, err := protocolStringField(values, "target_object")
+	targetObject, err := requireProtocolStringField(values, "target_object")
 	if err != nil {
 		return ApprovalRequestDTO{}, err
 	}
-	reason, err := protocolStringField(values, "reason")
+	reason, err := requireProtocolStringField(values, "reason")
 	if err != nil {
 		return ApprovalRequestDTO{}, err
 	}
-	status, err := protocolStringField(values, "status")
+	status, err := requireProtocolStringField(values, "status")
 	if err != nil {
 		return ApprovalRequestDTO{}, err
 	}
-	createdAt, err := protocolStringField(values, "created_at")
+	createdAt, err := requireProtocolStringField(values, "created_at")
 	if err != nil {
 		return ApprovalRequestDTO{}, err
 	}
@@ -930,31 +930,31 @@ func authorizationRecordDTOPointerFromMap(values map[string]any, key string) (*A
 }
 
 func authorizationRecordDTOFromMap(values map[string]any) (AuthorizationRecordDTO, error) {
-	recordID, err := protocolStringField(values, "authorization_record_id")
+	recordID, err := requireProtocolStringField(values, "authorization_record_id")
 	if err != nil {
 		return AuthorizationRecordDTO{}, err
 	}
-	taskID, err := protocolStringField(values, "task_id")
+	taskID, err := requireProtocolStringField(values, "task_id")
 	if err != nil {
 		return AuthorizationRecordDTO{}, err
 	}
-	approvalID, err := protocolStringField(values, "approval_id")
+	approvalID, err := requireProtocolStringField(values, "approval_id")
 	if err != nil {
 		return AuthorizationRecordDTO{}, err
 	}
-	decision, err := protocolStringField(values, "decision")
+	decision, err := requireProtocolStringField(values, "decision")
 	if err != nil {
 		return AuthorizationRecordDTO{}, err
 	}
-	rememberRule, err := protocolBoolField(values, "remember_rule")
+	rememberRule, err := requireProtocolBoolField(values, "remember_rule")
 	if err != nil {
 		return AuthorizationRecordDTO{}, err
 	}
-	operator, err := protocolStringField(values, "operator")
+	operator, err := requireProtocolStringField(values, "operator")
 	if err != nil {
 		return AuthorizationRecordDTO{}, err
 	}
-	createdAt, err := protocolStringField(values, "created_at")
+	createdAt, err := requireProtocolStringField(values, "created_at")
 	if err != nil {
 		return AuthorizationRecordDTO{}, err
 	}
@@ -985,35 +985,35 @@ func auditRecordDTOPointerFromMap(values map[string]any, key string) (*AuditReco
 }
 
 func auditRecordDTOFromMap(values map[string]any) (AuditRecordDTO, error) {
-	auditID, err := protocolStringField(values, "audit_id")
+	auditID, err := requireProtocolStringField(values, "audit_id")
 	if err != nil {
 		return AuditRecordDTO{}, err
 	}
-	taskID, err := protocolStringField(values, "task_id")
+	taskID, err := requireProtocolStringField(values, "task_id")
 	if err != nil {
 		return AuditRecordDTO{}, err
 	}
-	recordType, err := protocolStringField(values, "type")
+	recordType, err := requireProtocolStringField(values, "type")
 	if err != nil {
 		return AuditRecordDTO{}, err
 	}
-	action, err := protocolStringField(values, "action")
+	action, err := requireProtocolStringField(values, "action")
 	if err != nil {
 		return AuditRecordDTO{}, err
 	}
-	summary, err := protocolStringField(values, "summary")
+	summary, err := requireProtocolStringField(values, "summary")
 	if err != nil {
 		return AuditRecordDTO{}, err
 	}
-	target, err := protocolStringField(values, "target")
+	target, err := requireProtocolStringField(values, "target")
 	if err != nil {
 		return AuditRecordDTO{}, err
 	}
-	result, err := protocolStringField(values, "result")
+	result, err := requireProtocolStringField(values, "result")
 	if err != nil {
 		return AuditRecordDTO{}, err
 	}
-	createdAt, err := protocolStringField(values, "created_at")
+	createdAt, err := requireProtocolStringField(values, "created_at")
 	if err != nil {
 		return AuditRecordDTO{}, err
 	}
@@ -1045,23 +1045,23 @@ func recoveryPointDTOPointerFromMap(values map[string]any, key string) (*Recover
 }
 
 func recoveryPointDTOFromMap(values map[string]any) (RecoveryPointDTO, error) {
-	recoveryPointID, err := protocolStringField(values, "recovery_point_id")
+	recoveryPointID, err := requireProtocolStringField(values, "recovery_point_id")
 	if err != nil {
 		return RecoveryPointDTO{}, err
 	}
-	taskID, err := protocolStringField(values, "task_id")
+	taskID, err := requireProtocolStringField(values, "task_id")
 	if err != nil {
 		return RecoveryPointDTO{}, err
 	}
-	summary, err := protocolStringField(values, "summary")
+	summary, err := requireProtocolStringField(values, "summary")
 	if err != nil {
 		return RecoveryPointDTO{}, err
 	}
-	createdAt, err := protocolStringField(values, "created_at")
+	createdAt, err := requireProtocolStringField(values, "created_at")
 	if err != nil {
 		return RecoveryPointDTO{}, err
 	}
-	objects, err := protocolStringSliceField(values, "objects")
+	objects, err := requireProtocolStringSliceField(values, "objects")
 	if err != nil {
 		return RecoveryPointDTO{}, err
 	}
@@ -1194,6 +1194,14 @@ func protocolMapSliceField(values map[string]any, key string) ([]map[string]any,
 	}
 }
 
+func requireProtocolMapSliceField(values map[string]any, key string) ([]map[string]any, error) {
+	rawValue, ok := values[key]
+	if !ok || rawValue == nil {
+		return nil, fmt.Errorf("%s must be array of objects", key)
+	}
+	return protocolMapSliceField(values, key)
+}
+
 func protocolStringField(values map[string]any, key string) (string, error) {
 	rawValue, ok := values[key]
 	if !ok || rawValue == nil {
@@ -1207,12 +1215,13 @@ func protocolStringField(values map[string]any, key string) (string, error) {
 }
 
 func requireProtocolStringField(values map[string]any, key string) (string, error) {
-	value, err := protocolStringField(values, key)
-	if err != nil {
-		return "", err
-	}
-	if strings.TrimSpace(value) == "" {
+	rawValue, ok := values[key]
+	if !ok || rawValue == nil {
 		return "", fmt.Errorf("%s must be string", key)
+	}
+	value, ok := rawValue.(string)
+	if !ok {
+		return "", protocolTypeError(key, "string", rawValue)
 	}
 	return value, nil
 }
@@ -1239,6 +1248,14 @@ func protocolBoolField(values map[string]any, key string) (bool, error) {
 		return false, protocolTypeError(key, "boolean", rawValue)
 	}
 	return value, nil
+}
+
+func requireProtocolBoolField(values map[string]any, key string) (bool, error) {
+	rawValue, ok := values[key]
+	if !ok || rawValue == nil {
+		return false, fmt.Errorf("%s must be boolean", key)
+	}
+	return protocolBoolField(values, key)
 }
 
 func protocolIntField(values map[string]any, key string) (int, error) {
