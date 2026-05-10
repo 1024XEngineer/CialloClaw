@@ -8,7 +8,7 @@ import (
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
-	taskcontext "github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 

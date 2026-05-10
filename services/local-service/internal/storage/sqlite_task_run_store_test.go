@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	taskcontext "github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 func TestInMemoryTaskRunStoreSaveLoadAndAllocate(t *testing.T) {

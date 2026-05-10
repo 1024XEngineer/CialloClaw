@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 )
@@ -82,11 +83,62 @@ func (s *Service) DeliveryOpen(params map[string]any) (map[string]any, error) {
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
+	deliveryResult := s.resolveFormalTaskDeliveryResult(task)
+	return buildDeliveryOpenResult(nil, deliveryResult, taskID), nil
+}
+
+// resolveFormalTaskDeliveryResult restores the best task-scoped formal delivery
+// result across first-class rows, runtime compatibility snapshots, and the
+// narrow result_page fallback needed while legacy completed tasks are still
+// being backfilled into the dedicated delivery_result store.
+func (s *Service) resolveFormalTaskDeliveryResult(task runengine.TaskRecord) map[string]any {
 	deliveryResult := s.latestAttemptDeliveryResultFromStorage(task)
 	if len(deliveryResult) == 0 {
 		deliveryResult = cloneMap(task.DeliveryResult)
 	}
-	return buildDeliveryOpenResult(nil, deliveryResult, taskID), nil
+	if len(deliveryResult) > 0 && shouldSynthesizeLegacyResultPageDeliveryResult(task, deliveryResult) {
+		deliveryResult = synthesizeSparseResultPageDeliveryResult(task)
+	}
+	if len(deliveryResult) == 0 {
+		deliveryResult = synthesizeSparseResultPageDeliveryResult(task)
+	}
+	return deliveryResult
+}
+
+func shouldSynthesizeLegacyResultPageDeliveryResult(task runengine.TaskRecord, deliveryResult map[string]any) bool {
+	if normalizeDeliveryType(task.PreferredDelivery) != "result_page" {
+		return false
+	}
+	if task.Status != "completed" {
+		return false
+	}
+	return stringValue(deliveryResult, "type", "") != "result_page"
+}
+
+func synthesizeSparseResultPageDeliveryResult(task runengine.TaskRecord) map[string]any {
+	if normalizeDeliveryType(task.PreferredDelivery) != "result_page" {
+		return nil
+	}
+	if task.Status != "completed" {
+		return nil
+	}
+	title, _, _ := resultSpecFromIntent(task.Intent)
+	if strings.TrimSpace(title) == "" {
+		title = strings.TrimSpace(task.Title)
+	}
+	if strings.TrimSpace(title) == "" {
+		title = "任务交付结果"
+	}
+	return map[string]any{
+		"type":         "result_page",
+		"title":        title,
+		"preview_text": previewTextForDeliveryType("result_page"),
+		"payload": map[string]any{
+			"path":    nil,
+			"task_id": task.TaskID,
+			"url":     delivery.ResolveResultPageURL(task.TaskID),
+		},
+	}
 }
 
 func inferArtifactDeliveryType(artifact map[string]any) string {
@@ -218,6 +270,7 @@ func normalizeDeliveryOpenResult(artifact map[string]any, deliveryResult map[str
 		if payload == nil {
 			payload = map[string]any{}
 		}
+		deliveryType := firstNonEmptyString(stringValue(artifact, "delivery_type", ""), inferArtifactDeliveryType(artifact))
 		pathValue := firstNonEmptyString(stringValue(artifact, "path", ""), stringValue(payload, "path", ""))
 		if pathValue != "" {
 			payload["path"] = pathValue
@@ -226,23 +279,25 @@ func normalizeDeliveryOpenResult(artifact map[string]any, deliveryResult map[str
 			payload["task_id"] = taskID
 		}
 		return map[string]any{
-			"type":         firstNonEmptyString(stringValue(artifact, "delivery_type", ""), inferArtifactDeliveryType(artifact)),
+			"type":         deliveryType,
 			"title":        stringValue(artifact, "title", ""),
-			"payload":      normalizeFormalDeliveryPayload(payload, taskID),
+			"payload":      normalizeFormalDeliveryPayload(payload, taskID, deliveryType),
 			"preview_text": stringValue(artifact, "title", ""),
 		}
 	}
 	resolved := cloneMap(deliveryResult)
+	deliveryType := stringValue(resolved, "type", "")
+	if deliveryType == "" {
+		deliveryType = "task_detail"
+		resolved["type"] = deliveryType
+	}
 	payload := cloneMap(mapValue(resolved, "payload"))
 	if payload == nil {
 		payload = map[string]any{}
 	}
-	resolved["payload"] = normalizeFormalDeliveryPayload(payload, taskID)
-	if stringValue(resolved, "type", "") == "" {
-		resolved["type"] = "task_detail"
-	}
+	resolved["payload"] = normalizeFormalDeliveryPayload(payload, taskID, deliveryType)
 	if stringValue(resolved, "title", "") == "" {
-		resolved["title"] = "任务交付结果"
+		resolved["title"] = presentation.Text(presentation.MessageResultTitleTaskDelivery, nil)
 	}
 	if stringValue(resolved, "preview_text", "") == "" {
 		resolved["preview_text"] = stringValue(resolved, "title", "")
@@ -252,7 +307,7 @@ func normalizeDeliveryOpenResult(artifact map[string]any, deliveryResult map[str
 
 // normalizeFormalDeliveryPayload keeps formal delivery payload keys stable for
 // protocol consumers even when historical storage records omitted sparse fields.
-func normalizeFormalDeliveryPayload(payload map[string]any, taskID string) map[string]any {
+func normalizeFormalDeliveryPayload(payload map[string]any, taskID, deliveryType string) map[string]any {
 	normalized := cloneMap(payload)
 	if normalized == nil {
 		normalized = map[string]any{}
@@ -270,6 +325,19 @@ func normalizeFormalDeliveryPayload(payload map[string]any, taskID string) map[s
 			normalized["task_id"] = taskID
 		}
 	}
+	if deliveryType == "result_page" {
+		// Historical result_page records may predate the formal payload.url contract,
+		// so open flows backfill the stable dashboard route instead of surfacing a
+		// sparse or stale file-style payload.
+		normalized["path"] = nil
+		if strings.TrimSpace(taskID) == "" {
+			normalized["task_id"] = nil
+			normalized["url"] = nil
+		} else {
+			normalized["task_id"] = taskID
+			normalized["url"] = delivery.ResolveResultPageURL(taskID)
+		}
+	}
 	return normalized
 }
 
@@ -285,43 +353,17 @@ func normalizeTaskDetailDeliveryResult(taskID string, deliveryResult map[string]
 // resultSpecFromIntent returns the default result title, preview text, and
 // completion bubble text for an intent.
 func resultSpecFromIntent(taskIntent map[string]any) (string, string, string) {
-	switch stringValue(taskIntent, "name", "summarize") {
-	case "agent_loop":
-		return "处理结果", "结果已通过气泡返回", "结果已经生成，可直接查看。"
-	case "rewrite":
-		return "改写结果", "已为你写入文档并打开", "内容已经按要求改写完成，可直接查看。"
-	case "translate":
-		return "翻译结果", "结果已通过气泡返回", "翻译结果已经生成，可直接查看。"
-	case "explain":
-		return "解释结果", "结果已通过气泡返回", "这段内容的意思已经整理好了。"
-	case "page_read":
-		return "网页读取结果", "结果已通过气泡返回", "网页主要内容已经整理完成，可直接查看。"
-	case "page_search":
-		return "网页搜索结果", "结果已通过气泡返回", "网页搜索结果已经返回，可直接查看。"
-	case "browser_attach_current":
-		return "浏览器附着结果", "结果已通过气泡返回", "当前浏览器页已经附着成功，可继续操作。"
-	case "browser_snapshot":
-		return "浏览器快照结果", "结果已通过气泡返回", "当前浏览器页的关键信息已经整理完成，可直接查看。"
-	case "browser_tabs_list":
-		return "浏览器标签页结果", "结果已通过气泡返回", "当前浏览器标签页列表已经返回，可直接查看。"
-	case "browser_navigate":
-		return "浏览器导航结果", "结果已通过气泡返回", "当前浏览器页已经导航完成，可继续查看。"
-	case "browser_tab_focus":
-		return "浏览器切页结果", "结果已通过气泡返回", "目标浏览器标签页已经切换完成，可继续查看。"
-	case "browser_interact":
-		return "浏览器交互结果", "结果已通过气泡返回", "当前浏览器页交互已经完成，可继续查看。"
-	case "write_file":
-		return "文件写入结果", "已为你写入文档并打开", "文件已经生成，可直接查看。"
-	default:
-		return "处理结果", "已为你写入文档并打开", "结果已经生成，可直接查看。"
-	}
+	spec := presentation.RenderResultSpec(stringValue(taskIntent, "name", "summarize"))
+	return spec.Title, spec.Preview, spec.BubbleText
 }
 
 // deliveryTypeFromIntent returns the default delivery type for an intent.
 func deliveryTypeFromIntent(taskIntent map[string]any) string {
 	switch stringValue(taskIntent, "name", "summarize") {
-	case "agent_loop", "translate", "explain", "page_read", "page_search", "browser_attach_current", "browser_snapshot", "browser_tabs_list", "browser_navigate", "browser_tab_focus", "browser_interact":
+	case "agent_loop", "translate", "explain", "browser_attach_current", "browser_navigate", "browser_tab_focus", "browser_interact":
 		return "bubble"
+	case "page_read", "page_search", "structured_dom", "browser_snapshot", "browser_tabs_list":
+		return "result_page"
 	default:
 		return "workspace_document"
 	}
@@ -610,7 +652,7 @@ func resolveDeliveryType(preferred, fallback, defaultType string) string {
 
 func normalizeDeliveryType(deliveryType string) string {
 	switch deliveryType {
-	case "bubble", "workspace_document":
+	case "bubble", "workspace_document", "result_page":
 		return deliveryType
 	default:
 		return ""
@@ -619,8 +661,5 @@ func normalizeDeliveryType(deliveryType string) string {
 
 // previewTextForDeliveryType returns the preview copy for each delivery type.
 func previewTextForDeliveryType(deliveryType string) string {
-	if deliveryType == "bubble" {
-		return "\u7ed3\u679c\u5df2\u901a\u8fc7\u6c14\u6ce1\u8fd4\u56de"
-	}
-	return "\u5df2\u4e3a\u4f60\u5199\u5165\u6587\u6863\u5e76\u6253\u5f00"
+	return presentation.DeliveryPreviewText(deliveryType)
 }

@@ -5,7 +5,7 @@ import (
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
-	taskcontext "github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 func TestModelTaskContinuationDecisionUsesCurrentModelAccessor(t *testing.T) {

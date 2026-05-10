@@ -3,7 +3,7 @@ package intent
 import (
 	"testing"
 
-	taskcontext "github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 func TestSuggestInfersScreenAnalyzeFromVisualErrorRequest(t *testing.T) {

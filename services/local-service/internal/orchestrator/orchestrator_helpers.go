@@ -8,7 +8,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
-	taskcontext "github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 func storageTaskRunRecordFromSnapshotJSON(payload string) (storage.TaskRunRecord, error) {

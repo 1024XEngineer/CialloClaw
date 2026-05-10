@@ -8,7 +8,7 @@ import (
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
-	taskcontext "github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 const (

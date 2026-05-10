@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
-	taskcontext "github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 

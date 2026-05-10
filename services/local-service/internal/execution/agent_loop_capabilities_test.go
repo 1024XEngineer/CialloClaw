@@ -9,7 +9,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
-	taskcontext "github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/sidecarclient"

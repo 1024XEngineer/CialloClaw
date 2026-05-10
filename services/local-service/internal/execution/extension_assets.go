@@ -6,7 +6,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/perception"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
-	taskcontext "github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 // supplementalExecutionBoundaryAssets attributes model-provider and perception

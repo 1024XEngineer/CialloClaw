@@ -2,15 +2,15 @@ package orchestrator
 
 import (
 	"context"
-	"fmt"
 	"path"
 	"strings"
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/execution"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
-	taskcontext "github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -85,11 +85,13 @@ func (s *Service) normalizeSuggestedIntentForAvailability(snapshot taskcontext.T
 	// unavailable so the downgrade does not auto-execute a generic task.
 	fallback.RequiresConfirm = confirmRequired
 	fallback.TaskSourceType = "hover_input"
-	fallback.TaskTitle = "处理：" + inferredScreenFallbackSubject(snapshot)
+	fallback.TaskTitle = presentation.Text(presentation.MessageTaskTitleScreenFallback, map[string]string{
+		"subject": inferredScreenFallbackSubject(snapshot),
+	})
 	fallback.DirectDeliveryType = "bubble"
-	fallback.ResultTitle = "处理结果"
-	fallback.ResultPreview = "结果已通过气泡返回"
-	fallback.ResultBubbleText = "当前环境暂不支持受控屏幕查看，已改为按现有文本和页面上下文继续处理。"
+	fallback.ResultTitle = presentation.Text(presentation.MessageResultTitleGeneric, nil)
+	fallback.ResultPreview = presentation.Text(presentation.MessagePreviewBubble, nil)
+	fallback.ResultBubbleText = presentation.Text(presentation.MessageBubbleScreenDowngrade, nil)
 	return fallback
 }
 
@@ -122,7 +124,7 @@ func (s *Service) buildScreenAnalysisApprovalState(task runengine.TaskRecord) (m
 		"language":       firstNonEmptyString(stringValue(arguments, "language", ""), "eng"),
 		"evidence_role":  firstNonEmptyString(stringValue(arguments, "evidence_role", ""), "error_evidence"),
 		"delivery_type":  "bubble",
-		"result_title":   "屏幕分析结果",
+		"result_title":   presentation.Text(presentation.MessageResultTitleScreen, nil),
 		"preview_text":   screenAnalysisPreviewText(captureMode),
 		"impact_scope": map[string]any{
 			"files":                    impactFilesForScreenTarget(sourcePath),
@@ -132,7 +134,7 @@ func (s *Service) buildScreenAnalysisApprovalState(task runengine.TaskRecord) (m
 			"overwrite_or_delete_risk": false,
 		},
 	}
-	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "屏幕截图分析属于敏感能力，请先确认授权。", task.UpdatedAt.Format(dateTimeLayout))
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleScreenApproval, nil), task.UpdatedAt.Format(dateTimeLayout))
 	return approvalRequest, pendingExecution, bubble, nil
 }
 
@@ -197,10 +199,10 @@ func isClipScreenSourcePath(pathValue string) bool {
 
 func inferredScreenTaskTitle(snapshot taskcontext.TaskContextSnapshot) string {
 	target := screenSubjectFromSnapshot(snapshot)
-	if strings.TrimSpace(snapshot.ErrorText) != "" || strings.Contains(strings.ToLower(snapshot.Text), "错误") || strings.Contains(strings.ToLower(snapshot.Text), "报错") || strings.Contains(strings.ToLower(snapshot.Text), "error") {
-		return fmt.Sprintf("查看屏幕报错：%s", truncateText(target, subjectPreviewMaxLength))
-	}
-	return fmt.Sprintf("查看当前屏幕：%s", truncateText(target, subjectPreviewMaxLength))
+	return presentation.TaskTitle("screen_analyze", presentation.TaskTitleOptions{
+		Subject:  truncateText(target, subjectPreviewMaxLength),
+		HasError: screenSnapshotHasErrorIntent(snapshot),
+	})
 }
 
 func screenSubjectFromSnapshot(snapshot taskcontext.TaskContextSnapshot) string {
@@ -208,7 +210,7 @@ func screenSubjectFromSnapshot(snapshot taskcontext.TaskContextSnapshot) string 
 		snapshot.PageTitle,
 		firstNonEmptyString(
 			snapshot.WindowTitle,
-			firstNonEmptyString(snapshot.ScreenSummary, firstNonEmptyString(snapshot.VisibleText, "当前屏幕")),
+			firstNonEmptyString(snapshot.ScreenSummary, firstNonEmptyString(snapshot.VisibleText, presentation.Text(presentation.MessageTaskSubjectCurrentScreen, nil))),
 		),
 	)
 }
@@ -241,10 +243,15 @@ func screenCaptureModeFromArguments(arguments map[string]any) tools.ScreenCaptur
 }
 
 func screenAnalysisPreviewText(captureMode tools.ScreenCaptureMode) string {
-	if captureMode == tools.ScreenCaptureModeClip {
-		return "已准备分析屏幕录屏片段"
-	}
-	return "已准备分析屏幕截图"
+	return presentation.ScreenPreviewText(string(captureMode))
+}
+
+func screenSnapshotHasErrorIntent(snapshot taskcontext.TaskContextSnapshot) bool {
+	combined := strings.ToLower(strings.Join([]string{snapshot.Text, snapshot.ErrorText}, " "))
+	return strings.TrimSpace(snapshot.ErrorText) != "" ||
+		strings.Contains(combined, "错误") ||
+		strings.Contains(combined, "报错") ||
+		strings.Contains(combined, "error")
 }
 
 func impactFilesForScreenTarget(sourcePath string) []string {

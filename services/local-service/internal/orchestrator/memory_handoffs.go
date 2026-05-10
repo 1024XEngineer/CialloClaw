@@ -10,7 +10,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/memory"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
-	taskcontext "github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 func (s *Service) refreshMirrorReferences(taskID string) {

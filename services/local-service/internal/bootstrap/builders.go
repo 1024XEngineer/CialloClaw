@@ -18,7 +18,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/rpc"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
-	taskcontext "github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/sidecarclient"

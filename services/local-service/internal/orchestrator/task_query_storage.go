@@ -9,7 +9,7 @@ import (
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
-	taskcontext "github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 // taskMap converts a runengine task record into the protocol-facing task shape.
