@@ -17,7 +17,7 @@ go test ./services/local-service/...
 `local-service-style` verifies that `goimports` has been applied to changed Go
 files under `services/local-service`, rejects newly added Chinese Go comments in
 local-service diffs, and scans all current `services/local-service` Go comments
-so historical comment debt cannot silently return, and enforces a 2,000-line
+so historical comment debt cannot silently return, and enforces a 4,000-line
 ceiling for changed non-test Go files. The file-size guard only reports files
 that both exceed the ceiling and grow relative to the base or local pre-change
 snapshot, so historical oversized files can still receive focused fixes without
