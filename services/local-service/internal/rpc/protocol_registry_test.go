@@ -1,8 +1,10 @@
 package rpc
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -80,6 +82,38 @@ func TestAgentTaskStartDTOOmitsUnsupportedIntentField(t *testing.T) {
 	pageContext := mapValue(input, "page_context")
 	if stringValue(pageContext, "title", "") != "Editor" || intValue(pageContext, "process_id", 0) != 42 {
 		t.Fatalf("expected page context to survive dto normalization, got %+v", pageContext)
+	}
+}
+
+func TestStableMethodRegistryDispatchMatrix(t *testing.T) {
+	server := newTestServer()
+	expectedDecoders := map[string]func(json.RawMessage) (map[string]any, *rpcError){
+		methodAgentInputSubmit:            decodeAgentInputSubmitParams,
+		methodAgentTaskStart:              decodeAgentTaskStartParams,
+		methodAgentTaskConfirm:            decodeParams,
+		methodAgentTaskControl:            decodeParams,
+		methodAgentTaskDetailGet:          decodeParams,
+		methodAgentTaskInspectorConfigGet: decodeParams,
+		methodAgentTaskInspectorRun:       decodeParams,
+		methodAgentDeliveryOpen:           decodeParams,
+		methodAgentSettingsGet:            decodeParams,
+		methodAgentPluginDetailGet:        decodeParams,
+	}
+
+	for _, method := range server.stableMethodRegistry() {
+		if method.Handle == nil {
+			t.Fatalf("expected registered handler for %s", method.Name)
+		}
+		if method.Decode == nil {
+			t.Fatalf("expected decoder for %s", method.Name)
+		}
+		expectedDecode, ok := expectedDecoders[method.Name]
+		if !ok {
+			continue
+		}
+		if reflect.ValueOf(method.Decode).Pointer() != reflect.ValueOf(expectedDecode).Pointer() {
+			t.Fatalf("unexpected decoder for %s", method.Name)
+		}
 	}
 }
 
