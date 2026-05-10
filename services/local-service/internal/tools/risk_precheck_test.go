@@ -185,9 +185,9 @@ func TestBuildRiskPrecheckInputPageReadUsesURLWithoutWorkspaceBoundary(t *testin
 		ToolMetadata{Name: "page_read", DisplayName: "Page Read", Source: ToolSourceSidecar},
 		"page_read",
 		execCtx,
-		map[string]any{"url": "https://example.com/page"},
+		map[string]any{"url": "https://93.184.216.34/page"},
 	)
-	if input.Workspace.TargetPath != "https://example.com/page" {
+	if input.Workspace.TargetPath != "https://93.184.216.34/page" {
 		t.Fatalf("expected URL target path, got %+v", input.Workspace)
 	}
 	if input.Workspace.Within != nil {
@@ -199,7 +199,7 @@ func TestBuildRiskPrecheckInputPageReadUsesURLWithoutWorkspaceBoundary(t *testin
 		t.Fatalf("unexpected error: %v", err)
 	}
 	webpages := result.ImpactScope["webpages"].([]string)
-	if len(webpages) != 1 || webpages[0] != "https://example.com/page" {
+	if len(webpages) != 1 || webpages[0] != "https://93.184.216.34/page" {
 		t.Fatalf("expected webpage impact scope, got %+v", result.ImpactScope)
 	}
 	if result.RiskLevel != RiskLevelGreen || result.ApprovalRequired {

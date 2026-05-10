@@ -2,17 +2,35 @@
 package risk
 
 import (
+	"context"
 	"net"
+	"net/netip"
 	"net/url"
 	"strings"
 )
 
+var carrierGradeNATPrefix = netip.MustParsePrefix("100.64.0.0/10")
+
+// LookupIPAddrFunc lets controlled callers, especially tests, replace ambient
+// DNS with a deterministic hostname resolver while keeping production behavior
+// on the system resolver.
+type LookupIPAddrFunc func(context.Context, string) ([]net.IPAddr, error)
+
 // Service evaluates tool risk without mutating orchestrator state.
-type Service struct{}
+type Service struct {
+	lookupIPAddrs LookupIPAddrFunc
+}
 
 // NewService constructs a minimal risk assessment service.
 func NewService() *Service {
 	return &Service{}
+}
+
+// NewServiceWithResolver constructs a risk assessment service with one caller
+// supplied hostname resolver. This keeps hostname classification testable
+// without changing the default governance contract in production.
+func NewServiceWithResolver(lookup LookupIPAddrFunc) *Service {
+	return &Service{lookupIPAddrs: lookup}
 }
 
 // DefaultLevel returns the default risk level used by callers that need a
@@ -70,7 +88,7 @@ func (s *Service) Assess(input AssessmentInput) AssessmentResult {
 		return result
 	}
 
-	if requiresApprovalForSensitiveWebTarget(input.OperationName, input.TargetObject) {
+	if s.requiresApprovalForSensitiveWebTarget(input.OperationName, input.TargetObject) {
 		result.RiskLevel = RiskLevelYellow
 		result.ApprovalRequired = true
 		result.Reason = ReasonWebpageApproval
@@ -169,19 +187,20 @@ func isLowRiskBrowserObservationOperation(operationName string) bool {
 }
 
 // requiresApprovalForSensitiveWebTarget keeps read-only web tools low risk for
-// ordinary public pages while restoring authorization for local, loopback, and
-// private-network targets that could expose host-only services through the
-// browser sidecar path.
-func requiresApprovalForSensitiveWebTarget(operationName, targetObject string) bool {
+// ordinary public pages only when the target can be proven public. Local,
+// private, single-label, and private-DNS hostnames all stay on the approval
+// path because page_read/page_search otherwise widen browser reach without a
+// user checkpoint.
+func (s *Service) requiresApprovalForSensitiveWebTarget(operationName, targetObject string) bool {
 	switch strings.TrimSpace(operationName) {
 	case "page_read", "page_search":
-		return isSensitiveWebTarget(targetObject)
+		return s.isSensitiveWebTarget(targetObject)
 	default:
 		return false
 	}
 }
 
-func isSensitiveWebTarget(targetObject string) bool {
+func (s *Service) isSensitiveWebTarget(targetObject string) bool {
 	parsed, err := url.Parse(strings.TrimSpace(targetObject))
 	if err != nil {
 		return true
@@ -189,18 +208,75 @@ func isSensitiveWebTarget(targetObject string) bool {
 	if scheme := strings.ToLower(strings.TrimSpace(parsed.Scheme)); scheme != "http" && scheme != "https" {
 		return true
 	}
-	hostname := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	hostname := normalizeWebTargetHostname(parsed.Hostname())
 	if hostname == "" {
 		return true
 	}
+	if isSensitiveHostnamePattern(hostname) {
+		return true
+	}
+	if ip := parseHostnameIP(hostname); ip != nil {
+		return isNonPublicIPAddress(ip)
+	}
+	ipAddrs, err := s.lookupHostIPAddrs(context.Background(), hostname)
+	if err != nil || len(ipAddrs) == 0 {
+		return true
+	}
+	for _, ipAddr := range ipAddrs {
+		if isNonPublicIPAddress(ipAddr.IP) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) lookupHostIPAddrs(ctx context.Context, hostname string) ([]net.IPAddr, error) {
+	if s != nil && s.lookupIPAddrs != nil {
+		return s.lookupIPAddrs(ctx, hostname)
+	}
+	return net.DefaultResolver.LookupIPAddr(ctx, hostname)
+}
+
+func normalizeWebTargetHostname(hostname string) string {
+	hostname = strings.ToLower(strings.TrimSpace(hostname))
+	hostname = strings.TrimSuffix(hostname, ".")
+	return hostname
+}
+
+func isSensitiveHostnamePattern(hostname string) bool {
 	if hostname == "localhost" || strings.HasSuffix(hostname, ".localhost") {
 		return true
 	}
-	ip := net.ParseIP(hostname)
-	if ip == nil {
-		return false
+	if !strings.Contains(hostname, ".") {
+		return true
 	}
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+	for _, suffix := range []string{".local", ".localdomain", ".internal", ".home", ".lan", ".home.arpa"} {
+		if strings.HasSuffix(hostname, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseHostnameIP(hostname string) net.IP {
+	if zoneIndex := strings.LastIndex(hostname, "%"); zoneIndex >= 0 {
+		hostname = hostname[:zoneIndex]
+	}
+	return net.ParseIP(hostname)
+}
+
+func isNonPublicIPAddress(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	if !ip.IsGlobalUnicast() || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+		return true
+	}
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return true
+	}
+	return carrierGradeNATPrefix.Contains(addr.Unmap())
 }
 
 func isWorkspaceWriteOperation(operationName string) bool {
