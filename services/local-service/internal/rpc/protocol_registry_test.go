@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -92,7 +93,7 @@ func TestAgentInputSubmitDTORejectsMissingStableFields(t *testing.T) {
 		},
 	}))
 	if rpcErr == nil {
-		t.Fatal("expected missing source/trigger/context to return invalid params")
+		t.Fatal("expected missing request_meta/source/trigger/context to return invalid params")
 	}
 	if rpcErr.Code != errInvalidParams || rpcErr.Message != "INVALID_PARAMS" {
 		t.Fatalf("expected invalid params error, got %+v", rpcErr)
@@ -136,6 +137,93 @@ func TestAgentTaskDetailGetDTORejectsBlankTaskID(t *testing.T) {
 	}))
 	if rpcErr == nil {
 		t.Fatal("expected blank task_id to return invalid params")
+	}
+	if rpcErr.Code != errInvalidParams || rpcErr.Message != "INVALID_PARAMS" {
+		t.Fatalf("expected invalid params error, got %+v", rpcErr)
+	}
+}
+
+func TestStableDTOsRejectIncompleteRequestMeta(t *testing.T) {
+	testCases := []struct {
+		name   string
+		decode func(json.RawMessage) (map[string]any, *rpcError)
+		params map[string]any
+	}{
+		{
+			name:   "agent.input.submit",
+			decode: decodeAgentInputSubmitParams,
+			params: map[string]any{
+				"request_meta": map[string]any{
+					"trace_id": "trace_input_submit_missing_client_time",
+				},
+				"source":  "floating_ball",
+				"trigger": "hover_text_input",
+				"input": map[string]any{
+					"type":       "text",
+					"text":       "inspect the page",
+					"input_mode": "text",
+				},
+				"context": map[string]any{},
+			},
+		},
+		{
+			name:   "agent.task.start",
+			decode: decodeAgentTaskStartParams,
+			params: map[string]any{
+				"request_meta": map[string]any{
+					"client_time": "2026-05-09T12:00:00+08:00",
+				},
+				"source":  "floating_ball",
+				"trigger": "text_selected_click",
+				"input": map[string]any{
+					"type": "text_selection",
+					"text": "selected content",
+				},
+			},
+		},
+		{
+			name:   "agent.task.detail.get",
+			decode: decodeAgentTaskDetailGetParams,
+			params: map[string]any{
+				"request_meta": map[string]any{
+					"trace_id": "trace_task_detail_missing_client_time",
+				},
+				"task_id": "task_123",
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, rpcErr := testCase.decode(mustMarshal(t, testCase.params))
+			if rpcErr == nil {
+				t.Fatal("expected incomplete request_meta to return invalid params")
+			}
+			if rpcErr.Code != errInvalidParams || rpcErr.Message != "INVALID_PARAMS" {
+				t.Fatalf("expected invalid params error, got %+v", rpcErr)
+			}
+		})
+	}
+}
+
+func TestAgentTaskStartDTORejectsOutOfDomainPageContextBrowserWithoutContext(t *testing.T) {
+	_, rpcErr := decodeAgentTaskStartParams(mustMarshal(t, map[string]any{
+		"request_meta": map[string]any{
+			"trace_id":    "trace_task_start_invalid_page_context_browser",
+			"client_time": "2026-05-09T12:00:00+08:00",
+		},
+		"source":  "floating_ball",
+		"trigger": "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "selected content",
+			"page_context": map[string]any{
+				"browser_kind": "firefox",
+			},
+		},
+	}))
+	if rpcErr == nil {
+		t.Fatal("expected out-of-domain page_context browser_kind to return invalid params")
 	}
 	if rpcErr.Code != errInvalidParams || rpcErr.Message != "INVALID_PARAMS" {
 		t.Fatalf("expected invalid params error, got %+v", rpcErr)

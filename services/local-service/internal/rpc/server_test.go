@@ -254,6 +254,10 @@ func TestHandleStreamConnEmitsLoopLifecycleNotifications(t *testing.T) {
 		ID:      json.RawMessage(`"req-task-detail"`),
 		Method:  "agent.task.detail.get",
 		Params: mustMarshal(t, map[string]any{
+			"request_meta": map[string]any{
+				"trace_id":    "trace_task_detail_loop_notify",
+				"client_time": "2026-05-10T10:00:00Z",
+			},
 			"task_id": taskID,
 		}),
 	}
@@ -411,6 +415,10 @@ func TestHandleStreamConnStreamsLoopLifecycleNotificationsBeforeResponseForSubmi
 		ID:      json.RawMessage(`"req-input-submit-loop-stream"`),
 		Method:  "agent.input.submit",
 		Params: mustMarshal(t, map[string]any{
+			"request_meta": map[string]any{
+				"trace_id":    "trace_input_submit_loop_stream",
+				"client_time": "2026-05-10T10:00:00Z",
+			},
 			"session_id": "sess_input_submit_loop_stream",
 			"source":     "floating_ball",
 			"trigger":    "hover_text_input",
@@ -501,6 +509,10 @@ func TestHandleStreamConnDoesNotReplayStreamedRuntimeNotificationsAfterResponse(
 		ID:      json.RawMessage(`"req-loop-no-replay"`),
 		Method:  "agent.input.submit",
 		Params: mustMarshal(t, map[string]any{
+			"request_meta": map[string]any{
+				"trace_id":    "trace_input_submit_no_replay",
+				"client_time": "2026-05-10T10:00:00Z",
+			},
 			"session_id": "sess_input_submit_no_replay",
 			"source":     "floating_ball",
 			"trigger":    "hover_text_input",
@@ -1273,6 +1285,10 @@ func TestHandleStreamConnSerializesTaskStartingRequestsOnSharedConnection(t *tes
 			name:   "input submit",
 			method: "agent.input.submit",
 			firstParams: map[string]any{
+				"request_meta": map[string]any{
+					"trace_id":    "trace_serialized_submit_first",
+					"client_time": "2026-05-10T10:00:00Z",
+				},
 				"session_id": "sess_serialized_submit",
 				"source":     "floating_ball",
 				"trigger":    "hover_text_input",
@@ -1284,6 +1300,10 @@ func TestHandleStreamConnSerializesTaskStartingRequestsOnSharedConnection(t *tes
 				"context": map[string]any{},
 			},
 			secondParams: map[string]any{
+				"request_meta": map[string]any{
+					"trace_id":    "trace_serialized_submit_second",
+					"client_time": "2026-05-10T10:00:01Z",
+				},
 				"session_id": "sess_serialized_submit",
 				"source":     "floating_ball",
 				"trigger":    "hover_text_input",
@@ -1299,6 +1319,10 @@ func TestHandleStreamConnSerializesTaskStartingRequestsOnSharedConnection(t *tes
 			name:   "task start",
 			method: "agent.task.start",
 			firstParams: map[string]any{
+				"request_meta": map[string]any{
+					"trace_id":    "trace_serialized_start_first",
+					"client_time": "2026-05-10T10:00:00Z",
+				},
 				"session_id": "sess_serialized_start",
 				"source":     "floating_ball",
 				"trigger":    "text_selected_click",
@@ -1308,6 +1332,10 @@ func TestHandleStreamConnSerializesTaskStartingRequestsOnSharedConnection(t *tes
 				},
 			},
 			secondParams: map[string]any{
+				"request_meta": map[string]any{
+					"trace_id":    "trace_serialized_start_second",
+					"client_time": "2026-05-10T10:00:01Z",
+				},
 				"session_id": "sess_serialized_start",
 				"source":     "floating_ball",
 				"trigger":    "text_selected_click",
@@ -1494,6 +1522,10 @@ func TestHandleStreamConnReplaysLateTaskNotificationsBeforeQueuedSameTaskFollowU
 		ID:      json.RawMessage(`"req-late-task-starter"`),
 		Method:  "agent.task.start",
 		Params: mustMarshal(t, map[string]any{
+			"request_meta": map[string]any{
+				"trace_id":    "trace_late_task_starter",
+				"client_time": "2026-05-10T10:00:00Z",
+			},
 			"session_id": "sess_late_task_response_owner",
 			"source":     "floating_ball",
 			"trigger":    "text_selected_click",
@@ -1794,6 +1826,10 @@ func TestHandleStreamConnKeepsQueuedReadsResponsiveWhileLoopTaskRuns(t *testing.
 		ID:      json.RawMessage(`"req-task-detail-queued"`),
 		Method:  "agent.task.detail.get",
 		Params: mustMarshal(t, map[string]any{
+			"request_meta": map[string]any{
+				"trace_id":    "trace_task_detail_queued",
+				"client_time": "2026-05-10T10:00:00Z",
+			},
 			"task_id": taskB,
 		}),
 	}
@@ -1945,6 +1981,10 @@ func TestHandleStreamConnSerializesConcurrentRequestsForSameTask(t *testing.T) {
 		ID:      json.RawMessage(`"req-task-detail-same-task"`),
 		Method:  "agent.task.detail.get",
 		Params: mustMarshal(t, map[string]any{
+			"request_meta": map[string]any{
+				"trace_id":    "trace_task_detail_same_task",
+				"client_time": "2026-05-10T10:00:00Z",
+			},
 			"task_id": taskID,
 		}),
 	}
@@ -2000,6 +2040,10 @@ func TestDispatchTaskStartIgnoresUnsupportedIntentField(t *testing.T) {
 		ID:      json.RawMessage(`"req-task-start-ignore-intent"`),
 		Method:  "agent.task.start",
 		Params: mustMarshal(t, map[string]any{
+			"request_meta": map[string]any{
+				"trace_id":    "trace_task_start_ignore_intent",
+				"client_time": "2026-05-10T10:00:00Z",
+			},
 			"session_id": "sess_ignore_intent",
 			"source":     "floating_ball",
 			"trigger":    "text_selected_click",
@@ -2038,6 +2082,10 @@ func TestDispatchTaskStartFileInstructionSkipsIntentConfirmation(t *testing.T) {
 		ID:      json.RawMessage(`"req-task-start-file-instruction"`),
 		Method:  "agent.task.start",
 		Params: mustMarshal(t, map[string]any{
+			"request_meta": map[string]any{
+				"trace_id":    "trace_task_start_file_instruction",
+				"client_time": "2026-05-10T10:00:00Z",
+			},
 			"session_id": "sess_file_instruction_rpc",
 			"source":     "floating_ball",
 			"trigger":    "file_drop",
@@ -2191,6 +2239,10 @@ func TestDispatchTaskDetailGetIncludesActiveApprovalAnchor(t *testing.T) {
 		ID:      json.RawMessage(`"req-task-detail-anchor"`),
 		Method:  "agent.task.detail.get",
 		Params: mustMarshal(t, map[string]any{
+			"request_meta": map[string]any{
+				"trace_id":    "trace_task_detail_anchor",
+				"client_time": "2026-05-10T10:00:00Z",
+			},
 			"task_id": taskID,
 		}),
 	})
@@ -2248,6 +2300,10 @@ func TestDispatchTaskDetailGetOmitsApprovalAnchorForCompletedTask(t *testing.T) 
 		ID:      json.RawMessage(`"req-task-detail-no-anchor"`),
 		Method:  "agent.task.detail.get",
 		Params: mustMarshal(t, map[string]any{
+			"request_meta": map[string]any{
+				"trace_id":    "trace_task_detail_no_anchor",
+				"client_time": "2026-05-10T10:00:00Z",
+			},
 			"task_id": taskID,
 		}),
 	})

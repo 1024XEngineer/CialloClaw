@@ -97,6 +97,10 @@ func TestHandleStreamConnSkipsBufferedLiveRuntimeReplay(t *testing.T) {
 		ID:      json.RawMessage(`"req-stream-runtime-no-replay"`),
 		Method:  "agent.input.submit",
 		Params: mustMarshal(t, map[string]any{
+			"request_meta": map[string]any{
+				"trace_id":    "trace_stream_runtime_no_replay",
+				"client_time": "2026-05-10T10:00:00Z",
+			},
 			"session_id": "sess_stream_runtime_no_replay",
 			"source":     "floating_ball",
 			"trigger":    "hover_text_input",

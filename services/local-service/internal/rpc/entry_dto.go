@@ -236,6 +236,9 @@ func decodeTypedProtocolParams(raw json.RawMessage, target any, validate func(ma
 }
 
 func validateAgentInputSubmitParams(params map[string]any) *rpcError {
+	if err := requireRequestMeta(params); err != nil {
+		return err
+	}
 	input, err := requireObject(params, "input")
 	if err != nil {
 		return err
@@ -266,6 +269,9 @@ func validateAgentInputSubmitParams(params map[string]any) *rpcError {
 }
 
 func validateAgentTaskStartParams(params map[string]any) *rpcError {
+	if err := requireRequestMeta(params); err != nil {
+		return err
+	}
 	input, err := requireObject(params, "input")
 	if err != nil {
 		return err
@@ -293,6 +299,9 @@ func validateAgentTaskStartParams(params map[string]any) *rpcError {
 }
 
 func validateAgentTaskDetailGetParams(params map[string]any) *rpcError {
+	if err := requireRequestMeta(params); err != nil {
+		return err
+	}
 	if err := requireNonEmptyString(params, "task_id"); err != nil {
 		return err
 	}
@@ -300,6 +309,10 @@ func validateAgentTaskDetailGetParams(params map[string]any) *rpcError {
 }
 
 func validateContextEnvelope(params map[string]any) *rpcError {
+	pageContext := mapObject(mapObject(params, "input"), "page_context")
+	if err := optionalEnumValue(pageContext, "browser_kind", browserKindSet); err != nil {
+		return err
+	}
 	context := mapObject(params, "context")
 	if len(context) == 0 {
 		return nil
@@ -308,8 +321,18 @@ func validateContextEnvelope(params map[string]any) *rpcError {
 	if err := optionalEnumValue(page, "browser_kind", browserKindSet); err != nil {
 		return err
 	}
-	pageContext := mapObject(mapObject(params, "input"), "page_context")
-	if err := optionalEnumValue(pageContext, "browser_kind", browserKindSet); err != nil {
+	return nil
+}
+
+func requireRequestMeta(params map[string]any) *rpcError {
+	requestMeta, err := requireObject(params, "request_meta")
+	if err != nil {
+		return err
+	}
+	if err := requireNonEmptyString(requestMeta, "trace_id"); err != nil {
+		return err
+	}
+	if err := requireNonEmptyString(requestMeta, "client_time"); err != nil {
 		return err
 	}
 	return nil
