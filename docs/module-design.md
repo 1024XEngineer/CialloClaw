@@ -1322,7 +1322,7 @@ flowchart TB
 
 #### 上下文范围
 - 请求入口上下文：`source / trigger / input_type / input_mode / text`
-- 近场对象上下文：`selection_text / error_text / files`
+- 近场对象上下文：`selection_text / error.message / files`
 - 页面与窗口上下文：`page_title / page_url / app_name / window_title / visible_text`
 - 屏幕与行为上下文：`screen_summary / hover_target / last_action / dwell_millis / copy_count / switch_count`
 - 系统补充上下文：`clipboard_text`
