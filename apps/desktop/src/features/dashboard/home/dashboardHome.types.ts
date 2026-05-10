@@ -60,6 +60,26 @@ export type DashboardHomeAnomaly = {
   severity: "warn" | "error" | "info";
 };
 
+export type DashboardHomeNavigationTarget =
+  | {
+      kind: "module";
+      label: string;
+      module: DashboardHomeModuleKey;
+    }
+  | {
+      kind: "task_detail";
+      label: string;
+      module: "tasks";
+      taskId: string;
+    }
+  | {
+      kind: "mirror_detail";
+      label: string;
+      module: "memory";
+      activeDetailKey: "profile" | "memory" | "history";
+      focusMemoryId?: string;
+    };
+
 export type DashboardHomeStateData = {
   key: DashboardHomeEventStateKey;
   module: DashboardHomeModuleKey;
@@ -79,6 +99,7 @@ export type DashboardHomeStateData = {
   insights?: DashboardHomeInsightItem[];
   signals?: DashboardHomeSignalItem[];
   anomaly?: DashboardHomeAnomaly;
+  navigationTarget?: DashboardHomeNavigationTarget;
   breathSpeed: number;
 };
 
@@ -108,8 +129,10 @@ export type DashboardHomeStateGroup = {
 
 export type DashboardHomeSummonEvent = {
   copyDuration?: number;
+  expandedState?: DashboardHomeStateData;
   id: string;
   hideCopy?: boolean;
+  module: DashboardHomeModuleKey;
   stateKey: DashboardHomeEventStateKey;
   message: string;
   reason: string;
