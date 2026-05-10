@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/utils/cn";
 import { formatTimestamp } from "@/utils/formatters";
-import { getTaskPreviewStatusLabel, getTaskProgress, getTaskStateVoice, getTaskStatusBadgeClass, isTaskEnded } from "../taskPage.mapper";
+import { canTaskAcceptSteering, formatTaskSourceLabel, getTaskPreviewStatusLabel, getTaskProgress, getTaskStateVoice, getTaskStatusBadgeClass, isTaskEnded } from "../taskPage.mapper";
 import type { Task } from "@cialloclaw/protocol";
 import type { TaskDetailData, TaskExperience, TaskPrimaryAction } from "../taskPage.types";
 import { TaskActionBar } from "./TaskActionBar";
@@ -94,7 +94,7 @@ export function TaskDetailPanel({
       };
   const ended = task ? isTaskEnded(task) : false;
   const waitingCopy = task && experience
-    ? task.status === "waiting_auth" || task.status === "waiting_input" || task.status === "paused"
+    ? task.status === "confirming_intent" || task.status === "waiting_auth" || task.status === "waiting_input" || task.status === "paused"
       ? experience.waitingReason
       : task.status === "failed" || task.status === "blocked"
         ? experience.blockedReason
@@ -108,7 +108,17 @@ export function TaskDetailPanel({
     ? "当前先展示基础任务信息，时间线、产出和安全摘要正在从本地服务拉取。"
     : `${detailErrorMessage ?? "任务详情请求失败"}。当前先展示基础任务信息，你可以稍后重试。`;
   const shouldDeferSecuritySummary = detailState !== "ready" || detail === null;
-  const canSteerTask = task ? !ended && task.status !== "cancelled" : false;
+  const canSteerTask = task ? canTaskAcceptSteering(task) : false;
+  const steeringHint = task?.status === "confirming_intent"
+    ? "当前任务仍在等待确认处理方式；确认后才会开放正式 `agent.task.steer` 追加要求。"
+    : "这会调用正式 `agent.task.steer`，把补充说明排入当前任务后续执行。";
+  const steeringPlaceholder = canSteerTask
+    ? "例如：保留现有结果，再额外补一份简短结论。"
+    : task?.status === "confirming_intent"
+      ? "当前任务还在等待确认处理方式，确认后才能继续追加要求。"
+      : task && !ended
+        ? "当前任务暂不接受追加要求。"
+        : "当前任务已结束，不能继续补充要求。";
   const formalDeliveryResult = detail?.delivery_result ?? null;
   const runtimeSummary = detail?.runtime_summary ?? null;
   const evidenceItems = detail?.citations ?? [];
@@ -584,7 +594,7 @@ export function TaskDetailPanel({
         <div className="task-detail-shell__meta-grid">
         <div className="task-detail-shell__meta-card">
           <span>来源</span>
-          <strong>{task.source_type}</strong>
+          <strong>{formatTaskSourceLabel(task.source_type)}</strong>
         </div>
         <div className="task-detail-shell__meta-card">
           <span>开始时间</span>
@@ -786,13 +796,13 @@ export function TaskDetailPanel({
                     <h3 className="task-detail-card__title">补充新的执行要求</h3>
                   </div>
                 </div>
-                <p className="task-detail-card__hint">这会调用正式 `agent.task.steer`，把补充说明排入当前任务后续执行。</p>
+                <p className="task-detail-card__hint">{steeringHint}</p>
                 <div className="task-detail-steer-box">
                   <textarea
                     className="task-detail-steer-box__input"
                     disabled={!canSteerTask || steeringPending}
                     onChange={(event) => setSteeringMessage(event.target.value)}
-                    placeholder={canSteerTask ? "例如：保留现有结果，再额外补一份简短结论。" : "当前任务已结束，不能继续补充要求。"}
+                    placeholder={steeringPlaceholder}
                     rows={3}
                     value={steeringMessage}
                   />

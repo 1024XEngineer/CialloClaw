@@ -71,6 +71,10 @@ function getTaskPhase(task: Task) {
 }
 
 function getTaskWaitingReason(task: Task, detail?: AgentTaskDetailGetResult) {
+  if (task.status === "confirming_intent") {
+    return "等待确认当前处理方式后继续执行。";
+  }
+
   if (task.status === "waiting_auth") {
     const operationName = detail?.approval_request?.operation_name?.trim();
     return operationName ? `等待你确认是否允许 ${operationName}。` : "等待授权确认后继续执行。";
@@ -123,13 +127,13 @@ function getTaskEndedSummary(task: Task, detail?: AgentTaskDetailGetResult) {
 }
 
 function getTaskNextAction(task: Task, detail?: AgentTaskDetailGetResult) {
-  if (task.status === "processing" || task.status === "confirming_intent") {
-    return "等待正式时间线、交付结果或运行时通知继续推进。";
-  }
-
   const waitingReason = getTaskWaitingReason(task, detail);
   if (waitingReason) {
     return waitingReason;
+  }
+
+  if (task.status === "processing") {
+    return "等待正式时间线、交付结果或运行时通知继续推进。";
   }
 
   const blockedReason = getTaskBlockedReason(task, detail);

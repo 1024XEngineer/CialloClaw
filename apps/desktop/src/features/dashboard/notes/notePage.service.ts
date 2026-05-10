@@ -12,8 +12,29 @@ import type {
 import { openDesktopLocalPath, revealDesktopLocalPath } from "@/platform/desktopLocalPath";
 import { convertNotepadToTask, listNotepad, updateNotepad } from "@/rpc/methods";
 import type { NoteConvertOutcome, NoteDetailExperience, NoteListItem, NoteResource, NoteUpdateOutcome, SourceNoteDocument } from "./notePage.types";
+import { sanitizeSourceNoteBodyText } from "./sourceNoteEditor";
 
 const NOTEPAD_RPC_TIMEOUT_MS = 2_500;
+const NOTE_HIDDEN_METADATA_KEYS = new Set([
+  "agent",
+  "bucket",
+  "created_at",
+  "due",
+  "ended_at",
+  "next",
+  "note",
+  "prerequisite",
+  "recent_instance_status",
+  "reminder",
+  "repeat",
+  "resource",
+  "recurring_enabled",
+  "scope",
+  "status",
+  "suggest",
+  "tags",
+  "updated_at",
+]);
 
 export type NotePageDataMode = "rpc";
 
@@ -57,6 +78,21 @@ function formatAbsoluteTimestamp(value: number) {
   });
 }
 
+function trimBoundaryBlankLines(lines: string[]) {
+  let start = 0;
+  let end = lines.length;
+
+  while (start < end && lines[start]?.trim() === "") {
+    start += 1;
+  }
+
+  while (end > start && lines[end - 1]?.trim() === "") {
+    end -= 1;
+  }
+
+  return lines.slice(start, end);
+}
+
 function createSourceNoteFallbackId(path: string) {
   let hash = 2166136261;
 
@@ -66,6 +102,58 @@ function createSourceNoteFallbackId(path: string) {
   }
 
   return `source_note_${(hash >>> 0).toString(16)}`;
+}
+
+/**
+ * Converts note text that may still contain hidden markdown header metadata
+ * into the content-only text that should be rendered in note cards and detail
+ * panels. Header metadata stays hidden until the body begins.
+ *
+ * @param value Raw note text from protocol or markdown-derived fallback data.
+ * @param options Optional title context used to collapse title-only echoes.
+ * @returns User-visible note content with hidden header metadata removed.
+ */
+export function buildVisibleNoteText(
+  value: string | null | undefined,
+  options: {
+    title?: string | null;
+  } = {},
+) {
+  if (!value) {
+    return "";
+  }
+
+  const normalizedLines = value.replace(/\r\n/g, "\n").split("\n");
+  const visibleLines: string[] = [];
+  let bodyStarted = false;
+
+  normalizedLines.forEach((rawLine) => {
+    const line = rawLine.trimEnd();
+    const trimmed = line.trim();
+
+    if (bodyStarted) {
+      visibleLines.push(line);
+      return;
+    }
+
+    if (trimmed === "") {
+      return;
+    }
+
+    const metadata = splitSourceMetadataLine(trimmed);
+    if (metadata && NOTE_HIDDEN_METADATA_KEYS.has(metadata.key)) {
+      if (metadata.key === "note") {
+        visibleLines.push(metadata.value);
+        bodyStarted = true;
+      }
+      return;
+    }
+
+    visibleLines.push(line);
+    bodyStarted = true;
+  });
+
+  return sanitizeSourceNoteBodyText(trimBoundaryBlankLines(visibleLines).join("\n"), options);
 }
 
 function extractSourceNotePreview(content: string) {
@@ -273,6 +361,7 @@ function createResourceHints(item: TodoItem) {
 function createFallbackExperience(item: TodoItem): NoteDetailExperience {
   const previewStatus = getPreviewStatus(item);
   const detailStatus = getDetailStatus(item);
+  const visibleNoteText = buildVisibleNoteText(item.note_text, { title: item.title });
   const fallbackNoteType =
     item.bucket === "recurring_rule"
       ? "recurring"
@@ -288,7 +377,7 @@ function createFallbackExperience(item: TodoItem): NoteDetailExperience {
     agentSuggestion: {
       detail:
         item.agent_suggestion ??
-        "当前拿到的是协议中的基础便签数据，建议补一条更明确的上下文后再决定是否转交给 Agent。",
+        "这条便签会按当前正文直接生成任务；如果还想补充路径、时间或说明，可以继续写在正文里后再转交给 Agent。",
       label: "下一步建议",
     },
     canConvertToTask: item.bucket !== "closed" && !item.linked_task_id,
@@ -300,10 +389,13 @@ function createFallbackExperience(item: TodoItem): NoteDetailExperience {
     isRecurringEnabled: item.bucket === "recurring_rule" ? item.recurring_enabled !== false : false,
     nextOccurrenceAt: item.next_occurrence_at ?? (item.bucket === "recurring_rule" ? item.due_at : null),
     noteText:
-      item.note_text ??
-      (item.agent_suggestion
-        ? `${item.title}。${item.agent_suggestion}`
-        : `${item.title}。当前只返回了基础便签字段，页面用最小默认说明承接这条事项。`),
+      visibleNoteText !== ""
+        ? visibleNoteText
+        : item.note_text
+          ? ""
+          : item.agent_suggestion
+            ? `${item.title}。${item.agent_suggestion}`
+            : `${item.title}。当前只返回了基础便签字段，页面用最小默认说明承接这条事项。`,
     noteType: fallbackNoteType,
     plannedAt: item.due_at,
     previewStatus,
