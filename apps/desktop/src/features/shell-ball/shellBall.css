@@ -1174,6 +1174,7 @@ body[data-app-window="shell-ball"],
 
 .shell-ball-mascot {
   --shell-ball-dock-mirror-x: 1;
+  --shell-ball-dock-rotation-deg: 0deg;
   --shell-ball-mascot-visual-scale: 1;
   --shell-ball-orbital-scale: 1;
   --shell-ball-shadow-offset-y: 0px;
@@ -1184,7 +1185,11 @@ body[data-app-window="shell-ball"],
   height: clamp(16.2rem, 30.6vw, 21.6rem);
   justify-content: center;
   position: relative;
-  transform: scale(var(--shell-ball-mascot-scale)) scale(var(--shell-ball-mascot-visual-scale)) scaleX(var(--shell-ball-dock-mirror-x));
+  transform:
+    scale(var(--shell-ball-mascot-scale))
+    scale(var(--shell-ball-mascot-visual-scale))
+    scaleX(var(--shell-ball-dock-mirror-x))
+    rotate(var(--shell-ball-dock-rotation-deg));
   transform-origin: center center;
   width: clamp(14.86rem, 27.9vw, 17.1rem);
   will-change: filter, transform;
@@ -1194,6 +1199,7 @@ body[data-app-window="shell-ball"],
 .shell-ball-mascot[data-edge-dock-side="top_left"][data-edge-dock-revealed="false"],
 .shell-ball-mascot[data-edge-dock-side="bottom_left"][data-edge-dock-revealed="false"] {
   --shell-ball-dock-mirror-x: -1;
+  --shell-ball-dock-rotation-deg: -30deg;
 }
 
 .shell-ball-mascot[data-voice-hints="true"] {

@@ -449,7 +449,7 @@ const StyledInputBar = styled.div`
     text-align: left;
     top: 50%;
     line-height: 1;
-    transform: translateY(-50%);
+    transform: translateY(calc(-50% - 3px));
     width: calc(100% - 28px);
   }
 
@@ -584,7 +584,7 @@ const StyledInputBar = styled.div`
   &:focus-within .shell-ball-uiverse-actions,
   &[data-settled="true"] .shell-ball-uiverse-actions {
     opacity: 1;
-    transform: translateY(-50%) translateX(0);
+    transform: translateY(calc(-50% - 3px)) translateX(0);
   }
 
   &[data-can-attach="true"]:focus-within .shell-ball-uiverse-action--attach,
