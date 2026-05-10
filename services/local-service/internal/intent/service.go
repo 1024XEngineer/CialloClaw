@@ -115,14 +115,12 @@ func ComposeTaskTitle(snapshot taskcontext.TaskContextSnapshot, intentName strin
 	if subject == "" {
 		subject = subjectText(snapshot)
 	}
-	if intentName == "screen_analyze" {
-		subject = screenSubjectText(snapshot)
+	switch intentName {
+	case "screen_analyze":
+		return screenSubjectText(snapshot)
+	default:
+		return subject
 	}
-	return presentation.TaskTitle(intentName, presentation.TaskTitleOptions{
-		Subject:  subject,
-		HasError: snapshot.ErrorText != "" || snapshot.InputType == "error",
-		IsFile:   len(snapshot.Files) > 0 || snapshot.InputType == "file",
-	})
 }
 
 // buildTaskTitle creates the user-facing task title that appears in task lists,

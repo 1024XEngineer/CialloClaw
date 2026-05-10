@@ -34,6 +34,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/titlegen"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/sidecarclient"
@@ -2127,6 +2128,7 @@ func TestServiceStartTaskUsesGeneratedTaskTitleFromFullContext(t *testing.T) {
 			return model.GenerateTextResponse{OutputText: "unused"}, nil
 		},
 	})
+	service.WithTitleGenerator(titlegen.NewService(service.model))
 
 	startResult, err := service.StartTask(map[string]any{
 		"session_id": "sess_generated_title",

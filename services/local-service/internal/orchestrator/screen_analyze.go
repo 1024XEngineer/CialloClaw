@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"path"
 	"strings"
 	"time"
@@ -85,9 +86,7 @@ func (s *Service) normalizeSuggestedIntentForAvailability(snapshot taskcontext.T
 	// unavailable so the downgrade does not auto-execute a generic task.
 	fallback.RequiresConfirm = confirmRequired
 	fallback.TaskSourceType = "hover_input"
-	fallback.TaskTitle = presentation.Text(presentation.MessageTaskTitleScreenFallback, map[string]string{
-		"subject": inferredScreenFallbackSubject(snapshot),
-	})
+	fallback.TaskTitle = inferredScreenFallbackSubject(snapshot)
 	fallback.DirectDeliveryType = "bubble"
 	fallback.ResultTitle = presentation.Text(presentation.MessageResultTitleGeneric, nil)
 	fallback.ResultPreview = presentation.Text(presentation.MessagePreviewBubble, nil)
@@ -199,10 +198,10 @@ func isClipScreenSourcePath(pathValue string) bool {
 
 func inferredScreenTaskTitle(snapshot taskcontext.TaskContextSnapshot) string {
 	target := screenSubjectFromSnapshot(snapshot)
-	return presentation.TaskTitle("screen_analyze", presentation.TaskTitleOptions{
-		Subject:  truncateText(target, subjectPreviewMaxLength),
-		HasError: screenSnapshotHasErrorIntent(snapshot),
-	})
+	if screenSnapshotHasErrorIntent(snapshot) {
+		return fmt.Sprintf("%s报错", truncateText(target, subjectPreviewMaxLength))
+	}
+	return truncateText(target, subjectPreviewMaxLength)
 }
 
 func screenSubjectFromSnapshot(snapshot taskcontext.TaskContextSnapshot) string {

@@ -72,7 +72,6 @@ func NewService(deps Deps) (*Service, error) {
 		recommendation:   deps.recommendationService(),
 		traceEval:        deps.traceEvalService(),
 		inspector:        deps.inspectorService(),
-		titleGenerator:   titlegen.NewService(deps.Model),
 		storage:          deps.Storage,
 		executionTimeout: deps.resolvedExecutionTimeout(),
 		runtimeTaps:      map[uint64]func(taskID, method string, params map[string]any){},
