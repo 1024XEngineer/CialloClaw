@@ -399,6 +399,96 @@ func TestAgentTaskStartDTORejectsOutOfDomainPageContextBrowserWithoutContext(t *
 	}
 }
 
+func TestTypedEntryDTOsRejectMalformedDeclaredNestedFields(t *testing.T) {
+	testCases := []struct {
+		name   string
+		decode func(json.RawMessage) (map[string]any, *rpcError)
+		params map[string]any
+	}{
+		{
+			name:   "task.start context.page.process_id",
+			decode: decodeAgentTaskStartParams,
+			params: map[string]any{
+				"request_meta": map[string]any{
+					"trace_id":    "trace_task_start_invalid_process_id",
+					"client_time": "2026-05-10T00:00:00Z",
+				},
+				"source":  "floating_ball",
+				"trigger": "text_selected_click",
+				"input": map[string]any{
+					"type": "text_selection",
+					"text": "selected content",
+				},
+				"context": map[string]any{
+					"page": map[string]any{
+						"process_id": "42",
+					},
+					"selection": map[string]any{
+						"text": "selected content",
+					},
+				},
+			},
+		},
+		{
+			name:   "task.start context.behavior.dwell_millis",
+			decode: decodeAgentTaskStartParams,
+			params: map[string]any{
+				"request_meta": map[string]any{
+					"trace_id":    "trace_task_start_invalid_dwell_millis",
+					"client_time": "2026-05-10T00:00:00Z",
+				},
+				"source":  "floating_ball",
+				"trigger": "text_selected_click",
+				"input": map[string]any{
+					"type": "text_selection",
+					"text": "selected content",
+				},
+				"context": map[string]any{
+					"behavior": map[string]any{
+						"dwell_millis": "oops",
+					},
+					"selection": map[string]any{
+						"text": "selected content",
+					},
+				},
+			},
+		},
+		{
+			name:   "input.submit voice_meta.asr_confidence",
+			decode: decodeAgentInputSubmitParams,
+			params: map[string]any{
+				"request_meta": map[string]any{
+					"trace_id":    "trace_input_submit_invalid_asr_confidence",
+					"client_time": "2026-05-10T00:00:00Z",
+				},
+				"source":  "floating_ball",
+				"trigger": "hover_text_input",
+				"input": map[string]any{
+					"type":       "text",
+					"text":       "inspect the page",
+					"input_mode": "text",
+				},
+				"context": map[string]any{},
+				"voice_meta": map[string]any{
+					"asr_confidence": "0.9",
+				},
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, rpcErr := testCase.decode(mustMarshal(t, testCase.params))
+			if rpcErr == nil {
+				t.Fatal("expected malformed nested dto field to return invalid params")
+			}
+			if rpcErr.Code != errInvalidParams || rpcErr.Message != "INVALID_PARAMS" {
+				t.Fatalf("expected invalid params error, got %+v", rpcErr)
+			}
+		})
+	}
+}
+
 func TestAgentInputSubmitDTORejectsBlankInputText(t *testing.T) {
 	_, rpcErr := decodeAgentInputSubmitParams(mustMarshal(t, map[string]any{
 		"request_meta": map[string]any{

@@ -415,3 +415,134 @@ func TestTaskDetailGetResponseRejectsMissingRequiredSummaryFields(t *testing.T) 
 		})
 	}
 }
+
+func TestTaskEntryResponseRejectsMissingRequiredDeclaredFields(t *testing.T) {
+	testCases := []struct {
+		name    string
+		payload map[string]any
+	}{
+		{
+			name: "task.status",
+			payload: map[string]any{
+				"task": map[string]any{
+					"task_id":      "task_missing_status",
+					"title":        "Missing status",
+					"source_type":  "floating_ball",
+					"current_step": "deliver_result",
+					"risk_level":   "green",
+					"updated_at":   "2026-05-10T00:00:01Z",
+				},
+			},
+		},
+		{
+			name: "bubble_message.pinned",
+			payload: map[string]any{
+				"task": map[string]any{
+					"task_id":      "task_with_bubble_missing_bool",
+					"title":        "Missing bubble bool",
+					"source_type":  "floating_ball",
+					"status":       "completed",
+					"current_step": "deliver_result",
+					"risk_level":   "green",
+					"updated_at":   "2026-05-10T00:00:01Z",
+				},
+				"bubble_message": map[string]any{
+					"bubble_id":  "bubble_missing_pinned",
+					"task_id":    "task_with_bubble_missing_bool",
+					"type":       "result",
+					"text":       "Done",
+					"hidden":     false,
+					"created_at": "2026-05-10T00:00:01Z",
+				},
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, err := newTaskEntryResponse(testCase.payload); err == nil {
+				t.Fatalf("expected missing required declared field to fail for %s", testCase.name)
+			}
+		})
+	}
+}
+
+func TestTaskDetailGetResponseRejectsMissingRequiredDeclaredFields(t *testing.T) {
+	testCases := []struct {
+		name    string
+		payload map[string]any
+	}{
+		{
+			name: "task.task_id",
+			payload: map[string]any{
+				"task": map[string]any{
+					"title":        "Missing task id",
+					"source_type":  "floating_ball",
+					"status":       "completed",
+					"current_step": "deliver_result",
+					"risk_level":   "green",
+					"updated_at":   "2026-05-10T00:00:01Z",
+				},
+				"timeline":             []map[string]any{},
+				"delivery_result":      nil,
+				"artifacts":            []map[string]any{},
+				"citations":            []map[string]any{},
+				"mirror_references":    []map[string]any{},
+				"approval_request":     nil,
+				"authorization_record": nil,
+				"audit_record":         nil,
+				"security_summary": map[string]any{
+					"security_status":        "safe",
+					"risk_level":             "green",
+					"pending_authorizations": 0,
+					"latest_restore_point":   nil,
+				},
+				"runtime_summary": map[string]any{
+					"events_count":          0,
+					"active_steering_count": 0,
+					"observation_signals":   []string{},
+				},
+			},
+		},
+		{
+			name: "timeline array",
+			payload: map[string]any{
+				"task": map[string]any{
+					"task_id":      "task_missing_timeline",
+					"title":        "Missing timeline",
+					"source_type":  "floating_ball",
+					"status":       "completed",
+					"current_step": "deliver_result",
+					"risk_level":   "green",
+					"updated_at":   "2026-05-10T00:00:01Z",
+				},
+				"delivery_result":      nil,
+				"artifacts":            []map[string]any{},
+				"citations":            []map[string]any{},
+				"mirror_references":    []map[string]any{},
+				"approval_request":     nil,
+				"authorization_record": nil,
+				"audit_record":         nil,
+				"security_summary": map[string]any{
+					"security_status":        "safe",
+					"risk_level":             "green",
+					"pending_authorizations": 0,
+					"latest_restore_point":   nil,
+				},
+				"runtime_summary": map[string]any{
+					"events_count":          0,
+					"active_steering_count": 0,
+					"observation_signals":   []string{},
+				},
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, err := newTaskDetailGetResponse(testCase.payload); err == nil {
+				t.Fatalf("expected missing required declared field to fail for %s", testCase.name)
+			}
+		})
+	}
+}
