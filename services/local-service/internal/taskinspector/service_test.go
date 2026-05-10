@@ -80,6 +80,7 @@ func TestServiceRunAggregatesWorkspaceNotepadAndRuntimeState(t *testing.T) {
 	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
 
 	result, err := service.Run(RunInput{
+		AllowGeneratedTitles: true,
 		Config: map[string]any{
 			"task_sources":           []string{"workspace/todos"},
 			"inspection_interval":    map[string]any{"unit": "minute", "value": 15},
@@ -159,7 +160,10 @@ func TestServiceRunParsesMarkdownIntoRichNotepadFoundation(t *testing.T) {
 		output: `{"title":"每周复盘阻塞项"}`,
 	})))
 	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
-	result, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	result, err := service.Run(RunInput{
+		AllowGeneratedTitles: true,
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+	})
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -211,7 +215,10 @@ func TestServiceRunCachesGeneratedNoteTitlesUntilContentChanges(t *testing.T) {
 	})))
 	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
 
-	firstResult, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	firstResult, err := service.Run(RunInput{
+		AllowGeneratedTitles: true,
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+	})
 	if err != nil {
 		t.Fatalf("first Run returned error: %v", err)
 	}
@@ -222,7 +229,10 @@ func TestServiceRunCachesGeneratedNoteTitlesUntilContentChanges(t *testing.T) {
 		t.Fatalf("expected one title generation call on first run, got %d", got)
 	}
 
-	secondResult, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	secondResult, err := service.Run(RunInput{
+		AllowGeneratedTitles: true,
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+	})
 	if err != nil {
 		t.Fatalf("second Run returned error: %v", err)
 	}
@@ -236,7 +246,10 @@ func TestServiceRunCachesGeneratedNoteTitlesUntilContentChanges(t *testing.T) {
 	if err := os.WriteFile(notePath, []byte("- [ ] Weekly retro\n  note: review blockers, risks, and owners\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
-	if _, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}}); err != nil {
+	if _, err := service.Run(RunInput{
+		AllowGeneratedTitles: true,
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+	}); err != nil {
 		t.Fatalf("third Run returned error: %v", err)
 	}
 	if got := callCount.Load(); got != 2 {
@@ -272,6 +285,42 @@ func TestServiceRunUsesNoteTextAsFallbackWhenGeneratorUnavailable(t *testing.T) 
 	}
 	if got := result.NotepadItems[0]["title"]; got != "补齐风险项、责任人和发布时间" {
 		t.Fatalf("expected fallback title to prefer note body context, got %+v", got)
+	}
+}
+
+func TestServiceRunKeepsFallbackTitlesUnlessGenerationIsExplicitlyAllowed(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	content := strings.Join([]string{
+		"- [ ] Weekly retro",
+		"  note: review blockers",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "weekly.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	callCount := &atomic.Int32{}
+	service := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"每周复盘阻塞项"}`,
+		calls:  callCount,
+	})))
+
+	result, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if len(result.NotepadItems) != 1 || result.NotepadItems[0]["title"] != "review blockers" {
+		t.Fatalf("expected local fallback title on default inspection path, got %+v", result.NotepadItems)
+	}
+	if got := callCount.Load(); got != 0 {
+		t.Fatalf("expected default inspection path to skip title model calls, got %d", got)
 	}
 }
 

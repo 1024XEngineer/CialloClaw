@@ -23,7 +23,7 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	}
 
 	flow.Suggestion = s.suggestStartTaskIntent(flow)
-	flow.Suggestion.TaskTitle = s.resolvedTaskTitle(flow.Snapshot, flow.Suggestion.Intent, flow.Suggestion.TaskTitle)
+	flow.Suggestion.TaskTitle = s.fallbackTaskTitle(flow.Snapshot, flow.Suggestion.Intent, flow.Suggestion.TaskTitle)
 	if response, handled, err := s.maybeHandleSuggestedScreenStart(flow); err != nil || handled {
 		return response, err
 	}
@@ -123,6 +123,7 @@ func (s *Service) createTaskFromEntryFlow(flow taskEntryFlow) runengine.TaskReco
 	})
 	s.publishTaskStart(task.TaskID, task.SessionID, requestTraceID(flow.Params))
 	s.attachMemoryReadPlans(task.TaskID, task.RunID, flow.Snapshot, flow.Suggestion.Intent)
+	s.scheduleTaskTitleRefresh(task.TaskID, flow.Snapshot, flow.Suggestion.Intent, task.Title)
 	return task
 }
 

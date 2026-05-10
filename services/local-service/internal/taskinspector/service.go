@@ -38,12 +38,13 @@ type Service struct {
 
 // RunInput carries runtime state required by one inspection pass.
 type RunInput struct {
-	Reason          string
-	TargetSources   []string
-	Config          map[string]any
-	UnfinishedTasks []runengine.TaskRecord
-	FinishedTasks   []runengine.TaskRecord
-	NotepadItems    []map[string]any
+	Reason               string
+	AllowGeneratedTitles bool
+	TargetSources        []string
+	Config               map[string]any
+	UnfinishedTasks      []runengine.TaskRecord
+	FinishedTasks        []runengine.TaskRecord
+	NotepadItems         []map[string]any
 }
 
 // RunResult carries the protocol-compatible result of one inspection pass.
@@ -95,7 +96,7 @@ func (s *Service) Run(input RunInput) (RunResult, error) {
 		return RunResult{}, ErrInspectionFileSystemUnavailable
 	}
 	sourceSynced := len(sources) > 0 && s.fileSystem != nil
-	parsedFiles, parsedNotepadItems, err := s.inspectSources(sources)
+	parsedFiles, parsedNotepadItems, err := s.inspectSources(sources, input.AllowGeneratedTitles)
 	if err != nil {
 		return RunResult{}, err
 	}
@@ -123,7 +124,7 @@ func (s *Service) Run(input RunInput) (RunResult, error) {
 	}, nil
 }
 
-func (s *Service) inspectSources(sources []string) (int, []map[string]any, error) {
+func (s *Service) inspectSources(sources []string, allowGeneratedTitles bool) (int, []map[string]any, error) {
 	if s.fileSystem == nil || len(sources) == 0 {
 		return 0, nil, nil
 	}
@@ -174,7 +175,7 @@ func (s *Service) inspectSources(sources []string) (int, []map[string]any, error
 				}
 				return fmt.Errorf("decode task source file %s: %w", currentPath, err)
 			}
-			identifiedItems = append(identifiedItems, s.parseNotepadItemsFromMarkdown(sourcePathFromFSPath(currentPath), decoded.Text, s.now())...)
+			identifiedItems = append(identifiedItems, s.parseNotepadItemsFromMarkdown(sourcePathFromFSPath(currentPath), decoded.Text, s.now(), allowGeneratedTitles)...)
 			return nil
 		}); err != nil {
 			return 0, nil, fmt.Errorf("%w: %s: %v", ErrInspectionSourceUnreadable, strings.TrimSpace(source), err)
@@ -403,7 +404,7 @@ func countChecklistItems(content string) int {
 	return count
 }
 
-func (s *Service) parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time) []map[string]any {
+func (s *Service) parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time, allowGeneratedTitles bool) []map[string]any {
 	lines := strings.Split(content, "\n")
 	items := make([]map[string]any, 0)
 	var current map[string]any
@@ -415,7 +416,7 @@ func (s *Service) parseNotepadItemsFromMarkdown(sourcePath, content string, now 
 		if len(noteLines) > 0 && stringValue(current, "note_text") == "" {
 			current["note_text"] = strings.Join(noteLines, "\n")
 		}
-		items = append(items, s.normalizeParsedNotepadItem(current, sourcePath, now))
+		items = append(items, s.normalizeParsedNotepadItem(current, sourcePath, now, allowGeneratedTitles))
 		current = nil
 		noteLines = noteLines[:0]
 	}
@@ -523,7 +524,7 @@ func splitMetadataLine(line string) (string, string, bool) {
 	return key, value, true
 }
 
-func (s *Service) normalizeParsedNotepadItem(item map[string]any, sourcePath string, now time.Time) map[string]any {
+func (s *Service) normalizeParsedNotepadItem(item map[string]any, sourcePath string, now time.Time, allowGeneratedTitles bool) map[string]any {
 	if stringValue(item, "bucket") == notepadBucketRecurringRule {
 		item["type"] = "recurring"
 		if stringValue(item, "repeat_rule_text") == "" {
@@ -553,7 +554,7 @@ func (s *Service) normalizeParsedNotepadItem(item map[string]any, sourcePath str
 		stringValue(item, "title"),
 		"待办事项",
 	), 24)
-	if s != nil && s.titlegen != nil && shouldGenerateNoteTitle(item) {
+	if allowGeneratedTitles && s != nil && s.titlegen != nil && shouldGenerateNoteTitle(item) {
 		item["title"] = s.titlegen.GenerateNoteTitle(context.Background(), item, fallbackTitle)
 	} else {
 		item["title"] = fallbackTitle

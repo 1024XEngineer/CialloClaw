@@ -8,16 +8,36 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
-// resolvedTaskTitle keeps model-backed title generation on the formal task path
-// while treating the generated text as the final user-facing title.
-func (s *Service) resolvedTaskTitle(snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any, fallback string) string {
+// fallbackTaskTitle keeps the task lifecycle synchronous by using deterministic
+// local data on the hot path. Model-backed refinement, when enabled, happens
+// after the formal task mutation succeeds.
+func (s *Service) fallbackTaskTitle(snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any, fallback string) string {
 	intentName := strings.TrimSpace(stringValue(taskIntent, "name", ""))
 	subjectFallback := strings.TrimSpace(originalTextFromTaskTitle(fallback))
 	if subjectFallback == "" {
 		subjectFallback = intent.ComposeTaskTitle(snapshot, intentName, "")
 	}
-	if s == nil || s.titleGenerator == nil {
-		return intent.ComposeTaskTitle(snapshot, intentName, subjectFallback)
+	return intent.ComposeTaskTitle(snapshot, intentName, subjectFallback)
+}
+
+// scheduleTaskTitleRefresh refines the fallback title without blocking task
+// creation, confirmation, or continuation on a model round-trip.
+func (s *Service) scheduleTaskTitleRefresh(taskID string, snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any, fallbackTitle string) {
+	if s == nil || s.titleGenerator == nil || s.runEngine == nil {
+		return
 	}
-	return s.titleGenerator.GenerateTaskSubject(context.Background(), snapshot, intentName, subjectFallback)
+	taskID = strings.TrimSpace(taskID)
+	fallbackTitle = strings.TrimSpace(fallbackTitle)
+	if taskID == "" || fallbackTitle == "" {
+		return
+	}
+	intentValue := cloneMap(taskIntent)
+	go func() {
+		intentName := strings.TrimSpace(stringValue(intentValue, "name", ""))
+		generatedTitle := s.titleGenerator.GenerateTaskSubject(context.Background(), snapshot, intentName, fallbackTitle)
+		if generatedTitle == "" || generatedTitle == fallbackTitle {
+			return
+		}
+		s.runEngine.UpdateTitleIfCurrent(taskID, fallbackTitle, generatedTitle)
+	}()
 }
