@@ -2302,7 +2302,14 @@ func TestServiceStartTaskUsesGeneratedTaskTitleFromFullContext(t *testing.T) {
 	service, _ := newTestServiceWithModelClient(t, stubModelClient{
 		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
 			if request.TaskID == "task_title_generator" {
-				return model.GenerateTextResponse{OutputText: `{"title":"发布复盘风险跟进"}`}, nil
+				return model.GenerateTextResponse{
+					OutputText: `{"title":"发布复盘风险跟进"}`,
+					RequestID:  "req_task_title",
+					Provider:   "openai",
+					ModelID:    "gpt-title",
+					Usage:      model.TokenUsage{InputTokens: 12, OutputTokens: 4, TotalTokens: 16},
+					LatencyMS:  42,
+				}, nil
 			}
 			return model.GenerateTextResponse{OutputText: "执行结果"}, nil
 		},
@@ -2330,13 +2337,24 @@ func TestServiceStartTaskUsesGeneratedTaskTitleFromFullContext(t *testing.T) {
 	deadline := time.Now().Add(500 * time.Millisecond)
 	for time.Now().Before(deadline) {
 		record, ok := service.runEngine.GetTask(taskID)
-		if ok && record.Title == "发布复盘风险跟进" {
+		if ok && record.Title == "发布复盘风险跟进" &&
+			record.TokenUsage["total_tokens"] == 16 &&
+			hasTaskTitleAuditRecord(record.AuditRecords) {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	record, _ := service.runEngine.GetTask(taskID)
 	t.Fatalf("expected async task title refinement, got %+v", record)
+}
+
+func hasTaskTitleAuditRecord(records []map[string]any) bool {
+	for _, record := range records {
+		if stringValue(record, "action", "") == "title.generate" {
+			return true
+		}
+	}
+	return false
 }
 
 func TestServiceStartTaskConfirmingIntentDoesNotGenerateTitleBeforeConfirmation(t *testing.T) {
@@ -2615,14 +2633,14 @@ func TestServiceTaskTitleRefreshKeepsLatestReservation(t *testing.T) {
 		},
 	})
 
-	service.scheduleTaskTitleRefresh(task.TaskID, task.Snapshot, task.Intent, task.Title)
+	service.scheduleTaskTitleRefresh(task, task.Snapshot, task.Intent, task.Title)
 	select {
 	case <-client.firstStarted:
 	case <-time.After(500 * time.Millisecond):
 		t.Fatal("expected first title refresh to start")
 	}
 
-	service.scheduleTaskTitleRefresh(task.TaskID, taskcontext.TaskContextSnapshot{
+	service.scheduleTaskTitleRefresh(task, taskcontext.TaskContextSnapshot{
 		InputType: "text",
 		Text:      "请分析构建失败，并补充最新客户影响",
 		Trigger:   "hover_text_input",

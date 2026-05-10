@@ -305,6 +305,55 @@ func TestEngineAppendAuditDataPersistsAuditAndTokenUsage(t *testing.T) {
 	}
 }
 
+func TestEngineAppendAuditDataMergesTokenUsage(t *testing.T) {
+	engine := NewEngine()
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_audit_merge",
+		Title:       "merge audit",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "summarize"},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+	})
+
+	if _, ok := engine.AppendAuditData(task.TaskID, nil, map[string]any{
+		"input_tokens":   12,
+		"output_tokens":  4,
+		"total_tokens":   16,
+		"estimated_cost": 0.03,
+		"request_id":     "req_first",
+		"provider":       "openai",
+		"model_id":       "gpt-first",
+		"latency_ms":     int64(120),
+	}); !ok {
+		t.Fatal("expected first token usage append to succeed")
+	}
+
+	appended, ok := engine.AppendAuditData(task.TaskID, nil, map[string]any{
+		"input_tokens":   8,
+		"output_tokens":  3,
+		"total_tokens":   11,
+		"estimated_cost": 0.02,
+		"request_id":     "req_second",
+		"provider":       "openai",
+		"model_id":       "gpt-second",
+		"latency_ms":     int64(80),
+	})
+	if !ok {
+		t.Fatal("expected second token usage append to succeed")
+	}
+	if appended.TokenUsage["input_tokens"] != 20 || appended.TokenUsage["output_tokens"] != 7 || appended.TokenUsage["total_tokens"] != 27 {
+		t.Fatalf("expected token counts to merge, got %+v", appended.TokenUsage)
+	}
+	if appended.TokenUsage["estimated_cost"] != 0.05 {
+		t.Fatalf("expected estimated_cost to merge, got %+v", appended.TokenUsage)
+	}
+	if appended.TokenUsage["request_id"] != "req_second" || appended.TokenUsage["model_id"] != "gpt-second" {
+		t.Fatalf("expected latest request metadata to win, got %+v", appended.TokenUsage)
+	}
+}
+
 func TestEngineDefaultSettingsIncludeBudgetPolicy(t *testing.T) {
 	engine := NewEngine()
 	settings := engine.Settings()

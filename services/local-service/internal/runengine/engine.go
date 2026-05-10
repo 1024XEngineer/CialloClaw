@@ -2186,11 +2186,89 @@ func (e *Engine) AppendAuditData(taskID string, auditRecords []map[string]any, t
 		record.AuditRecords = append(record.AuditRecords, cloneMapSlice(auditRecords)...)
 	}
 	if len(tokenUsage) > 0 {
-		record.TokenUsage = cloneMap(tokenUsage)
+		record.TokenUsage = mergeTaskTokenUsage(record.TokenUsage, tokenUsage)
 	}
 	record.UpdatedAt = e.now()
 	e.persistTaskLocked(record)
 	return record.clone(), true
+}
+
+func mergeTaskTokenUsage(current map[string]any, update map[string]any) map[string]any {
+	if len(update) == 0 {
+		return cloneMap(current)
+	}
+	if len(current) == 0 {
+		return cloneMap(update)
+	}
+	merged := cloneMap(current)
+	for _, key := range []string{"input_tokens", "output_tokens", "total_tokens"} {
+		merged[key] = tokenUsageInt(current[key]) + tokenUsageInt(update[key])
+	}
+	merged["estimated_cost"] = tokenUsageFloat(current["estimated_cost"]) + tokenUsageFloat(update["estimated_cost"])
+	for _, key := range []string{"request_id", "provider", "model_id"} {
+		if value := strings.TrimSpace(tokenUsageString(update[key])); value != "" {
+			merged[key] = value
+		}
+	}
+	if latency := tokenUsageInt64(update["latency_ms"]); latency > 0 {
+		merged["latency_ms"] = latency
+	}
+	if fallback, ok := update["fallback"].(bool); ok {
+		merged["fallback"] = fallback
+	}
+	return merged
+}
+
+func tokenUsageInt(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int32:
+		return int(typed)
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	default:
+		return 0
+	}
+}
+
+func tokenUsageInt64(value any) int64 {
+	switch typed := value.(type) {
+	case int:
+		return int64(typed)
+	case int32:
+		return int64(typed)
+	case int64:
+		return typed
+	case float64:
+		return int64(typed)
+	default:
+		return 0
+	}
+}
+
+func tokenUsageFloat(value any) float64 {
+	switch typed := value.(type) {
+	case float64:
+		return typed
+	case float32:
+		return float64(typed)
+	case int:
+		return float64(typed)
+	case int64:
+		return float64(typed)
+	default:
+		return 0
+	}
+}
+
+func tokenUsageString(value any) string {
+	if typed, ok := value.(string); ok {
+		return typed
+	}
+	return ""
 }
 
 // UpdateSecuritySummary writes task-facing governance metadata back into the

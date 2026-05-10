@@ -167,7 +167,7 @@ func buildServices(core coreDeps, runtimes runtimeDeps) (serviceDeps, error) {
 	).WithArtifactStore(core.storageService.ArtifactStore()).
 		WithLoopRuntimeStore(core.storageService.LoopRuntimeStore()).
 		WithExtensionAssetCatalog(core.storageService)
-	inspectorService := taskinspector.NewService(core.fileSystem).WithTitleGenerator(titleGenerator)
+	inspectorService := taskinspector.NewService(core.fileSystem)
 
 	runEngine, err := runengine.NewEngineWithStore(core.storageService.TaskRunStore())
 	if err != nil {

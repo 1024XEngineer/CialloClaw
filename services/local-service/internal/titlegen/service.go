@@ -40,6 +40,14 @@ type Service struct {
 	noteTitleCache map[string]string
 }
 
+// TaskSubjectResult captures the user-facing title plus the model invocation
+// metadata needed when callers must audit or account for the generation cost.
+type TaskSubjectResult struct {
+	Title      string
+	Generated  bool
+	Invocation *model.InvocationRecord
+}
+
 // NewService creates a title generator around the current runtime model.
 func NewService(modelService *model.Service) *Service {
 	return &Service{
@@ -73,9 +81,19 @@ func (s *Service) currentModel() *model.Service {
 // GenerateTaskSubject summarizes the full task snapshot into a short final task
 // title.
 func (s *Service) GenerateTaskSubject(ctx context.Context, snapshot taskcontext.TaskContextSnapshot, intentName string, fallback string) string {
+	return s.GenerateTaskSubjectResult(ctx, snapshot, intentName, fallback).Title
+}
+
+// GenerateTaskSubjectResult exposes the task-title model invocation so the
+// caller can project the spend back into formal task audit/token accounting.
+func (s *Service) GenerateTaskSubjectResult(ctx context.Context, snapshot taskcontext.TaskContextSnapshot, intentName string, fallback string) TaskSubjectResult {
 	prompt := buildTaskSubjectPrompt(snapshot, intentName, s.maxTitle)
-	title, _ := s.generate(ctx, taskTitleRequestID, prompt, fallback)
-	return title
+	title, generated, invocation := s.generate(ctx, taskTitleRequestID, prompt, fallback)
+	return TaskSubjectResult{
+		Title:      title,
+		Generated:  generated,
+		Invocation: invocation,
+	}
 }
 
 // CompactTaskFallback keeps the first task-facing title deterministic when the
@@ -98,7 +116,7 @@ func (s *Service) GenerateNoteTitle(ctx context.Context, item map[string]any, fa
 	if title, ok := s.cachedNoteTitle(cacheKey); ok {
 		return title
 	}
-	title, generated := s.generate(ctx, noteTitleRequestID, prompt, fallback)
+	title, generated, _ := s.generate(ctx, noteTitleRequestID, prompt, fallback)
 	if generated {
 		s.storeNoteTitle(cacheKey, title)
 	}
@@ -116,14 +134,14 @@ func (s *Service) CachedNoteTitle(item map[string]any, fallback string) (string,
 	return s.cachedNoteTitle(cacheKey)
 }
 
-func (s *Service) generate(ctx context.Context, requestID string, prompt string, fallback string) (string, bool) {
+func (s *Service) generate(ctx context.Context, requestID string, prompt string, fallback string) (string, bool, *model.InvocationRecord) {
 	fallback = normalizeTitle(fallback, s.maxTitle)
 	if strings.TrimSpace(prompt) == "" {
-		return fallback, false
+		return fallback, false, nil
 	}
 	modelService := s.currentModel()
 	if modelService == nil {
-		return fallback, false
+		return fallback, false, nil
 	}
 	generationCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
@@ -133,12 +151,13 @@ func (s *Service) generate(ctx context.Context, requestID string, prompt string,
 		Input:  prompt,
 	})
 	if err != nil {
-		return fallback, false
+		return fallback, false, nil
 	}
+	invocation := response.InvocationRecord()
 	if title := parseGeneratedTitle(response.OutputText, s.maxTitle); title != "" {
-		return title, true
+		return title, true, &invocation
 	}
-	return fallback, false
+	return fallback, false, &invocation
 }
 
 func buildTaskSubjectPrompt(snapshot taskcontext.TaskContextSnapshot, intentName string, maxLength int) string {
@@ -161,7 +180,7 @@ func buildTaskSubjectPrompt(snapshot taskcontext.TaskContextSnapshot, intentName
 		firstNonEmpty(intentName, "agent_loop"),
 		"",
 		"Context:",
-		taskSnapshotSummary(snapshot),
+		taskSnapshotSummary(snapshot, intentName),
 	}
 	return strings.Join(lines, "\n")
 }
@@ -186,7 +205,7 @@ func buildNoteTitlePrompt(item map[string]any, maxLength int) string {
 	return strings.Join(lines, "\n")
 }
 
-func taskSnapshotSummary(snapshot taskcontext.TaskContextSnapshot) string {
+func taskSnapshotSummary(snapshot taskcontext.TaskContextSnapshot, intentName string) string {
 	lines := make([]string, 0, 12)
 	appendLine := func(label string, value string, maxLength int) {
 		if value = budgetPromptValue(value, maxLength); value != "" {
@@ -202,8 +221,11 @@ func taskSnapshotSummary(snapshot taskcontext.TaskContextSnapshot) string {
 	}
 	appendLine("page_title", snapshot.PageTitle, taskPromptSecondaryLimit)
 	appendLine("window_title", snapshot.WindowTitle, taskPromptSecondaryLimit)
-	appendLine("screen_summary", snapshot.ScreenSummary, taskPromptSecondaryLimit)
-	appendLine("visible_text", snapshot.VisibleText, taskPromptPrimaryLimit)
+	if strings.TrimSpace(intentName) == "screen_analyze" {
+		// Ambient OCR/page text only belongs to explicit screen-analysis flows.
+		appendLine("screen_summary", snapshot.ScreenSummary, taskPromptSecondaryLimit)
+		appendLine("visible_text", snapshot.VisibleText, taskPromptPrimaryLimit)
+	}
 	appendLine("hover_target", snapshot.HoverTarget, taskPromptSecondaryLimit)
 	return strings.Join(lines, "\n")
 }

@@ -156,6 +156,50 @@ func TestGenerateTaskSubjectPromptBudgetsLargeSnapshotFields(t *testing.T) {
 	}
 }
 
+func TestGenerateTaskSubjectPromptOmitsAmbientScreenContextForOrdinaryTasks(t *testing.T) {
+	var prompt string
+	service := NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"发布说明校对"}`,
+		last:   &prompt,
+	}))
+
+	_ = service.GenerateTaskSubject(context.Background(), taskcontext.TaskContextSnapshot{
+		InputType:     "text_selection",
+		SelectionText: "请检查发布说明",
+		VisibleText:   "ambient page text",
+		ScreenSummary: "ambient screen summary",
+	}, "agent_loop", "发布说明")
+
+	if strings.Contains(prompt, "visible_text") || strings.Contains(prompt, "ambient page text") {
+		t.Fatalf("expected ordinary task title prompt to exclude visible_text, got %q", prompt)
+	}
+	if strings.Contains(prompt, "screen_summary") || strings.Contains(prompt, "ambient screen summary") {
+		t.Fatalf("expected ordinary task title prompt to exclude screen_summary, got %q", prompt)
+	}
+}
+
+func TestGenerateTaskSubjectPromptKeepsScreenContextForScreenAnalyze(t *testing.T) {
+	var prompt string
+	service := NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"发布说明校对"}`,
+		last:   &prompt,
+	}))
+
+	_ = service.GenerateTaskSubject(context.Background(), taskcontext.TaskContextSnapshot{
+		InputType:     "text",
+		Text:          "帮我看看这个报错",
+		VisibleText:   "runtime stack trace",
+		ScreenSummary: "browser page with error dialog",
+	}, "screen_analyze", "报错分析")
+
+	if !strings.Contains(prompt, "visible_text: runtime stack trace") {
+		t.Fatalf("expected screen analysis prompt to keep visible_text, got %q", prompt)
+	}
+	if !strings.Contains(prompt, "screen_summary: browser page with error dialog") {
+		t.Fatalf("expected screen analysis prompt to keep screen_summary, got %q", prompt)
+	}
+}
+
 func TestGenerateNoteTitlePromptBudgetsLargeNoteFields(t *testing.T) {
 	var prompt string
 	service := NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
