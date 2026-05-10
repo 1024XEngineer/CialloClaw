@@ -17,7 +17,7 @@ import { isDashboardTaskDeliveryHref, requestDashboardTaskDeliveryOpen } from ".
 export type TaskOutputDataMode = "rpc";
 
 export type TaskOpenExecutionPlan = {
-  mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+  mode: "task_detail" | "open_result_page" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
   taskId: string | null;
   path: string | null;
   url: string | null;
@@ -32,6 +32,11 @@ export type TaskOpenExecutionOptions = {
   onOpenTaskDelivery?: (input: {
     plan: TaskOpenExecutionPlan;
     taskId: string;
+  }) => Promise<string | void> | string | void;
+  onOpenResultPage?: (input: {
+    plan: TaskOpenExecutionPlan;
+    taskId: string | null;
+    url: string;
   }) => Promise<string | void> | string | void;
 };
 
@@ -131,8 +136,12 @@ async function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
   ]);
 }
 
-function resolveTaskId(payload: DeliveryPayload, result: AgentTaskArtifactOpenResult | AgentDeliveryOpenResult) {
-  return payload.task_id ?? result.artifact?.task_id ?? null;
+function resolveTaskId(
+  payload: DeliveryPayload,
+  result: AgentTaskArtifactOpenResult | AgentDeliveryOpenResult,
+  fallbackTaskId: string | null = null,
+) {
+  return payload.task_id ?? result.artifact?.task_id ?? fallbackTaskId;
 }
 
 /**
@@ -143,9 +152,12 @@ function resolveTaskId(payload: DeliveryPayload, result: AgentTaskArtifactOpenRe
  * @param result Formal artifact or delivery open payload returned by RPC.
  * @returns The renderer execution plan for the requested output action.
  */
-export function resolveTaskOpenExecutionPlan(result: AgentTaskArtifactOpenResult | AgentDeliveryOpenResult): TaskOpenExecutionPlan {
+export function resolveTaskOpenExecutionPlan(
+  result: AgentTaskArtifactOpenResult | AgentDeliveryOpenResult,
+  fallbackTaskId: string | null = null,
+): TaskOpenExecutionPlan {
   const payload = result.resolved_payload;
-  const taskId = resolveTaskId(payload, result);
+  const taskId = resolveTaskId(payload, result, fallbackTaskId);
   const path = payload.path;
   const url = payload.url;
 
@@ -179,9 +191,19 @@ export function resolveTaskOpenExecutionPlan(result: AgentTaskArtifactOpenResult
     };
   }
 
+  if (result.open_action === "result_page" && url) {
+    return {
+      feedback: "已打开结果页。",
+      mode: "open_result_page",
+      path,
+      taskId,
+      url,
+    };
+  }
+
   if (url) {
     return {
-      feedback: result.open_action === "result_page" ? "已打开结果页。" : "已打开链接。",
+      feedback: "已打开链接。",
       mode: "open_url",
       path,
       taskId,
@@ -242,6 +264,39 @@ export async function performTaskOpenExecution(plan: TaskOpenExecutionPlan, opti
     return typeof detailFeedback === "string" && detailFeedback.trim() !== ""
       ? detailFeedback
       : plan.feedback;
+  }
+
+  if (plan.mode === "open_result_page" && plan.url) {
+    if (!isAllowedTaskOpenUrl(plan.url)) {
+      return "已拦截不受支持的结果页链接。";
+    }
+
+    const resultPageFeedback = await options.onOpenResultPage?.({
+      plan,
+      taskId: plan.taskId,
+      url: plan.url,
+    });
+
+    if (typeof resultPageFeedback === "string" && resultPageFeedback.trim() !== "") {
+      return resultPageFeedback;
+    }
+
+    if (plan.taskId && isDashboardTaskDeliveryHref(plan.url)) {
+      const deliveryFeedback = await options.onOpenTaskDelivery?.({
+        plan,
+        taskId: plan.taskId,
+      });
+
+      if (typeof deliveryFeedback === "string" && deliveryFeedback.trim() !== "") {
+        return deliveryFeedback;
+      }
+
+      await requestDashboardTaskDeliveryOpen(plan.taskId);
+      return plan.feedback;
+    }
+
+    window.open(plan.url, "_blank", "noopener,noreferrer");
+    return plan.feedback;
   }
 
   if (plan.mode === "open_url" && plan.url) {
