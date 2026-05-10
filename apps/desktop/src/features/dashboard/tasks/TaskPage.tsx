@@ -15,6 +15,7 @@ import {
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import { subscribeDeliveryReady, subscribeTaskRuntime, subscribeTaskUpdated } from "@/rpc/subscriptions";
 import { readDashboardTaskDetailRouteState } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
+import { navigateToDashboardResultPage } from "@/features/dashboard/shared/dashboardResultPageNavigation";
 import { buildDashboardSafetyNavigationState } from "@/features/dashboard/shared/dashboardSafetyNavigation";
 import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
@@ -53,13 +54,15 @@ import {
   type TaskPageDataMode,
 } from "./taskPage.service";
 import {
+  canOpenTaskDeliveryResult,
   describeTaskOpenResultForCurrentTask,
+  mergeTaskArtifactItems,
   loadTaskArtifactPage,
   openTaskArtifactForTask,
+  openTaskDeliveryForTask,
   performTaskOpenExecution,
   resolveTaskOpenExecutionPlan,
 } from "./taskOutput.service";
-import { resolveDashboardTaskDeliveryRoutePath } from "./taskDeliveryNavigation";
 import { TaskDetailPanel } from "./components/TaskDetailPanel";
 import { TaskPreviewCard } from "./components/TaskPreviewCard";
 import type { TaskEventFilters, TaskListItem, TaskPrimaryAction } from "./taskPage.types";
@@ -278,6 +281,10 @@ export function TaskPage() {
     refetchOnWindowFocus: false,
     retry: false,
   });
+  const mergedArtifactItems = useMemo(
+    () => mergeTaskArtifactItems(artifactListQuery.data?.items ?? [], detailData?.detail.artifacts ?? []),
+    [artifactListQuery.data?.items, detailData?.detail.artifacts],
+  );
   const taskEventsQuery = useQuery({
     enabled: detailOpen && Boolean(selectedTaskId),
     queryKey: buildDashboardTaskEventQueryKey(dataMode, selectedTaskId ?? "", taskEventFilters),
@@ -493,8 +500,11 @@ export function TaskPage() {
     },
   });
 
-  async function handleResolvedOpen(result: Awaited<ReturnType<typeof openTaskArtifactForTask>>) {
-    const plan = resolveTaskOpenExecutionPlan(result);
+  async function handleResolvedOpen(
+    result: Awaited<ReturnType<typeof openTaskArtifactForTask>> | Awaited<ReturnType<typeof openTaskDeliveryForTask>>,
+    fallbackTaskId: string | null,
+  ) {
+    const plan = resolveTaskOpenExecutionPlan(result, fallbackTaskId);
     const sameTaskMessage = describeTaskOpenResultForCurrentTask(plan, selectedTaskId);
     if (sameTaskMessage) {
       setDetailOpen(true);
@@ -507,19 +517,36 @@ export function TaskPage() {
         focusTaskDetail(taskId);
         return plan.feedback;
       },
+      onOpenResultPage: ({ taskId, url }) => {
+        navigateToDashboardResultPage(navigate, {
+          taskId,
+          title: result.delivery_result.title,
+          url,
+        });
+        return plan.feedback;
+      },
     }));
   }
 
   const artifactOpenMutation = useMutation({
     mutationFn: ({ artifactId, taskId }: { artifactId: string; taskId: string }) => openTaskArtifactForTask(taskId, artifactId, dataMode),
-    onSuccess: async (result) => {
-      await handleResolvedOpen(result);
+    onSuccess: async (result, variables) => {
+      await handleResolvedOpen(result, variables.taskId);
     },
     onError: (error) => {
       showFeedback(error instanceof Error ? `打开成果失败：${error.message}` : "打开成果失败，请稍后再试。");
     },
   });
 
+  const deliveryOpenMutation = useMutation({
+    mutationFn: ({ artifactId, taskId }: { artifactId?: string; taskId: string }) => openTaskDeliveryForTask(taskId, artifactId, dataMode),
+    onSuccess: async (result, variables) => {
+      await handleResolvedOpen(result, variables.taskId);
+    },
+    onError: (error) => {
+      showFeedback(error instanceof Error ? `打开结果失败：${error.message}` : "打开结果失败，请稍后再试。");
+    },
+  });
   const taskSteerMutation = useMutation({
     mutationFn: ({ message, taskId }: { message: string; taskId: string }) => steerTaskByMessage(taskId, message, dataMode),
     onSuccess: (result, variables) => {
@@ -600,7 +627,11 @@ export function TaskPage() {
       return;
     }
 
-    navigate(resolveDashboardTaskDeliveryRoutePath(selectedTaskControlTargetId));
+    if (!canOpenTaskDeliveryResult(detailData?.detail.delivery_result ?? null)) {
+      return;
+    }
+
+    deliveryOpenMutation.mutate({ taskId: selectedTaskControlTargetId });
   }
 
   function handleSteerTask(message: string) {
@@ -862,7 +893,7 @@ export function TaskPage() {
                 <TaskDetailPanel
                   artifactActionPendingId={artifactOpenMutation.isPending ? artifactOpenMutation.variables?.artifactId ?? null : null}
                   artifactErrorMessage={artifactListQuery.isError ? (artifactListQuery.error instanceof Error ? artifactListQuery.error.message : "成果列表请求失败") : null}
-                  artifactItems={artifactListQuery.data?.items ?? detailData?.detail.artifacts ?? []}
+                  artifactItems={mergedArtifactItems}
                   artifactLoading={artifactListQuery.isPending}
                   fallbackOutputAccess={fallbackOutputAccess}
                   detailData={detailData}
@@ -873,7 +904,7 @@ export function TaskPage() {
                   eventItems={taskEventsQuery.data?.items ?? []}
                   eventLoading={taskEventsQuery.isPending}
                   detailState={detailState}
-                  deliveryActionPending={false}
+                  deliveryActionPending={deliveryOpenMutation.isPending}
                   feedback={feedback}
                   fallbackActions={fallbackDetailActions}
                   onAction={handlePrimaryAction}

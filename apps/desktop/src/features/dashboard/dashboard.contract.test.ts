@@ -5867,7 +5867,7 @@ test("task output helpers normalize open actions from existing rpc contracts", a
       },
     }),
     {
-      mode: "open_url",
+      mode: "open_result_page",
       taskId: "task_dashboard_001",
       path: null,
       url: "https://example.test/result",
