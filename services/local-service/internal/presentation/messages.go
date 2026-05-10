@@ -345,10 +345,33 @@ func Render(locale string, message Message) string {
 	if template == "" {
 		return string(message.Key)
 	}
-	for key, value := range message.Params {
-		template = strings.ReplaceAll(template, "{"+key+"}", value)
+	if len(message.Params) == 0 || !strings.Contains(template, "{") {
+		return template
 	}
-	return template
+	var builder strings.Builder
+	builder.Grow(len(template))
+	for index := 0; index < len(template); {
+		if template[index] != '{' {
+			builder.WriteByte(template[index])
+			index++
+			continue
+		}
+		end := strings.IndexByte(template[index+1:], '}')
+		if end < 0 {
+			builder.WriteByte(template[index])
+			index++
+			continue
+		}
+		end += index + 1
+		placeholder := template[index+1 : end]
+		if value, ok := message.Params[placeholder]; ok {
+			builder.WriteString(value)
+		} else {
+			builder.WriteString(template[index : end+1])
+		}
+		index = end + 1
+	}
+	return builder.String()
 }
 
 // Text renders a message using the default backend locale.

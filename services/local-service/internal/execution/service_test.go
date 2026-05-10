@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -3894,7 +3895,12 @@ func TestToolBubbleTextAndGovernanceHelpersSupportNewWorkerFlows(t *testing.T) {
 		t.Fatalf("expected content preview bubble text, got %s", bubbleText)
 	}
 	searchBubble := toolBubbleText("page_search", &tools.ToolExecutionResult{SummaryOutput: map[string]any{"query": "demo", "match_count": 3}})
-	if searchBubble != presentation.Text(presentation.MessageToolBubbleSearchMatches, map[string]string{"query": "demo", "count": "3"}) {
+	if searchBubble != presentation.Text(presentation.MessageToolBubbleSearchMatches, map[string]string{"query": strconv.Quote("demo"), "count": "3"}) {
+		t.Fatalf("expected search bubble text, got %s", searchBubble)
+	}
+	injectedQuery := "first line\n{count}"
+	searchBubble = toolBubbleText("page_search", &tools.ToolExecutionResult{SummaryOutput: map[string]any{"query": injectedQuery, "match_count": 3}})
+	if searchBubble != presentation.Text(presentation.MessageToolBubbleSearchMatches, map[string]string{"query": strconv.Quote(injectedQuery), "count": "3"}) {
 		t.Fatalf("expected search bubble text, got %s", searchBubble)
 	}
 	attachBubble := toolBubbleText("browser_attach_current", &tools.ToolExecutionResult{SummaryOutput: map[string]any{"title": "Docs"}})
