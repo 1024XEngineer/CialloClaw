@@ -110,15 +110,6 @@ type stubPlaywrightClient struct {
 
 type localHTTPPlaywrightClient struct{}
 
-func newTestRiskService() *risk.Service {
-	return risk.NewServiceWithResolver(func(_ context.Context, host string) ([]net.IPAddr, error) {
-		if host == "example.com" || strings.HasSuffix(host, ".example.com") {
-			return []net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}, nil
-		}
-		return nil, errors.New("hostname not stubbed")
-	})
-}
-
 type stubOCRWorkerClient struct {
 	result tools.OCRTextResult
 	err    error
@@ -817,8 +808,7 @@ func newTestServiceWithModelClient(t *testing.T, client model.Client) (*Service,
 	if err := sidecarclient.RegisterMediaTools(toolRegistry); err != nil {
 		t.Fatalf("register media tools: %v", err)
 	}
-	riskService := newTestRiskService()
-	toolExecutor := tools.NewToolExecutor(toolRegistry, tools.WithToolCallRecorder(tools.NewToolCallRecorder(storageService.ToolCallSink())), tools.WithRiskPrechecker(tools.NewDefaultRiskPrechecker(riskService)))
+	toolExecutor := tools.NewToolExecutor(toolRegistry, tools.WithToolCallRecorder(tools.NewToolCallRecorder(storageService.ToolCallSink())))
 	pluginService := plugin.NewService()
 	seedTestExtensionAssets(t, storageService, pluginService)
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
@@ -830,7 +820,7 @@ func newTestServiceWithModelClient(t *testing.T, client model.Client) (*Service,
 		RunEngine: mustNewStoredEngine(t, storageService.TaskRunStore()),
 		Delivery:  deliveryService,
 		Memory:    memory.NewServiceFromStorage(storageService.MemoryStore(), storageService.Capabilities().MemoryRetrievalBackend),
-		Risk:      riskService,
+		Risk:      risk.NewService(),
 		Model:     modelService,
 		Tools:     toolRegistry,
 		Plugin:    pluginService,
@@ -887,8 +877,7 @@ func newTestServiceWithExecutionWorkersAndScreen(t *testing.T, modelOutput strin
 	if err := sidecarclient.RegisterMediaTools(toolRegistry); err != nil {
 		t.Fatalf("register media tools: %v", err)
 	}
-	riskService := newTestRiskService()
-	toolExecutor := tools.NewToolExecutor(toolRegistry, tools.WithToolCallRecorder(tools.NewToolCallRecorder(storageService.ToolCallSink())), tools.WithRiskPrechecker(tools.NewDefaultRiskPrechecker(riskService)))
+	toolExecutor := tools.NewToolExecutor(toolRegistry, tools.WithToolCallRecorder(tools.NewToolCallRecorder(storageService.ToolCallSink())))
 	pluginService := plugin.NewService()
 	seedTestExtensionAssets(t, storageService, pluginService)
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
@@ -903,7 +892,7 @@ func newTestServiceWithExecutionWorkersAndScreen(t *testing.T, modelOutput strin
 		RunEngine: mustNewStoredEngine(t, storageService.TaskRunStore()),
 		Delivery:  deliveryService,
 		Memory:    memory.NewServiceFromStorage(storageService.MemoryStore(), storageService.Capabilities().MemoryRetrievalBackend),
-		Risk:      riskService,
+		Risk:      risk.NewService(),
 		Model:     modelService,
 		Tools:     toolRegistry,
 		Plugin:    pluginService,

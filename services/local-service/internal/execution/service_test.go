@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -51,20 +50,6 @@ type recordingLoopRuntimeStore struct {
 	events          []storage.EventRecord
 	deliveryResults []storage.DeliveryResultRecord
 	citationsByTask map[string][]storage.CitationRecord
-}
-
-func newTestRiskPrechecker() tools.RiskPrechecker {
-	return tools.NewDefaultRiskPrechecker(risk.NewServiceWithResolver(func(_ context.Context, host string) ([]net.IPAddr, error) {
-		if host == "example.com" || strings.HasSuffix(host, ".example.com") {
-			return []net.IPAddr{{IP: net.ParseIP("93.184.216.34")}}, nil
-		}
-		return nil, errors.New("hostname not stubbed")
-	}))
-}
-
-func newTestToolExecutor(registry *tools.Registry, opts ...tools.ToolExecutorOption) *tools.ToolExecutor {
-	options := append([]tools.ToolExecutorOption{tools.WithRiskPrechecker(newTestRiskPrechecker())}, opts...)
-	return tools.NewToolExecutor(registry, options...)
 }
 
 func (s *recordingLoopRuntimeStore) SaveRun(_ context.Context, record storage.RunRecord) error {
@@ -262,7 +247,7 @@ func newTestExecutionServiceWithConfig(t *testing.T, cfg serviceconfig.ModelConf
 	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
 		t.Fatalf("register builtin tools: %v", err)
 	}
-	toolExecutor := newTestToolExecutor(toolRegistry)
+	toolExecutor := tools.NewToolExecutor(toolRegistry)
 	storageService := newTestExecutionStorage(t)
 	pluginService := plugin.NewService()
 	seedTestExecutionPluginManifests(t, storageService, pluginService)
@@ -296,7 +281,7 @@ func newTestExecutionServiceWithModelClient(t *testing.T, client model.Client) (
 	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
 		t.Fatalf("register builtin tools: %v", err)
 	}
-	toolExecutor := newTestToolExecutor(toolRegistry)
+	toolExecutor := tools.NewToolExecutor(toolRegistry)
 	storageService := newTestExecutionStorage(t)
 	pluginService := plugin.NewService()
 	seedTestExecutionPluginManifests(t, storageService, pluginService)
@@ -333,7 +318,7 @@ func newTestExecutionServiceWithPlaywright(t *testing.T, output string, playwrig
 	if err := sidecarclient.RegisterPlaywrightTools(toolRegistry); err != nil {
 		t.Fatalf("register playwright tools: %v", err)
 	}
-	toolExecutor := newTestToolExecutor(toolRegistry)
+	toolExecutor := tools.NewToolExecutor(toolRegistry)
 	storageService := newTestExecutionStorage(t)
 	pluginService := plugin.NewService()
 	seedTestExecutionPluginManifests(t, storageService, pluginService)
@@ -376,7 +361,7 @@ func newTestExecutionServiceWithWorkers(t *testing.T, output string, playwright 
 	if err := sidecarclient.RegisterMediaTools(toolRegistry); err != nil {
 		t.Fatalf("register media tools: %v", err)
 	}
-	toolExecutor := newTestToolExecutor(toolRegistry)
+	toolExecutor := tools.NewToolExecutor(toolRegistry)
 	storageService := newTestExecutionStorage(t)
 	pluginService := plugin.NewService()
 	seedTestExecutionPluginManifests(t, storageService, pluginService)
@@ -1729,7 +1714,7 @@ func newTestExecutionServiceWithModelClientAndConfig(t *testing.T, cfg serviceco
 	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
 		t.Fatalf("register builtin tools: %v", err)
 	}
-	toolExecutor := newTestToolExecutor(toolRegistry)
+	toolExecutor := tools.NewToolExecutor(toolRegistry)
 
 	return NewService(
 		platform.NewLocalFileSystemAdapter(pathPolicy),
@@ -2345,7 +2330,7 @@ func TestExecuteFallsBackWhenModelFails(t *testing.T) {
 	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
 		t.Fatalf("register builtin tools: %v", err)
 	}
-	toolExecutor := newTestToolExecutor(toolRegistry)
+	toolExecutor := tools.NewToolExecutor(toolRegistry)
 
 	service := NewService(
 		platform.NewLocalFileSystemAdapter(pathPolicy),
@@ -3462,6 +3447,31 @@ func TestAssessGovernancePageReadStaysLowRiskByDefault(t *testing.T) {
 	}
 	if assessment.RiskLevel != string(risk.RiskLevelGreen) {
 		t.Fatalf("expected page_read green risk level by default, got %+v", assessment)
+	}
+}
+
+func TestAssessGovernancePageReadStaysLowRiskForBenchmarkIPAddress(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_page_read_benchmark_ip",
+		RunID:  "run_page_read_benchmark_ip",
+		Intent: map[string]any{"name": "page_read", "arguments": map[string]any{
+			"url": "http://198.18.0.58/demo",
+		}},
+		DeliveryType: "bubble",
+		ResultTitle:  "网页读取结果",
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected benchmark-ip page_read governance path to be handled")
+	}
+	if assessment.ApprovalRequired {
+		t.Fatalf("expected benchmark-ip page_read to stay low risk, got %+v", assessment)
+	}
+	if assessment.RiskLevel != string(risk.RiskLevelGreen) {
+		t.Fatalf("expected benchmark-ip page_read green risk level, got %+v", assessment)
 	}
 }
 

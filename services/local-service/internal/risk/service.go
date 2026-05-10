@@ -2,7 +2,6 @@
 package risk
 
 import (
-	"context"
 	"net"
 	"net/netip"
 	"net/url"
@@ -11,26 +10,12 @@ import (
 
 var carrierGradeNATPrefix = netip.MustParsePrefix("100.64.0.0/10")
 
-// LookupIPAddrFunc lets controlled callers, especially tests, replace ambient
-// DNS with a deterministic hostname resolver while keeping production behavior
-// on the system resolver.
-type LookupIPAddrFunc func(context.Context, string) ([]net.IPAddr, error)
-
 // Service evaluates tool risk without mutating orchestrator state.
-type Service struct {
-	lookupIPAddrs LookupIPAddrFunc
-}
+type Service struct{}
 
 // NewService constructs a minimal risk assessment service.
 func NewService() *Service {
 	return &Service{}
-}
-
-// NewServiceWithResolver constructs a risk assessment service with one caller
-// supplied hostname resolver. This keeps hostname classification testable
-// without changing the default governance contract in production.
-func NewServiceWithResolver(lookup LookupIPAddrFunc) *Service {
-	return &Service{lookupIPAddrs: lookup}
 }
 
 // DefaultLevel returns the default risk level used by callers that need a
@@ -187,10 +172,10 @@ func isLowRiskBrowserObservationOperation(operationName string) bool {
 }
 
 // requiresApprovalForSensitiveWebTarget keeps read-only web tools low risk for
-// ordinary public pages only when the target can be proven public. Local,
-// private, single-label, and private-DNS hostnames all stay on the approval
-// path because page_read/page_search otherwise widen browser reach without a
-// user checkpoint.
+// ordinary public-looking pages while keeping explicit local, private, and
+// host-only targets on the approval path. The check intentionally stays on the
+// user-provided URL shape instead of resolving DNS during precheck so task
+// startup does not block on network name service.
 func (s *Service) requiresApprovalForSensitiveWebTarget(operationName, targetObject string) bool {
 	switch strings.TrimSpace(operationName) {
 	case "page_read", "page_search":
@@ -212,29 +197,13 @@ func (s *Service) isSensitiveWebTarget(targetObject string) bool {
 	if hostname == "" {
 		return true
 	}
-	if isSensitiveHostnamePattern(hostname) {
-		return true
-	}
 	if ip := parseHostnameIP(hostname); ip != nil {
 		return isNonPublicIPAddress(ip)
 	}
-	ipAddrs, err := s.lookupHostIPAddrs(context.Background(), hostname)
-	if err != nil || len(ipAddrs) == 0 {
+	if isSensitiveHostnamePattern(hostname) {
 		return true
 	}
-	for _, ipAddr := range ipAddrs {
-		if isNonPublicIPAddress(ipAddr.IP) {
-			return true
-		}
-	}
 	return false
-}
-
-func (s *Service) lookupHostIPAddrs(ctx context.Context, hostname string) ([]net.IPAddr, error) {
-	if s != nil && s.lookupIPAddrs != nil {
-		return s.lookupIPAddrs(ctx, hostname)
-	}
-	return net.DefaultResolver.LookupIPAddr(ctx, hostname)
 }
 
 func normalizeWebTargetHostname(hostname string) string {

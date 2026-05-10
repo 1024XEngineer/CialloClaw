@@ -1,27 +1,9 @@
 package risk
 
 import (
-	"context"
-	"errors"
-	"net"
 	"strings"
 	"testing"
 )
-
-type stubHostnameResolver struct {
-	addrs map[string][]net.IPAddr
-	errs  map[string]error
-}
-
-func (s stubHostnameResolver) LookupIPAddr(_ context.Context, host string) ([]net.IPAddr, error) {
-	if err, ok := s.errs[host]; ok {
-		return nil, err
-	}
-	if addrs, ok := s.addrs[host]; ok {
-		return append([]net.IPAddr(nil), addrs...), nil
-	}
-	return nil, errors.New("hostname not stubbed")
-}
 
 func TestServiceDefaultLevel(t *testing.T) {
 	service := NewService()
@@ -32,9 +14,7 @@ func TestServiceDefaultLevel(t *testing.T) {
 }
 
 func TestServiceAssess(t *testing.T) {
-	service := NewServiceWithResolver(stubHostnameResolver{addrs: map[string][]net.IPAddr{
-		"example.com": {{IP: net.ParseIP("93.184.216.34")}},
-	}}.LookupIPAddr)
+	service := NewService()
 
 	tests := []struct {
 		name  string
@@ -315,21 +295,7 @@ func TestServiceAssess(t *testing.T) {
 }
 
 func TestServiceSensitiveWebTargetClassification(t *testing.T) {
-	service := NewServiceWithResolver(stubHostnameResolver{
-		addrs: map[string][]net.IPAddr{
-			"public.example.com":        {{IP: net.ParseIP("93.184.216.34")}},
-			"split-horizon.example.com": {{IP: net.ParseIP("10.0.0.5")}},
-			"mixed.example.com":         {{IP: net.ParseIP("93.184.216.34")}, {IP: net.ParseIP("192.168.1.20")}},
-			"no-records.example.com":    {},
-			"mixed-case.example.com":    {{IP: net.ParseIP("93.184.216.34")}},
-			"ipv6-public.example.com":   {{IP: net.ParseIP("2606:2800:220:1:248:1893:25c8:1946")}},
-			"carrier-nat.example.com":   {{IP: net.ParseIP("100.64.1.10")}},
-			"trailing-dot.example.com":  {{IP: net.ParseIP("93.184.216.34")}},
-		},
-		errs: map[string]error{
-			"unknown.example.com": errors.New("lookup failed"),
-		},
-	}.LookupIPAddr)
+	service := NewService()
 
 	tests := []struct {
 		name   string
@@ -337,17 +303,15 @@ func TestServiceSensitiveWebTargetClassification(t *testing.T) {
 		want   bool
 	}{
 		{name: "public_hostname_is_low_risk", target: "https://public.example.com/docs", want: false},
-		{name: "public_ipv6_hostname_is_low_risk", target: "https://ipv6-public.example.com/docs", want: false},
+		{name: "multi_label_hostname_stays_low_risk_without_dns_lookup", target: "https://blog.csdn.net/csdnnews/article/details/160669079", want: false},
+		{name: "benchmark_range_ip_stays_low_risk", target: "http://198.18.0.58/demo", want: false},
+		{name: "public_ipv6_literal_is_low_risk", target: "https://[2606:2800:220:1:248:1893:25c8:1946]/docs", want: false},
 		{name: "single_label_hostname_requires_approval", target: "http://intranet", want: true},
 		{name: "local_suffix_requires_approval", target: "http://printer.local/status", want: true},
 		{name: "docker_internal_suffix_requires_approval", target: "http://host.docker.internal", want: true},
-		{name: "split_horizon_private_dns_requires_approval", target: "https://split-horizon.example.com", want: true},
-		{name: "mixed_public_and_private_dns_requires_approval", target: "https://mixed.example.com", want: true},
-		{name: "resolver_failure_requires_approval", target: "https://unknown.example.com", want: true},
-		{name: "empty_dns_answer_requires_approval", target: "https://no-records.example.com", want: true},
-		{name: "carrier_grade_nat_requires_approval", target: "http://carrier-nat.example.com", want: true},
-		{name: "trailing_dot_hostname_normalizes_before_lookup", target: "https://trailing-dot.example.com./docs", want: false},
-		{name: "mixed_case_hostname_normalizes_before_lookup", target: "https://MIXED-CASE.EXAMPLE.COM/docs", want: false},
+		{name: "carrier_grade_nat_literal_requires_approval", target: "http://100.64.1.10/demo", want: true},
+		{name: "trailing_dot_hostname_normalizes_without_lookup", target: "https://trailing-dot.example.com./docs", want: false},
+		{name: "mixed_case_hostname_normalizes_without_lookup", target: "https://MIXED-CASE.EXAMPLE.COM/docs", want: false},
 		{name: "unsupported_scheme_requires_approval", target: "ftp://public.example.com/archive", want: true},
 		{name: "invalid_url_requires_approval", target: "://bad", want: true},
 	}
