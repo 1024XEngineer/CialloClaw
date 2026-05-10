@@ -7127,6 +7127,8 @@ test("note conversion and confirming-intent surfaces use direct task handoff wor
   assert.doesNotMatch(noteActionBarSource, /会直接生成任务并跳转到任务页。/);
   assert.match(notePageSource, /function getNoteConvertSuccessFeedback\(status: Task\["status"\]\)/);
   assert.match(notePageSource, /已按这条便签生成任务，正在打开任务详情。/);
+  assert.match(notePageSource, /openTaskDeliveryForTask/);
+  assert.match(notePageSource, /navigateToDashboardTaskDelivery/);
   assert.doesNotMatch(notePageSource, /等待你确认处理方式。/);
   assert.match(notePageSource, /后续还需要处理授权。/);
   assert.match(noteServiceSource, /这条便签会按当前正文直接生成任务；如果还想补充路径、时间或说明，可以继续写在正文里后再转交给 Agent。/);

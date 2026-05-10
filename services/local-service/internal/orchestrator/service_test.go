@@ -2671,8 +2671,8 @@ func TestServiceNotepadConvertToTaskUsesRuntimeItemWithoutClosingTodo(t *testing
 	if task["source_type"] != "todo" {
 		t.Fatalf("expected converted task source_type todo, got %v", task["source_type"])
 	}
-	if task["status"] == "confirming_intent" || task["current_step"] == "intent_confirmation" {
-		t.Fatalf("expected confirmed notepad conversion to skip narrowed intent confirmation, got %+v", task)
+	if task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
+		t.Fatalf("expected confirmed notepad conversion to reuse the text confirmation gate, got %+v", task)
 	}
 
 	intentValue := task["intent"].(map[string]any)
@@ -2694,8 +2694,12 @@ func TestServiceNotepadConvertToTaskUsesRuntimeItemWithoutClosingTodo(t *testing
 	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "workspace/homework" {
 		t.Fatalf("expected explicit path resources to enter task snapshot, got %+v", record.Snapshot.Files)
 	}
-	if result["delivery_result"] == nil {
-		t.Fatal("expected confirmed notepad conversion to reuse formal delivery flow")
+	if result["delivery_result"] != nil {
+		t.Fatalf("expected confirm-gated notepad conversion to defer delivery_result, got %+v", result["delivery_result"])
+	}
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["type"] != "intent_confirm" {
+		t.Fatalf("expected confirm-gated notepad conversion to return intent_confirm bubble, got %+v", bubble)
 	}
 
 	sourceItem := result["notepad_item"].(map[string]any)
@@ -2748,11 +2752,14 @@ func TestServiceNotepadConvertToTaskFallsBackToTitleAndIgnoresNonPathResources(t
 	if !ok {
 		t.Fatal("expected converted task to remain available in runtime")
 	}
-	if record.Snapshot.Text != "整理明天评审要点。当前处于便签巡检域，等待进入正式执行。" {
-		t.Fatalf("expected title fallback to keep the derived notepad note text, got %+v", record.Snapshot)
+	if record.Snapshot.Text != "整理明天评审要点" {
+		t.Fatalf("expected title-only note to use the original title text, got %+v", record.Snapshot)
 	}
 	if len(record.Snapshot.Files) != 0 {
 		t.Fatalf("expected non-path resources to stay out of task snapshot files, got %+v", record.Snapshot.Files)
+	}
+	if record.Status != "confirming_intent" || record.CurrentStep != "intent_confirmation" {
+		t.Fatalf("expected title-only note to stay behind confirmation, got %+v", record)
 	}
 }
 
