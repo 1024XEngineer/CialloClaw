@@ -3450,6 +3450,38 @@ func TestAssessGovernancePageReadStaysLowRiskByDefault(t *testing.T) {
 	}
 }
 
+func TestAssessGovernanceStructuredDOMStillRequiresApproval(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_structured_dom_auth",
+		RunID:  "run_structured_dom_auth",
+		Intent: map[string]any{"name": "structured_dom", "arguments": map[string]any{
+			"url": "https://example.com/demo",
+		}},
+		DeliveryType: "bubble",
+		ResultTitle:  "结构化页面结果",
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected structured_dom governance path to be handled")
+	}
+	if assessment.OperationName != "structured_dom" || assessment.TargetObject != "https://example.com/demo" {
+		t.Fatalf("unexpected structured_dom assessment: %+v", assessment)
+	}
+	if !assessment.ApprovalRequired {
+		t.Fatalf("expected structured_dom to remain approval-gated, got %+v", assessment)
+	}
+	if assessment.RiskLevel != string(risk.RiskLevelYellow) {
+		t.Fatalf("expected structured_dom yellow risk level, got %+v", assessment)
+	}
+	webpages, _ := assessment.ImpactScope["webpages"].([]string)
+	if len(webpages) != 1 || webpages[0] != "https://example.com/demo" {
+		t.Fatalf("expected structured_dom impact scope to include target URL, got %+v", assessment.ImpactScope)
+	}
+}
+
 func TestAssessGovernanceBrowserSnapshotUsesAttachedPageTarget(t *testing.T) {
 	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
 	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
