@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"hash/fnv"
+	"net/url"
 	"path"
 	"regexp"
 	"strings"
@@ -15,6 +16,7 @@ import (
 )
 
 const defaultWorkspaceRoot = "workspace"
+const dashboardResultPageBaseURL = "./dashboard.html#/tasks/delivery/"
 
 // StorageWritePlan describes the minimum workspace write plan required for a
 // formal delivery result.
@@ -88,8 +90,11 @@ func (s *Service) BuildDeliveryResultWithTargetPath(taskID, deliveryType, title,
 		"task_id": taskID,
 	}
 
-	if deliveryType == "workspace_document" {
+	switch deliveryType {
+	case "workspace_document":
 		payload["path"] = resolveWorkspaceTargetPath(targetPath, fmt.Sprintf("%s.md", slugify(title, taskID)))
+	case "result_page":
+		payload["url"] = ResolveResultPageURL(taskID)
 	}
 
 	return map[string]any{
@@ -98,6 +103,12 @@ func (s *Service) BuildDeliveryResultWithTargetPath(taskID, deliveryType, title,
 		"payload":      payload,
 		"preview_text": previewText,
 	}
+}
+
+// ResolveResultPageURL keeps result_page delivery on the same formal task route
+// regardless of which desktop surface asked to open the final result.
+func ResolveResultPageURL(taskID string) string {
+	return dashboardResultPageBaseURL + url.PathEscape(strings.TrimSpace(taskID))
 }
 
 // BuildArtifact derives artifact metadata from a formal delivery result.

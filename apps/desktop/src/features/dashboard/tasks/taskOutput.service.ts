@@ -10,6 +10,7 @@ import type {
 } from "@cialloclaw/protocol";
 import { openDesktopLocalPath, revealDesktopLocalPath } from "@/platform/desktopLocalPath";
 import { listTaskArtifacts, openDelivery, openTaskArtifact } from "@/rpc/methods";
+import { isDashboardTaskDeliveryHref, requestDashboardTaskDeliveryOpen } from "./taskDeliveryNavigation";
 
 export type TaskOutputDataMode = "rpc";
 
@@ -23,6 +24,10 @@ export type TaskOpenExecutionPlan = {
 
 export type TaskOpenExecutionOptions = {
   onOpenTaskDetail?: (input: {
+    plan: TaskOpenExecutionPlan;
+    taskId: string;
+  }) => Promise<string | void> | string | void;
+  onOpenTaskDelivery?: (input: {
     plan: TaskOpenExecutionPlan;
     taskId: string;
   }) => Promise<string | void> | string | void;
@@ -169,6 +174,23 @@ export async function performTaskOpenExecution(plan: TaskOpenExecutionPlan, opti
   }
 
   if (plan.mode === "open_url" && plan.url) {
+    if (plan.taskId && isDashboardTaskDeliveryHref(plan.url)) {
+      // Result-page URLs stay inside the formal dashboard surface instead of
+      // leaking into an external browser tab, even when the request starts from
+      // shell-ball or another non-dashboard window.
+      const deliveryFeedback = await options.onOpenTaskDelivery?.({
+        plan,
+        taskId: plan.taskId,
+      });
+
+      if (typeof deliveryFeedback === "string" && deliveryFeedback.trim() !== "") {
+        return deliveryFeedback;
+      }
+
+      await requestDashboardTaskDeliveryOpen(plan.taskId);
+      return plan.feedback;
+    }
+
     if (!isAllowedTaskOpenUrl(plan.url)) {
       return "已拦截不受支持的结果链接。";
     }
