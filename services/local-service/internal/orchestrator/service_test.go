@@ -1980,6 +1980,62 @@ func TestServiceConfirmTaskRunsStoredAgentLoopIntentWithoutCorrection(t *testing
 	if record.FinishedAt != nil {
 		t.Fatal("expected reopened waiting_input task to keep finished_at nil")
 	}
+	traces, total, err := service.storage.TraceStore().ListTraceRecords(context.Background(), taskID, 10, 0)
+	if err != nil || total != 1 || len(traces) != 1 {
+		t.Fatalf("expected one trace record for waiting_input task, total=%d len=%d err=%v", total, len(traces), err)
+	}
+	if strings.Contains(traces[0].RuleHitsJSON, "delivery_type=result_page") {
+		t.Fatalf("expected waiting_input trace not to claim result_page delivery, got %+v", traces[0])
+	}
+	evals, total, err := service.storage.EvalStore().ListEvalSnapshots(context.Background(), taskID, 10, 0)
+	if err != nil || total != 1 || len(evals) != 1 {
+		t.Fatalf("expected one eval snapshot for waiting_input task, total=%d len=%d err=%v", total, len(evals), err)
+	}
+	if strings.Contains(evals[0].MetricsJSON, `"delivery_type":"result_page"`) {
+		t.Fatalf("expected waiting_input eval metrics not to claim result_page delivery, got %+v", evals[0])
+	}
+}
+
+func TestExecuteTaskResultPageWaitingInputDoesNotClaimDeliveryInTrace(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, &stubToolCallingModelClient{})
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:         "sess_result_page_waiting_input",
+		Title:             "结果页澄清任务",
+		SourceType:        "floating_ball",
+		Status:            "processing",
+		Intent:            map[string]any{"name": "agent_loop", "arguments": map[string]any{}},
+		CurrentStep:       "agent_loop",
+		RiskLevel:         "green",
+		PreferredDelivery: "result_page",
+	})
+
+	updated, bubble, deliveryResult, _, err := service.executeTask(task, contextsvc.TaskContextSnapshot{InputType: "text", Text: "你好"}, task.Intent)
+	if err != nil {
+		t.Fatalf("executeTask failed: %v", err)
+	}
+	if updated.Status != "waiting_input" {
+		t.Fatalf("expected waiting_input status, got %+v", updated)
+	}
+	if deliveryResult != nil {
+		t.Fatalf("expected waiting_input execution not to finalize delivery_result, got %+v", deliveryResult)
+	}
+	if bubble == nil || !strings.Contains(stringValue(bubble, "text", ""), "请补充你的目标") {
+		t.Fatalf("expected clarification bubble for waiting_input result_page task, got %+v", bubble)
+	}
+	traces, total, err := service.storage.TraceStore().ListTraceRecords(context.Background(), task.TaskID, 10, 0)
+	if err != nil || total != 1 || len(traces) != 1 {
+		t.Fatalf("expected one trace record for waiting_input result_page task, total=%d len=%d err=%v", total, len(traces), err)
+	}
+	if strings.Contains(traces[0].RuleHitsJSON, "delivery_type=result_page") {
+		t.Fatalf("expected waiting_input result_page trace not to claim result_page delivery, got %+v", traces[0])
+	}
+	evals, total, err := service.storage.EvalStore().ListEvalSnapshots(context.Background(), task.TaskID, 10, 0)
+	if err != nil || total != 1 || len(evals) != 1 {
+		t.Fatalf("expected one eval snapshot for waiting_input result_page task, total=%d len=%d err=%v", total, len(evals), err)
+	}
+	if strings.Contains(evals[0].MetricsJSON, `"delivery_type":"result_page"`) {
+		t.Fatalf("expected waiting_input result_page eval metrics not to claim result_page delivery, got %+v", evals[0])
+	}
 }
 
 func TestServiceConfirmTaskKeepsUnknownIntentInConfirmationWhenRejected(t *testing.T) {

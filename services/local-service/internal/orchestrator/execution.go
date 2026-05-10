@@ -328,7 +328,11 @@ func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, sn
 	executionAuditRecords = append(executionAuditRecords, s.buildBudgetDowngradeAudit(processingTask, budgetDecision))
 	processingTask = s.appendAuditData(processingTask, executionAuditRecords, executionTokenUsage)
 	processingTask = s.recordBudgetDowngradeEvent(processingTask, budgetDecision)
-	traceCapture, traceErr := s.captureExecutionTrace(processingTask, snapshot, taskIntent, executionResult, err)
+	traceResult := executionResult
+	if traceResult.LoopStopReason == string(agentloop.StopReasonNeedUserInput) {
+		traceResult.DeliveryResult = nil
+	}
+	traceCapture, traceErr := s.captureExecutionTrace(processingTask, snapshot, taskIntent, traceResult, err)
 	if traceErr != nil {
 		failedTask, failureBubble := s.failExecutionTask(processingTask, taskIntent, executionResult, traceErr)
 		return failedTask, failureBubble, nil, nil, nil
