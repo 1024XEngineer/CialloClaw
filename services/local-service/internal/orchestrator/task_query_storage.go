@@ -43,23 +43,6 @@ func taskIsTerminal(status string) bool {
 	}
 }
 
-// timelineMap converts internal timeline records into protocol-facing values.
-func timelineMap(timeline []runengine.TaskStepRecord) []map[string]any {
-	result := make([]map[string]any, 0, len(timeline))
-	for _, step := range timeline {
-		result = append(result, map[string]any{
-			"step_id":        step.StepID,
-			"task_id":        step.TaskID,
-			"name":           step.Name,
-			"status":         step.Status,
-			"order_index":    step.OrderIndex,
-			"input_summary":  step.InputSummary,
-			"output_summary": step.OutputSummary,
-		})
-	}
-	return result
-}
-
 // pageMap builds the shared paging payload used by list endpoints.
 func pageMap(limit, offset, total int) map[string]any {
 	return map[string]any{

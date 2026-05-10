@@ -151,14 +151,6 @@ func inferArtifactDeliveryType(artifact map[string]any) string {
 	return "task_detail"
 }
 
-// protocolTaskStepList guarantees that task detail timeline stays an array.
-func protocolTaskStepList(steps []map[string]any) []map[string]any {
-	if len(steps) == 0 {
-		return []map[string]any{}
-	}
-	return cloneMapSlice(steps)
-}
-
 // protocolArtifactList trims artifact items to the declared protocol fields and
 // keeps the collection non-null for RPC consumers.
 func protocolArtifactList(artifacts []map[string]any) []map[string]any {

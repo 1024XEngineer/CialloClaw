@@ -552,46 +552,6 @@ func deliveryPayloadDTOFromMap(values map[string]any) (DeliveryPayloadDTO, error
 	return DeliveryPayloadDTO{Path: path, URL: url, TaskID: taskID}, nil
 }
 
-func taskStepDTOFromMap(values map[string]any) (TaskStepDTO, error) {
-	stepID, err := requireProtocolStringField(values, "step_id")
-	if err != nil {
-		return TaskStepDTO{}, err
-	}
-	taskID, err := requireProtocolStringField(values, "task_id")
-	if err != nil {
-		return TaskStepDTO{}, err
-	}
-	name, err := requireProtocolStringField(values, "name")
-	if err != nil {
-		return TaskStepDTO{}, err
-	}
-	status, err := requireProtocolStringField(values, "status")
-	if err != nil {
-		return TaskStepDTO{}, err
-	}
-	orderIndex, err := requireProtocolIntField(values, "order_index")
-	if err != nil {
-		return TaskStepDTO{}, err
-	}
-	inputSummary, err := requireProtocolStringField(values, "input_summary")
-	if err != nil {
-		return TaskStepDTO{}, err
-	}
-	outputSummary, err := requireProtocolStringField(values, "output_summary")
-	if err != nil {
-		return TaskStepDTO{}, err
-	}
-	return TaskStepDTO{
-		StepID:        stepID,
-		TaskID:        taskID,
-		Name:          name,
-		Status:        status,
-		OrderIndex:    orderIndex,
-		InputSummary:  inputSummary,
-		OutputSummary: outputSummary,
-	}, nil
-}
-
 func artifactDTOFromMap(values map[string]any) (ArtifactDTO, error) {
 	artifactID, err := requireProtocolStringField(values, "artifact_id")
 	if err != nil {
@@ -703,21 +663,6 @@ func mirrorReferenceDTOFromMap(values map[string]any) (MirrorReferenceDTO, error
 	return MirrorReferenceDTO{MemoryID: memoryID, Reason: reason, Summary: summary}, nil
 }
 
-func approvalRequestDTOPointerFromMap(values map[string]any, key string) (*ApprovalRequestDTO, error) {
-	payload, ok, err := protocolMapField(values, key)
-	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		return nil, nil
-	}
-	approvalRequest, err := approvalRequestDTOFromMap(payload)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", key, err)
-	}
-	return &approvalRequest, nil
-}
-
 func approvalRequestDTOFromMap(values map[string]any) (ApprovalRequestDTO, error) {
 	approvalID, err := requireProtocolStringField(values, "approval_id")
 	if err != nil {
@@ -763,21 +708,6 @@ func approvalRequestDTOFromMap(values map[string]any) (ApprovalRequestDTO, error
 	}, nil
 }
 
-func authorizationRecordDTOPointerFromMap(values map[string]any, key string) (*AuthorizationRecordDTO, error) {
-	payload, ok, err := protocolMapField(values, key)
-	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		return nil, nil
-	}
-	authorizationRecord, err := authorizationRecordDTOFromMap(payload)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", key, err)
-	}
-	return &authorizationRecord, nil
-}
-
 func authorizationRecordDTOFromMap(values map[string]any) (AuthorizationRecordDTO, error) {
 	recordID, err := requireProtocolStringField(values, "authorization_record_id")
 	if err != nil {
@@ -816,21 +746,6 @@ func authorizationRecordDTOFromMap(values map[string]any) (AuthorizationRecordDT
 		Operator:              operator,
 		CreatedAt:             createdAt,
 	}, nil
-}
-
-func auditRecordDTOPointerFromMap(values map[string]any, key string) (*AuditRecordDTO, error) {
-	payload, ok, err := protocolMapField(values, key)
-	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		return nil, nil
-	}
-	auditRecord, err := auditRecordDTOFromMap(payload)
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", key, err)
-	}
-	return &auditRecord, nil
 }
 
 func auditRecordDTOFromMap(values map[string]any) (AuditRecordDTO, error) {
