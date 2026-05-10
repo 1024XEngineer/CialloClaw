@@ -236,8 +236,10 @@ func TestApprovalBypassAllowedUsesStoredOperationAndTarget(t *testing.T) {
 		ApprovalGranted:      true,
 		ApprovedOperation:    "write_file",
 		ApprovedTargetObject: "workspace/notes/a.md",
+		ApprovedToolInput:    map[string]any{"path": "notes/a.md", "content": "hello"},
 	}
 	precheckInput := RiskPrecheckInput{
+		Input: map[string]any{"path": "notes/a.md", "content": "hello"},
 		Workspace: WorkspaceBoundaryInfo{
 			WorkspacePath: "D:/repo/workspace",
 			TargetPath:    "D:/repo/workspace/notes/a.md",
@@ -249,9 +251,14 @@ func TestApprovalBypassAllowedUsesStoredOperationAndTarget(t *testing.T) {
 	if approvalBypassAllowed(execCtx, "exec_command", precheckInput) {
 		t.Fatal("expected approval bypass to reject mismatched operation")
 	}
+	precheckInput.Input["content"] = "changed"
+	if approvalBypassAllowed(execCtx, "write_file", precheckInput) {
+		t.Fatal("expected approval bypass to reject mismatched approved tool input")
+	}
 
 	execCtx.ApprovedOperation = ""
 	execCtx.ApprovedTargetObject = ""
+	execCtx.ApprovedToolInput = nil
 	if !approvalBypassAllowed(execCtx, "write_file", precheckInput) {
 		t.Fatal("expected blank approved target to allow granted approval")
 	}

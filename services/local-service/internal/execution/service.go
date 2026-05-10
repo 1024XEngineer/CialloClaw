@@ -146,6 +146,7 @@ type Request struct {
 	ApprovalGranted      bool
 	ApprovedOperation    string
 	ApprovedTargetObject string
+	ApprovedToolInput    map[string]any
 	BudgetDowngrade      map[string]any
 }
 
@@ -3293,6 +3294,7 @@ func (s *Service) toolExecutionContext(workspacePath string, request Request) *t
 		ApprovalGranted:      request.ApprovalGranted,
 		ApprovedOperation:    approvedOperation,
 		ApprovedTargetObject: approvedTargetObject,
+		ApprovedToolInput:    cloneMap(request.ApprovedToolInput),
 		Platform:             s.fileSystem,
 		Execution:            s.execution,
 		Playwright:           s.playwright,

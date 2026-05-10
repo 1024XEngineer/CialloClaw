@@ -139,6 +139,9 @@ func (s *Service) maybePauseForRuntimeApproval(task runengine.TaskRecord, taskIn
 		assessment = s.fallbackRuntimeApprovalAssessment(result)
 	}
 	pendingExecution := s.applyGovernanceAssessment(s.buildPendingExecution(task, taskIntent), assessment)
+	if blockedToolCall, found := latestApprovalRequiredToolCall(result.ToolCalls); found {
+		pendingExecution = applyRuntimeApprovedToolInput(pendingExecution, blockedToolCall.Input)
+	}
 	approvalRequest := buildApprovalRequest(task.TaskID, taskIntent, assessment)
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleGovernancePending, nil), task.UpdatedAt.Format(dateTimeLayout))
 	updatedTask, changed := s.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble)
@@ -242,6 +245,23 @@ func runtimeApprovalTargetObject(toolCall tools.ToolCallRecord) string {
 		return apps[0]
 	}
 	return impactScopeTarget(impactScope, execution.GovernanceTargetObject(toolCall.ToolName, toolCall.Input, nil))
+}
+
+// applyRuntimeApprovedToolInput persists the exact blocked tool payload onto the
+// waiting-auth resume plan. Resume execution may still replay agent_loop, but
+// governance bypass is then restricted to this concrete input instead of any
+// later tool call that only shares the same target object.
+func applyRuntimeApprovedToolInput(plan map[string]any, toolInput map[string]any) map[string]any {
+	updatedPlan := cloneMap(plan)
+	if updatedPlan == nil {
+		updatedPlan = map[string]any{}
+	}
+	if len(toolInput) == 0 {
+		delete(updatedPlan, "approved_tool_input")
+		return updatedPlan
+	}
+	updatedPlan["approved_tool_input"] = cloneMap(toolInput)
+	return updatedPlan
 }
 
 func (s *Service) fallbackGovernanceAssessment(task runengine.TaskRecord, taskIntent map[string]any) (execution.GovernanceAssessment, bool) {

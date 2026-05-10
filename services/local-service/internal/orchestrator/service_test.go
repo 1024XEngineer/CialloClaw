@@ -4740,6 +4740,9 @@ func TestServiceAgentLoopToolApprovalPausesWaitingAuth(t *testing.T) {
 	if stringValue(record.PendingExecution, "operation_name", "") != "page_read" || stringValue(record.PendingExecution, "target_object", "") != "https://example.com" {
 		t.Fatalf("expected pending execution to preserve runtime tool target, got %+v", record.PendingExecution)
 	}
+	if !reflect.DeepEqual(mapValue(record.PendingExecution, "approved_tool_input"), map[string]any{"url": "https://example.com"}) {
+		t.Fatalf("expected pending execution to preserve exact runtime tool input, got %+v", record.PendingExecution)
+	}
 	notifications, ok := service.runEngine.PendingNotifications(taskID)
 	if !ok {
 		t.Fatal("expected waiting task notifications")
@@ -4753,6 +4756,100 @@ func TestServiceAgentLoopToolApprovalPausesWaitingAuth(t *testing.T) {
 	}
 	if !hasApprovalPending {
 		t.Fatalf("expected approval.pending notification, got %+v", notifications)
+	}
+}
+
+func TestServiceRuntimeApprovalResumeRejectsChangedToolInput(t *testing.T) {
+	modelClient := &stubToolCallingModelClient{
+		toolCalls: []model.ToolCallResult{
+			{
+				RequestID: "req_agent_loop_search_first",
+				Provider:  "openai_responses",
+				ModelID:   "gpt-5.4",
+				ToolCalls: []model.ToolInvocation{{
+					Name: "page_search",
+					Arguments: map[string]any{
+						"url":   "https://example.com",
+						"query": "billing",
+						"limit": 3,
+					},
+				}},
+			},
+			{
+				RequestID: "req_agent_loop_search_second",
+				Provider:  "openai_responses",
+				ModelID:   "gpt-5.4",
+				ToolCalls: []model.ToolInvocation{{
+					Name: "page_search",
+					Arguments: map[string]any{
+						"url":   "https://example.com",
+						"query": "security",
+						"limit": 3,
+					},
+				}},
+			},
+		},
+	}
+	service, _ := newTestServiceWithModelClient(t, modelClient)
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_agent_loop_exec_auth",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "先看看当前仓库状态",
+		},
+		"intent": map[string]any{
+			"name":      "agent_loop",
+			"arguments": map[string]any{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	if startResult["task"].(map[string]any)["status"] != "waiting_auth" {
+		t.Fatalf("expected first runtime approval to enter waiting_auth, got %+v", startResult["task"])
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	firstRecord, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected first waiting_auth task record")
+	}
+	firstApprovedInput := map[string]any{
+		"url":   "https://example.com",
+		"query": "billing",
+		"limit": 3,
+	}
+	if !reflect.DeepEqual(mapValue(firstRecord.PendingExecution, "approved_tool_input"), firstApprovedInput) {
+		t.Fatalf("expected first runtime approval to preserve exact tool input, got %+v", firstRecord.PendingExecution)
+	}
+
+	respondResult, err := service.SecurityRespond(map[string]any{
+		"task_id":     taskID,
+		"approval_id": activeApprovalIDForTask(t, service, taskID),
+		"decision":    "allow_once",
+	})
+	if err != nil {
+		t.Fatalf("security respond allow_once failed: %v", err)
+	}
+
+	respondTask := respondResult["task"].(map[string]any)
+	if respondTask["status"] != "waiting_auth" {
+		t.Fatalf("expected changed replay input to require fresh approval, got %+v", respondTask)
+	}
+	secondRecord, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected second waiting_auth task record")
+	}
+	secondApprovedInput := map[string]any{
+		"url":   "https://example.com",
+		"query": "security",
+		"limit": 3,
+	}
+	if !reflect.DeepEqual(mapValue(secondRecord.PendingExecution, "approved_tool_input"), secondApprovedInput) {
+		t.Fatalf("expected renewed approval to track second tool input, got %+v", secondRecord.PendingExecution)
 	}
 }
 

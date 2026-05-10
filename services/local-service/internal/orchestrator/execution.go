@@ -275,7 +275,7 @@ func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, sn
 		return updatedTask, resultBubble, deliveryResult, artifacts, nil
 	}
 
-	approvedOperation, approvedTargetObject := approvedExecutionFromTask(processingTask)
+	approvedOperation, approvedTargetObject, approvedToolInput := approvedExecutionFromTask(processingTask)
 	executionCtx := context.Background()
 	if shouldBoundTaskExecution(processingTask, snapshot, taskIntent, deliveryType) {
 		executionTimeout := s.executionTimeout
@@ -303,6 +303,7 @@ func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, sn
 		ApprovalGranted:      processingTask.Authorization != nil,
 		ApprovedOperation:    approvedOperation,
 		ApprovedTargetObject: approvedTargetObject,
+		ApprovedToolInput:    approvedToolInput,
 		BudgetDowngrade: map[string]any{
 			"enabled":         budgetDecision.Enabled,
 			"applied":         budgetDecision.Applied,
@@ -1012,11 +1013,11 @@ func (s *Service) activeExecutionStepName(taskIntent map[string]any) string {
 	return "generate_output"
 }
 
-func approvedExecutionFromTask(task runengine.TaskRecord) (string, string) {
+func approvedExecutionFromTask(task runengine.TaskRecord) (string, string, map[string]any) {
 	if len(task.PendingExecution) == 0 {
-		return "", ""
+		return "", "", nil
 	}
-	return stringValue(task.PendingExecution, "operation_name", ""), stringValue(task.PendingExecution, "target_object", "")
+	return stringValue(task.PendingExecution, "operation_name", ""), stringValue(task.PendingExecution, "target_object", ""), cloneMap(mapValue(task.PendingExecution, "approved_tool_input"))
 }
 
 func toolCallErrorCode(toolCall tools.ToolCallRecord) any {
