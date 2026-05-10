@@ -96,6 +96,7 @@ type blockingModelClient struct {
 type titleBlockingModelClient struct {
 	started         chan string
 	released        chan struct{}
+	allowReturn     chan struct{}
 	immediateOutput string
 }
 
@@ -767,6 +768,33 @@ func (s *titleBlockingModelClient) GenerateText(ctx context.Context, request mod
 		select {
 		case s.started <- request.TaskID:
 		default:
+		}
+	}
+	if s.allowReturn != nil {
+		select {
+		case <-ctx.Done():
+			if s.released != nil {
+				select {
+				case s.released <- struct{}{}:
+				default:
+				}
+			}
+			return model.GenerateTextResponse{}, ctx.Err()
+		case <-s.allowReturn:
+			if s.released != nil {
+				select {
+				case s.released <- struct{}{}:
+				default:
+				}
+			}
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_title_release",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: `{"title":"发布复盘风险跟进"}`,
+			}, nil
 		}
 	}
 	<-ctx.Done()
@@ -2349,9 +2377,11 @@ func TestServiceStartTaskConfirmingIntentDoesNotGenerateTitleBeforeConfirmation(
 func TestServiceStartTaskDoesNotBlockOnAsyncTitleGeneration(t *testing.T) {
 	titleStarted := make(chan string, 1)
 	titleReleased := make(chan struct{}, 1)
+	titleAllowReturn := make(chan struct{})
 	service, _ := newTestServiceWithModelClient(t, &titleBlockingModelClient{
 		started:         titleStarted,
 		released:        titleReleased,
+		allowReturn:     titleAllowReturn,
 		immediateOutput: "执行结果",
 	})
 	service.WithTitleGenerator(titlegen.NewService(service.model))
@@ -2388,18 +2418,24 @@ func TestServiceStartTaskDoesNotBlockOnAsyncTitleGeneration(t *testing.T) {
 	case err := <-errCh:
 		t.Fatalf("start task failed: %v", err)
 	case startResult := <-resultCh:
+		select {
+		case <-titleReleased:
+			t.Fatal("expected task start to return while title generation was still blocked")
+		default:
+		}
 		task := startResult["task"].(map[string]any)
 		if task["title"] == "发布复盘风险跟进" {
 			t.Fatalf("expected hot path to return fallback title before async refinement, got %+v", task)
 		}
-	case <-time.After(200 * time.Millisecond):
-		t.Fatal("expected task start to return before title generation finishes")
+	case <-time.After(time.Second):
+		t.Fatal("expected task start to return before title generation was released")
 	}
 
+	close(titleAllowReturn)
 	select {
 	case <-titleReleased:
-	case <-time.After(4 * time.Second):
-		t.Fatal("expected background title generation to exit after its timeout")
+	case <-time.After(time.Second):
+		t.Fatal("expected background title generation to exit after release")
 	}
 }
 
