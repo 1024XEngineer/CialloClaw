@@ -114,7 +114,6 @@ type ApprovalRequestDTO struct {
 type AuthorizationRecordDTO struct {
 	AuthorizationRecordID string `json:"authorization_record_id"`
 	TaskID                string `json:"task_id"`
-	RunID                 string `json:"run_id,omitempty"`
 	ApprovalID            string `json:"approval_id"`
 	Decision              string `json:"decision"`
 	RememberRule          bool   `json:"remember_rule"`
