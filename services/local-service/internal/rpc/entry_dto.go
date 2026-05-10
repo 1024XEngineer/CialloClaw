@@ -3,6 +3,7 @@ package rpc
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"strings"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/orchestrator"
@@ -35,6 +36,19 @@ var (
 		"text_selection": {},
 		"file":           {},
 		"error":          {},
+	}
+	taskListGroupSet = map[string]struct{}{
+		"unfinished": {},
+		"finished":   {},
+	}
+	taskListSortBySet = map[string]struct{}{
+		"updated_at":  {},
+		"started_at":  {},
+		"finished_at": {},
+	}
+	taskListSortOrderSet = map[string]struct{}{
+		"asc":  {},
+		"desc": {},
 	}
 	deliveryTypeSet = map[string]struct{}{
 		"bubble":             {},
@@ -78,6 +92,10 @@ func decodeAgentTaskStartParams(raw json.RawMessage) (map[string]any, *rpcError)
 func decodeAgentTaskDetailGetParams(raw json.RawMessage) (map[string]any, *rpcError) {
 	var params AgentTaskDetailGetParams
 	return decodeTypedProtocolParams(raw, &params, validateAgentTaskDetailGetParams)
+}
+
+func decodeAgentTaskListParams(raw json.RawMessage) (map[string]any, *rpcError) {
+	return decodeParamsWithValidation(raw, validateAgentTaskListParams)
 }
 
 func decodeTypedProtocolParams(raw json.RawMessage, target any, validate func(map[string]any) *rpcError) (map[string]any, *rpcError) {
@@ -206,6 +224,28 @@ func validateAgentTaskDetailGetParams(params map[string]any) *rpcError {
 	return nil
 }
 
+func validateAgentTaskListParams(params map[string]any) *rpcError {
+	if err := requireRequestMeta(params); err != nil {
+		return err
+	}
+	if err := requireEnumValue(params, "group", taskListGroupSet); err != nil {
+		return err
+	}
+	if err := requireInteger(params, "limit"); err != nil {
+		return err
+	}
+	if err := requireInteger(params, "offset"); err != nil {
+		return err
+	}
+	if err := optionalEnumValue(params, "sort_by", taskListSortBySet); err != nil {
+		return err
+	}
+	if err := optionalEnumValue(params, "sort_order", taskListSortOrderSet); err != nil {
+		return err
+	}
+	return nil
+}
+
 // validateTaskStartInputPayload keeps the stable task-start DTO aligned with
 // the context capture fallback rules. Structured starts must still carry the
 // evidence that identifies the selected text, files, or error payload even when
@@ -220,22 +260,19 @@ func validateTaskStartInputPayload(input, context map[string]any) *rpcError {
 		selection := mapObject(context, "selection")
 		if !hasNonEmptyString(input, "text") &&
 			!hasNonEmptyString(selection, "text") &&
-			!hasNonEmptyString(context, "selection_text") &&
-			!hasNonEmptyString(input, "selection_text") {
+			!hasNonEmptyString(context, "selection_text") {
 			return invalidParamsError("text_selection task input requires selected text")
 		}
 	case "file":
 		if !hasNonEmptyStringSlice(input, "files") &&
 			!hasNonEmptyStringSlice(context, "files") &&
-			!hasNonEmptyStringSlice(input, "file_paths") &&
 			!hasNonEmptyStringSlice(context, "file_paths") {
 			return invalidParamsError("file task input requires at least one file")
 		}
 	case "error":
 		errorContext := mapObject(context, "error")
 		if !hasNonEmptyString(input, "error_message") &&
-			!hasNonEmptyString(errorContext, "message") &&
-			!hasNonEmptyString(context, "error_text") {
+			!hasNonEmptyString(errorContext, "message") {
 			return invalidParamsError("error task input requires an error message")
 		}
 	}
@@ -304,6 +341,18 @@ func requireNonEmptyString(values map[string]any, key string) *rpcError {
 	value, ok := raw.(string)
 	if !ok || strings.TrimSpace(value) == "" {
 		return invalidParamsError("field must be a non-empty string: " + key)
+	}
+	return nil
+}
+
+func requireInteger(values map[string]any, key string) *rpcError {
+	raw, ok := values[key]
+	if !ok {
+		return invalidParamsError("missing required integer field: " + key)
+	}
+	value, ok := raw.(float64)
+	if !ok || math.Trunc(value) != value {
+		return invalidParamsError("field must be an integer: " + key)
 	}
 	return nil
 }
