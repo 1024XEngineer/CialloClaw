@@ -55,6 +55,18 @@ func TestTruncateTextPreservesUTF8Boundaries(t *testing.T) {
 	}
 }
 
+func TestOriginalTextFromTaskTitleStripsLegacyScreenPrefixes(t *testing.T) {
+	cases := map[string]string{
+		"查看当前屏幕：Build Dashboard":    "Build Dashboard",
+		"查看屏幕报错：Build Dashboard": "Build Dashboard",
+	}
+	for title, want := range cases {
+		if got := originalTextFromTaskTitle(title); got != want {
+			t.Fatalf("expected %q to unwrap to %q, got %q", title, want, got)
+		}
+	}
+}
+
 func (taskInspectorFailingSettingsStore) SaveSettingsSnapshot(context.Context, map[string]any) error {
 	return errors.New("settings snapshot write failed")
 }

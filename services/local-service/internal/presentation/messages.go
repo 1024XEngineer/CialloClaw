@@ -350,6 +350,8 @@ func TaskTitlePrefixes() []string {
 		MessageTaskTitleSummarizeFile,
 		MessageTaskTitleSummarize,
 		MessageTaskTitleGeneric,
+		MessageTaskTitleScreenError,
+		MessageTaskTitleScreenCurrent,
 	}
 	prefixes := make([]string, 0, len(keys))
 	for _, key := range keys {
