@@ -13,6 +13,46 @@ const (
 	ReplyLanguageEnglish = "en-US"
 )
 
+var englishSignalWords = map[string]struct{}{
+	"answer":    {},
+	"browser":   {},
+	"can":       {},
+	"could":     {},
+	"edit":      {},
+	"english":   {},
+	"error":     {},
+	"explain":   {},
+	"file":      {},
+	"files":     {},
+	"fix":       {},
+	"hello":     {},
+	"help":      {},
+	"hey":       {},
+	"hi":        {},
+	"how":       {},
+	"inspect":   {},
+	"issue":     {},
+	"need":      {},
+	"note":      {},
+	"notes":     {},
+	"page":      {},
+	"please":    {},
+	"project":   {},
+	"read":      {},
+	"rewrite":   {},
+	"rollout":   {},
+	"summarize": {},
+	"task":      {},
+	"that":      {},
+	"this":      {},
+	"translate": {},
+	"what":      {},
+	"why":       {},
+	"workspace": {},
+	"would":     {},
+	"write":     {},
+}
+
 // PreferredReplyLanguage infers the reply language from the current user-facing
 // text only. The heuristic intentionally stays conservative: it upgrades to
 // English only for English-only inputs so Chinese-first behavior remains stable
@@ -26,8 +66,10 @@ func PreferredReplyLanguage(text string) string {
 }
 
 // IsEnglishOnlyText reports whether one input is composed like an English-only
-// request. The check rejects Han characters and requires enough Latin letters
-// so short punctuation-only inputs do not accidentally flip the reply policy.
+// request. The heuristic stays intentionally conservative: it still rejects Han
+// text and non-ASCII letters, but it now also requires at least one explicit
+// English signal word so arbitrary ASCII-only text does not silently flip the
+// whole reply path to English.
 func IsEnglishOnlyText(text string) bool {
 	trimmed := strings.TrimSpace(text)
 	if trimmed == "" {
@@ -55,5 +97,40 @@ func IsEnglishOnlyText(text string) bool {
 		}
 	}
 
-	return latinLetters >= 2
+	if latinLetters < 2 {
+		return false
+	}
+
+	return containsEnglishSignalWord(asciiWordTokens(trimmed))
+}
+
+func containsEnglishSignalWord(tokens []string) bool {
+	for _, token := range tokens {
+		if _, ok := englishSignalWords[token]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func asciiWordTokens(text string) []string {
+	fields := strings.FieldsFunc(text, func(r rune) bool {
+		return !isASCIIAlpha(r)
+	})
+	if len(fields) == 0 {
+		return nil
+	}
+
+	tokens := make([]string, 0, len(fields))
+	for _, field := range fields {
+		trimmed := strings.ToLower(strings.TrimSpace(field))
+		if trimmed != "" {
+			tokens = append(tokens, trimmed)
+		}
+	}
+	return tokens
+}
+
+func isASCIIAlpha(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
 }
