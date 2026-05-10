@@ -85,7 +85,7 @@ func (s *Service) normalizeSuggestedIntentForAvailability(snapshot contextsvc.Ta
 	// unavailable so the downgrade does not auto-execute a generic task.
 	fallback.RequiresConfirm = confirmRequired
 	fallback.TaskSourceType = "hover_input"
-	fallback.TaskTitle = "处理：" + inferredScreenFallbackSubject(snapshot)
+	fallback.TaskTitle = inferredScreenFallbackSubject(snapshot)
 	fallback.DirectDeliveryType = "bubble"
 	fallback.ResultTitle = "处理结果"
 	fallback.ResultPreview = "结果已通过气泡返回"
@@ -198,9 +198,9 @@ func isClipScreenSourcePath(pathValue string) bool {
 func inferredScreenTaskTitle(snapshot contextsvc.TaskContextSnapshot) string {
 	target := screenSubjectFromSnapshot(snapshot)
 	if strings.TrimSpace(snapshot.ErrorText) != "" || strings.Contains(strings.ToLower(snapshot.Text), "错误") || strings.Contains(strings.ToLower(snapshot.Text), "报错") || strings.Contains(strings.ToLower(snapshot.Text), "error") {
-		return fmt.Sprintf("查看屏幕报错：%s", truncateText(target, subjectPreviewMaxLength))
+		return fmt.Sprintf("%s报错", truncateText(target, subjectPreviewMaxLength))
 	}
-	return fmt.Sprintf("查看当前屏幕：%s", truncateText(target, subjectPreviewMaxLength))
+	return truncateText(target, subjectPreviewMaxLength)
 }
 
 func screenSubjectFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {

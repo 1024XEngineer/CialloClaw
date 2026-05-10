@@ -60,9 +60,8 @@ func (s *Service) currentModel() *model.Service {
 	return s.model
 }
 
-// GenerateTaskSubject summarizes the full task snapshot into a short subject
-// body. Callers remain responsible for applying the stable task-title prefix
-// required by the intent contract.
+// GenerateTaskSubject summarizes the full task snapshot into a short final task
+// title.
 func (s *Service) GenerateTaskSubject(ctx context.Context, snapshot contextsvc.TaskContextSnapshot, intentName string, fallback string) string {
 	prompt := buildTaskSubjectPrompt(snapshot, intentName, s.maxTitle)
 	return s.generate(ctx, taskTitleRequestID, prompt, fallback)
@@ -107,8 +106,8 @@ func buildTaskSubjectPrompt(snapshot contextsvc.TaskContextSnapshot, intentName 
 		"Return JSON only.",
 		`Schema: {"title":"..."}`,
 		"Rules:",
-		"- Return only the subject body, not the leading task verb prefix.",
 		"- Keep the title natural, specific, and under the visible character limit.",
+		"- Return the final title text directly. Do not add labels like 处理：, 翻译：, 总结：, explain:, or todo:.",
 		"- Do not copy filler like 请帮我, 帮我, 我想, summarize, translate, review, todo, note.",
 		"- Do not invent goals that are not present in the input.",
 		"- Prefer the real object, deliverable, or topic the user wants handled.",

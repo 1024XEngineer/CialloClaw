@@ -9,19 +9,15 @@ import (
 )
 
 // resolvedTaskTitle keeps model-backed title generation on the formal task path
-// while preserving the stable intent-specific prefix contract.
+// while treating the generated text as the final user-facing title.
 func (s *Service) resolvedTaskTitle(snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, fallback string) string {
 	intentName := strings.TrimSpace(stringValue(taskIntent, "name", ""))
-	if intentName == "screen_analyze" {
-		return firstNonEmptyString(strings.TrimSpace(fallback), "查看屏幕：当前内容")
-	}
 	subjectFallback := strings.TrimSpace(originalTextFromTaskTitle(fallback))
 	if subjectFallback == "" {
-		subjectFallback = "当前内容"
+		subjectFallback = intent.ComposeTaskTitle(snapshot, intentName, "")
 	}
 	if s == nil || s.titleGenerator == nil {
 		return intent.ComposeTaskTitle(snapshot, intentName, subjectFallback)
 	}
-	subject := s.titleGenerator.GenerateTaskSubject(context.Background(), snapshot, intentName, subjectFallback)
-	return intent.ComposeTaskTitle(snapshot, intentName, subject)
+	return s.titleGenerator.GenerateTaskSubject(context.Background(), snapshot, intentName, subjectFallback)
 }

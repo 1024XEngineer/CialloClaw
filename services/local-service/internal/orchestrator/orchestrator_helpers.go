@@ -122,7 +122,7 @@ func isEmptySnapshot(snapshot contextsvc.TaskContextSnapshot) bool {
 
 func originalTextFromTaskTitle(title string) string {
 	trimmed := strings.TrimSpace(title)
-	for _, prefix := range []string{"确认处理方式：", "改写：", "翻译：", "解释错误：", "解释：", "总结文件：", "总结：", "处理："} {
+	for _, prefix := range []string{"确认处理方式：", "改写：", "翻译：", "解释错误：", "解释：", "总结文件：", "总结：", "处理：", "查看屏幕：", "查看当前屏幕：", "查看屏幕报错："} {
 		if strings.HasPrefix(trimmed, prefix) {
 			return strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
 		}
@@ -135,7 +135,7 @@ func confirmationTitleFromTask(task runengine.TaskRecord) string {
 	if subject == "" {
 		subject = "当前任务"
 	}
-	return "确认处理方式：" + subject
+	return subject
 }
 
 // mergeSuggestedDeliveryPreference preserves explicit caller preferences and only

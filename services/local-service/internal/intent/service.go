@@ -106,36 +106,19 @@ func (s *Service) defaultIntent(snapshot contextsvc.TaskContextSnapshot) map[str
 	return intentPayload(defaultAgentLoopIntent)
 }
 
-// ComposeTaskTitle creates the user-facing task title that appears in task
-// lists, dashboard modules, and later memory summaries.
+// ComposeTaskTitle creates the fallback user-facing task title that appears in
+// task lists, dashboard modules, and later memory summaries before model-backed
+// title generation can refine it.
 func ComposeTaskTitle(snapshot contextsvc.TaskContextSnapshot, intentName string, subject string) string {
 	subject = strings.TrimSpace(subject)
 	if subject == "" {
 		subject = "当前内容"
 	}
 	switch intentName {
-	case "":
-		return "确认处理方式：" + subject
-	case defaultAgentLoopIntent:
-		return "处理：" + subject
 	case "screen_analyze":
-		return "查看屏幕：" + screenSubjectText(snapshot)
-	case "rewrite":
-		return "改写：" + subject
-	case "translate":
-		return "翻译：" + subject
-	case "explain":
-		if snapshot.ErrorText != "" || snapshot.InputType == "error" {
-			return "解释错误：" + subject
-		}
-		return "解释：" + subject
-	case "summarize":
-		if len(snapshot.Files) > 0 || snapshot.InputType == "file" {
-			return "总结文件：" + subject
-		}
-		return "总结：" + subject
+		return screenSubjectText(snapshot)
 	default:
-		return "处理：" + subject
+		return subject
 	}
 }
 

@@ -2062,7 +2062,7 @@ func TestServiceConfirmTaskRewritesPlaceholderTitleAfterCorrection(t *testing.T)
 	}
 
 	task := confirmResult["task"].(map[string]any)
-	if task["title"] != "翻译：你好" {
+	if task["title"] != "你好" {
 		t.Fatalf("expected corrected intent to rewrite placeholder title, got %v", task["title"])
 	}
 }
@@ -2093,7 +2093,7 @@ func TestServiceStartTaskUsesGeneratedTaskTitleFromFullContext(t *testing.T) {
 	}
 
 	task := startResult["task"].(map[string]any)
-	if task["title"] != "翻译：发布复盘风险跟进" {
+	if task["title"] != "发布复盘风险跟进" {
 		t.Fatalf("expected model-backed task title, got %+v", task)
 	}
 }
