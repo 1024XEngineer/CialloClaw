@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,9 +23,13 @@ import (
 
 type stubModelClient struct {
 	output string
+	calls  *atomic.Int32
 }
 
 func (s stubModelClient) GenerateText(_ context.Context, _ model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	if s.calls != nil {
+		s.calls.Add(1)
+	}
 	return model.GenerateTextResponse{OutputText: s.output}, nil
 }
 
@@ -181,6 +186,61 @@ func TestServiceRunParsesMarkdownIntoRichNotepadFoundation(t *testing.T) {
 	later := result.NotepadItems[1]
 	if later["bucket"] != notepadBucketLater {
 		t.Fatalf("expected explicit bucket metadata to win, got %+v", later)
+	}
+}
+
+func TestServiceRunCachesGeneratedNoteTitlesUntilContentChanges(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	notePath := filepath.Join(workspaceRoot, "todos", "weekly.md")
+	if err := os.WriteFile(notePath, []byte("- [ ] Weekly retro\n  note: review blockers and next steps\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	callCount := &atomic.Int32{}
+	service := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"每周复盘阻塞项"}`,
+		calls:  callCount,
+	})))
+	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
+
+	firstResult, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	if err != nil {
+		t.Fatalf("first Run returned error: %v", err)
+	}
+	if len(firstResult.NotepadItems) != 1 || firstResult.NotepadItems[0]["title"] != "每周复盘阻塞项" {
+		t.Fatalf("expected generated note title on first run, got %+v", firstResult.NotepadItems)
+	}
+	if got := callCount.Load(); got != 1 {
+		t.Fatalf("expected one title generation call on first run, got %d", got)
+	}
+
+	secondResult, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	if err != nil {
+		t.Fatalf("second Run returned error: %v", err)
+	}
+	if len(secondResult.NotepadItems) != 1 || secondResult.NotepadItems[0]["title"] != "每周复盘阻塞项" {
+		t.Fatalf("expected cached note title on second run, got %+v", secondResult.NotepadItems)
+	}
+	if got := callCount.Load(); got != 1 {
+		t.Fatalf("expected unchanged note content to reuse cached title, got %d calls", got)
+	}
+
+	if err := os.WriteFile(notePath, []byte("- [ ] Weekly retro\n  note: review blockers, risks, and owners\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if _, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}}); err != nil {
+		t.Fatalf("third Run returned error: %v", err)
+	}
+	if got := callCount.Load(); got != 2 {
+		t.Fatalf("expected changed note content to refresh generated title, got %d calls", got)
 	}
 }
 

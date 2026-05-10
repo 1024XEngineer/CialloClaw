@@ -5,6 +5,7 @@ package titlegen
 import (
 	"context"
 	"encoding/json"
+	"hash/fnv"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,9 +17,10 @@ import (
 )
 
 const (
-	defaultTitleLengthLimit = 24
-	taskTitleRequestID      = "task_title_generator"
-	noteTitleRequestID      = "note_title_generator"
+	defaultTitleLengthLimit    = 24
+	defaultNoteTitleCacheLimit = 256
+	taskTitleRequestID         = "task_title_generator"
+	noteTitleRequestID         = "note_title_generator"
 )
 
 var defaultGenerationTimeout = 3 * time.Second
@@ -26,18 +28,21 @@ var defaultGenerationTimeout = 3 * time.Second
 // Service keeps title generation behind one model-backed boundary with a small
 // deterministic fallback when the model is unavailable.
 type Service struct {
-	modelMu  sync.RWMutex
-	model    *model.Service
-	timeout  time.Duration
-	maxTitle int
+	modelMu        sync.RWMutex
+	model          *model.Service
+	timeout        time.Duration
+	maxTitle       int
+	noteTitleMu    sync.RWMutex
+	noteTitleCache map[string]string
 }
 
 // NewService creates a title generator around the current runtime model.
 func NewService(modelService *model.Service) *Service {
 	return &Service{
-		model:    modelService,
-		timeout:  defaultGenerationTimeout,
-		maxTitle: defaultTitleLengthLimit,
+		model:          modelService,
+		timeout:        defaultGenerationTimeout,
+		maxTitle:       defaultTitleLengthLimit,
+		noteTitleCache: map[string]string{},
 	}
 }
 
@@ -49,6 +54,7 @@ func (s *Service) ReplaceModel(modelService *model.Service) {
 	s.modelMu.Lock()
 	s.model = modelService
 	s.modelMu.Unlock()
+	s.clearNoteTitleCache()
 }
 
 func (s *Service) currentModel() *model.Service {
@@ -71,7 +77,13 @@ func (s *Service) GenerateTaskSubject(ctx context.Context, snapshot taskcontext.
 // label.
 func (s *Service) GenerateNoteTitle(ctx context.Context, item map[string]any, fallback string) string {
 	prompt := buildNoteTitlePrompt(item, s.maxTitle)
-	return s.generate(ctx, noteTitleRequestID, prompt, fallback)
+	cacheKey := noteTitleCacheKey(prompt, fallback, s.maxTitle)
+	if title, ok := s.cachedNoteTitle(cacheKey); ok {
+		return title
+	}
+	title := s.generate(ctx, noteTitleRequestID, prompt, fallback)
+	s.storeNoteTitle(cacheKey, title)
+	return title
 }
 
 func (s *Service) generate(ctx context.Context, requestID string, prompt string, fallback string) string {
@@ -239,4 +251,48 @@ func stringValue(values map[string]any, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(text)
+}
+
+func noteTitleCacheKey(prompt string, fallback string, maxLength int) string {
+	hasher := fnv.New64a()
+	_, _ = hasher.Write([]byte(prompt))
+	_, _ = hasher.Write([]byte{0})
+	_, _ = hasher.Write([]byte(fallback))
+	_, _ = hasher.Write([]byte{0})
+	_, _ = hasher.Write([]byte(strconv.Itoa(maxLength)))
+	return strconv.FormatUint(hasher.Sum64(), 16)
+}
+
+func (s *Service) cachedNoteTitle(cacheKey string) (string, bool) {
+	if s == nil || cacheKey == "" {
+		return "", false
+	}
+	s.noteTitleMu.RLock()
+	defer s.noteTitleMu.RUnlock()
+	title, ok := s.noteTitleCache[cacheKey]
+	return title, ok
+}
+
+func (s *Service) storeNoteTitle(cacheKey string, title string) {
+	if s == nil || cacheKey == "" || title == "" {
+		return
+	}
+	s.noteTitleMu.Lock()
+	defer s.noteTitleMu.Unlock()
+	if len(s.noteTitleCache) >= defaultNoteTitleCacheLimit {
+		// Note titles are regenerated from source-of-truth note content, so
+		// clearing the bounded memo is safer than allowing unbounded growth during
+		// long-lived inspection sessions.
+		s.noteTitleCache = map[string]string{}
+	}
+	s.noteTitleCache[cacheKey] = title
+}
+
+func (s *Service) clearNoteTitleCache() {
+	if s == nil {
+		return
+	}
+	s.noteTitleMu.Lock()
+	s.noteTitleCache = map[string]string{}
+	s.noteTitleMu.Unlock()
 }
