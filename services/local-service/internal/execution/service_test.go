@@ -3918,6 +3918,9 @@ func TestToolBubbleTextAndGovernanceHelpersSupportNewWorkerFlows(t *testing.T) {
 	if governanceTargetObject("page_interact", map[string]any{"url": "https://example.com"}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "https://example.com" {
 		t.Fatalf("expected page_interact governance target url")
 	}
+	if GovernanceTargetObject("browser_attach_current", map[string]any{"attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{"title_contains": "Pinned Tab"}}}, nil) != "Pinned Tab" {
+		t.Fatalf("expected exported governance target helper to preserve browser title selectors")
+	}
 	if governanceTargetObject("browser_snapshot", map[string]any{"attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{"url": "https://example.com/docs"}}}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "https://example.com/docs" {
 		t.Fatalf("expected browser_snapshot governance target url")
 	}

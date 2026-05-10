@@ -4756,6 +4756,34 @@ func TestServiceAgentLoopToolApprovalPausesWaitingAuth(t *testing.T) {
 	}
 }
 
+func TestRuntimeApprovalTargetObjectPreservesBrowserSelectors(t *testing.T) {
+	titleTarget := runtimeApprovalTargetObject(tools.ToolCallRecord{
+		ToolName: "browser_attach_current",
+		Input: map[string]any{
+			"attach": map[string]any{
+				"browser_kind": "chrome",
+				"target":       map[string]any{"title_contains": "Pinned Tab"},
+			},
+		},
+	})
+	if titleTarget != "Pinned Tab" {
+		t.Fatalf("expected browser title selector target, got %q", titleTarget)
+	}
+
+	tabTarget := runtimeApprovalTargetObject(tools.ToolCallRecord{
+		ToolName: "browser_tab_focus",
+		Input: map[string]any{
+			"attach": map[string]any{
+				"browser_kind": "chrome",
+				"target":       map[string]any{"page_index": 2},
+			},
+		},
+	})
+	if tabTarget != "browser_tab:2" {
+		t.Fatalf("expected browser tab selector target, got %q", tabTarget)
+	}
+}
+
 // TestServiceConfirmCanEnterWaitingAuth verifies confirm flows can enter
 // waiting_auth.
 func TestServiceConfirmCanEnterWaitingAuth(t *testing.T) {

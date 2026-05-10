@@ -241,10 +241,7 @@ func runtimeApprovalTargetObject(toolCall tools.ToolCallRecord) string {
 	if apps := stringSliceValue(impactScope["apps"]); len(apps) > 0 {
 		return apps[0]
 	}
-	return impactScopeTarget(impactScope, firstNonEmptyString(
-		firstNonEmptyString(stringValue(toolCall.Input, "url", ""), stringValue(toolCall.Input, "target_url", "")),
-		firstNonEmptyString(stringValue(toolCall.Input, "path", ""), stringValue(toolCall.Input, "working_dir", "")),
-	))
+	return impactScopeTarget(impactScope, execution.GovernanceTargetObject(toolCall.ToolName, toolCall.Input, nil))
 }
 
 func (s *Service) fallbackGovernanceAssessment(task runengine.TaskRecord, taskIntent map[string]any) (execution.GovernanceAssessment, bool) {

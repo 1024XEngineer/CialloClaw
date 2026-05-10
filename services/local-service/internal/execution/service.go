@@ -3338,11 +3338,18 @@ func recoveryPointMap(point checkpoint.RecoveryPoint) map[string]any {
 	}
 }
 
-func governanceTargetObject(toolName string, toolInput map[string]any, execCtx *tools.ToolExecuteContext) string {
+// GovernanceTargetObject derives the stable approval boundary for a concrete
+// tool invocation. Orchestrator runtime-approval recovery reuses the same
+// target-object rules so resumed approval checks match the executor's
+// preflight and replay behavior.
+func GovernanceTargetObject(toolName string, toolInput map[string]any, execCtx *tools.ToolExecuteContext) string {
 	switch toolName {
 	case "write_file":
 		return stringValue(toolInput, "path", "")
 	case "exec_command":
+		if execCtx == nil {
+			return stringValue(toolInput, "working_dir", "")
+		}
 		return firstNonEmpty(stringValue(toolInput, "working_dir", ""), execCtx.WorkspacePath)
 	case "page_read", "page_search", "page_interact", "structured_dom":
 		return stringValue(toolInput, "url", "")
@@ -3360,6 +3367,10 @@ func governanceTargetObject(toolName string, toolInput map[string]any, execCtx *
 		}
 		return ""
 	}
+}
+
+func governanceTargetObject(toolName string, toolInput map[string]any, execCtx *tools.ToolExecuteContext) string {
+	return GovernanceTargetObject(toolName, toolInput, execCtx)
 }
 
 func approvedTargetObject(intent map[string]any, workspacePath string) string {
