@@ -24,16 +24,6 @@ type taskIntentCorrection struct {
 	Reason string         `json:"reason"`
 }
 
-var supportedTaskConfirmIntents = map[string]struct{}{
-	"agent_loop":     {},
-	"summarize":      {},
-	"translate":      {},
-	"explain":        {},
-	"rewrite":        {},
-	"write_file":     {},
-	"screen_analyze": {},
-}
-
 func validateTaskConfirmCorrectionPayload(confirmed bool, correctedIntent map[string]any, correctionText string) error {
 	hasCorrectedIntent := len(correctedIntent) > 0
 	hasCorrectionText := strings.TrimSpace(correctionText) != ""
@@ -85,11 +75,11 @@ func buildTaskConfirmCorrectionPrompt(task runengine.TaskRecord, snapshot taskco
 	lines := []string{
 		"You infer a corrected CialloClaw IntentPayload for an existing task confirmation.",
 		"Return JSON only.",
-		`Schema: {"intent":{"name":"<one allowed intent name>","arguments":{}},"reason":"short reason"}`,
-		"Allowed intent names: agent_loop, summarize, translate, explain, rewrite, write_file, screen_analyze.",
+		`Schema: {"intent":{"name":"<formal intent name>","arguments":{}},"reason":"short reason"}`,
 		"Keep the same task; do not decide whether to execute it.",
 		"Use the correction text as the user's latest instruction while preserving the original task context.",
-		"Use agent_loop for open-ended, mixed, or unsupported goals instead of narrowing a task from a single keyword.",
+		"Pick the most appropriate formal intent for the user's latest goal when the task is specific enough.",
+		"Use agent_loop only when the goal remains open-ended, mixed, or underspecified after considering the full task context.",
 		"",
 		"Original task:",
 		fmt.Sprintf("task_id=%s", task.TaskID),
@@ -139,21 +129,21 @@ func parseTaskConfirmCorrectionIntent(raw string) (map[string]any, bool) {
 	}
 	var correction taskIntentCorrection
 	if err := json.Unmarshal([]byte(payload), &correction); err == nil && len(correction.Intent) > 0 {
-		return normalizeCorrectionIntent(correction.Intent)
+		return normalizeTaskConfirmIntent(correction.Intent)
 	}
 	var intentValue map[string]any
 	if err := json.Unmarshal([]byte(payload), &intentValue); err != nil {
 		return nil, false
 	}
-	return normalizeCorrectionIntent(intentValue)
+	return normalizeTaskConfirmIntent(intentValue)
 }
 
-func normalizeCorrectionIntent(intentValue map[string]any) (map[string]any, bool) {
+// normalizeTaskConfirmIntent only validates the formal payload shape. Confirm
+// corrections must keep the full orchestrator intent surface instead of
+// reintroducing a confirmation-only allowlist that hides supported paths.
+func normalizeTaskConfirmIntent(intentValue map[string]any) (map[string]any, bool) {
 	name := strings.TrimSpace(stringValue(intentValue, "name", ""))
 	if name == "" {
-		return nil, false
-	}
-	if _, ok := supportedTaskConfirmIntents[name]; !ok {
 		return nil, false
 	}
 	arguments := cloneMap(mapValue(intentValue, "arguments"))

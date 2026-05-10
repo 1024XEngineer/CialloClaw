@@ -32,7 +32,7 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	intentValue := cloneMap(task.Intent)
 	updatedTitle := task.Title
 	if !confirmed && len(correctedIntent) > 0 {
-		if normalizedIntent, ok := normalizeCorrectionIntent(correctedIntent); ok {
+		if normalizedIntent, ok := normalizeTaskConfirmIntent(correctedIntent); ok {
 			suggestion := s.normalizedTaskConfirmSuggestion(snapshot, normalizedIntent, false)
 			intentValue = suggestion.Intent
 			updatedTitle = suggestion.TaskTitle

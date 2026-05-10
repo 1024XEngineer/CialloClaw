@@ -463,6 +463,10 @@ export async function confirmTask(params?: unknown): Promise<AgentTaskConfirmRes
     ? (params as { correction_text?: unknown }).correction_text
     : undefined;
   const hasCorrectedIntent = !!correctedIntent && typeof correctedIntent === "object" && !Array.isArray(correctedIntent);
+  const correctedIntentName = hasCorrectedIntent
+    ? ((correctedIntent as { name?: unknown }).name)
+    : undefined;
+  const normalizedCorrectedIntentName = typeof correctedIntentName === "string" ? correctedIntentName : null;
   const hasCorrectionText = typeof correctionText === "string" && correctionText.trim() !== "";
 
   if (hasCorrectionText || (!confirmed && !hasCorrectedIntent)) {
@@ -485,6 +489,35 @@ export async function confirmTask(params?: unknown): Promise<AgentTaskConfirmRes
         created_at: new Date().toISOString(),
       },
       delivery_result: null,
+    };
+  }
+
+  if (!confirmed && hasCorrectedIntent) {
+    const requiresAuthorization = normalizedCorrectedIntentName === "write_file"
+      || normalizedCorrectedIntentName === "exec_command"
+      || normalizedCorrectedIntentName === "page_interact"
+      || normalizedCorrectedIntentName === "browser_navigate"
+      || normalizedCorrectedIntentName === "browser_tab_focus"
+      || normalizedCorrectedIntentName === "browser_interact";
+
+    return {
+      task: {
+        ...createTask(requiresAuthorization ? "waiting_auth" : "completed", requiresAuthorization ? "waiting_authorization" : "completed"),
+        task_id: taskId,
+        intent: correctedIntent as Task["intent"],
+      },
+      bubble_message: {
+        bubble_id: "bubble_confirm_stub",
+        task_id: taskId,
+        type: "status",
+        text: requiresAuthorization
+          ? "Authorization is required before continuing the corrected task."
+          : "The corrected task was accepted and executed.",
+        pinned: false,
+        hidden: false,
+        created_at: new Date().toISOString(),
+      },
+      delivery_result: requiresAuthorization ? null : createTaskDeliveryResult(),
     };
   }
 
