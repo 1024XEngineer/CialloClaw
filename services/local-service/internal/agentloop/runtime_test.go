@@ -257,6 +257,17 @@ func TestBuildPlannerInputUsesEnglishPolicyForEnglishOnlyInput(t *testing.T) {
 	}
 }
 
+func TestBuildPlannerInputUsesEnglishPolicyForCommonEnglishPhrase(t *testing.T) {
+	plannerInput, _ := buildPlannerInput("review the diff", nil, nil, 0, 0)
+
+	if !strings.Contains(plannerInput, "Use English for this request unless the user explicitly asks for another language.") {
+		t.Fatalf("expected common english phrase to keep english planner policy, got %q", plannerInput)
+	}
+	if strings.Contains(plannerInput, "用户上下文：") {
+		t.Fatalf("expected common english phrase to avoid chinese planner headings, got %q", plannerInput)
+	}
+}
+
 func TestBuildPlannerInputUsesEnglishCapabilityLabels(t *testing.T) {
 	plannerInput, _ := buildPlannerInput(
 		"Inspect workspace notes and answer.",
