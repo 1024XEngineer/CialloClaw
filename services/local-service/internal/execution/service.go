@@ -146,6 +146,7 @@ type Request struct {
 	ApprovalGranted      bool
 	ApprovedOperation    string
 	ApprovedTargetObject string
+	ApprovedToolInput    map[string]any
 	BudgetDowngrade      map[string]any
 }
 
@@ -416,6 +417,20 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 	trace, err := s.generateOutput(ctx, request, inputText)
 	if err != nil {
 		return Result{}, err
+	}
+	if trace.LoopStopReason == string(agentloop.StopReasonNeedAuthorization) {
+		latestCall := latestToolCall(trace.ToolCalls)
+		return Result{
+			Content:         trace.OutputText,
+			DurationMS:      time.Since(startedAt).Milliseconds(),
+			ModelInvocation: cloneMap(trace.ModelInvocation),
+			AuditRecord:     cloneMap(trace.AuditRecord),
+			ToolCalls:       append([]tools.ToolCallRecord(nil), trace.ToolCalls...),
+			LoopStopReason:  trace.LoopStopReason,
+			ToolName:        latestCall.ToolName,
+			ToolInput:       cloneMap(latestCall.Input),
+			ToolOutput:      cloneMap(latestCall.Output),
+		}, nil
 	}
 
 	deliveryType := firstNonEmpty(request.DeliveryType, "workspace_document")
@@ -3279,6 +3294,7 @@ func (s *Service) toolExecutionContext(workspacePath string, request Request) *t
 		ApprovalGranted:      request.ApprovalGranted,
 		ApprovedOperation:    approvedOperation,
 		ApprovedTargetObject: approvedTargetObject,
+		ApprovedToolInput:    cloneMap(request.ApprovedToolInput),
 		Platform:             s.fileSystem,
 		Execution:            s.execution,
 		Playwright:           s.playwright,
@@ -3324,11 +3340,18 @@ func recoveryPointMap(point checkpoint.RecoveryPoint) map[string]any {
 	}
 }
 
-func governanceTargetObject(toolName string, toolInput map[string]any, execCtx *tools.ToolExecuteContext) string {
+// GovernanceTargetObject derives the stable approval boundary for a concrete
+// tool invocation. Orchestrator runtime-approval recovery reuses the same
+// target-object rules so resumed approval checks match the executor's
+// preflight and replay behavior.
+func GovernanceTargetObject(toolName string, toolInput map[string]any, execCtx *tools.ToolExecuteContext) string {
 	switch toolName {
 	case "write_file":
 		return stringValue(toolInput, "path", "")
 	case "exec_command":
+		if execCtx == nil {
+			return stringValue(toolInput, "working_dir", "")
+		}
 		return firstNonEmpty(stringValue(toolInput, "working_dir", ""), execCtx.WorkspacePath)
 	case "page_read", "page_search", "page_interact", "structured_dom":
 		return stringValue(toolInput, "url", "")
@@ -3346,6 +3369,10 @@ func governanceTargetObject(toolName string, toolInput map[string]any, execCtx *
 		}
 		return ""
 	}
+}
+
+func governanceTargetObject(toolName string, toolInput map[string]any, execCtx *tools.ToolExecuteContext) string {
+	return GovernanceTargetObject(toolName, toolInput, execCtx)
 }
 
 func approvedTargetObject(intent map[string]any, workspacePath string) string {
