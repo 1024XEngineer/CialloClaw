@@ -320,7 +320,7 @@ func streamReaderReachedEOF(reader *bufio.Reader, conn net.Conn) bool {
 	return !errors.As(err, &netErr)
 }
 
-func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnvelopeWriter, connState *streamConnState, pendingState *streamPendingState, taskCoordinator *streamTaskCoordinator, taskStartMu *sync.RWMutex, releasePending func()) {
+func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnvelopeWriter, connState *streamConnState, connectionTasks *streamConnTaskSet, pendingState *streamPendingState, taskCoordinator *streamTaskCoordinator, taskStartMu *sync.RWMutex, releasePending func()) {
 	if connState.isClosed() {
 		return
 	}
