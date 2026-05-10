@@ -30,6 +30,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/titlegen"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/sidecarclient"
@@ -156,11 +157,12 @@ func New(cfg config.Config) (*App, error) {
 
 	deliveryService := delivery.NewService()
 	traceEvalService := traceeval.NewService(storageService.TraceStore(), storageService.EvalStore())
+	titleGenerator := titlegen.NewService(modelService)
 	executionService := execution.NewService(fileSystem, executionBackend, playwrightClient, ocrClient, mediaClient, screenClient, modelService, auditService, checkpointService, deliveryService, toolRegistry, toolExecutor, pluginService).
 		WithArtifactStore(storageService.ArtifactStore()).
 		WithLoopRuntimeStore(storageService.LoopRuntimeStore()).
 		WithExtensionAssetCatalog(storageService)
-	inspectorService := taskinspector.NewService(fileSystem)
+	inspectorService := taskinspector.NewService(fileSystem).WithTitleGenerator(titleGenerator)
 	runEngine, err := runengine.NewEngineWithStore(storageService.TaskRunStore())
 	if err != nil {
 		_ = storageService.Close()
@@ -189,7 +191,7 @@ func New(cfg config.Config) (*App, error) {
 		modelService,
 		toolRegistry,
 		pluginService,
-	).WithAudit(auditService).WithExecutor(executionService).WithStorage(storageService).WithTaskInspector(inspectorService).WithTraceEval(traceEvalService)
+	).WithAudit(auditService).WithExecutor(executionService).WithStorage(storageService).WithTaskInspector(inspectorService).WithTitleGenerator(titleGenerator).WithTraceEval(traceEvalService)
 
 	return &App{
 		server:       rpc.NewServer(cfg.RPC, orchestratorService),

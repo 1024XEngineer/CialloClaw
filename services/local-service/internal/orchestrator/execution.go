@@ -665,7 +665,8 @@ func (s *Service) resumeHumanLoopTask(task runengine.TaskRecord, reviewDecision 
 		if correctedIntent := mapValue(escalation, "corrected_intent"); len(correctedIntent) > 0 {
 			intentValue = correctedIntent
 		}
-		updatedTitle := s.intent.Suggest(snapshotFromTask(task), intentValue, false).TaskTitle
+		fallbackTitle := s.intent.Suggest(snapshotFromTask(task), intentValue, false).TaskTitle
+		updatedTitle := s.resolvedTaskTitle(snapshotFromTask(task), intentValue, fallbackTitle)
 		replanBubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "人工复核要求重新规划，请确认新的处理意图。", task.UpdatedAt.Format(dateTimeLayout))
 		replannedTask, ok := s.runEngine.ReopenIntentConfirmation(task.TaskID, updatedTitle, intentValue, replanBubble)
 		if !ok {

@@ -84,7 +84,7 @@ func (s *Service) Suggest(snapshot contextsvc.TaskContextSnapshot, explicitInten
 	return Suggestion{
 		Intent:             intent,
 		IntentConfirmed:    intentConfirmed,
-		TaskTitle:          s.buildTaskTitle(snapshot, intentName),
+		TaskTitle:          ComposeTaskTitle(snapshot, intentName, subjectText(snapshot)),
 		TaskSourceType:     sourceType,
 		RequiresConfirm:    requiresConfirm,
 		DirectDeliveryType: directDeliveryType,
@@ -106,10 +106,13 @@ func (s *Service) defaultIntent(snapshot contextsvc.TaskContextSnapshot) map[str
 	return intentPayload(defaultAgentLoopIntent)
 }
 
-// buildTaskTitle creates the user-facing task title that appears in task lists,
-// dashboard modules, and later memory summaries.
-func (s *Service) buildTaskTitle(snapshot contextsvc.TaskContextSnapshot, intentName string) string {
-	subject := subjectText(snapshot)
+// ComposeTaskTitle creates the user-facing task title that appears in task
+// lists, dashboard modules, and later memory summaries.
+func ComposeTaskTitle(snapshot contextsvc.TaskContextSnapshot, intentName string, subject string) string {
+	subject = strings.TrimSpace(subject)
+	if subject == "" {
+		subject = "当前内容"
+	}
 	switch intentName {
 	case "":
 		return "确认处理方式：" + subject
@@ -282,34 +285,24 @@ func intentPayload(name string) map[string]any {
 }
 
 func subjectText(snapshot contextsvc.TaskContextSnapshot) string {
-	candidates := make([]string, 0, 7)
-	hasPrimaryText := false
 	switch {
 	case len(snapshot.Files) > 0:
-		candidates = append(candidates, filepath.Base(snapshot.Files[0]))
+		return filepath.Base(snapshot.Files[0])
+	case strings.TrimSpace(snapshot.SelectionText) != "":
+		return truncateText(snapshot.SelectionText, subjectPreviewMaxLength)
+	case strings.TrimSpace(snapshot.Text) != "":
+		return truncateText(snapshot.Text, subjectPreviewMaxLength)
+	case strings.TrimSpace(snapshot.ErrorText) != "":
+		return truncateText(snapshot.ErrorText, subjectPreviewMaxLength)
+	case strings.TrimSpace(snapshot.PageTitle) != "":
+		return truncateText(snapshot.PageTitle, subjectPreviewMaxLength)
+	case strings.TrimSpace(snapshot.WindowTitle) != "":
+		return truncateText(snapshot.WindowTitle, subjectPreviewMaxLength)
+	case strings.TrimSpace(snapshot.ScreenSummary) != "":
+		return truncateText(snapshot.ScreenSummary, subjectPreviewMaxLength)
+	default:
+		return "当前内容"
 	}
-	if strings.TrimSpace(snapshot.SelectionText) != "" {
-		candidates = append(candidates, snapshot.SelectionText)
-		hasPrimaryText = true
-	}
-	if strings.TrimSpace(snapshot.Text) != "" {
-		candidates = append(candidates, snapshot.Text)
-		hasPrimaryText = true
-	}
-	if strings.TrimSpace(snapshot.ErrorText) != "" {
-		candidates = append(candidates, snapshot.ErrorText)
-		hasPrimaryText = true
-	}
-	if !hasPrimaryText && strings.TrimSpace(snapshot.PageTitle) != "" {
-		candidates = append(candidates, snapshot.PageTitle)
-	}
-	if !hasPrimaryText && strings.TrimSpace(snapshot.WindowTitle) != "" {
-		candidates = append(candidates, snapshot.WindowTitle)
-	}
-	if !hasPrimaryText && strings.TrimSpace(snapshot.ScreenSummary) != "" {
-		candidates = append(candidates, snapshot.ScreenSummary)
-	}
-	return textutil.CompactSubject(candidates, "当前内容", subjectPreviewMaxLength)
 }
 
 func screenSubjectText(snapshot contextsvc.TaskContextSnapshot) string {
@@ -388,7 +381,7 @@ func isLongContent(text string) bool {
 }
 
 func truncateText(value string, maxLength int) string {
-	return textutil.TruncateGraphemes(value, maxLength)
+	return textutil.TruncateGraphemes(strings.Join(strings.Fields(value), " "), maxLength)
 }
 
 // stringValue safely reads a string field from an intent payload.

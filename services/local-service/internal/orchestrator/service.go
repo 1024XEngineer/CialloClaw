@@ -18,6 +18,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/titlegen"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/traceeval"
 )
@@ -41,6 +42,7 @@ type Service struct {
 	executor         *execution.Service
 	inspector        *taskinspector.Service
 	storage          *storage.Service
+	titleGenerator   *titlegen.Service
 	modelMu          sync.RWMutex
 	runtimeMu        sync.RWMutex
 	executionTimeout time.Duration
@@ -77,6 +79,7 @@ func NewService(
 		recommendation:   recommendation.NewService(),
 		traceEval:        traceeval.NewService(nil, nil),
 		inspector:        taskinspector.NewService(nil),
+		titleGenerator:   titlegen.NewService(model),
 		executionTimeout: defaultTaskExecutionTimeout,
 		runtimeTaps:      map[uint64]func(taskID, method string, params map[string]any){},
 		taskStartTaps:    map[uint64]func(taskID, sessionID, traceID string){},
@@ -116,6 +119,15 @@ func (s *Service) WithExecutor(executorService *execution.Service) *Service {
 func (s *Service) WithTaskInspector(inspectorService *taskinspector.Service) *Service {
 	if inspectorService != nil {
 		s.inspector = inspectorService
+	}
+	return s
+}
+
+// WithTitleGenerator replaces the default runtime title generator so every
+// title-producing path shares the same model-backed policy.
+func (s *Service) WithTitleGenerator(generator *titlegen.Service) *Service {
+	if generator != nil {
+		s.titleGenerator = generator
 	}
 	return s
 }

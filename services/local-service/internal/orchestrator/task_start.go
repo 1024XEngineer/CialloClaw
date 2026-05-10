@@ -22,6 +22,7 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	}
 
 	flow.Suggestion = s.suggestStartTaskIntent(flow)
+	flow.Suggestion.TaskTitle = s.resolvedTaskTitle(flow.Snapshot, flow.Suggestion.Intent, flow.Suggestion.TaskTitle)
 	if response, handled, err := s.maybeHandleSuggestedScreenStart(flow); err != nil || handled {
 		return response, err
 	}

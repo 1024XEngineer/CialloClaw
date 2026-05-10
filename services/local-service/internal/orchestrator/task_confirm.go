@@ -52,7 +52,8 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		}
 		return nil, ErrTaskNotFound
 	}
-	updatedTitle := s.intent.Suggest(snapshotFromTask(task), intentValue, false).TaskTitle
+	fallbackTitle := s.intent.Suggest(snapshotFromTask(task), intentValue, false).TaskTitle
+	updatedTitle := s.resolvedTaskTitle(snapshotFromTask(task), intentValue, fallbackTitle)
 
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已按新的要求开始处理", task.UpdatedAt.Format(dateTimeLayout))
 	updatedTask, ok := s.runEngine.UpdateIntent(task.TaskID, updatedTitle, intentValue)

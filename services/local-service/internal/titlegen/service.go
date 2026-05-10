@@ -1,0 +1,243 @@
+// Package titlegen generates concise user-facing titles from full task or note
+// context while keeping the final task/run contracts deterministic.
+package titlegen
+
+import (
+	"context"
+	"encoding/json"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
+)
+
+const (
+	defaultTitleLengthLimit = 24
+	taskTitleRequestID      = "task_title_generator"
+	noteTitleRequestID      = "note_title_generator"
+)
+
+var defaultGenerationTimeout = 3 * time.Second
+
+// Service keeps title generation behind one model-backed boundary with a small
+// deterministic fallback when the model is unavailable.
+type Service struct {
+	modelMu  sync.RWMutex
+	model    *model.Service
+	timeout  time.Duration
+	maxTitle int
+}
+
+// NewService creates a title generator around the current runtime model.
+func NewService(modelService *model.Service) *Service {
+	return &Service{
+		model:    modelService,
+		timeout:  defaultGenerationTimeout,
+		maxTitle: defaultTitleLengthLimit,
+	}
+}
+
+// ReplaceModel keeps title generation aligned with runtime model changes.
+func (s *Service) ReplaceModel(modelService *model.Service) {
+	if s == nil {
+		return
+	}
+	s.modelMu.Lock()
+	s.model = modelService
+	s.modelMu.Unlock()
+}
+
+func (s *Service) currentModel() *model.Service {
+	if s == nil {
+		return nil
+	}
+	s.modelMu.RLock()
+	defer s.modelMu.RUnlock()
+	return s.model
+}
+
+// GenerateTaskSubject summarizes the full task snapshot into a short subject
+// body. Callers remain responsible for applying the stable task-title prefix
+// required by the intent contract.
+func (s *Service) GenerateTaskSubject(ctx context.Context, snapshot contextsvc.TaskContextSnapshot, intentName string, fallback string) string {
+	prompt := buildTaskSubjectPrompt(snapshot, intentName, s.maxTitle)
+	return s.generate(ctx, taskTitleRequestID, prompt, fallback)
+}
+
+// GenerateNoteTitle summarizes note body context into one short dashboard
+// label.
+func (s *Service) GenerateNoteTitle(ctx context.Context, item map[string]any, fallback string) string {
+	prompt := buildNoteTitlePrompt(item, s.maxTitle)
+	return s.generate(ctx, noteTitleRequestID, prompt, fallback)
+}
+
+func (s *Service) generate(ctx context.Context, requestID string, prompt string, fallback string) string {
+	fallback = normalizeTitle(fallback, s.maxTitle)
+	if strings.TrimSpace(prompt) == "" {
+		return fallback
+	}
+	modelService := s.currentModel()
+	if modelService == nil {
+		return fallback
+	}
+	generationCtx, cancel := context.WithTimeout(ctx, s.timeout)
+	defer cancel()
+	response, err := modelService.GenerateText(generationCtx, model.GenerateTextRequest{
+		TaskID: requestID,
+		RunID:  requestID,
+		Input:  prompt,
+	})
+	if err != nil {
+		return fallback
+	}
+	if title := parseGeneratedTitle(response.OutputText, s.maxTitle); title != "" {
+		return title
+	}
+	return fallback
+}
+
+func buildTaskSubjectPrompt(snapshot contextsvc.TaskContextSnapshot, intentName string, maxLength int) string {
+	lines := []string{
+		"You generate one compact task title subject for a desktop agent task.",
+		"Use the full context, not just the first sentence.",
+		"Return JSON only.",
+		`Schema: {"title":"..."}`,
+		"Rules:",
+		"- Return only the subject body, not the leading task verb prefix.",
+		"- Keep the title natural, specific, and under the visible character limit.",
+		"- Do not copy filler like 请帮我, 帮我, 我想, summarize, translate, review, todo, note.",
+		"- Do not invent goals that are not present in the input.",
+		"- Prefer the real object, deliverable, or topic the user wants handled.",
+		"",
+		"Title body max visible characters:",
+		strconv.Itoa(maxLength),
+		"",
+		"Intent:",
+		firstNonEmpty(intentName, "agent_loop"),
+		"",
+		"Context:",
+		taskSnapshotSummary(snapshot),
+	}
+	return strings.Join(lines, "\n")
+}
+
+func buildNoteTitlePrompt(item map[string]any, maxLength int) string {
+	lines := []string{
+		"You generate one compact note title for a desktop dashboard item.",
+		"Use the full note context, not only the first checklist line.",
+		"Return JSON only.",
+		`Schema: {"title":"..."}`,
+		"Rules:",
+		"- Keep the title natural, specific, and under the visible character limit.",
+		"- Prefer the actual work item or topic over generic wrappers.",
+		"- Do not output markdown bullets, prefixes, or surrounding quotes.",
+		"",
+		"Title max visible characters:",
+		strconv.Itoa(maxLength),
+		"",
+		"Note context:",
+		notepadItemSummary(item),
+	}
+	return strings.Join(lines, "\n")
+}
+
+func taskSnapshotSummary(snapshot contextsvc.TaskContextSnapshot) string {
+	lines := make([]string, 0, 12)
+	appendLine := func(label string, value string) {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			lines = append(lines, label+": "+value)
+		}
+	}
+	appendLine("input_type", snapshot.InputType)
+	appendLine("text", snapshot.Text)
+	appendLine("selection_text", snapshot.SelectionText)
+	appendLine("error_text", snapshot.ErrorText)
+	if len(snapshot.Files) > 0 {
+		lines = append(lines, "files: "+strings.Join(snapshot.Files, ", "))
+	}
+	appendLine("page_title", snapshot.PageTitle)
+	appendLine("window_title", snapshot.WindowTitle)
+	appendLine("screen_summary", snapshot.ScreenSummary)
+	appendLine("visible_text", snapshot.VisibleText)
+	appendLine("hover_target", snapshot.HoverTarget)
+	appendLine("clipboard_text", snapshot.ClipboardText)
+	return strings.Join(lines, "\n")
+}
+
+func notepadItemSummary(item map[string]any) string {
+	lines := make([]string, 0, 6)
+	appendLine := func(label string, value string) {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			lines = append(lines, label+": "+value)
+		}
+	}
+	appendLine("title", stringValue(item, "title"))
+	appendLine("note_text", stringValue(item, "note_text"))
+	appendLine("agent_suggestion", stringValue(item, "agent_suggestion"))
+	appendLine("prerequisite", stringValue(item, "prerequisite"))
+	return strings.Join(lines, "\n")
+}
+
+func parseGeneratedTitle(raw string, maxLength int) string {
+	payload := extractJSONObject(raw)
+	if payload != "" {
+		var decoded struct {
+			Title string `json:"title"`
+		}
+		if err := json.Unmarshal([]byte(payload), &decoded); err == nil {
+			return normalizeTitle(decoded.Title, maxLength)
+		}
+	}
+	return normalizeTitle(raw, maxLength)
+}
+
+func extractJSONObject(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	start := strings.Index(trimmed, "{")
+	end := strings.LastIndex(trimmed, "}")
+	if start < 0 || end < start {
+		return ""
+	}
+	return trimmed[start : end+1]
+}
+
+func normalizeTitle(value string, maxLength int) string {
+	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(value, "```json")
+	value = strings.TrimPrefix(value, "```")
+	value = strings.TrimSuffix(value, "```")
+	value = strings.TrimSpace(value)
+	value = strings.Trim(value, "\"'`")
+	value = strings.Join(strings.Fields(value), " ")
+	return textutil.TruncateGraphemes(value, maxLength)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func stringValue(values map[string]any, key string) string {
+	if values == nil {
+		return ""
+	}
+	value, ok := values[key]
+	if !ok {
+		return ""
+	}
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(text)
+}
