@@ -57,8 +57,8 @@ func TestTruncateTextPreservesUTF8Boundaries(t *testing.T) {
 
 func TestOriginalTextFromTaskTitleStripsLegacyScreenPrefixes(t *testing.T) {
 	cases := map[string]string{
-		"查看屏幕：Build Dashboard":      "Build Dashboard",
-		"查看当前屏幕：Build Dashboard":    "Build Dashboard",
+		"查看屏幕：Build Dashboard":   "Build Dashboard",
+		"查看当前屏幕：Build Dashboard": "Build Dashboard",
 		"查看屏幕报错：Build Dashboard": "Build Dashboard",
 	}
 	for title, want := range cases {
