@@ -48,6 +48,16 @@ func protocolNotepadItemMap(item map[string]any, now time.Time) map[string]any {
 	return result
 }
 
+// ProtocolNotepadItem projects one internal notepad record to the stable
+// TodoItem RPC shape so orchestrator responses do not leak richer provenance
+// fields that only exist to preserve task-conversion semantics internally.
+func (e *Engine) ProtocolNotepadItem(item map[string]any) map[string]any {
+	if len(item) == 0 {
+		return nil
+	}
+	return protocolNotepadItemMap(item, e.now())
+}
+
 func protocolNotepadResourceList(rawValue any) []map[string]any {
 	resources := cloneResourceList(rawValue)
 	if len(resources) == 0 {

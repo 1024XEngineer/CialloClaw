@@ -49,7 +49,7 @@ func (s *Service) NotepadUpdate(params map[string]any) (map[string]any, error) {
 		"deleted_item_id": nil,
 	}
 	if updatedItem != nil {
-		response["notepad_item"] = updatedItem
+		response["notepad_item"] = s.runEngine.ProtocolNotepadItem(updatedItem)
 	}
 	if deletedItemID != "" {
 		response["deleted_item_id"] = deletedItemID
@@ -103,7 +103,7 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 	}
 	s.publishTaskStart(task.TaskID, task.SessionID, requestTraceID(params))
 
-	response["notepad_item"] = updatedItem
+	response["notepad_item"] = s.runEngine.ProtocolNotepadItem(updatedItem)
 	response["refresh_groups"] = []string{stringValue(updatedItem, "bucket", "upcoming")}
 	return response, nil
 }

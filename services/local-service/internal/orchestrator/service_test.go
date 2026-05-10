@@ -2706,6 +2706,16 @@ func TestServiceNotepadConvertToTaskUsesRuntimeItemWithoutClosingTodo(t *testing
 	if sourceItem["linked_task_id"] != taskID {
 		t.Fatalf("expected convert_to_task to return linked source item, got %+v", sourceItem)
 	}
+	if _, ok := sourceItem["note_text_origin"]; ok {
+		t.Fatalf("expected convert_to_task response to keep note_text_origin internal, got %+v", sourceItem)
+	}
+	if resources, ok := sourceItem["related_resources"].([]map[string]any); ok {
+		for _, resource := range resources {
+			if _, leaked := resource["resource_origin"]; leaked {
+				t.Fatalf("expected convert_to_task response resources to keep resource_origin internal, got %+v", resources)
+			}
+		}
+	}
 	refreshGroups := result["refresh_groups"].([]string)
 	if len(refreshGroups) != 1 || refreshGroups[0] != "upcoming" {
 		t.Fatalf("expected refresh_groups to point at updated bucket, got %+v", refreshGroups)
@@ -3199,6 +3209,16 @@ func TestServiceNotepadUpdateReturnsUpdatedItemAndRefreshGroups(t *testing.T) {
 	updatedItem := result["notepad_item"].(map[string]any)
 	if updatedItem["bucket"] != "upcoming" {
 		t.Fatalf("expected updated item bucket upcoming, got %+v", updatedItem)
+	}
+	if _, ok := updatedItem["note_text_origin"]; ok {
+		t.Fatalf("expected notepad update response to keep note_text_origin internal, got %+v", updatedItem)
+	}
+	if resources, ok := updatedItem["related_resources"].([]map[string]any); ok {
+		for _, resource := range resources {
+			if _, leaked := resource["resource_origin"]; leaked {
+				t.Fatalf("expected notepad update resources to keep resource_origin internal, got %+v", resources)
+			}
+		}
 	}
 	refreshGroups := result["refresh_groups"].([]string)
 	if len(refreshGroups) != 2 || refreshGroups[0] != "later" || refreshGroups[1] != "upcoming" {
