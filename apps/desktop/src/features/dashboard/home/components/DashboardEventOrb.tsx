@@ -6,7 +6,7 @@ type DashboardEventOrbProps = {
   event: DashboardHomeSummonEvent;
   stateMap: Record<string, DashboardHomeStateData>;
   onDismiss: (id: string) => void;
-  onExpand: (stateKey: DashboardHomeSummonEvent["stateKey"]) => void;
+  onExpand: (event: DashboardHomeSummonEvent) => void;
 };
 
 type Phase = "dormant" | "emerging" | "present" | "receding" | "gone";
@@ -237,9 +237,9 @@ export function DashboardEventOrb({ event, stateMap, onDismiss, onExpand }: Dash
       return;
     }
 
-    onExpand(event.stateKey);
+    onExpand(event);
     startRecede();
-  }, [event.stateKey, isDragging, onExpand, startRecede]);
+  }, [event, isDragging, onExpand, startRecede]);
 
   if (phase === "gone") {
     return null;
