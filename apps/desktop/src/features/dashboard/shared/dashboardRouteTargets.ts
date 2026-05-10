@@ -1,13 +1,11 @@
-export type DashboardRouteTarget = "home" | "safety" | "result";
+export type DashboardRouteTarget = "home" | "safety";
 export type DashboardModuleRouteTarget = "tasks" | "notes" | "memory" | "safety";
 type DashboardRoutePath = "/" | `/${Exclude<DashboardRouteTarget, "home">}`;
 type DashboardModuleRoutePath = `/${DashboardModuleRouteTarget}`;
 export const dashboardSafetyRoutePath = "/safety";
-export const dashboardResultRoutePath = "/result";
 
 export const dashboardRoutePaths: Record<DashboardRouteTarget, DashboardRoutePath> = {
   home: "/",
-  result: dashboardResultRoutePath,
   safety: dashboardSafetyRoutePath,
 };
 

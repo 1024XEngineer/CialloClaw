@@ -10,6 +10,7 @@ import type {
   DeliveryResult,
   RequestMeta,
 } from "@cialloclaw/protocol";
+import { openDesktopExternalUrl } from "@/platform/desktopExternalUrl";
 import { openDesktopLocalPath, revealDesktopLocalPath } from "@/platform/desktopLocalPath";
 import { listTaskArtifacts, openDelivery, openTaskArtifact } from "@/rpc/methods";
 import { isDashboardTaskDeliveryHref, requestDashboardTaskDeliveryOpen } from "./taskDeliveryNavigation";
@@ -17,7 +18,7 @@ import { isDashboardTaskDeliveryHref, requestDashboardTaskDeliveryOpen } from ".
 export type TaskOutputDataMode = "rpc";
 
 export type TaskOpenExecutionPlan = {
-  mode: "task_detail" | "open_result_page" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+  mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
   taskId: string | null;
   path: string | null;
   url: string | null;
@@ -32,11 +33,6 @@ export type TaskOpenExecutionOptions = {
   onOpenTaskDelivery?: (input: {
     plan: TaskOpenExecutionPlan;
     taskId: string;
-  }) => Promise<string | void> | string | void;
-  onOpenResultPage?: (input: {
-    plan: TaskOpenExecutionPlan;
-    taskId: string | null;
-    url: string;
   }) => Promise<string | void> | string | void;
 };
 
@@ -191,19 +187,9 @@ export function resolveTaskOpenExecutionPlan(
     };
   }
 
-  if (result.open_action === "result_page" && url) {
-    return {
-      feedback: "已打开结果页。",
-      mode: "open_result_page",
-      path,
-      taskId,
-      url,
-    };
-  }
-
   if (url) {
     return {
-      feedback: "已打开链接。",
+      feedback: result.open_action === "result_page" ? "已打开结果页。" : "已打开链接。",
       mode: "open_url",
       path,
       taskId,
@@ -246,6 +232,15 @@ function localPathExecutionFailure(message: string, error: unknown) {
   return `${message}（${detail}）`;
 }
 
+function externalUrlExecutionFailure(message: string, error: unknown) {
+  const detail = error instanceof Error ? error.message.trim() : "";
+  if (!detail) {
+    return message;
+  }
+
+  return `${message}（${detail}）`;
+}
+
 /**
  * Executes a renderer-side open plan while keeping task-detail routing and
  * copy-path fallback inside the same formal execution entry.
@@ -264,39 +259,6 @@ export async function performTaskOpenExecution(plan: TaskOpenExecutionPlan, opti
     return typeof detailFeedback === "string" && detailFeedback.trim() !== ""
       ? detailFeedback
       : plan.feedback;
-  }
-
-  if (plan.mode === "open_result_page" && plan.url) {
-    if (!isAllowedTaskOpenUrl(plan.url)) {
-      return "已拦截不受支持的结果页链接。";
-    }
-
-    const resultPageFeedback = await options.onOpenResultPage?.({
-      plan,
-      taskId: plan.taskId,
-      url: plan.url,
-    });
-
-    if (typeof resultPageFeedback === "string" && resultPageFeedback.trim() !== "") {
-      return resultPageFeedback;
-    }
-
-    if (plan.taskId && isDashboardTaskDeliveryHref(plan.url)) {
-      const deliveryFeedback = await options.onOpenTaskDelivery?.({
-        plan,
-        taskId: plan.taskId,
-      });
-
-      if (typeof deliveryFeedback === "string" && deliveryFeedback.trim() !== "") {
-        return deliveryFeedback;
-      }
-
-      await requestDashboardTaskDeliveryOpen(plan.taskId);
-      return plan.feedback;
-    }
-
-    window.open(plan.url, "_blank", "noopener,noreferrer");
-    return plan.feedback;
   }
 
   if (plan.mode === "open_url" && plan.url) {
@@ -321,8 +283,12 @@ export async function performTaskOpenExecution(plan: TaskOpenExecutionPlan, opti
       return "已拦截不受支持的结果链接。";
     }
 
-    window.open(plan.url, "_blank", "noopener,noreferrer");
-    return plan.feedback;
+    try {
+      await openDesktopExternalUrl(plan.url);
+      return plan.feedback;
+    } catch (error) {
+      return externalUrlExecutionFailure("无法通过系统浏览器打开结果链接", error);
+    }
   }
 
   if (plan.mode === "open_local_path" && plan.path) {

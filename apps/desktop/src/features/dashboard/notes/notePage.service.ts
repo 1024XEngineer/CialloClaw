@@ -9,6 +9,7 @@ import type {
   TodoBucket,
   TodoItem,
 } from "@cialloclaw/protocol";
+import { openDesktopExternalUrl } from "@/platform/desktopExternalUrl";
 import { openDesktopLocalPath, revealDesktopLocalPath } from "@/platform/desktopLocalPath";
 import { convertNotepadToTask, listNotepad, updateNotepad } from "@/rpc/methods";
 import type { NoteConvertOutcome, NoteDetailExperience, NoteListItem, NoteResource, NoteUpdateOutcome, SourceNoteDocument } from "./notePage.types";
@@ -919,6 +920,15 @@ function localPathExecutionFailure(message: string, error: unknown) {
   return `${message}（${detail}）`;
 }
 
+function externalUrlExecutionFailure(message: string, error: unknown) {
+  const detail = error instanceof Error ? error.message.trim() : "";
+  if (!detail) {
+    return message;
+  }
+
+  return `${message}（${detail}）`;
+}
+
 /**
  * Executes a note resource open plan while preserving task-detail routing and
  * copy-path fallback inside the same renderer entry.
@@ -957,8 +967,12 @@ export async function performNoteResourceOpenExecution(
       return resultPageFeedback;
     }
 
-    window.open(plan.url, "_blank", "noopener,noreferrer");
-    return plan.feedback;
+    try {
+      await openDesktopExternalUrl(plan.url);
+      return plan.feedback;
+    } catch (error) {
+      return externalUrlExecutionFailure("无法通过系统浏览器打开便签结果页链接", error);
+    }
   }
 
   if (plan.mode === "open_url" && plan.url) {
@@ -966,8 +980,12 @@ export async function performNoteResourceOpenExecution(
       return "已拦截不受支持的便签资源链接。";
     }
 
-    window.open(plan.url, "_blank", "noopener,noreferrer");
-    return plan.feedback;
+    try {
+      await openDesktopExternalUrl(plan.url);
+      return plan.feedback;
+    } catch (error) {
+      return externalUrlExecutionFailure("无法通过系统浏览器打开便签资源链接", error);
+    }
   }
 
   if (plan.mode === "open_local_path" && plan.path) {

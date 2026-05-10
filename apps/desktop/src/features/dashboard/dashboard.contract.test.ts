@@ -431,14 +431,14 @@ function loadTaskOutputServiceModule(
       openTaskDeliveryForTask: (taskId: string, artifactId: string | undefined, source: "rpc") => Promise<AgentDeliveryOpenResult>;
       canOpenTaskDeliveryResult: (deliveryResult: AgentDeliveryOpenResult["delivery_result"] | null | undefined, fallbackTaskId?: string | null) => boolean;
       resolveTaskOpenExecutionPlan: (result: AgentTaskArtifactOpenResult | AgentDeliveryOpenResult) => {
-        mode: "task_detail" | "open_result_page" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+        mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
         taskId: string | null;
         path: string | null;
         url: string | null;
         feedback: string;
       };
       performTaskOpenExecution: (plan: {
-        mode: "task_detail" | "open_result_page" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+        mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
         taskId: string | null;
         path: string | null;
         url: string | null;
@@ -446,7 +446,7 @@ function loadTaskOutputServiceModule(
       }, options?: {
         onOpenTaskDetail?: (input: {
           plan: {
-            mode: "task_detail" | "open_result_page" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+            mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
             taskId: string | null;
             path: string | null;
             url: string | null;
@@ -2062,21 +2062,6 @@ test("dashboard home randomizes summons while preferring a different module when
   assert.match(dashboardHomeSource, /const closeActiveOverlay = useCallback\(\(\) => \{/);
   assert.match(dashboardHomeSource, /if \(event\.key === "Escape" && \(activeStateKey \|\| activeExpandedState\)\) \{/);
   assert.match(dashboardHomeSource, /onClose=\{closeActiveOverlay\}/);
-});
-
-test("dashboard result page only embeds trusted loopback shell origins and auto-opens browser fallback", () => {
-  const resultPageSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/DashboardResultPage.tsx"), "utf8");
-
-  assert.match(resultPageSource, /function isTrustedDashboardResultPageOrigin/);
-  assert.match(resultPageSource, /const trustedDashboardResultPageHosts = new Set\(/);
-  assert.match(resultPageSource, /"desktop\.local"/);
-  assert.match(resultPageSource, /trustedDashboardResultPageHosts\.has\(currentOriginUrl\.hostname\)/);
-  assert.match(resultPageSource, /return url\.origin === currentOriginUrl\.origin/);
-  assert.match(resultPageSource, /window\.open\(resultUrl, "_blank", "noopener,noreferrer"\)/);
-  assert.match(resultPageSource, /lastBrowserFallbackUrlRef/);
-  assert.match(resultPageSource, /if \(lastBrowserFallbackUrlRef\.current === resultUrl\) \{/);
-  assert.match(resultPageSource, /不在站内可信嵌入白名单内，已切换为浏览器承接模式/);
-  assert.match(resultPageSource, /sandbox="allow-downloads allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"/);
 });
 
 test("mirror page stays RPC-only instead of exposing a page-level mock toggle", () => {
@@ -5902,7 +5887,7 @@ test("task output helpers normalize open actions from existing rpc contracts", a
       },
     }),
     {
-      mode: "open_result_page",
+      mode: "open_url",
       taskId: "task_dashboard_001",
       path: null,
       url: "https://example.test/result",
@@ -6367,7 +6352,7 @@ test("task workspace routes formal delivery through a dedicated page and keeps l
   assert.match(taskPageSource, /buildDashboardTaskArtifactQueryKey/);
   assert.match(taskPageSource, /loadTaskArtifactPage/);
   assert.match(taskPageSource, /openTaskArtifactForTask/);
-  assert.match(taskPageSource, /navigateToDashboardResultPage/);
+  assert.match(taskPageSource, /navigateToDashboardTaskDelivery/);
   assert.match(taskPageSource, /readDashboardTaskDetailRouteState/);
   assert.match(taskPageSource, /subscribeTaskUpdated\(\(payload\) =>/);
   assert.match(taskPageSource, /subscribeDeliveryReady\(\(payload\) =>/);
@@ -6399,12 +6384,12 @@ test("task workspace routes formal delivery through a dedicated page and keeps l
   assert.match(taskDeliverySource, /const plan = resolveTaskOpenExecutionPlan\(result, taskId\);/);
   assert.match(taskDeliverySource, /getTaskDeliveryOpenLabel/);
   assert.match(taskDeliverySource, /buildDashboardTaskDetailRouteState/);
-  assert.match(taskDeliverySource, /navigateToDashboardResultPage/);
+  assert.match(taskDeliverySource, /navigateToDashboardTaskDelivery/);
   assert.match(taskDeliverySource, /isAllowedTaskOpenUrl/);
   assert.match(taskDeliverySource, /formalDeliveryUrlIsAllowed/);
   assert.doesNotMatch(taskDeliverySource, /href=\{formalDeliveryResult\.payload\.url\}/);
   assert.match(taskDeliverySource, /当前正式结果已经在交付页中展示/);
-  assert.match(taskDeliverySource, /onOpenResultPage:/);
+  assert.match(taskDeliverySource, /onOpenTaskDelivery:/);
 
   assert.doesNotMatch(taskDetailSource, /当前协议尚未提供稳定的 artifact\.open 能力/);
   assert.match(taskDetailSource, /onOpenArtifact/);
