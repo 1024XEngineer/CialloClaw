@@ -1884,7 +1884,7 @@ flowchart TB
 ### 子模块说明
 - **风险评估 / 授权承接**：判断动作风险、形成待授权对象，并把用户决策重新并入主链。
 - **正式结果交付协调**：把执行结果装配成 `delivery_result / artifact / citation`，并决定如何进入通知和查询视图。
-- **展示文案渲染**：后端只在 `presentation` 层维护展示文案和语义键；编排、意图、交付路径只选择语义键与参数，避免把中文展示句混入状态机控制流。
+- **展示文案渲染**：本轮已把任务标题、确认气泡、授权/排队/续接反馈、交付结果标题与预览等主链展示文案收口到 `presentation` 层；编排、意图、交付路径优先只选择语义键与参数，避免继续把中文展示句混入状态机控制流。其余执行提示、社交回复等后端文案仍留在各自模块，后续再独立收口。
 - **记忆与镜像沉淀**：决定哪些运行结果应沉淀为长期记忆或镜像引用，哪些只能保留为运行态痕迹。
 - **结果审查 / Hooks / Trace / Eval**：负责对输出做质量检查、记录命中、沉淀可观测性与评估快照。
 - **Doom Loop / Human-in-the-loop**：在执行异常、重复无进展或高不确定性场景下，负责熔断、重规划和人工升级。
@@ -1897,7 +1897,7 @@ flowchart TB
 | --- | --- | --- | --- |
 | 风险评估与授权承接 | 运行层提交的拟执行动作、目标范围、能力请求 | `risk_level`、`impact_scope`、`approval_request`、`pending_execution` | `approval.pending`、授权结果、阻断或继续执行结论 |
 | 正式结果交付协调 | 执行结果、artifact/citation 候选、交付偏好 | `delivery_result`、artifact 计划、交付说明 | `delivery.ready`、任务详情交付、文件/文档/结果页入口 |
-| 展示文案渲染 | 意图名、展示语义键、渲染参数 | `presentation.MessageKey`、渲染后的 task/bubble/result 文案 | `bubble_message`、`delivery_result`、任务标题 |
+| 展示文案渲染 | 已迁移主链的意图名、展示语义键、渲染参数 | `presentation.MessageKey`、渲染后的 task/bubble/result 文案 | `bubble_message`、`delivery_result`、任务标题 |
 | 记忆与镜像沉淀 | 已完成阶段结果、检索计划、摘要候选 | `memory_candidate`、`memory_summary`、镜像引用关系 | 后续检索命中、任务详情中的记忆摘要 |
 | 结果审查与 Hooks | 执行结果、工具调用记录、交付对象 | 审查结论、hook 命中、结构化失败原因 | 继续交付、重试、HITL 或阻断 |
 | Trace / Eval | 模型调用、tool_call、输出摘要、资产命中 | `trace_record`、`eval_snapshot`、review result | 调试视图、loop 诊断、评估快照 |
