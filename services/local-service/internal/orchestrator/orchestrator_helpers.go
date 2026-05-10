@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
@@ -122,7 +123,7 @@ func isEmptySnapshot(snapshot taskcontext.TaskContextSnapshot) bool {
 
 func originalTextFromTaskTitle(title string) string {
 	trimmed := strings.TrimSpace(title)
-	for _, prefix := range []string{"确认处理方式：", "改写：", "翻译：", "解释错误：", "解释：", "总结文件：", "总结：", "处理："} {
+	for _, prefix := range presentation.TaskTitlePrefixes() {
 		if strings.HasPrefix(trimmed, prefix) {
 			return strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
 		}
@@ -133,9 +134,9 @@ func originalTextFromTaskTitle(title string) string {
 func confirmationTitleFromTask(task runengine.TaskRecord) string {
 	subject := strings.TrimSpace(originalTextFromTaskTitle(task.Title))
 	if subject == "" {
-		subject = "当前任务"
+		subject = presentation.Text(presentation.MessageTaskTitleCurrentTask, nil)
 	}
-	return "确认处理方式：" + subject
+	return presentation.TaskTitle("", presentation.TaskTitleOptions{Subject: subject})
 }
 
 // mergeSuggestedDeliveryPreference preserves explicit caller preferences and only

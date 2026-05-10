@@ -9,6 +9,7 @@ import (
 
 	intentsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
@@ -703,7 +704,7 @@ func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot taskco
 	continuationSnapshot := sanitizeContinuationUpdateSnapshot(baseSnapshot, snapshot)
 	mergedSnapshot := mergeContinuationSnapshots(baseSnapshot, continuationSnapshot)
 	if s.intent.AnalyzeSnapshot(mergedSnapshot) == "waiting_input" {
-		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已把补充内容挂回当前任务，请继续补充剩余信息。", time.Now().Format(dateTimeLayout))
+		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleContinuationNeedMore, nil), time.Now().Format(dateTimeLayout))
 		updatedTask, changed := s.runEngine.ContinueTask(task.TaskID, runengine.ContinuationUpdate{
 			Snapshot:      continuationSnapshot,
 			Status:        "waiting_input",
@@ -858,22 +859,22 @@ func withResolvedSessionID(params map[string]any, sessionID string) map[string]a
 func buildTaskContinuationBubbleText(snapshot taskcontext.TaskContextSnapshot, decision taskContinuationDecision) string {
 	subject := continuationSubject(snapshot)
 	if strings.TrimSpace(subject) == "" {
-		subject = "已把补充内容挂回当前任务。"
+		subject = presentation.Text(presentation.MessageBubbleContinuationDefault, nil)
 	}
 	return subject
 }
 
 func continuationSubject(snapshot taskcontext.TaskContextSnapshot) string {
 	if len(snapshot.Files) > 0 {
-		return fmt.Sprintf("已把 %d 个补充文件挂回当前任务。", len(snapshot.Files))
+		return presentation.Text(presentation.MessageBubbleContinuationFiles, presentation.CountParam(len(snapshot.Files)))
 	}
 	if strings.TrimSpace(snapshot.SelectionText) != "" {
-		return "已把补充选中文本挂回当前任务。"
+		return presentation.Text(presentation.MessageBubbleContinuationSelection, nil)
 	}
 	if strings.TrimSpace(snapshot.ErrorText) != "" {
-		return "已把补充报错信息挂回当前任务。"
+		return presentation.Text(presentation.MessageBubbleContinuationError, nil)
 	}
-	return "已把补充说明挂回当前任务。"
+	return presentation.Text(presentation.MessageBubbleContinuationText, nil)
 }
 
 func buildTaskContinuationInstruction(snapshot taskcontext.TaskContextSnapshot, explicitIntent map[string]any) string {

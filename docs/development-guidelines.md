@@ -111,6 +111,7 @@
 - `orchestrator/`：任务编排
 - `taskcontext/`：task-facing context capture service
 - `intent/`：入口判断、澄清与规划
+- `presentation/`：后端展示文案语义键与渲染
 - `memory/`：记忆管理
 - `delivery/`：正式交付
 - `governance/`：治理与反馈

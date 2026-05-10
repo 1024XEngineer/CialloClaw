@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
@@ -211,7 +212,7 @@ func bubbleTypeForSuggestion(requiresConfirm bool) string {
 func bubbleTextForInput(suggestion intent.Suggestion) string {
 	if suggestion.RequiresConfirm {
 		if !suggestion.IntentConfirmed {
-			return "我还不确定你想如何处理这段内容，请确认目标。"
+			return presentation.Text(presentation.MessageBubbleInputConfirmUnknown, nil)
 		}
 		return confirmIntentText(suggestion.Intent)
 	}
@@ -222,7 +223,7 @@ func bubbleTextForInput(suggestion intent.Suggestion) string {
 func bubbleTextForStart(suggestion intent.Suggestion) string {
 	if suggestion.RequiresConfirm {
 		if !suggestion.IntentConfirmed {
-			return "我还不确定你想如何处理当前对象，请先确认。"
+			return presentation.Text(presentation.MessageBubbleStartConfirmUnknown, nil)
 		}
 		return confirmIntentText(suggestion.Intent)
 	}
@@ -232,17 +233,17 @@ func bubbleTextForStart(suggestion intent.Suggestion) string {
 func confirmIntentText(taskIntent map[string]any) string {
 	switch stringValue(taskIntent, "name", "") {
 	case "translate":
-		return "你是想翻译这段内容吗？"
+		return presentation.Text(presentation.MessageBubbleConfirmTranslate, nil)
 	case "rewrite":
-		return "你是想改写这段内容吗？"
+		return presentation.Text(presentation.MessageBubbleConfirmRewrite, nil)
 	case "explain":
-		return "你是想解释这段内容吗？"
+		return presentation.Text(presentation.MessageBubbleConfirmExplain, nil)
 	case "summarize":
-		return "你是想总结这段内容吗？"
+		return presentation.Text(presentation.MessageBubbleConfirmSummarize, nil)
 	case "write_file":
-		return "你是想把结果整理成文档吗？"
+		return presentation.Text(presentation.MessageBubbleConfirmWriteFile, nil)
 	default:
-		return "请确认你希望我如何处理当前内容。"
+		return presentation.Text(presentation.MessageBubbleConfirmDefault, nil)
 	}
 }
 
@@ -254,9 +255,9 @@ func initialTimeline(status, currentStep string) []runengine.TaskStepRecord {
 		stepStatus = "pending"
 	}
 
-	outputSummary := "等待继续处理"
+	outputSummary := presentation.Text(presentation.MessageTimelineWaiting, nil)
 	if status == "waiting_input" {
-		outputSummary = "等待用户补充输入"
+		outputSummary = presentation.Text(presentation.MessageTimelineWaitingInput, nil)
 	}
 
 	return []runengine.TaskStepRecord{
@@ -265,7 +266,7 @@ func initialTimeline(status, currentStep string) []runengine.TaskStepRecord {
 			Name:          currentStep,
 			Status:        stepStatus,
 			OrderIndex:    1,
-			InputSummary:  "已识别到当前任务对象",
+			InputSummary:  presentation.Text(presentation.MessageTimelineInputSeen, nil),
 			OutputSummary: outputSummary,
 		},
 	}

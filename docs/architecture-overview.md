@@ -687,6 +687,7 @@ sequenceDiagram
 | 任务编排器                       | `services/local-service/internal/orchestrator`               |
 | 上下文归一                       | `services/local-service/internal/taskcontext`                |
 | 轻量意图建议                     | `services/local-service/internal/intent`                     |
+| 后端展示文案渲染                 | `services/local-service/internal/presentation`               |
 | 任务运行引擎                     | `services/local-service/internal/runengine`                  |
 | 受控执行循环                     | `services/local-service/internal/agentloop`                  |
 | 风险评估                         | `services/local-service/internal/risk`                       |

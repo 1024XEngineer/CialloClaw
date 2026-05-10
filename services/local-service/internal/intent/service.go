@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 )
@@ -110,72 +111,26 @@ func (s *Service) defaultIntent(snapshot taskcontext.TaskContextSnapshot) map[st
 // dashboard modules, and later memory summaries.
 func (s *Service) buildTaskTitle(snapshot taskcontext.TaskContextSnapshot, intentName string) string {
 	subject := subjectText(snapshot)
-	switch intentName {
-	case "":
-		return "确认处理方式：" + subject
-	case defaultAgentLoopIntent:
-		return "处理：" + subject
-	case "screen_analyze":
-		return "查看屏幕：" + screenSubjectText(snapshot)
-	case "rewrite":
-		return "改写：" + subject
-	case "translate":
-		return "翻译：" + subject
-	case "explain":
-		if snapshot.ErrorText != "" || snapshot.InputType == "error" {
-			return "解释错误：" + subject
-		}
-		return "解释：" + subject
-	case "summarize":
-		if len(snapshot.Files) > 0 || snapshot.InputType == "file" {
-			return "总结文件：" + subject
-		}
-		return "总结：" + subject
-	default:
-		return "处理：" + subject
+	if intentName == "screen_analyze" {
+		subject = screenSubjectText(snapshot)
 	}
+	return presentation.TaskTitle(intentName, presentation.TaskTitleOptions{
+		Subject:  subject,
+		HasError: snapshot.ErrorText != "" || snapshot.InputType == "error",
+		IsFile:   len(snapshot.Files) > 0 || snapshot.InputType == "file",
+	})
 }
 
 // buildResultTitle creates the formal delivery title used by delivery_result
 // and artifact views.
 func (s *Service) buildResultTitle(intentName string) string {
-	switch intentName {
-	case "":
-		return "待确认处理方式"
-	case defaultAgentLoopIntent:
-		return "处理结果"
-	case "screen_analyze":
-		return "屏幕分析结果"
-	case "rewrite":
-		return "改写结果"
-	case "translate":
-		return "翻译结果"
-	case "explain":
-		return "解释结果"
-	default:
-		return "处理结果"
-	}
+	return presentation.RenderResultSpec(intentName).Title
 }
 
 // buildResultBubbleText generates the completion bubble text shown after
 // delivery is ready.
 func (s *Service) buildResultBubbleText(intentName string) string {
-	switch intentName {
-	case "":
-		return "请先告诉我希望如何处理这段内容。"
-	case defaultAgentLoopIntent:
-		return "结果已经生成，可直接查看。"
-	case "screen_analyze":
-		return "已准备查看当前屏幕，等待授权后继续分析。"
-	case "rewrite":
-		return "内容已经按要求改写完成，可直接查看。"
-	case "translate":
-		return "翻译结果已经生成，可直接查看。"
-	case "explain":
-		return "这段内容的意思已经整理好了。"
-	default:
-		return "结果已经生成，可直接查看。"
-	}
+	return presentation.RenderResultSpec(intentName).BubbleText
 }
 
 // sourceTypeFromSnapshot maps trigger-level input semantics into the stable
@@ -231,10 +186,7 @@ func directDeliveryTypeForSnapshot(snapshot taskcontext.TaskContextSnapshot, int
 }
 
 func previewForDeliveryType(deliveryType string) string {
-	if deliveryType == "workspace_document" {
-		return "已为你写入文档并打开"
-	}
-	return "结果已通过气泡返回"
+	return presentation.DeliveryPreviewText(deliveryType)
 }
 
 func intentPayload(name string) map[string]any {
