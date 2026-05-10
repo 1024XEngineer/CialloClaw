@@ -796,8 +796,9 @@ func restoreNotepadItemsFromStore(items []storage.TodoItemRecord, rules []storag
 }
 
 // restoreStoredNoteTextOrigin preserves persisted provenance for title-only
-// notes and only falls back to content heuristics for legacy rows created
-// before the origin marker existed.
+// notes. Legacy rows without an explicit origin marker stay on the conservative
+// "keep the stored body" side because content equality alone is not enough
+// evidence to discard note_text during later task conversion.
 func restoreStoredNoteTextOrigin(item map[string]any, persistedOrigin string) string {
 	if origin := strings.TrimSpace(persistedOrigin); origin != "" {
 		return origin
@@ -805,11 +806,6 @@ func restoreStoredNoteTextOrigin(item map[string]any, persistedOrigin string) st
 	noteText := strings.TrimSpace(stringValue(item, "note_text", ""))
 	if noteText == "" {
 		return ""
-	}
-	title := strings.TrimSpace(stringValue(item, "title", "待办事项"))
-	suggestion := strings.TrimSpace(stringValue(item, "agent_suggestion", ""))
-	if noteText == deriveSyntheticNotepadNoteText(title, suggestion) {
-		return "derived_default"
 	}
 	return "user_provided"
 }
@@ -822,17 +818,18 @@ func restoreStoredRelatedResources(item map[string]any, resources []map[string]a
 		return nil
 	}
 
-	legacyDefaults := deriveNotepadRelatedResources(itemWithoutRelatedResources(item))
-	defaultsBySignature := make(map[string]struct{}, len(legacyDefaults)+4)
-	for _, resource := range legacyDefaults {
-		defaultsBySignature[relatedResourceSignature(resource)] = struct{}{}
-	}
-	for _, resource := range knownDerivedDefaultNotepadResources() {
-		defaultsBySignature[relatedResourceSignature(resource)] = struct{}{}
-	}
+	defaultResourceIDs := knownDerivedDefaultNotepadResourceIDs(stringValue(item, "item_id", ""))
+	defaultsBySignature := knownDerivedDefaultNotepadResourceSignatures()
 
 	for _, resource := range resources {
 		if strings.TrimSpace(stringValue(resource, "resource_origin", "")) != "" {
+			continue
+		}
+		resourceID := strings.TrimSpace(firstNonEmpty(
+			stringValue(resource, "resource_id", ""),
+			stringValue(resource, "id", ""),
+		))
+		if _, ok := defaultResourceIDs[resourceID]; !ok {
 			continue
 		}
 		if _, ok := defaultsBySignature[relatedResourceSignature(resource)]; ok {
@@ -842,8 +839,22 @@ func restoreStoredRelatedResources(item map[string]any, resources []map[string]a
 	return resources
 }
 
-func knownDerivedDefaultNotepadResources() []map[string]any {
-	return []map[string]any{
+func knownDerivedDefaultNotepadResourceIDs(itemID string) map[string]struct{} {
+	itemID = strings.TrimSpace(itemID)
+	if itemID == "" {
+		return nil
+	}
+	return map[string]struct{}{
+		itemID + "_rule_source": {},
+		itemID + "_archive":     {},
+		itemID + "_template":    {},
+		itemID + "_drafts":      {},
+		itemID + "_workspace":   {},
+	}
+}
+
+func knownDerivedDefaultNotepadResourceSignatures() map[string]struct{} {
+	defaultResources := []map[string]any{
 		{
 			"label":       "任务源目录",
 			"path":        defaultTaskSourcePath,
@@ -875,12 +886,12 @@ func knownDerivedDefaultNotepadResources() []map[string]any {
 			"target_kind": "folder",
 		},
 	}
-}
 
-func itemWithoutRelatedResources(item map[string]any) map[string]any {
-	cloned := cloneMap(item)
-	delete(cloned, "related_resources")
-	return cloned
+	signatures := make(map[string]struct{}, len(defaultResources))
+	for _, resource := range defaultResources {
+		signatures[relatedResourceSignature(resource)] = struct{}{}
+	}
+	return signatures
 }
 
 func relatedResourceSignature(resource map[string]any) string {

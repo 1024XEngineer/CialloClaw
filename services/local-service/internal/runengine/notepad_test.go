@@ -231,7 +231,7 @@ func TestEngineTodoStorePersistsAndReloadsNotepadState(t *testing.T) {
 	}
 }
 
-func TestEngineTodoStoreReloadMarksLegacySyntheticNoteTextAndDerivedResources(t *testing.T) {
+func TestEngineTodoStoreReloadKeepsAmbiguousLegacyNoteTextAndMarksGeneratedDerivedResources(t *testing.T) {
 	todoStore := storage.NewInMemoryTodoStore()
 	now := time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC)
 	legacySynthetic := deriveSyntheticNotepadNoteText("周报模板", "")
@@ -262,8 +262,8 @@ func TestEngineTodoStoreReloadMarksLegacySyntheticNoteTextAndDerivedResources(t 
 	if !ok {
 		t.Fatal("expected legacy note to reload from todo store")
 	}
-	if detail["note_text_origin"] != "derived_default" {
-		t.Fatalf("expected legacy synthetic note_text to be marked derived_default, got %+v", detail)
+	if detail["note_text_origin"] != "user_provided" {
+		t.Fatalf("expected ambiguous legacy note_text to stay on the conservative user_provided side, got %+v", detail)
 	}
 	resources, ok := detail["related_resources"].([]map[string]any)
 	if !ok || len(resources) != 2 {
@@ -273,6 +273,45 @@ func TestEngineTodoStoreReloadMarksLegacySyntheticNoteTextAndDerivedResources(t 
 		if resource["resource_origin"] != "derived_default" {
 			t.Fatalf("expected legacy fallback resource to be marked derived_default, got %+v", resources)
 		}
+	}
+}
+
+func TestEngineTodoStoreReloadKeepsUserAttachedFallbackPathResourcesExplicit(t *testing.T) {
+	todoStore := storage.NewInMemoryTodoStore()
+	now := time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC)
+
+	if err := todoStore.ReplaceTodoState(context.Background(), []storage.TodoItemRecord{{
+		ItemID:               "todo_user_templates",
+		Title:                "模板评审",
+		Bucket:               notepadBucketUpcoming,
+		Status:               "normal",
+		NoteText:             "请重点检查 workspace/templates 中这套模板。",
+		RelatedResourcesJSON: `[{"id":"user_templates_attachment","label":"关联模板","path":"workspace/templates","type":"directory","target_kind":"folder"}]`,
+		CreatedAt:            now.Format(time.RFC3339),
+		UpdatedAt:            now.Format(time.RFC3339),
+	}}, nil); err != nil {
+		t.Fatalf("seed user-attached todo store state failed: %v", err)
+	}
+
+	reloaded, err := NewEngineWithStore(storage.NewInMemoryTaskRunStore())
+	if err != nil {
+		t.Fatalf("new reload engine failed: %v", err)
+	}
+	reloaded.now = func() time.Time { return now }
+	if err := reloaded.WithTodoStore(todoStore); err != nil {
+		t.Fatalf("attach todo store on reload failed: %v", err)
+	}
+
+	detail, ok := reloaded.NotepadItem("todo_user_templates")
+	if !ok {
+		t.Fatal("expected explicit template note to reload from todo store")
+	}
+	resources, ok := detail["related_resources"].([]map[string]any)
+	if !ok || len(resources) != 1 {
+		t.Fatalf("expected explicit template resource to reload, got %+v", detail["related_resources"])
+	}
+	if _, marked := resources[0]["resource_origin"]; marked {
+		t.Fatalf("expected explicit template attachment to stay user-authored, got %+v", resources[0])
 	}
 }
 
