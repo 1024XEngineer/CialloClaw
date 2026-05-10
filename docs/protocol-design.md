@@ -590,6 +590,49 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ## 8.1 入口承接 / 语音 / 场景助手
 
+### 8.1.0 共享 `InputContext` 上下文字段
+
+`agent.input.submit` 与 `agent.task.start` 共享同一个稳定 `InputContext` 包。
+两条入口若传入 `context`，其字段集合与语义必须保持一致，不允许只在其中一条入口单独扩字段。
+
+| 字段 | 中文说明 |
+| ---- | -------- |
+| `context.page` | 当前页面上下文 |
+| `context.page.title` | 当前页面标题 |
+| `context.page.url` | 当前页面 URL |
+| `context.page.browser_kind` | 当前浏览器分类，取值为 `chrome / edge / other_browser / non_browser` |
+| `context.page.process_path` | 当前宿主进程路径 |
+| `context.page.process_id` | 当前宿主进程 ID |
+| `context.page.app_name` | 当前宿主应用名 |
+| `context.page.window_title` | 当前窗口标题 |
+| `context.page.visible_text` | 当前页面可见文本摘录 |
+| `context.page.hover_target` | 当前悬停目标摘要，按需传入 |
+| `context.screen.summary` | 当前屏幕摘要，可用于视觉型任务上下文 |
+| `context.screen.screen_summary` | 当前屏幕摘要的结构化别名，按需传入 |
+| `context.screen.visible_text` | 当前屏幕可见文本摘录 |
+| `context.screen.window_title` | 当前屏幕对应窗口标题，按需传入 |
+| `context.screen.hover_target` | 当前屏幕上的悬停目标摘要，按需传入 |
+| `context.behavior.last_action` | 最近行为信号，例如 `copy` |
+| `context.behavior.dwell_millis` | 当前场景停留时长 |
+| `context.behavior.copy_count` | 最近复制次数，按需传入 |
+| `context.behavior.window_switch_count` | 最近窗口切换次数，按需传入 |
+| `context.behavior.page_switch_count` | 最近页面切换次数，按需传入 |
+| `context.selection.text` | 当前选区补充文本，按需传入 |
+| `context.error.message` | 当前错误文本，按需传入 |
+| `context.clipboard.text` | 当前剪贴板文本，按需传入 |
+| `context.text` | 当前自由文本补充，按需传入 |
+| `context.selection_text` | 当前选区的平铺补充文本，按需传入 |
+| `context.files` | 当前附带文件列表，按需传入 |
+| `context.file_paths` | 兼容文件路径列表，按需传入 |
+| `context.screen_summary` | 当前屏幕摘要的平铺别名，按需传入 |
+| `context.clipboard_text` | 当前剪贴板文本的平铺别名，按需传入 |
+| `context.hover_target` | 当前悬停目标摘要的平铺别名，按需传入 |
+| `context.last_action` | 最近行为信号的平铺别名，按需传入 |
+| `context.dwell_millis` | 当前场景停留时长的平铺别名，按需传入 |
+| `context.copy_count` | 最近复制次数的平铺别名，按需传入 |
+| `context.window_switch_count` | 最近窗口切换次数的平铺别名，按需传入 |
+| `context.page_switch_count` | 最近页面切换次数的平铺别名，按需传入 |
+
 ### 8.1.1 `agent.input.submit`
 
 - **请求方式**：JSON-RPC 2.0
@@ -617,21 +660,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `input.type`                 | 输入对象类型，固定为 `text`    |
 | `input.text`                 | 用户输入文本                   |
 | `input.input_mode`           | 输入模式，语音或文字           |
-| `context.page`               | 当前页面上下文                 |
-| `context.page.title`         | 当前页面标题                   |
-| `context.page.url`           | 当前页面 URL                   |
-| `context.page.browser_kind`  | 当前浏览器分类，取值为 `chrome / edge / other_browser / non_browser` |
-| `context.page.process_path`  | 当前宿主进程路径               |
-| `context.page.process_id`    | 当前宿主进程 ID                |
-| `context.page.app_name`      | 当前宿主应用名                 |
-| `context.page.window_title`  | 当前窗口标题                   |
-| `context.page.visible_text`  | 当前页面可见文本摘录           |
-| `context.selection.text`     | 当前选中文本                   |
-| `context.files`              | 当前附带文件列表               |
-| `context.screen.summary`     | 当前屏幕摘要，可用于视觉型任务上下文 |
-| `context.screen.visible_text` | 当前屏幕可见文本摘录          |
-| `context.behavior.last_action` | 最近行为信号，例如 `copy`    |
-| `context.behavior.dwell_millis` | 当前场景停留时长             |
+| `context`                    | 共享上下文包，字段定义见上方共享 `InputContext` 表 |
 | `voice_meta`                 | 语音会话元信息                 |
 | `options.confirm_required`   | 是否强制先进入意图确认         |
 | `options.preferred_delivery` | 偏好的结果交付方式             |
@@ -808,15 +837,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `input.page_context.app_name` | 当前宿主应用名 |
 | `input.page_context.window_title` | 当前窗口标题 |
 | `input.page_context.visible_text` | 当前页面可见文本摘录 |
-| `context.selection.text`   | 当前选区补充文本，按需传入 |
-| `context.selection_text`   | 当前选区的平铺补充文本，按需传入 |
-| `context.files`            | 补充文件上下文，按需传入 |
-| `context.file_paths`       | 兼容文件路径列表，按需传入 |
-| `context.error.message`    | 当前错误文本，按需传入 |
-| `context.screen.summary`   | 当前屏幕摘要，可用于视觉型任务上下文 |
-| `context.screen.visible_text` | 当前屏幕可见文本摘录 |
-| `context.behavior.last_action` | 最近行为信号，例如 `copy` |
-| `context.behavior.dwell_millis` | 当前场景停留时长 |
+| `context`                  | 共享上下文包，字段定义见上方共享 `InputContext` 表 |
 | `delivery.preferred`       | 优先交付方式 |
 | `delivery.fallback`        | 兜底交付方式 |
 | `options.confirm_required` | 是否强制先进入意图确认；不用于绕过风险授权 |
