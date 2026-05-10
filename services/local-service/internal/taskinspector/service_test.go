@@ -24,11 +24,16 @@ import (
 type stubModelClient struct {
 	output string
 	calls  *atomic.Int32
+	wait   bool
 }
 
-func (s stubModelClient) GenerateText(_ context.Context, _ model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+func (s stubModelClient) GenerateText(ctx context.Context, _ model.GenerateTextRequest) (model.GenerateTextResponse, error) {
 	if s.calls != nil {
 		s.calls.Add(1)
+	}
+	if s.wait {
+		<-ctx.Done()
+		return model.GenerateTextResponse{}, ctx.Err()
 	}
 	return model.GenerateTextResponse{OutputText: s.output}, nil
 }
@@ -507,6 +512,139 @@ func TestServiceRunSkipsModelForPlainChecklistTitles(t *testing.T) {
 	}
 	if got := callCount.Load(); got != 0 {
 		t.Fatalf("expected plain checklist item to skip title model call, got %d calls", got)
+	}
+}
+
+func TestServiceRunPreservesGeneratedTitlesAcrossAutomaticSync(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "weekly.md"), []byte("- [ ] Weekly retro\n  note: review blockers and next steps\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"每周复盘阻塞项"}`,
+	})))
+
+	manualResult, err := service.Run(RunInput{
+		AllowGeneratedTitles: true,
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+	})
+	if err != nil {
+		t.Fatalf("manual Run returned error: %v", err)
+	}
+	if manualResult.NotepadItems[0]["title"] != "每周复盘阻塞项" {
+		t.Fatalf("expected manual run to generate note title, got %+v", manualResult.NotepadItems)
+	}
+
+	autoResult, err := service.Run(RunInput{
+		Config:       map[string]any{"task_sources": []string{"workspace/todos"}},
+		NotepadItems: manualResult.NotepadItems,
+	})
+	if err != nil {
+		t.Fatalf("automatic Run returned error: %v", err)
+	}
+	if autoResult.NotepadItems[0]["title"] != "每周复盘阻塞项" {
+		t.Fatalf("expected automatic sync to preserve unchanged generated title, got %+v", autoResult.NotepadItems)
+	}
+}
+
+func TestServiceRunResetsPreservedGeneratedTitlesWhenSourceChanges(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	notePath := filepath.Join(workspaceRoot, "todos", "weekly.md")
+	if err := os.WriteFile(notePath, []byte("- [ ] Weekly retro\n  note: review blockers and next steps\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"每周复盘阻塞项"}`,
+	})))
+
+	manualResult, err := service.Run(RunInput{
+		AllowGeneratedTitles: true,
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+	})
+	if err != nil {
+		t.Fatalf("manual Run returned error: %v", err)
+	}
+
+	if err := os.WriteFile(notePath, []byte("- [ ] Weekly retro\n  note: owners and rollback plan\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	autoResult, err := service.Run(RunInput{
+		Config:       map[string]any{"task_sources": []string{"workspace/todos"}},
+		NotepadItems: manualResult.NotepadItems,
+	})
+	if err != nil {
+		t.Fatalf("automatic Run returned error: %v", err)
+	}
+	if autoResult.NotepadItems[0]["title"] != "owners and rollback p..." {
+		t.Fatalf("expected changed note content to drop preserved generated title, got %+v", autoResult.NotepadItems)
+	}
+}
+
+func TestServiceRunBoundsManualGeneratedTitleLatency(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	content := strings.Join([]string{
+		"- [ ] Weekly retro",
+		"  note: review blockers and next steps",
+		"- [ ] Release checklist",
+		"  note: verify owners and rollback steps",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "weekly.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	previousTimeout := manualGeneratedTitleTimeout
+	manualGeneratedTitleTimeout = 5 * time.Millisecond
+	defer func() {
+		manualGeneratedTitleTimeout = previousTimeout
+	}()
+
+	service := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		wait: true,
+	})))
+
+	start := time.Now()
+	result, err := service.Run(RunInput{
+		AllowGeneratedTitles: true,
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if len(result.NotepadItems) != 2 {
+		t.Fatalf("expected parsed notes, got %+v", result.NotepadItems)
+	}
+	if elapsed := time.Since(start); elapsed > 80*time.Millisecond {
+		t.Fatalf("expected manual generation path to honor the shorter request timeout, got %s", elapsed)
+	}
+	if result.NotepadItems[0]["title"] != "review blockers and n..." {
+		t.Fatalf("expected first timed-out note to keep fallback title, got %+v", result.NotepadItems[0])
 	}
 }
 

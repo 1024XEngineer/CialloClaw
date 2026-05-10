@@ -116,7 +116,23 @@ func TestSuggestCompactsMergedConversationIntoShorterTaskTitle(t *testing.T) {
 		}, "\n\n"),
 	}, nil, false)
 
-	if suggestion.TaskTitle != "整理这次发布复盘 重点补齐风险项和后..." {
+	if suggestion.TaskTitle != "整理这次发布复盘 重点补齐风险项和后续跟进..." {
 		t.Fatalf("expected fallback task title to remain bounded before model generation, got %q", suggestion.TaskTitle)
+	}
+}
+
+func TestSuggestFallbackTitleUsesLaterContextWhenFirstSentenceIsLong(t *testing.T) {
+	service := NewService()
+
+	suggestion := service.Suggest(taskcontext.TaskContextSnapshot{
+		InputType: "text",
+		Text: strings.Join([]string{
+			"请帮我把这段很长很长的发布说明重新整理成适合群里同步的版本并补齐背景信息",
+			"重点保留回滚方案",
+		}, "\n"),
+	}, nil, true)
+
+	if suggestion.TaskTitle != "把这段很长很长的发布说明重新整理成适合群里..." {
+		t.Fatalf("expected local fallback to compact the full text instead of a pre-truncated first sentence, got %q", suggestion.TaskTitle)
 	}
 }

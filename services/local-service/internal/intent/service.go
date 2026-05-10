@@ -8,7 +8,6 @@ import (
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/titlegen"
 )
 
@@ -247,17 +246,17 @@ func subjectText(snapshot taskcontext.TaskContextSnapshot) string {
 	case len(snapshot.Files) > 0:
 		return filepath.Base(snapshot.Files[0])
 	case strings.TrimSpace(snapshot.SelectionText) != "":
-		return truncateText(snapshot.SelectionText, subjectPreviewMaxLength)
+		return normalizeSubjectSource(snapshot.SelectionText)
 	case strings.TrimSpace(snapshot.Text) != "":
-		return truncateText(snapshot.Text, subjectPreviewMaxLength)
+		return normalizeSubjectSource(snapshot.Text)
 	case strings.TrimSpace(snapshot.ErrorText) != "":
-		return truncateText(snapshot.ErrorText, subjectPreviewMaxLength)
+		return normalizeSubjectSource(snapshot.ErrorText)
 	case strings.TrimSpace(snapshot.PageTitle) != "":
-		return truncateText(snapshot.PageTitle, subjectPreviewMaxLength)
+		return normalizeSubjectSource(snapshot.PageTitle)
 	case strings.TrimSpace(snapshot.WindowTitle) != "":
-		return truncateText(snapshot.WindowTitle, subjectPreviewMaxLength)
+		return normalizeSubjectSource(snapshot.WindowTitle)
 	case strings.TrimSpace(snapshot.ScreenSummary) != "":
-		return truncateText(snapshot.ScreenSummary, subjectPreviewMaxLength)
+		return normalizeSubjectSource(snapshot.ScreenSummary)
 	default:
 		return "当前内容"
 	}
@@ -266,9 +265,9 @@ func subjectText(snapshot taskcontext.TaskContextSnapshot) string {
 func screenSubjectText(snapshot taskcontext.TaskContextSnapshot) string {
 	switch {
 	case strings.TrimSpace(snapshot.PageTitle) != "":
-		return truncateText(snapshot.PageTitle, subjectPreviewMaxLength)
+		return normalizeSubjectSource(snapshot.PageTitle)
 	case strings.TrimSpace(snapshot.WindowTitle) != "":
-		return truncateText(snapshot.WindowTitle, subjectPreviewMaxLength)
+		return normalizeSubjectSource(snapshot.WindowTitle)
 	default:
 		return subjectText(snapshot)
 	}
@@ -338,8 +337,8 @@ func isLongContent(text string) bool {
 	return strings.Contains(trimmed, "\n") || utf8.RuneCountInString(trimmed) >= 80
 }
 
-func truncateText(value string, maxLength int) string {
-	return textutil.TruncateGraphemes(strings.Join(strings.Fields(value), " "), maxLength)
+func normalizeSubjectSource(value string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
 }
 
 // stringValue safely reads a string field from an intent payload.

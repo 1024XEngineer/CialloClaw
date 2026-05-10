@@ -29,6 +29,8 @@ const (
 	defaultGeneratedTitleLimit = 3
 )
 
+var manualGeneratedTitleTimeout = 750 * time.Millisecond
+
 // Service builds inspection results from workspace, notepad, and runtime task state.
 type Service struct {
 	fileSystem platform.FileSystemAdapter
@@ -100,6 +102,7 @@ func (s *Service) Run(input RunInput) (RunResult, error) {
 	if err != nil {
 		return RunResult{}, err
 	}
+	parsedNotepadItems = preserveExistingGeneratedTitles(parsedNotepadItems, input.NotepadItems)
 	resolvedNotepadItems := cloneMapSlice(input.NotepadItems)
 	if sourceSynced {
 		resolvedNotepadItems = cloneMapSlice(parsedNotepadItems)
@@ -563,7 +566,9 @@ func (s *Service) normalizeParsedNotepadItem(item map[string]any, sourcePath str
 			// Consume the manual-generation budget only for cache misses that will
 			// actually call the title model, so repeated inspector passes do not let
 			// earlier cached notes starve later uncached notes.
-			item["title"] = s.titlegen.GenerateNoteTitle(context.Background(), item, fallbackTitle)
+			generationCtx, cancel := context.WithTimeout(context.Background(), manualGeneratedTitleTimeout)
+			item["title"] = s.titlegen.GenerateNoteTitle(generationCtx, item, fallbackTitle)
+			cancel()
 		} else {
 			item["title"] = fallbackTitle
 		}
@@ -814,6 +819,61 @@ func canGenerateTitleNow(remaining *int) bool {
 	}
 	*remaining--
 	return true
+}
+
+func preserveExistingGeneratedTitles(parsedItems []map[string]any, existingItems []map[string]any) []map[string]any {
+	if len(parsedItems) == 0 || len(existingItems) == 0 {
+		return parsedItems
+	}
+
+	existingByID := make(map[string]map[string]any, len(existingItems))
+	for _, item := range existingItems {
+		itemID := strings.TrimSpace(stringValue(item, "item_id"))
+		if itemID == "" || strings.TrimSpace(stringValue(item, "source_path")) == "" {
+			continue
+		}
+		existingByID[itemID] = item
+	}
+
+	for _, item := range parsedItems {
+		itemID := strings.TrimSpace(stringValue(item, "item_id"))
+		if itemID == "" {
+			continue
+		}
+		existing, ok := existingByID[itemID]
+		if !ok || !sameGeneratedTitleSource(existing, item) {
+			continue
+		}
+		fallbackTitle := titlegen.CompactNoteFallback(firstNonEmpty(
+			stringValue(item, "note_text"),
+			stringValue(item, "title"),
+			"待办事项",
+		))
+		if strings.TrimSpace(stringValue(item, "title")) != fallbackTitle {
+			continue
+		}
+		existingTitle := strings.TrimSpace(stringValue(existing, "title"))
+		if existingTitle == "" || existingTitle == fallbackTitle {
+			continue
+		}
+		item["title"] = existingTitle
+	}
+
+	return parsedItems
+}
+
+func sameGeneratedTitleSource(left map[string]any, right map[string]any) bool {
+	return generatedTitleSourceKey(left) == generatedTitleSourceKey(right)
+}
+
+func generatedTitleSourceKey(item map[string]any) string {
+	return strings.Join([]string{
+		strings.TrimSpace(stringValue(item, "item_id")),
+		strings.TrimSpace(stringValue(item, "note_text")),
+		strings.TrimSpace(stringValue(item, "agent_suggestion")),
+		strings.TrimSpace(stringValue(item, "prerequisite")),
+		strings.TrimSpace(stringValue(item, "repeat_rule_text")),
+	}, "\x00")
 }
 
 func countOpenNotepadItems(items []map[string]any) int {
