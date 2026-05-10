@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -20,7 +20,7 @@ func TestServiceCaptureBuildsTraceAndEvalRecords(t *testing.T) {
 		TaskID:     "task_trace",
 		RunID:      "run_trace",
 		IntentName: "agent_loop",
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			Text:      "please inspect this note",
 			PageTitle: "Release Dashboard",
 		},
@@ -93,7 +93,7 @@ func TestServiceCaptureEscalatesDoomLoopToHumanReview(t *testing.T) {
 		TaskID:     "task_loop",
 		RunID:      "run_loop",
 		IntentName: "agent_loop",
-		Snapshot:   contextsvc.TaskContextSnapshot{Text: "keep trying"},
+		Snapshot:   taskcontext.TaskContextSnapshot{Text: "keep trying"},
 		ToolCalls: []tools.ToolCallRecord{
 			{ToolName: "read_file", Input: map[string]any{"path": "workspace/a.md"}, Status: tools.ToolCallStatusFailed, ErrorCode: intPtr(1001), Output: map[string]any{"loop_round": 3}},
 			{ToolName: "read_file", Input: map[string]any{"path": "workspace/a.md"}, Status: tools.ToolCallStatusFailed, ErrorCode: intPtr(1001), Output: map[string]any{"loop_round": 3}},
@@ -141,7 +141,7 @@ func TestTraceEvalHelpersCoverErrorAndFilePriorityBranches(t *testing.T) {
 		TaskID:     "task_file",
 		RunID:      "run_file",
 		IntentName: "agent_loop",
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			Files:         []string{"workspace/specs/report.md"},
 			VisibleText:   "visible page text",
 			ClipboardText: "clipboard",
@@ -156,7 +156,7 @@ func TestTraceEvalHelpersCoverErrorAndFilePriorityBranches(t *testing.T) {
 	if buildInputSummary(input) != "workspace/specs/report.md" {
 		t.Fatalf("expected file input to outrank perception text, got %q", buildInputSummary(input))
 	}
-	textInput := CaptureInput{Snapshot: contextsvc.TaskContextSnapshot{SelectionText: "secret copied token", ClipboardText: "another secret"}}
+	textInput := CaptureInput{Snapshot: taskcontext.TaskContextSnapshot{SelectionText: "secret copied token", ClipboardText: "another secret"}}
 	textSummary := buildInputSummary(textInput)
 	if strings.Contains(textSummary, "secret copied token") || strings.Contains(textSummary, "another secret") {
 		t.Fatalf("expected hashed trace input summary instead of raw text, got %q", textSummary)

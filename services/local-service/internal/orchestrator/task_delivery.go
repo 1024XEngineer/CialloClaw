@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 )
@@ -242,7 +243,7 @@ func normalizeDeliveryOpenResult(artifact map[string]any, deliveryResult map[str
 		resolved["type"] = "task_detail"
 	}
 	if stringValue(resolved, "title", "") == "" {
-		resolved["title"] = "任务交付结果"
+		resolved["title"] = presentation.Text(presentation.MessageResultTitleTaskDelivery, nil)
 	}
 	if stringValue(resolved, "preview_text", "") == "" {
 		resolved["preview_text"] = stringValue(resolved, "title", "")
@@ -285,36 +286,8 @@ func normalizeTaskDetailDeliveryResult(taskID string, deliveryResult map[string]
 // resultSpecFromIntent returns the default result title, preview text, and
 // completion bubble text for an intent.
 func resultSpecFromIntent(taskIntent map[string]any) (string, string, string) {
-	switch stringValue(taskIntent, "name", "summarize") {
-	case "agent_loop":
-		return "处理结果", "结果已通过气泡返回", "结果已经生成，可直接查看。"
-	case "rewrite":
-		return "改写结果", "已为你写入文档并打开", "内容已经按要求改写完成，可直接查看。"
-	case "translate":
-		return "翻译结果", "结果已通过气泡返回", "翻译结果已经生成，可直接查看。"
-	case "explain":
-		return "解释结果", "结果已通过气泡返回", "这段内容的意思已经整理好了。"
-	case "page_read":
-		return "网页读取结果", "结果已通过气泡返回", "网页主要内容已经整理完成，可直接查看。"
-	case "page_search":
-		return "网页搜索结果", "结果已通过气泡返回", "网页搜索结果已经返回，可直接查看。"
-	case "browser_attach_current":
-		return "浏览器附着结果", "结果已通过气泡返回", "当前浏览器页已经附着成功，可继续操作。"
-	case "browser_snapshot":
-		return "浏览器快照结果", "结果已通过气泡返回", "当前浏览器页的关键信息已经整理完成，可直接查看。"
-	case "browser_tabs_list":
-		return "浏览器标签页结果", "结果已通过气泡返回", "当前浏览器标签页列表已经返回，可直接查看。"
-	case "browser_navigate":
-		return "浏览器导航结果", "结果已通过气泡返回", "当前浏览器页已经导航完成，可继续查看。"
-	case "browser_tab_focus":
-		return "浏览器切页结果", "结果已通过气泡返回", "目标浏览器标签页已经切换完成，可继续查看。"
-	case "browser_interact":
-		return "浏览器交互结果", "结果已通过气泡返回", "当前浏览器页交互已经完成，可继续查看。"
-	case "write_file":
-		return "文件写入结果", "已为你写入文档并打开", "文件已经生成，可直接查看。"
-	default:
-		return "处理结果", "已为你写入文档并打开", "结果已经生成，可直接查看。"
-	}
+	spec := presentation.RenderResultSpec(stringValue(taskIntent, "name", "summarize"))
+	return spec.Title, spec.Preview, spec.BubbleText
 }
 
 // deliveryTypeFromIntent returns the default delivery type for an intent.
@@ -619,8 +592,5 @@ func normalizeDeliveryType(deliveryType string) string {
 
 // previewTextForDeliveryType returns the preview copy for each delivery type.
 func previewTextForDeliveryType(deliveryType string) string {
-	if deliveryType == "bubble" {
-		return "\u7ed3\u679c\u5df2\u901a\u8fc7\u6c14\u6ce1\u8fd4\u56de"
-	}
-	return "\u5df2\u4e3a\u4f60\u5199\u5165\u6587\u6863\u5e76\u6253\u5f00"
+	return presentation.DeliveryPreviewText(deliveryType)
 }

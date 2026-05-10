@@ -14,8 +14,8 @@ import (
 	"time"
 
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 const (
@@ -66,7 +66,7 @@ type TaskRecord struct {
 	Citations         []map[string]any
 	AuditRecords      []map[string]any
 	MirrorReferences  []map[string]any
-	Snapshot          contextsvc.TaskContextSnapshot
+	Snapshot          taskcontext.TaskContextSnapshot
 	SecuritySummary   map[string]any
 	ApprovalRequest   map[string]any
 	PendingExecution  map[string]any
@@ -138,13 +138,13 @@ type CreateTaskInput struct {
 	Artifacts         []map[string]any
 	Citations         []map[string]any
 	MirrorReferences  []map[string]any
-	Snapshot          contextsvc.TaskContextSnapshot
+	Snapshot          taskcontext.TaskContextSnapshot
 }
 
 // ContinuationUpdate captures the minimum runtime state changes required when a
 // later desktop input should stay on the same task instead of opening a new one.
 type ContinuationUpdate struct {
-	Snapshot        contextsvc.TaskContextSnapshot
+	Snapshot        taskcontext.TaskContextSnapshot
 	Title           string
 	Intent          map[string]any
 	Status          string
@@ -2421,7 +2421,7 @@ func cloneTimeline(timeline []TaskStepRecord) []TaskStepRecord {
 	return result
 }
 
-func mergeTaskSnapshot(base, update contextsvc.TaskContextSnapshot) contextsvc.TaskContextSnapshot {
+func mergeTaskSnapshot(base, update taskcontext.TaskContextSnapshot) taskcontext.TaskContextSnapshot {
 	merged := base
 	merged.Source = pickLastNonEmpty(base.Source, update.Source)
 	merged.Trigger = pickLastNonEmpty(base.Trigger, update.Trigger)
@@ -3605,7 +3605,7 @@ func maxInt(primary, fallback int) int {
 	return fallback
 }
 
-func cloneContextSnapshot(snapshot contextsvc.TaskContextSnapshot) contextsvc.TaskContextSnapshot {
+func cloneContextSnapshot(snapshot taskcontext.TaskContextSnapshot) taskcontext.TaskContextSnapshot {
 	cloned := snapshot
 	if len(snapshot.Files) > 0 {
 		cloned.Files = append([]string(nil), snapshot.Files...)
