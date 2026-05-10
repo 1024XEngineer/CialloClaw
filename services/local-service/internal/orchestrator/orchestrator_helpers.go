@@ -45,14 +45,50 @@ func cloneTimePointer(value *time.Time) *time.Time {
 	return &cloned
 }
 
+// notepadSnapshot rebuilds a free-text task snapshot from one notepad item so
+// convert_to_task can reuse the normal task pipeline without narrowing the
+// user's goal into a notepad-specific intent bucket first.
 func notepadSnapshot(item map[string]any) contextsvc.TaskContextSnapshot {
+	text := firstNonEmptyString(
+		stringValue(item, "note_text", ""),
+		stringValue(item, "title", ""),
+	)
+
 	return contextsvc.TaskContextSnapshot{
 		Source:    "dashboard",
+		Trigger:   "recommendation_click",
 		InputType: "text",
-		Text:      stringValue(item, "title", ""),
+		InputMode: "text",
+		Text:      text,
+		Files:     notepadResourcePaths(item),
 		PageTitle: "notepad",
 		AppName:   "dashboard",
 	}
+}
+
+func notepadResourcePaths(item map[string]any) []string {
+	resources, ok := item["related_resources"].([]map[string]any)
+	if !ok {
+		return nil
+	}
+
+	paths := make([]string, 0, len(resources))
+	for _, resource := range resources {
+		path := strings.TrimSpace(stringValue(resource, "path", ""))
+		if path == "" {
+			continue
+		}
+
+		switch strings.TrimSpace(stringValue(resource, "resource_type", "")) {
+		case "file", "folder":
+			paths = append(paths, path)
+		}
+	}
+
+	if len(paths) == 0 {
+		return nil
+	}
+	return paths
 }
 
 func latestOutputPathFromTasks(tasks []runengine.TaskRecord) string {

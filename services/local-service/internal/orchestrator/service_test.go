@@ -2556,7 +2556,7 @@ func TestServiceNotepadListReturnsRuntimeItemsByBucket(t *testing.T) {
 }
 
 func TestServiceNotepadConvertToTaskUsesRuntimeItemWithoutClosingTodo(t *testing.T) {
-	service := newTestService()
+	service, _ := newTestServiceWithExecution(t, "Converted notepad task finished.")
 	now := time.Date(2026, 4, 10, 9, 0, 0, 0, time.UTC)
 	service.runEngine.ReplaceNotepadItems([]map[string]any{
 		{
@@ -2567,6 +2567,14 @@ func TestServiceNotepadConvertToTaskUsesRuntimeItemWithoutClosingTodo(t *testing
 			"type":             "todo_item",
 			"due_at":           now.Add(3 * time.Hour).Format(time.RFC3339),
 			"agent_suggestion": "translate into English",
+			"note_text":        "Finish the computer homework before tonight and use the materials in workspace/homework.",
+			"related_resources": []map[string]any{
+				{
+					"resource_id":   "todo_translate_homework",
+					"path":          "workspace/homework",
+					"resource_type": "folder",
+				},
+			},
 		},
 	})
 
@@ -2579,16 +2587,19 @@ func TestServiceNotepadConvertToTaskUsesRuntimeItemWithoutClosingTodo(t *testing
 	}
 
 	task := result["task"].(map[string]any)
-	if task["title"] != "translate the meeting notes" {
-		t.Fatalf("expected converted task title to come from runtime notepad item, got %v", task["title"])
+	if task["title"] != "处理：homework" {
+		t.Fatalf("expected converted task title to follow the reused task subject builder, got %v", task["title"])
 	}
 	if task["source_type"] != "todo" {
 		t.Fatalf("expected converted task source_type todo, got %v", task["source_type"])
 	}
+	if task["status"] == "confirming_intent" || task["current_step"] == "intent_confirmation" {
+		t.Fatalf("expected confirmed notepad conversion to skip narrowed intent confirmation, got %+v", task)
+	}
 
 	intentValue := task["intent"].(map[string]any)
-	if intentValue["name"] != "translate" {
-		t.Fatalf("expected runtime notepad conversion to infer translate intent, got %v", intentValue["name"])
+	if intentValue["name"] != "agent_loop" {
+		t.Fatalf("expected runtime notepad conversion to stay on agent_loop, got %v", intentValue["name"])
 	}
 
 	taskID := task["task_id"].(string)
@@ -2598,6 +2609,15 @@ func TestServiceNotepadConvertToTaskUsesRuntimeItemWithoutClosingTodo(t *testing
 	}
 	if len(record.MemoryReadPlans) == 0 {
 		t.Fatal("expected converted task to attach memory read plans")
+	}
+	if record.Snapshot.Text != "Finish the computer homework before tonight and use the materials in workspace/homework." {
+		t.Fatalf("expected notepad note_text to drive task snapshot text, got %+v", record.Snapshot)
+	}
+	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "workspace/homework" {
+		t.Fatalf("expected related resource paths to enter task snapshot, got %+v", record.Snapshot.Files)
+	}
+	if result["delivery_result"] == nil {
+		t.Fatal("expected confirmed notepad conversion to reuse formal delivery flow")
 	}
 
 	sourceItem := result["notepad_item"].(map[string]any)
@@ -2618,6 +2638,43 @@ func TestServiceNotepadConvertToTaskUsesRuntimeItemWithoutClosingTodo(t *testing
 	}
 	if upcomingItems[0]["linked_task_id"] != taskID {
 		t.Fatalf("expected runtime notepad item to keep linked_task_id, got %+v", upcomingItems[0])
+	}
+}
+
+func TestServiceNotepadConvertToTaskFallsBackToTitleAndIgnoresNonPathResources(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Converted title-only notepad task finished.")
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":   "todo_title_only",
+		"title":     "整理明天评审要点",
+		"bucket":    "upcoming",
+		"status":    "normal",
+		"type":      "todo_item",
+		"note_text": "",
+		"related_resources": []map[string]any{{
+			"resource_id":   "todo_title_only_link",
+			"url":           "https://example.com/review",
+			"resource_type": "link",
+		}},
+	}})
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_title_only",
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected converted task to remain available in runtime")
+	}
+	if record.Snapshot.Text != "整理明天评审要点。当前处于便签巡检域，等待进入正式执行。" {
+		t.Fatalf("expected title fallback to keep the derived notepad note text, got %+v", record.Snapshot)
+	}
+	if len(record.Snapshot.Files) != 0 {
+		t.Fatalf("expected non-path resources to stay out of task snapshot files, got %+v", record.Snapshot.Files)
 	}
 }
 

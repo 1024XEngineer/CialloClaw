@@ -3,8 +3,9 @@ package orchestrator
 import (
 	"errors"
 	"fmt"
-	"strings"
 
+	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 )
 
@@ -81,19 +82,17 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 		}
 	}()
 
-	itemTitle := stringValue(item, "title", "待办事项")
-	taskIntent := notepadIntent(item)
-	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
-		RequestSource: "dashboard",
-		Title:         itemTitle,
-		SourceType:    "todo",
-		Status:        "confirming_intent",
-		Intent:        taskIntent,
-		CurrentStep:   "intent_confirmation",
-		RiskLevel:     s.risk.DefaultLevel(),
-		Timeline:      initialTimeline("confirming_intent", "intent_confirmation"),
-	})
-	s.attachMemoryReadPlans(task.TaskID, task.RunID, notepadSnapshot(item), taskIntent)
+	snapshot := notepadSnapshot(item)
+	suggestion := s.intent.Suggest(snapshot, nil, false)
+	task := s.createNotepadTask(snapshot, suggestion)
+	response, err := s.finishNotepadTask(snapshot, suggestion, task)
+	if err != nil {
+		if rollbackErr := s.runEngine.DeleteTask(task.TaskID); rollbackErr != nil {
+			return nil, errors.Join(err, fmt.Errorf("rollback task %s: %w", task.TaskID, rollbackErr))
+		}
+		return nil, err
+	}
+
 	updatedItem, ok := s.runEngine.LinkNotepadItemTask(itemID, task.TaskID)
 	if !ok {
 		linkErr := fmt.Errorf("failed to link notepad item to task: %s", itemID)
@@ -104,42 +103,59 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 	}
 	claimed = false
 
-	return map[string]any{
-		"task":           taskMap(task),
-		"notepad_item":   updatedItem,
-		"refresh_groups": []string{stringValue(updatedItem, "bucket", "upcoming")},
-	}, nil
+	response["notepad_item"] = updatedItem
+	response["refresh_groups"] = []string{stringValue(updatedItem, "bucket", "upcoming")}
+	return response, nil
 }
 
-// defaultIntentMap creates a minimal default intent payload for notepad
-// conversions.
-func defaultIntentMap(name string) map[string]any {
-	arguments := map[string]any{}
-	if name == "summarize" {
-		arguments["style"] = "key_points"
-	}
-	if name == "rewrite" {
-		arguments["tone"] = "professional"
-	}
-	return map[string]any{
-		"name":      name,
-		"arguments": arguments,
-	}
+func (s *Service) createNotepadTask(snapshot contextsvc.TaskContextSnapshot, suggestion intent.Suggestion) runengine.TaskRecord {
+	status := taskStatusForSuggestion(suggestion.RequiresConfirm)
+	currentStep := currentStepForSuggestion(suggestion.RequiresConfirm, suggestion.Intent)
+	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
+		RequestSource:     snapshot.Source,
+		RequestTrigger:    snapshot.Trigger,
+		Title:             suggestion.TaskTitle,
+		SourceType:        "todo",
+		Status:            status,
+		Intent:            suggestion.Intent,
+		PreferredDelivery: suggestion.DirectDeliveryType,
+		CurrentStep:       currentStep,
+		RiskLevel:         s.risk.DefaultLevel(),
+		Timeline:          initialTimeline(status, currentStep),
+		Snapshot:          snapshot,
+	})
+	s.publishTaskStart(task.TaskID, task.SessionID, "")
+	s.attachMemoryReadPlans(task.TaskID, task.RunID, snapshot, suggestion.Intent)
+	return task
 }
 
-func notepadIntent(item map[string]any) map[string]any {
-	title := strings.ToLower(stringValue(item, "title", ""))
-	suggestion := strings.ToLower(stringValue(item, "agent_suggestion", ""))
-	combined := title + " " + suggestion
-
-	switch {
-	case strings.Contains(combined, "翻译") || strings.Contains(combined, "translate"):
-		return defaultIntentMap("translate")
-	case strings.Contains(combined, "改写") || strings.Contains(combined, "rewrite"):
-		return defaultIntentMap("rewrite")
-	case strings.Contains(combined, "解释") || strings.Contains(combined, "explain"):
-		return defaultIntentMap("explain")
-	default:
-		return defaultIntentMap("summarize")
+func (s *Service) finishNotepadTask(snapshot contextsvc.TaskContextSnapshot, suggestion intent.Suggestion, task runengine.TaskRecord) (map[string]any, error) {
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForStart(suggestion), task.StartedAt.Format(dateTimeLayout))
+	if suggestion.RequiresConfirm {
+		task = s.persistTaskPresentation(task, bubble)
+		return buildTaskEntryResponse(task, bubble, nil), nil
 	}
+
+	if queuedTask, queueBubble, queued, queueErr := s.queueTaskIfSessionBusy(task); queueErr != nil {
+		return nil, queueErr
+	} else if queued {
+		return buildTaskEntryResponse(queuedTask, queueBubble, nil), nil
+	}
+
+	governedTask, governedResponse, handled, governanceErr := s.handleTaskGovernanceDecision(task, suggestion.Intent)
+	if governanceErr != nil {
+		return nil, governanceErr
+	}
+	if handled {
+		return governedResponse, nil
+	}
+	task = governedTask
+
+	deliveryResult := map[string]any(nil)
+	var execErr error
+	task, bubble, deliveryResult, _, execErr = s.executeTask(task, snapshot, suggestion.Intent)
+	if execErr != nil {
+		return nil, execErr
+	}
+	return buildTaskEntryResponse(task, bubble, deliveryResult), nil
 }
