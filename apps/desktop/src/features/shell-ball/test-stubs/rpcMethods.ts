@@ -251,6 +251,16 @@ function readStringParam(params: unknown, key: "action" | "approval_id" | "task_
   return typeof value === "string" ? value : null;
 }
 
+function createStubCorrectionIntent(correctionText: string): Task["intent"] {
+  return {
+    name: "agent_loop",
+    arguments: {
+      goal: correctionText,
+      correction_text: correctionText,
+    },
+  };
+}
+
 function createSecurityApprovalRespondResult(taskId = "task_stub", approvalId = "approval_stub"): AgentSecurityRespondResult {
   return {
     authorization_record: {
@@ -468,16 +478,22 @@ export async function confirmTask(params?: unknown): Promise<AgentTaskConfirmRes
     : undefined;
   const normalizedCorrectedIntentName = typeof correctedIntentName === "string" ? correctedIntentName : null;
   const hasCorrectionText = typeof correctionText === "string" && correctionText.trim() !== "";
+  const normalizedCorrectionText = hasCorrectionText ? correctionText.trim() : "";
+
+  if (confirmed && (hasCorrectedIntent || hasCorrectionText)) {
+    throw new Error("confirmed=true cannot include corrected_intent or correction_text");
+  }
+
+  if (hasCorrectedIntent && hasCorrectionText) {
+    throw new Error("corrected_intent and correction_text are mutually exclusive");
+  }
 
   if (hasCorrectionText || (!confirmed && !hasCorrectedIntent)) {
     return {
       task: {
         ...createTask("confirming_intent", "intent_confirmation"),
         task_id: taskId,
-        intent: {
-          name: "summarize",
-          arguments: {},
-        },
+        intent: hasCorrectionText ? createStubCorrectionIntent(normalizedCorrectionText) : null,
       },
       bubble_message: {
         bubble_id: "bubble_confirm_stub",
@@ -493,6 +509,26 @@ export async function confirmTask(params?: unknown): Promise<AgentTaskConfirmRes
   }
 
   if (!confirmed && hasCorrectedIntent) {
+    if (normalizedCorrectedIntentName === null || normalizedCorrectedIntentName.trim() === "") {
+      return {
+        task: {
+          ...createTask("confirming_intent", "intent_confirmation"),
+          task_id: taskId,
+          intent: null,
+        },
+        bubble_message: {
+          bubble_id: "bubble_confirm_stub",
+          task_id: taskId,
+          type: "status",
+          text: "This correction did not include a valid intent name. Please clarify the goal or provide a corrected intent.",
+          pinned: false,
+          hidden: false,
+          created_at: new Date().toISOString(),
+        },
+        delivery_result: null,
+      };
+    }
+
     const requiresAuthorization = normalizedCorrectedIntentName === "write_file"
       || normalizedCorrectedIntentName === "exec_command"
       || normalizedCorrectedIntentName === "page_interact"
