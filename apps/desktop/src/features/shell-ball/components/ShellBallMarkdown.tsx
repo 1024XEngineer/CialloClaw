@@ -185,18 +185,63 @@ function findFirstInlineMatch(text: string): InlineMatch | null {
 }
 
 function matchLink(text: string): InlineMatch | null {
-  const match = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/.exec(text);
+  const match = /\[([^\]]+)\]\(/.exec(text);
   if (match === null || match.index === undefined) {
+    return null;
+  }
+
+  const hrefStart = match.index + match[0].length;
+  const href = extractBalancedMarkdownHref(text, hrefStart);
+  if (href === null) {
     return null;
   }
 
   return {
     kind: "link",
     index: match.index,
-    length: match[0].length,
+    length: hrefStart + href.length + 1 - match.index,
     label: match[1],
-    href: match[2],
+    href,
   };
+}
+
+/**
+ * Keeps markdown-link parsing aligned with common browser URL handling by
+ * allowing balanced parentheses inside the href while still stopping at the
+ * markdown link's closing `)`.
+ */
+function extractBalancedMarkdownHref(text: string, hrefStart: number) {
+  let nestedParentheses = 0;
+
+  for (let index = hrefStart; index < text.length; index += 1) {
+    const character = text[index];
+    if (character === undefined) {
+      return null;
+    }
+
+    if (/\s/.test(character)) {
+      return null;
+    }
+
+    if (character === "(") {
+      nestedParentheses += 1;
+      continue;
+    }
+
+    if (character !== ")") {
+      continue;
+    }
+
+    if (nestedParentheses > 0) {
+      nestedParentheses -= 1;
+      continue;
+    }
+
+    const href = text.slice(hrefStart, index);
+    return /^https?:\/\//i.test(href) && href !== "" ? href : null;
+  }
+
+  return null;
 }
 
 function matchAutoLink(text: string): InlineMatch | null {
