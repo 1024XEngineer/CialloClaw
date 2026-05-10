@@ -110,6 +110,7 @@ func normalizeNotepadItem(item map[string]any, now time.Time) map[string]any {
 	if plannedAt := deriveNotepadPlannedAt(normalized); plannedAt != "" {
 		normalized["planned_at"] = plannedAt
 	}
+	normalized["note_text_origin"] = deriveNotepadNoteTextOrigin(normalized)
 	normalized["note_text"] = deriveNotepadNoteText(normalized)
 	normalized["prerequisite"] = deriveNotepadPrerequisite(normalized)
 	normalized["related_resources"] = deriveNotepadRelatedResources(normalized)
@@ -327,6 +328,16 @@ func deriveNotepadNoteText(item map[string]any) string {
 	title := strings.TrimSpace(stringValue(item, "title", "待办事项"))
 	suggestion := strings.TrimSpace(stringValue(item, "agent_suggestion", ""))
 	return deriveSyntheticNotepadNoteText(title, suggestion)
+}
+
+func deriveNotepadNoteTextOrigin(item map[string]any) string {
+	if origin := strings.TrimSpace(stringValue(item, "note_text_origin", "")); origin != "" {
+		return origin
+	}
+	if strings.TrimSpace(stringValue(item, "note_text", "")) != "" {
+		return "user_provided"
+	}
+	return "derived_default"
 }
 
 func deriveSyntheticNotepadNoteText(title, suggestion string) string {

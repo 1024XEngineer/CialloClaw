@@ -2763,6 +2763,36 @@ func TestServiceNotepadConvertToTaskFallsBackToTitleAndIgnoresNonPathResources(t
 	}
 }
 
+func TestServiceNotepadConvertToTaskKeepsUserNoteTextWhenItMatchesSyntheticDisplayText(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Converted synthetic-match note finished.")
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":          "todo_real_note_text",
+		"title":            "整理评审要点",
+		"bucket":           "upcoming",
+		"status":           "normal",
+		"type":             "todo_item",
+		"agent_suggestion": "translate into English",
+		"note_text":        "整理评审要点。当前建议：translate into English。",
+	}})
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_real_note_text",
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected converted task to remain available in runtime")
+	}
+	if record.Snapshot.Text != "整理评审要点。当前建议：translate into English。" {
+		t.Fatalf("expected authored note_text to survive even when it matches the synthetic display copy, got %+v", record.Snapshot)
+	}
+}
+
 func TestServiceNotepadConvertToTaskKeepsDerivedDefaultResourcesOutOfSnapshot(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Converted derived-resource notepad task finished.")
 	service.runEngine.ReplaceNotepadItems([]map[string]any{{
@@ -3056,7 +3086,13 @@ func TestServiceNotepadConvertToTaskRollsBackLinkWhenFinishFails(t *testing.T) {
 		ResultTitle:        "处理结果",
 		ResultBubbleText:   "结果已经生成，可直接查看。",
 	}
-	task := service.createNotepadTask(snapshot, suggestion, "")
+	starts := make(chan struct{}, 1)
+	unsubscribe := service.SubscribeTaskStarts(func(taskID, sessionID, traceID string) {
+		starts <- struct{}{}
+	})
+	defer unsubscribe()
+
+	task := service.createNotepadTask(snapshot, suggestion)
 
 	if _, handled, claimErr := service.runEngine.ClaimNotepadItemTask("todo_finish_failure"); claimErr != nil || !handled {
 		t.Fatalf("expected note claim to succeed before linking, handled=%v err=%v", handled, claimErr)
@@ -3092,6 +3128,11 @@ func TestServiceNotepadConvertToTaskRollsBackLinkWhenFinishFails(t *testing.T) {
 	}
 	if linkedTaskID := stringValue(item, "linked_task_id", ""); linkedTaskID != "" {
 		t.Fatalf("expected note link rollback to clear linked_task_id, got %+v", item)
+	}
+	select {
+	case <-starts:
+		t.Fatal("expected failed notepad conversion to avoid publishing task start before rollback")
+	default:
 	}
 }
 
