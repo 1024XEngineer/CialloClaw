@@ -13,28 +13,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/execution"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/memory"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/orchestrator"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/rpc"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/titlegen"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/sidecarclient"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/traceeval"
 )
 
 // App keeps the assembled local-service runtime dependencies.
@@ -85,123 +72,29 @@ func New(cfg config.Config) (*App, error) {
 	if err := migrateLegacyRuntimeDefaultsIfNeeded(cfg, legacyRuntimeRootsForCompatibility()); err != nil {
 		return nil, err
 	}
-
-	pathPolicy, err := newLocalPathPolicyForBootstrap(cfg.WorkspaceRoot)
+	core, err := buildCoreDeps(cfg)
 	if err != nil {
 		return nil, err
 	}
-
-	storageService := storage.NewService(platform.NewLocalStorageAdapter(cfg.DatabasePath))
-	// Bootstrap builds a working client from the canonical runtime route, but an
-	// unsupported persisted provider still needs a clientless placeholder that
-	// preserves the user-facing provider identity for diagnostics and follow-up
-	// settings edits.
-	resolvedModelConfig, placeholderModelConfig, persistedModelRouteChanged, err := loadBootstrapModelConfig(cfg.Model, storageService.SettingsStore())
-	if err != nil {
-		_ = storageService.Close()
-		return nil, err
-	}
-	auditService := audit.NewService(storageService.AuditWriter())
-	checkpointService := checkpoint.NewService(storageService.RecoveryPointWriter())
-	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
-	executionBackend := platform.NewControlledExecutionBackend(cfg.WorkspaceRoot)
-	osCapability := platform.NewLocalOSCapabilityAdapter()
-	pluginService := plugin.NewService()
-	if err := storageService.EnsureBuiltinExecutionAssets(context.Background()); err != nil {
-		_ = storageService.Close()
-		return nil, err
-	}
-	if err := persistPluginManifests(context.Background(), storageService, pluginService); err != nil {
-		_ = storageService.Close()
-		return nil, err
-	}
-	sidecars := buildSidecarRuntimes(pluginService, osCapability)
-	playwrightClient := sidecars.playwright.Client()
-	ocrClient := sidecars.ocr.Client()
-	mediaClient := sidecars.media.Client()
-	screenClient := sidecarclient.NewLocalScreenCaptureClient(fileSystem)
-	toolRegistry := tools.NewRegistry()
-	if err := registerBuiltinToolsForBootstrap(toolRegistry); err != nil {
-		_ = storageService.Close()
-		return nil, err
-	}
-	if err := registerPlaywrightToolsForBootstrap(toolRegistry); err != nil {
-		_ = storageService.Close()
-		return nil, err
-	}
-	if err := registerOCRToolsForBootstrap(toolRegistry); err != nil {
-		_ = storageService.Close()
-		return nil, err
-	}
-	if err := registerMediaToolsForBootstrap(toolRegistry); err != nil {
-		_ = storageService.Close()
-		return nil, err
-	}
-	toolExecutor := tools.NewToolExecutor(
-		toolRegistry,
-		tools.WithToolCallRecorder(tools.NewToolCallRecorder(storageService.ToolCallSink())),
-	)
-
-	modelService, err := newModelServiceFromConfigForBootstrap(model.ServiceConfig{
-		ModelConfig:  resolvedModelConfig,
-		SecretSource: model.NewStaticSecretSource(storageService),
-	})
-	if err != nil {
-		if shouldFallbackBootstrapModelService(err, persistedModelRouteChanged) {
-			modelService = model.NewService(placeholderModelConfig)
-		} else {
-			_ = storageService.Close()
-			return nil, err
+	success := false
+	defer func() {
+		if !success {
+			_ = core.storageService.Close()
 		}
-	}
+	}()
 
-	deliveryService := delivery.NewService()
-	traceEvalService := traceeval.NewService(storageService.TraceStore(), storageService.EvalStore())
-	titleGenerator := titlegen.NewService(modelService)
-	executionService := execution.NewService(fileSystem, executionBackend, playwrightClient, ocrClient, mediaClient, screenClient, modelService, auditService, checkpointService, deliveryService, toolRegistry, toolExecutor, pluginService).
-		WithArtifactStore(storageService.ArtifactStore()).
-		WithLoopRuntimeStore(storageService.LoopRuntimeStore()).
-		WithExtensionAssetCatalog(storageService)
-	inspectorService := taskinspector.NewService(fileSystem).WithTitleGenerator(titleGenerator)
-	runEngine, err := runengine.NewEngineWithStore(storageService.TaskRunStore())
+	runtimes, err := buildRuntimes(core)
 	if err != nil {
-		_ = storageService.Close()
-		return nil, err
-	}
-	if err := runEngine.WithTodoStore(storageService.TodoStore()); err != nil {
-		_ = storageService.Close()
-		return nil, err
-	}
-	if err := runEngine.WithSettingsStore(storageService.SettingsStore()); err != nil {
-		_ = storageService.Close()
-		return nil, err
-	}
-	if err := runEngine.WithSessionStore(storageService.SessionStore()); err != nil {
-		_ = storageService.Close()
 		return nil, err
 	}
 
-	orchestratorService := orchestrator.NewService(
-		contextsvc.NewService(),
-		intent.NewService(),
-		runEngine,
-		deliveryService,
-		memory.NewServiceFromStorage(storageService.MemoryStore(), storageService.Capabilities().MemoryRetrievalBackend),
-		risk.NewService(),
-		modelService,
-		toolRegistry,
-		pluginService,
-	).WithAudit(auditService).WithExecutor(executionService).WithStorage(storageService).WithTaskInspector(inspectorService).WithTitleGenerator(titleGenerator).WithTraceEval(traceEvalService)
+	services, err := buildServices(core, runtimes)
+	if err != nil {
+		return nil, err
+	}
 
-	return &App{
-		server:       rpc.NewServer(cfg.RPC, orchestratorService),
-		storage:      storageService,
-		toolRegistry: toolRegistry,
-		toolExecutor: toolExecutor,
-		playwright:   sidecars.playwright,
-		ocr:          sidecars.ocr,
-		media:        sidecars.media,
-	}, nil
+	success = true
+	return newApp(cfg, core, runtimes, services), nil
 }
 
 // buildSidecarRuntimes keeps worker startup policy in one bootstrap phase. A
