@@ -109,7 +109,7 @@
 
 - `rpc/`：接口接入层
 - `orchestrator/`：任务编排
-- `context/`：Context Manager
+- `taskcontext/`：task-facing context capture service
 - `intent/`：入口判断、澄清与规划
 - `memory/`：记忆管理
 - `delivery/`：正式交付

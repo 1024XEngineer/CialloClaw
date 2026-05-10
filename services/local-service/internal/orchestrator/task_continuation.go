@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	intentsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 const implicitSessionReuseWindow = 15 * time.Minute
@@ -39,7 +39,7 @@ type taskContinuationOptions struct {
 	ForceConfirmRequired bool
 }
 
-func (s *Service) maybeContinueExistingTask(params map[string]any, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, options taskContinuationOptions) (map[string]any, bool, string, error) {
+func (s *Service) maybeContinueExistingTask(params map[string]any, snapshot taskcontext.TaskContextSnapshot, explicitIntent map[string]any, options taskContinuationOptions) (map[string]any, bool, string, error) {
 	explicitSessionID := strings.TrimSpace(stringValue(params, "session_id", ""))
 	continuationContext := s.resolveTaskContinuationContext(explicitSessionID)
 	decision := s.classifyTaskContinuation(snapshot, explicitIntent, continuationContext, options)
@@ -158,7 +158,7 @@ func taskCanConsumeActiveSteering(task runengine.TaskRecord) bool {
 		strings.TrimSpace(task.CurrentStep) == "agent_loop"
 }
 
-func (s *Service) classifyTaskContinuation(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext, options taskContinuationOptions) taskContinuationDecision {
+func (s *Service) classifyTaskContinuation(snapshot taskcontext.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext, options taskContinuationOptions) taskContinuationDecision {
 	if len(continuationContext.Candidates) == 0 {
 		return taskContinuationDecision{Decision: "new_task", Reason: "no unfinished candidate task"}
 	}
@@ -177,7 +177,7 @@ func (s *Service) classifyTaskContinuation(snapshot contextsvc.TaskContextSnapsh
 	return heuristicTaskContinuationDecision(snapshot, explicitIntent, continuationContext)
 }
 
-func (s *Service) modelTaskContinuationDecision(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext, options taskContinuationOptions) (taskContinuationDecision, bool) {
+func (s *Service) modelTaskContinuationDecision(snapshot taskcontext.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext, options taskContinuationOptions) (taskContinuationDecision, bool) {
 	modelService := s.currentModel()
 	if s == nil || modelService == nil {
 		return taskContinuationDecision{}, false
@@ -202,7 +202,7 @@ func (s *Service) modelTaskContinuationDecision(snapshot contextsvc.TaskContextS
 // buildTaskContinuationPrompt intentionally sends only coarse task/session
 // signals to the model so remote classification does not leak raw text, file
 // names, or other cross-task payload details.
-func buildTaskContinuationPrompt(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext, options taskContinuationOptions) string {
+func buildTaskContinuationPrompt(snapshot taskcontext.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext, options taskContinuationOptions) string {
 	lines := []string{
 		"You decide whether one new desktop input should continue an existing task or start a new task.",
 		"Return JSON only.",
@@ -222,7 +222,7 @@ func buildTaskContinuationPrompt(snapshot contextsvc.TaskContextSnapshot, explic
 	return strings.Join(lines, "\n")
 }
 
-func taskContinuationInputSummary(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, options taskContinuationOptions) string {
+func taskContinuationInputSummary(snapshot taskcontext.TaskContextSnapshot, explicitIntent map[string]any, options taskContinuationOptions) string {
 	suggestion := intentsvc.NewService().Suggest(snapshot, explicitIntent, options.ConfirmRequired)
 	resolvedIntentName := stringValue(suggestion.Intent, "name", "")
 	resolvedDeliveryType := deliveryTypeFromIntent(suggestion.Intent)
@@ -303,7 +303,7 @@ func parseTaskContinuationDecision(raw string, candidates []runengine.TaskRecord
 // strong context anchors over brittle free-text cue matching while preventing
 // agent.task.start explicit intents from being silently grafted onto another
 // task unless there is concrete continuation evidence.
-func deterministicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext, options taskContinuationOptions) (taskContinuationDecision, bool) {
+func deterministicTaskContinuationDecision(snapshot taskcontext.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext, options taskContinuationOptions) (taskContinuationDecision, bool) {
 	if len(continuationContext.Candidates) != 1 {
 		return taskContinuationDecision{}, false
 	}
@@ -419,7 +419,7 @@ func plainTextCanUseAnchorlessPendingSession(continuationContext taskContinuatio
 // Inputs without that match are claimed as new tasks here so model fallback
 // cannot guess an owner for file, selection, or error evidence.
 // Confirmation only gates execution after that ownership decision is made.
-func uniqueTaskSpecificContinuationDecision(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext, options taskContinuationOptions) (taskContinuationDecision, bool) {
+func uniqueTaskSpecificContinuationDecision(snapshot taskcontext.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext, options taskContinuationOptions) (taskContinuationDecision, bool) {
 	if len(continuationContext.Candidates) < 2 || !isStructuredSupplementInput(snapshot) {
 		return taskContinuationDecision{}, false
 	}
@@ -521,7 +521,7 @@ func explicitIntentRequiresFreshTask(explicitIntentName string, candidate runeng
 	return candidate.Status == "waiting_input" || candidate.Status == "confirming_intent" || candidate.Status == "processing"
 }
 
-func heuristicTaskContinuationDecision(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext) taskContinuationDecision {
+func heuristicTaskContinuationDecision(snapshot taskcontext.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext) taskContinuationDecision {
 	if len(continuationContext.Candidates) != 1 {
 		return taskContinuationDecision{Decision: "new_task", Reason: "multiple unfinished candidates"}
 	}
@@ -543,7 +543,7 @@ type taskContinuationEvidence struct {
 	PreviousHasContextAnchor bool
 }
 
-func buildTaskContinuationEvidence(current, previous contextsvc.TaskContextSnapshot) taskContinuationEvidence {
+func buildTaskContinuationEvidence(current, previous taskcontext.TaskContextSnapshot) taskContinuationEvidence {
 	structuredSupplement := isStructuredSupplementInput(current)
 	currentAnchor := taskSpecificAnchorSnapshot(current)
 	previousAnchor := taskSpecificAnchorSnapshot(previous)
@@ -565,7 +565,7 @@ func buildTaskContinuationEvidence(current, previous contextsvc.TaskContextSnaps
 	}
 }
 
-func taskContinuationInputShape(snapshot contextsvc.TaskContextSnapshot) string {
+func taskContinuationInputShape(snapshot taskcontext.TaskContextSnapshot) string {
 	switch {
 	case isStructuredSupplementInput(snapshot) && strings.TrimSpace(snapshot.Text) != "" && snapshot.InputType == "text":
 		return "mixed"
@@ -582,7 +582,7 @@ func taskContinuationInputShape(snapshot contextsvc.TaskContextSnapshot) string 
 	}
 }
 
-func isStructuredSupplementInput(snapshot contextsvc.TaskContextSnapshot) bool {
+func isStructuredSupplementInput(snapshot taskcontext.TaskContextSnapshot) bool {
 	return snapshot.InputType == "file" ||
 		snapshot.InputType == "text_selection" ||
 		snapshot.InputType == "error" ||
@@ -591,7 +591,7 @@ func isStructuredSupplementInput(snapshot contextsvc.TaskContextSnapshot) bool {
 		strings.TrimSpace(snapshot.ErrorText) != ""
 }
 
-func hasSnapshotContextAnchor(snapshot contextsvc.TaskContextSnapshot) bool {
+func hasSnapshotContextAnchor(snapshot taskcontext.TaskContextSnapshot) bool {
 	return strings.TrimSpace(snapshot.PageURL) != "" ||
 		strings.TrimSpace(snapshot.WindowTitle) != "" ||
 		strings.TrimSpace(snapshot.AppName) != "" ||
@@ -599,7 +599,7 @@ func hasSnapshotContextAnchor(snapshot contextsvc.TaskContextSnapshot) bool {
 		strings.TrimSpace(snapshot.HoverTarget) != ""
 }
 
-func hasConflictingContextAnchor(current, previous contextsvc.TaskContextSnapshot) bool {
+func hasConflictingContextAnchor(current, previous taskcontext.TaskContextSnapshot) bool {
 	if nonEmptyAndDifferent(current.PageURL, previous.PageURL) {
 		return true
 	}
@@ -617,7 +617,7 @@ func hasConflictingContextAnchor(current, previous contextsvc.TaskContextSnapsho
 // taskSpecificAnchorSnapshot removes intake-only shell-ball context before
 // comparing continuation anchors. The shell-ball page identifies where input
 // entered the system, not which user task the input belongs to.
-func taskSpecificAnchorSnapshot(snapshot contextsvc.TaskContextSnapshot) contextsvc.TaskContextSnapshot {
+func taskSpecificAnchorSnapshot(snapshot taskcontext.TaskContextSnapshot) taskcontext.TaskContextSnapshot {
 	if isShellBallIntakeAnchor(snapshot) {
 		return withoutShellBallIntakeAnchor(snapshot)
 	}
@@ -627,12 +627,12 @@ func taskSpecificAnchorSnapshot(snapshot contextsvc.TaskContextSnapshot) context
 // isShellBallIntakeAnchor identifies the frontend's default shell-ball wrapper
 // context. It is an intake surface marker, not evidence that the user's active
 // work context moved away from the pending task.
-func isShellBallIntakeAnchor(snapshot contextsvc.TaskContextSnapshot) bool {
+func isShellBallIntakeAnchor(snapshot taskcontext.TaskContextSnapshot) bool {
 	return strings.TrimSpace(snapshot.PageURL) == "local://shell-ball" &&
 		strings.EqualFold(strings.TrimSpace(snapshot.AppName), "desktop")
 }
 
-func withoutShellBallIntakeAnchor(snapshot contextsvc.TaskContextSnapshot) contextsvc.TaskContextSnapshot {
+func withoutShellBallIntakeAnchor(snapshot taskcontext.TaskContextSnapshot) taskcontext.TaskContextSnapshot {
 	snapshot.PageTitle = ""
 	snapshot.PageURL = ""
 	snapshot.AppName = ""
@@ -676,7 +676,7 @@ func nonEmptyAndDifferent(left, right string) bool {
 	return left != "" && right != "" && left != right
 }
 
-func (s *Service) continueTask(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, decision taskContinuationDecision, options taskContinuationOptions) (map[string]any, error) {
+func (s *Service) continueTask(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, explicitIntent map[string]any, decision taskContinuationDecision, options taskContinuationOptions) (map[string]any, error) {
 	if task.Status == "waiting_input" || task.Status == "confirming_intent" {
 		return s.continuePendingTask(task, snapshot, explicitIntent, options)
 	}
@@ -698,7 +698,7 @@ func (s *Service) continueTask(task runengine.TaskRecord, snapshot contextsvc.Ta
 	}, nil
 }
 
-func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, options taskContinuationOptions) (map[string]any, error) {
+func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, explicitIntent map[string]any, options taskContinuationOptions) (map[string]any, error) {
 	baseSnapshot := snapshotFromTask(task)
 	continuationSnapshot := sanitizeContinuationUpdateSnapshot(baseSnapshot, snapshot)
 	mergedSnapshot := mergeContinuationSnapshots(baseSnapshot, continuationSnapshot)
@@ -767,7 +767,7 @@ func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot contex
 	}, nil
 }
 
-func pendingContinuationRequiresConfirm(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, options taskContinuationOptions) bool {
+func pendingContinuationRequiresConfirm(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, options taskContinuationOptions) bool {
 	if options.ForceConfirmRequired {
 		return true
 	}
@@ -855,7 +855,7 @@ func withResolvedSessionID(params map[string]any, sessionID string) map[string]a
 	return cloned
 }
 
-func buildTaskContinuationBubbleText(snapshot contextsvc.TaskContextSnapshot, decision taskContinuationDecision) string {
+func buildTaskContinuationBubbleText(snapshot taskcontext.TaskContextSnapshot, decision taskContinuationDecision) string {
 	subject := continuationSubject(snapshot)
 	if strings.TrimSpace(subject) == "" {
 		subject = "已把补充内容挂回当前任务。"
@@ -863,7 +863,7 @@ func buildTaskContinuationBubbleText(snapshot contextsvc.TaskContextSnapshot, de
 	return subject
 }
 
-func continuationSubject(snapshot contextsvc.TaskContextSnapshot) string {
+func continuationSubject(snapshot taskcontext.TaskContextSnapshot) string {
 	if len(snapshot.Files) > 0 {
 		return fmt.Sprintf("已把 %d 个补充文件挂回当前任务。", len(snapshot.Files))
 	}
@@ -876,7 +876,7 @@ func continuationSubject(snapshot contextsvc.TaskContextSnapshot) string {
 	return "已把补充说明挂回当前任务。"
 }
 
-func buildTaskContinuationInstruction(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any) string {
+func buildTaskContinuationInstruction(snapshot taskcontext.TaskContextSnapshot, explicitIntent map[string]any) string {
 	parts := make([]string, 0, 5)
 	if text := strings.TrimSpace(snapshot.Text); text != "" {
 		parts = append(parts, "Additional user text:\n"+text)
@@ -929,7 +929,7 @@ func (s *Service) sessionHasRecentRuntimeTask(sessionID, group string) bool {
 	return false
 }
 
-func sanitizeContinuationUpdateSnapshot(base, update contextsvc.TaskContextSnapshot) contextsvc.TaskContextSnapshot {
+func sanitizeContinuationUpdateSnapshot(base, update taskcontext.TaskContextSnapshot) taskcontext.TaskContextSnapshot {
 	if hasSnapshotContextAnchor(base) && isStructuredSupplementInput(update) && isShellBallIntakeAnchor(update) {
 		// Shell-ball default anchors describe how supplemental evidence entered
 		// the system; they must not replace the real page/app anchors of the
@@ -939,7 +939,7 @@ func sanitizeContinuationUpdateSnapshot(base, update contextsvc.TaskContextSnaps
 	return update
 }
 
-func mergeContinuationSnapshots(base, update contextsvc.TaskContextSnapshot) contextsvc.TaskContextSnapshot {
+func mergeContinuationSnapshots(base, update taskcontext.TaskContextSnapshot) taskcontext.TaskContextSnapshot {
 	update = sanitizeContinuationUpdateSnapshot(base, update)
 	merged := base
 	merged.Source = pickContinuationValue(base.Source, update.Source)

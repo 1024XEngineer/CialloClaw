@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strings"
 
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 // StartTask creates the formal task/run mapping from an explicit object or an
@@ -33,7 +33,7 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 
 type taskEntryFlow struct {
 	Params               map[string]any
-	Snapshot             contextsvc.TaskContextSnapshot
+	Snapshot             taskcontext.TaskContextSnapshot
 	ExplicitIntent       map[string]any
 	Options              map[string]any
 	ConfirmRequired      bool
@@ -158,7 +158,7 @@ func (s *Service) finishStartTask(flow taskEntryFlow, task runengine.TaskRecord)
 // taskStartConfirmRequired keeps confirmation as an explicit pre-execution gate.
 // Object-based task starts with their own instruction can enter the Agent Loop
 // directly, while bare objects still stop for intent confirmation.
-func taskStartConfirmRequired(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, forceConfirm bool) bool {
+func taskStartConfirmRequired(snapshot taskcontext.TaskContextSnapshot, explicitIntent map[string]any, forceConfirm bool) bool {
 	if forceConfirm {
 		return true
 	}
@@ -168,7 +168,7 @@ func taskStartConfirmRequired(snapshot contextsvc.TaskContextSnapshot, explicitI
 	return !taskStartHasExplicitGoal(snapshot)
 }
 
-func taskStartHasExplicitGoal(snapshot contextsvc.TaskContextSnapshot) bool {
+func taskStartHasExplicitGoal(snapshot taskcontext.TaskContextSnapshot) bool {
 	switch snapshot.InputType {
 	case "file":
 		return strings.TrimSpace(snapshot.Text) != ""

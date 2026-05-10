@@ -7,14 +7,14 @@ import (
 	"strings"
 	"time"
 
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/execution"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
-func (s *Service) handleScreenAnalyzeStart(params map[string]any, snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any) (map[string]any, bool, error) {
+func (s *Service) handleScreenAnalyzeStart(params map[string]any, snapshot taskcontext.TaskContextSnapshot, explicitIntent map[string]any) (map[string]any, bool, error) {
 	if stringValue(explicitIntent, "name", "") != "screen_analyze" || s.executor == nil || !s.executor.ScreenCapabilitySnapshot().Available {
 		return nil, false, nil
 	}
@@ -61,14 +61,14 @@ func (s *Service) handleScreenAnalyzeStart(params map[string]any, snapshot conte
 	}, true, nil
 }
 
-func (s *Service) handleScreenAnalyzeSuggestion(params map[string]any, snapshot contextsvc.TaskContextSnapshot, suggestion intent.Suggestion) (map[string]any, bool, error) {
+func (s *Service) handleScreenAnalyzeSuggestion(params map[string]any, snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) (map[string]any, bool, error) {
 	if stringValue(suggestion.Intent, "name", "") != "screen_analyze" || suggestion.RequiresConfirm {
 		return nil, false, nil
 	}
 	return s.handleScreenAnalyzeStart(params, snapshot, suggestion.Intent)
 }
 
-func (s *Service) normalizeSuggestedIntentForAvailability(snapshot contextsvc.TaskContextSnapshot, suggestion intent.Suggestion, confirmRequired bool) intent.Suggestion {
+func (s *Service) normalizeSuggestedIntentForAvailability(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, confirmRequired bool) intent.Suggestion {
 	if stringValue(suggestion.Intent, "name", "") != "screen_analyze" {
 		return suggestion
 	}
@@ -93,7 +93,7 @@ func (s *Service) normalizeSuggestedIntentForAvailability(snapshot contextsvc.Ta
 	return fallback
 }
 
-func inferredScreenFallbackSubject(snapshot contextsvc.TaskContextSnapshot) string {
+func inferredScreenFallbackSubject(snapshot taskcontext.TaskContextSnapshot) string {
 	return truncateText(firstNonEmptyString(strings.TrimSpace(snapshot.Text), screenSubjectFromSnapshot(snapshot)), subjectPreviewMaxLength)
 }
 
@@ -136,7 +136,7 @@ func (s *Service) buildScreenAnalysisApprovalState(task runengine.TaskRecord) (m
 	return approvalRequest, pendingExecution, bubble, nil
 }
 
-func (s *Service) resolveScreenAnalyzeIntent(snapshot contextsvc.TaskContextSnapshot, current map[string]any) map[string]any {
+func (s *Service) resolveScreenAnalyzeIntent(snapshot taskcontext.TaskContextSnapshot, current map[string]any) map[string]any {
 	updatedIntent := cloneMap(current)
 	arguments := cloneMap(mapValue(updatedIntent, "arguments"))
 	if arguments == nil {
@@ -195,7 +195,7 @@ func isClipScreenSourcePath(pathValue string) bool {
 	}
 }
 
-func inferredScreenTaskTitle(snapshot contextsvc.TaskContextSnapshot) string {
+func inferredScreenTaskTitle(snapshot taskcontext.TaskContextSnapshot) string {
 	target := screenSubjectFromSnapshot(snapshot)
 	if strings.TrimSpace(snapshot.ErrorText) != "" || strings.Contains(strings.ToLower(snapshot.Text), "错误") || strings.Contains(strings.ToLower(snapshot.Text), "报错") || strings.Contains(strings.ToLower(snapshot.Text), "error") {
 		return fmt.Sprintf("查看屏幕报错：%s", truncateText(target, subjectPreviewMaxLength))
@@ -203,7 +203,7 @@ func inferredScreenTaskTitle(snapshot contextsvc.TaskContextSnapshot) string {
 	return fmt.Sprintf("查看当前屏幕：%s", truncateText(target, subjectPreviewMaxLength))
 }
 
-func screenSubjectFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
+func screenSubjectFromSnapshot(snapshot taskcontext.TaskContextSnapshot) string {
 	return firstNonEmptyString(
 		snapshot.PageTitle,
 		firstNonEmptyString(
@@ -254,7 +254,7 @@ func impactFilesForScreenTarget(sourcePath string) []string {
 	return []string{sourcePath}
 }
 
-func inferredScreenEvidenceRole(snapshot contextsvc.TaskContextSnapshot, arguments map[string]any) string {
+func inferredScreenEvidenceRole(snapshot taskcontext.TaskContextSnapshot, arguments map[string]any) string {
 	if role := stringValue(arguments, "evidence_role", ""); strings.TrimSpace(role) != "" {
 		return role
 	}
