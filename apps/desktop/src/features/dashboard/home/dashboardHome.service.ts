@@ -1106,7 +1106,10 @@ function buildOverviewSummons(
   if (hasUrgentSafetySignal) {
     templates.push({
       duration: 6_200,
-      message: highValueSignals[0] ?? safetyState.headline,
+      // Safety summons are hard-routed to the safety module. Keep their
+      // headline anchored to safety state so task-oriented overview copy does
+      // not leak into a different navigation target.
+      message: safetyState.headline,
       module: "safety",
       nextStep: getSummonNextStep(safetyState),
       priority: "urgent",
