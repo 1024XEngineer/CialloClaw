@@ -326,10 +326,9 @@ func TestDispatchTaskListClampsPagingParams(t *testing.T) {
 }
 
 func TestDispatchTaskEventsListReturnsLoopEvents(t *testing.T) {
-	server := newTestServer()
 	storageService := storage.NewService(testStorageAdapter{databasePath: filepath.Join(t.TempDir(), "rpc-loop-events.db")})
 	defer func() { _ = storageService.Close() }()
-	server.orchestrator.WithStorage(storageService)
+	server := newTestServerWithStorage(storageService)
 	if err := storageService.LoopRuntimeStore().SaveEvents(context.Background(), []storage.EventRecord{{
 		EventID:     "evt_rpc_loop_001",
 		RunID:       "run_rpc_loop_001",
@@ -368,10 +367,9 @@ func TestDispatchTaskEventsListReturnsLoopEvents(t *testing.T) {
 }
 
 func TestDispatchTaskToolCallsListReturnsPersistedToolCalls(t *testing.T) {
-	server := newTestServer()
 	storageService := storage.NewService(testStorageAdapter{databasePath: filepath.Join(t.TempDir(), "rpc-tool-calls.db")})
 	defer func() { _ = storageService.Close() }()
-	server.orchestrator.WithStorage(storageService)
+	server := newTestServerWithStorage(storageService)
 	if err := storageService.ToolCallStore().SaveToolCall(context.Background(), tools.ToolCallRecord{
 		ToolCallID: "tool_call_rpc_001",
 		RunID:      "run_rpc_tool_001",
@@ -449,10 +447,9 @@ func TestDispatchTaskSteerReturnsUpdatedTask(t *testing.T) {
 }
 
 func TestDispatchReturnsSettingsGet(t *testing.T) {
-	server := newTestServer()
 	storageService := storage.NewService(testStorageAdapter{databasePath: filepath.Join(t.TempDir(), "settings-get.db")})
 	defer func() { _ = storageService.Close() }()
-	server.orchestrator.WithStorage(storageService)
+	server := newTestServerWithStorage(storageService)
 	response := server.dispatch(requestEnvelope{
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-settings-get"`),
@@ -470,10 +467,9 @@ func TestDispatchReturnsSettingsGet(t *testing.T) {
 }
 
 func TestDispatchReturnsSettingsUpdate(t *testing.T) {
-	server := newTestServer()
 	storageService := storage.NewService(testStorageAdapter{databasePath: filepath.Join(t.TempDir(), "settings-update.db")})
 	defer func() { _ = storageService.Close() }()
-	server.orchestrator.WithStorage(storageService)
+	server := newTestServerWithStorage(storageService)
 	response := server.dispatch(requestEnvelope{
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-settings-update"`),
@@ -573,7 +569,7 @@ func TestDispatchReturnsPluginList(t *testing.T) {
 }
 
 func TestDispatchReturnsPluginDetail(t *testing.T) {
-	server, toolRegistry, pluginService := newTestServerWithDependencies(nil)
+	server, toolRegistry, pluginService := newTestServerWithDependencies(nil, nil, nil)
 	response := server.dispatch(requestEnvelope{
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-plugin-detail"`),

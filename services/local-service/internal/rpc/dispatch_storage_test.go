@@ -16,10 +16,9 @@ import (
 )
 
 func TestDispatchReturnsSecurityAuditList(t *testing.T) {
-	server := newTestServer()
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "audit.db")))
 	defer func() { _ = storageService.Close() }()
-	server.orchestrator.WithStorage(storageService)
+	server := newTestServerWithStorage(storageService)
 	err := storageService.AuditWriter().WriteAuditRecord(context.Background(), audit.Record{
 		AuditID:   "audit_001",
 		TaskID:    "task_001",
@@ -52,10 +51,9 @@ func TestDispatchReturnsSecurityAuditList(t *testing.T) {
 }
 
 func TestDispatchReturnsSecurityRestorePointsList(t *testing.T) {
-	server := newTestServer()
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "restore.db")))
 	defer func() { _ = storageService.Close() }()
-	server.orchestrator.WithStorage(storageService)
+	server := newTestServerWithStorage(storageService)
 	err := storageService.RecoveryPointWriter().WriteRecoveryPoint(context.Background(), checkpoint.RecoveryPoint{
 		RecoveryPointID: "rp_001",
 		TaskID:          "task_001",
@@ -85,10 +83,9 @@ func TestDispatchReturnsSecurityRestorePointsList(t *testing.T) {
 }
 
 func TestDispatchReturnsSecurityRestoreApplyResult(t *testing.T) {
-	server := newTestServer()
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "restore-apply.db")))
 	defer func() { _ = storageService.Close() }()
-	server.orchestrator.WithStorage(storageService)
+	server := newTestServerWithStorage(storageService)
 	startResult, err := startTaskForTest(server.orchestrator, map[string]any{
 		"session_id": "sess_restore",
 		"source":     "floating_ball",
@@ -154,10 +151,9 @@ func TestDispatchReturnsNotepadUpdateResult(t *testing.T) {
 }
 
 func TestDispatchReturnsTaskArtifactList(t *testing.T) {
-	server := newTestServer()
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "artifact-list.db")))
 	defer func() { _ = storageService.Close() }()
-	server.orchestrator.WithStorage(storageService)
+	server := newTestServerWithStorage(storageService)
 	err := storageService.ArtifactStore().SaveArtifacts(context.Background(), []storage.ArtifactRecord{{
 		ArtifactID:          "art_rpc_001",
 		TaskID:              "task_rpc_001",
@@ -189,10 +185,9 @@ func TestDispatchReturnsTaskArtifactList(t *testing.T) {
 }
 
 func TestDispatchReturnsTaskArtifactOpen(t *testing.T) {
-	server := newTestServer()
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "artifact-open.db")))
 	defer func() { _ = storageService.Close() }()
-	server.orchestrator.WithStorage(storageService)
+	server := newTestServerWithStorage(storageService)
 	err := storageService.ArtifactStore().SaveArtifacts(context.Background(), []storage.ArtifactRecord{{
 		ArtifactID:          "art_rpc_open_001",
 		TaskID:              "task_rpc_open_001",
@@ -224,10 +219,9 @@ func TestDispatchReturnsTaskArtifactOpen(t *testing.T) {
 }
 
 func TestDispatchReturnsDeliveryOpenForArtifact(t *testing.T) {
-	server := newTestServer()
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "delivery-open-artifact.db")))
 	defer func() { _ = storageService.Close() }()
-	server.orchestrator.WithStorage(storageService)
+	server := newTestServerWithStorage(storageService)
 	err := storageService.ArtifactStore().SaveArtifacts(context.Background(), []storage.ArtifactRecord{{
 		ArtifactID:          "art_delivery_rpc_001",
 		TaskID:              "task_delivery_rpc_001",
@@ -294,12 +288,11 @@ func TestDispatchReturnsDeliveryOpenForTaskResult(t *testing.T) {
 }
 
 func TestDispatchReturnsFormalTaskInspectorRunSourceErrors(t *testing.T) {
-	server := newTestServer()
 	pathPolicy, err := platform.NewLocalPathPolicy(filepath.Join(t.TempDir(), "rpc-task-inspector"))
 	if err != nil {
 		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
 	}
-	server.orchestrator.WithTaskInspector(taskinspector.NewService(platform.NewLocalFileSystemAdapter(pathPolicy)))
+	server := newTestServerWithTaskInspector(taskinspector.NewService(platform.NewLocalFileSystemAdapter(pathPolicy)))
 	tests := []struct {
 		name          string
 		requestID     string
