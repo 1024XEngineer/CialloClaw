@@ -10,12 +10,13 @@ import (
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/agentloop"
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/execution"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/traceeval"
 )
@@ -53,7 +54,7 @@ func (s *Service) evaluateBudgetAutoDowngrade(task runengine.TaskRecord, taskInt
 		decision.Applied = true
 		decision.TriggerReason = "provider_unavailable"
 		decision.DegradeActions = budgetDegradeActionsForReason(policy, "provider_unavailable")
-		decision.Summary = "预算降级已生效：当前模型提供方不可用，任务改走轻量交付路径。"
+		decision.Summary = presentation.Text(presentation.MessageBudgetDowngradeProvider, nil)
 		decision.Trace = buildBudgetDecisionTrace(task, decision, policy, 0, 0)
 		return decision
 	}
@@ -62,7 +63,7 @@ func (s *Service) evaluateBudgetAutoDowngrade(task runengine.TaskRecord, taskInt
 		decision.Applied = true
 		decision.TriggerReason = "failure_pressure"
 		decision.DegradeActions = budgetDegradeActionsForReason(policy, "failure_pressure")
-		decision.Summary = "预算降级已生效：最近出现模型/提供方失败，任务改走轻量保守执行路径。"
+		decision.Summary = presentation.Text(presentation.MessageBudgetDowngradeFailure, nil)
 		decision.Trace = buildBudgetDecisionTrace(task, decision, policy, failureSignals, 0)
 		return decision
 	}
@@ -72,7 +73,7 @@ func (s *Service) evaluateBudgetAutoDowngrade(task runengine.TaskRecord, taskInt
 		decision.Applied = true
 		decision.TriggerReason = "budget_pressure"
 		decision.DegradeActions = budgetDegradeActionsForReason(policy, "budget_pressure")
-		decision.Summary = "预算降级已生效：当前任务命中 token/成本压力，改为轻量交付并压缩上下文。"
+		decision.Summary = presentation.Text(presentation.MessageBudgetDowngradePressure, nil)
 		decision.Trace = buildBudgetDecisionTrace(task, decision, policy, failureSignals, map[string]any{"total_tokens": totalTokens, "estimated_cost": estimatedCost})
 	}
 	return decision
@@ -80,7 +81,7 @@ func (s *Service) evaluateBudgetAutoDowngrade(task runengine.TaskRecord, taskInt
 
 // applyBudgetAutoDowngrade mutates the execution request shape so the downgrade
 // decision changes the real path instead of only updating settings summaries.
-func (s *Service) applyBudgetAutoDowngrade(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, decision budgetDowngradeDecision) (runengine.TaskRecord, contextsvc.TaskContextSnapshot, map[string]any) {
+func (s *Service) applyBudgetAutoDowngrade(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any, decision budgetDowngradeDecision) (runengine.TaskRecord, taskcontext.TaskContextSnapshot, map[string]any) {
 	if !decision.Applied {
 		return task, snapshot, taskIntent
 	}
@@ -212,7 +213,7 @@ func firstNonEmptyString(primary, fallback string) string {
 	return fallback
 }
 
-func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, []map[string]any, error) {
+func (s *Service) executeTask(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, []map[string]any, error) {
 	return s.executeTaskAttempt(task, task, snapshot, taskIntent)
 }
 
@@ -220,13 +221,13 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 // task snapshot for execution segment classification. Restart needs this split:
 // the new run must execute, but the executor still needs the old run_id to mark
 // the segment as restart instead of initial.
-func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, []map[string]any, error) {
+func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, []map[string]any, error) {
 	var processingTask runengine.TaskRecord
 	ok := false
 	if s.isPreparedRestartAttempt(task) {
-		processingTask, ok = s.runEngine.BeginPreparedExecution(task, s.activeExecutionStepName(taskIntent), "开始生成正式结果")
+		processingTask, ok = s.runEngine.BeginPreparedExecution(task, s.activeExecutionStepName(taskIntent), presentation.Text(presentation.MessageTimelineStartOutput, nil))
 	} else {
-		processingTask, ok = s.runEngine.BeginExecution(task.TaskID, s.activeExecutionStepName(taskIntent), "开始生成正式结果")
+		processingTask, ok = s.runEngine.BeginExecution(task.TaskID, s.activeExecutionStepName(taskIntent), presentation.Text(presentation.MessageTimelineStartOutput, nil))
 	}
 	if !ok {
 		return runengine.TaskRecord{}, nil, nil, nil, ErrTaskNotFound
@@ -366,7 +367,7 @@ func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, sn
 // shell-ball submits that still resolve to bubble delivery. Longer structured
 // flows already carry their own internal timeouts and should not inherit the
 // short near-field deadline.
-func shouldBoundTaskExecution(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, deliveryType string) bool {
+func shouldBoundTaskExecution(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any, deliveryType string) bool {
 	if strings.TrimSpace(stringValue(taskIntent, "name", "")) == "screen_analyze_candidate" {
 		return false
 	}
@@ -391,7 +392,7 @@ func shouldBoundTaskExecution(task runengine.TaskRecord, snapshot contextsvc.Tas
 func (s *Service) reopenTaskForUserInput(task runengine.TaskRecord, taskIntent map[string]any, executionResult execution.Result) (runengine.TaskRecord, map[string]any, bool) {
 	clarificationText := firstNonEmptyString(
 		firstNonEmptyString(executionResult.BubbleText, stringValue(executionResult.DeliveryResult, "preview_text", "")),
-		"请补充你的目标。",
+		presentation.Text(presentation.MessageBubbleInputNeedGoal, nil),
 	)
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", clarificationText, task.UpdatedAt.Format(dateTimeLayout))
 	updatedTask, ok := s.runEngine.ReopenWaitingInput(task.TaskID, task.Title, taskIntent, bubble)
@@ -597,7 +598,7 @@ func executionSegmentKind(previousTask, processingTask runengine.TaskRecord) str
 	return executionSegmentInitial
 }
 
-func (s *Service) captureExecutionTrace(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, result execution.Result, executionErr error) (traceeval.CaptureResult, error) {
+func (s *Service) captureExecutionTrace(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any, result execution.Result, executionErr error) (traceeval.CaptureResult, error) {
 	if s.traceEval == nil {
 		return traceeval.CaptureResult{}, nil
 	}
@@ -666,14 +667,14 @@ func (s *Service) resumeHumanLoopTask(task runengine.TaskRecord, reviewDecision 
 			intentValue = correctedIntent
 		}
 		updatedTitle := s.intent.Suggest(snapshotFromTask(task), intentValue, false).TaskTitle
-		replanBubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "人工复核要求重新规划，请确认新的处理意图。", task.UpdatedAt.Format(dateTimeLayout))
+		replanBubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleReviewReplan, nil), task.UpdatedAt.Format(dateTimeLayout))
 		replannedTask, ok := s.runEngine.ReopenIntentConfirmation(task.TaskID, updatedTitle, intentValue, replanBubble)
 		if !ok {
 			return runengine.TaskRecord{}, nil, nil, false, ErrTaskNotFound
 		}
 		return replannedTask, replanBubble, nil, true, nil
 	}
-	resultBubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "人工复核完成，任务继续执行。", task.UpdatedAt.Format(dateTimeLayout))
+	resultBubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleReviewContinue, nil), task.UpdatedAt.Format(dateTimeLayout))
 	updatedTask, bubble, deliveryResult, _, err := s.executeTask(task, snapshotFromTask(task), task.Intent)
 	if err != nil {
 		return runengine.TaskRecord{}, nil, nil, false, err
@@ -1074,24 +1075,24 @@ func classifyScreenFailure(task runengine.TaskRecord, err error) (string, string
 func executionFailureBubble(err error) string {
 	switch {
 	case errors.Is(err, execution.ErrRecoveryPointPrepareFailed):
-		return "执行失败：执行前恢复点创建失败，请稍后重试。"
+		return presentation.Text(presentation.MessageExecutionFailureCheckpoint, nil)
 	case errors.Is(err, tools.ErrWorkspaceBoundaryDenied):
-		return "执行失败：目标超出工作区边界，已阻止本次操作。"
+		return presentation.Text(presentation.MessageExecutionFailureBoundary, nil)
 	case errors.Is(err, tools.ErrCommandNotAllowed):
-		return "执行失败：命令存在高危风险，已被策略拦截。"
+		return presentation.Text(presentation.MessageExecutionFailureCommand, nil)
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, tools.ErrToolExecutionTimeout):
-		return "执行失败：本地任务执行超时，请重试。"
+		return presentation.Text(presentation.MessageExecutionFailureTimeout, nil)
 	case errors.Is(err, context.Canceled):
-		return "执行失败：本地任务已取消。"
+		return presentation.Text(presentation.MessageExecutionFailureCanceled, nil)
 	case errors.Is(err, tools.ErrCapabilityDenied):
-		return "执行失败：当前平台能力不可用，请检查环境后重试。"
+		return presentation.Text(presentation.MessageExecutionFailurePlatform, nil)
 	case errors.Is(err, tools.ErrToolExecutionFailed):
-		return "执行失败：工具运行失败，请检查环境后重试。"
+		return presentation.Text(presentation.MessageExecutionFailureTool, nil)
 	default:
 		if detail := modelExecutionFailureBubble(err); detail != "" {
 			return detail
 		}
-		return "执行失败：请稍后重试。"
+		return presentation.Text(presentation.MessageExecutionFailureGeneric, nil)
 	}
 }
 
@@ -1104,15 +1105,15 @@ func modelExecutionFailureBubble(err error) string {
 	var statusErr *model.OpenAIHTTPStatusError
 	switch {
 	case errors.Is(err, model.ErrClientNotConfigured):
-		return "执行失败：当前模型未完成配置，请检查 Provider、Base URL、Model 和 API Key。"
+		return presentation.Text(presentation.MessageExecutionFailureModelSetup, nil)
 	case errors.Is(err, model.ErrToolCallingNotSupported):
-		return "执行失败：当前模型接口不支持工具调用，请切换到兼容工具调用的模型或关闭相关工具路径。"
+		return presentation.Text(presentation.MessageExecutionFailureToolCall, nil)
 	case errors.Is(err, model.ErrOpenAIResponseInvalid):
-		return "执行失败：模型返回内容无法解析，请检查上游接口兼容性。"
+		return presentation.Text(presentation.MessageExecutionFailureInvalid, nil)
 	case errors.Is(err, model.ErrOpenAIRequestTimeout):
-		return "执行失败：模型请求超时，请稍后重试。"
+		return presentation.Text(presentation.MessageExecutionFailureModelTime, nil)
 	case errors.Is(err, model.ErrOpenAIRequestFailed):
-		return "执行失败：模型请求发送失败，请检查网络连接或上游地址。"
+		return presentation.Text(presentation.MessageExecutionFailureRequest, nil)
 	case errors.As(err, &statusErr):
 		return modelHTTPStatusFailureBubble(statusErr)
 	default:
@@ -1127,37 +1128,19 @@ func modelHTTPStatusFailureBubble(statusErr *model.OpenAIHTTPStatusError) string
 	safeMessage := sanitizeModelProviderMessage(statusErr.Message)
 	switch statusErr.StatusCode {
 	case 400:
-		if safeMessage != "" {
-			return "执行失败：模型请求被上游拒绝（" + safeMessage + "）。"
-		}
-		return "执行失败：模型请求被上游拒绝，请检查输入内容、模型能力和接口兼容性。"
+		return presentation.Text(presentation.MessageExecutionFailureRejected, presentation.DetailParam(safeMessage))
 	case 401, 403:
-		if safeMessage != "" {
-			return "执行失败：模型鉴权失败（" + safeMessage + "），请检查 API Key 或访问权限。"
-		}
-		return "执行失败：模型鉴权失败，请检查 API Key 或访问权限。"
+		return presentation.Text(presentation.MessageExecutionFailureAuth, presentation.DetailParam(safeMessage))
 	case 404:
-		if safeMessage != "" {
-			return "执行失败：模型接口不存在（" + safeMessage + "），请检查 Base URL 或接口兼容性。"
-		}
-		return "执行失败：模型接口不存在，请检查 Base URL 或接口兼容性。"
+		return presentation.Text(presentation.MessageExecutionFailureEndpoint, presentation.DetailParam(safeMessage))
 	case 408, 504:
-		return "执行失败：模型请求超时，请稍后重试。"
+		return presentation.Text(presentation.MessageExecutionFailureModelTime, nil)
 	case 429:
-		if safeMessage != "" {
-			return "执行失败：模型请求过于频繁（" + safeMessage + "），请稍后重试。"
-		}
-		return "执行失败：模型请求过于频繁，请稍后重试。"
+		return presentation.Text(presentation.MessageExecutionFailureRate, presentation.DetailParam(safeMessage))
 	case 500, 502, 503:
-		if safeMessage != "" {
-			return "执行失败：模型服务暂时不可用（" + safeMessage + "），请稍后重试。"
-		}
-		return "执行失败：模型服务暂时不可用，请稍后重试。"
+		return presentation.Text(presentation.MessageExecutionFailureUpstream, presentation.DetailParam(safeMessage))
 	default:
-		if safeMessage != "" {
-			return "执行失败：模型调用失败（" + safeMessage + "）。"
-		}
-		return "执行失败：模型调用失败，请稍后重试。"
+		return presentation.Text(presentation.MessageExecutionFailureModel, presentation.DetailParam(safeMessage))
 	}
 }
 

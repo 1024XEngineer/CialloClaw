@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/memory"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 func (s *Service) refreshMirrorReferences(taskID string) {
@@ -97,7 +97,7 @@ func mergeMirrorReferences(referenceGroups ...[]map[string]any) []map[string]any
 	return merged
 }
 
-func (s *Service) materializeMemoryReadReferences(taskID, runID string, snapshot contextsvc.TaskContextSnapshot) ([]map[string]any, []memory.RetrievalHit, error) {
+func (s *Service) materializeMemoryReadReferences(taskID, runID string, snapshot taskcontext.TaskContextSnapshot) ([]map[string]any, []memory.RetrievalHit, error) {
 	if s.memory == nil {
 		return nil, nil, memory.ErrStoreNotConfigured
 	}
@@ -117,7 +117,7 @@ func (s *Service) materializeMemoryReadReferences(taskID, runID string, snapshot
 	return mirrorReferencesFromRetrievalHits(persistedHits), persistedHits, nil
 }
 
-func (s *Service) materializeMemoryWriteReferences(taskID, runID string, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, deliveryResult map[string]any) ([]map[string]any, error) {
+func (s *Service) materializeMemoryWriteReferences(taskID, runID string, snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any, deliveryResult map[string]any) ([]map[string]any, error) {
 	if s.memory == nil {
 		return nil, memory.ErrStoreNotConfigured
 	}
@@ -179,7 +179,7 @@ func mirrorReferenceFromSummary(summary memory.MemorySummary) map[string]any {
 // confirmation time. Read plans are persisted before execution so later mirror,
 // debug, or storage-backed views can explain what memory lookup the task was
 // supposed to perform even if execution changes or the process restarts.
-func (s *Service) attachMemoryReadPlans(taskID, runID string, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) {
+func (s *Service) attachMemoryReadPlans(taskID, runID string, snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any) {
 	readPlans := buildMemoryReadPlans(s.memory, taskID, runID, snapshot, taskIntent, nil)
 	_, _ = s.runEngine.SetMemoryPlans(taskID, readPlans, nil)
 	references, hits, err := s.materializeMemoryReadReferences(taskID, runID, snapshot)
@@ -189,7 +189,7 @@ func (s *Service) attachMemoryReadPlans(taskID, runID string, snapshot contextsv
 	s.syncTaskReadMirrorReferences(taskID, references, err)
 }
 
-func buildMemoryReadPlans(memoryService *memory.Service, taskID, runID string, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, hits []memory.RetrievalHit) []map[string]any {
+func buildMemoryReadPlans(memoryService *memory.Service, taskID, runID string, snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any, hits []memory.RetrievalHit) []map[string]any {
 	readPlan := map[string]any{
 		"kind":           "retrieval",
 		"task_id":        taskID,
@@ -239,7 +239,7 @@ func retrievalContextItems(hits []memory.RetrievalHit) []map[string]any {
 // handoffs after a task finishes. Keeping these side effects in one post-
 // delivery step prevents runtime execution from mixing formal delivery with
 // memory persistence details while still leaving a durable handoff trail.
-func (s *Service) attachPostDeliveryHandoffs(taskID, runID string, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, deliveryResult map[string]any, artifacts []map[string]any) {
+func (s *Service) attachPostDeliveryHandoffs(taskID, runID string, snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any, deliveryResult map[string]any, artifacts []map[string]any) {
 	writePlans := []map[string]any{
 		{
 			"kind":        "summary_write",
@@ -266,7 +266,7 @@ func (s *Service) attachPostDeliveryHandoffs(taskID, runID string, snapshot cont
 // the current context snapshot. The fallback order intentionally prefers direct
 // user focus, then file context, then broader perception signals so memory
 // lookup stays anchored to what most likely triggered the task.
-func memoryQueryFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
+func memoryQueryFromSnapshot(snapshot taskcontext.TaskContextSnapshot) string {
 	for _, value := range []string{snapshot.SelectionText, snapshot.Text, snapshot.ErrorText} {
 		if value != "" {
 			return truncateText(value, 64)
@@ -289,7 +289,7 @@ func memoryQueryFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
 // buildMemorySummary creates the short post-task memory summary written after
 // delivery completes. It keeps the output compact on purpose because this text
 // is later used as durable memory material rather than a full-fidelity trace.
-func buildMemorySummary(snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, deliveryResult map[string]any) string {
+func buildMemorySummary(snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any, deliveryResult map[string]any) string {
 	intentName := stringValue(taskIntent, "name", "summarize")
 	title := stringValue(deliveryResult, "title", "任务结果")
 	query := memoryQueryFromSnapshot(snapshot)

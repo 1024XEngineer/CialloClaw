@@ -64,7 +64,7 @@
 
 - [x] `services/local-service/internal/rpc/handlers.go` 已把大部分 stable 方法路由到 orchestrator。
 - [x] `services/local-service/internal/orchestrator/service.go` 已实现 `agent.input.submit`、`agent.task.start`、`agent.task.confirm`、`agent.task.list`、`agent.task.detail.get`、`agent.task.control`、`agent.task.artifact.list`、`agent.task.artifact.open`、`agent.delivery.open`、巡检、镜子、安全、设置等主入口。
-- [x] `services/local-service/internal/runengine`、`internal/delivery`、`internal/context`、`internal/intent`、`internal/risk`、`internal/memory`、`internal/taskinspector` 已具备模块级代码骨架。
+- [x] `services/local-service/internal/runengine`、`internal/delivery`、`internal/taskcontext`、`internal/intent`、`internal/risk`、`internal/memory`、`internal/taskinspector` 已具备模块级代码骨架。
 - [x] 高风险授权等待、待执行计划挂起、基础 `delivery_result` 构建已经进入主编排。
 
 #### 存储与治理底座
