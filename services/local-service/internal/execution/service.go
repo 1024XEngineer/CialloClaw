@@ -417,6 +417,20 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 	if err != nil {
 		return Result{}, err
 	}
+	if trace.LoopStopReason == string(agentloop.StopReasonNeedAuthorization) {
+		latestCall := latestToolCall(trace.ToolCalls)
+		return Result{
+			Content:         trace.OutputText,
+			DurationMS:      time.Since(startedAt).Milliseconds(),
+			ModelInvocation: cloneMap(trace.ModelInvocation),
+			AuditRecord:     cloneMap(trace.AuditRecord),
+			ToolCalls:       append([]tools.ToolCallRecord(nil), trace.ToolCalls...),
+			LoopStopReason:  trace.LoopStopReason,
+			ToolName:        latestCall.ToolName,
+			ToolInput:       cloneMap(latestCall.Input),
+			ToolOutput:      cloneMap(latestCall.Output),
+		}, nil
+	}
 
 	deliveryType := firstNonEmpty(request.DeliveryType, "workspace_document")
 	targetPath := targetPathFromIntent(request.Intent)
