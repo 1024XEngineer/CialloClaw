@@ -7,16 +7,16 @@ import { useUnmount } from "ahooks";
 import type { CSSProperties, PointerEvent as ReactPointerEvent, UIEvent } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, FilePlus2, PanelLeftClose, PanelLeftOpen, RefreshCcw, ScanSearch, X } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowUpRight, FilePlus2, PanelLeftClose, PanelLeftOpen, RefreshCcw, ScanSearch, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import type { NotepadAction } from "@cialloclaw/protocol";
+import type { NotepadAction, Task, TodoItem } from "@cialloclaw/protocol";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { navigateToDashboardTaskDetail } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import { cn } from "@/utils/cn";
-import { buildNoteSummary, describeNotePreview, getNoteBucketLabel, getNoteStatusBadgeClass, groupClosedNotes, sortClosedNotes, sortNotesByUrgency } from "./notePage.mapper";
+import { buildNoteSummary, describeNotePreview, formatNoteBoardTimeHint, formatNoteDisplayPath, getNoteBucketLabel, getNoteStatusBadgeClass, groupClosedNotes, sortClosedNotes, sortNotesByUrgency } from "./notePage.mapper";
 import { buildDashboardNoteBucketInvalidateKeys, buildDashboardNoteBucketQueryKey, dashboardNoteBucketGroups, getDashboardNoteRefreshPlan } from "./notePage.query";
 import {
   areDesktopSourceNotesAvailable,
@@ -27,21 +27,29 @@ import {
   runNoteSourceInspection,
   saveNoteSource,
 } from "./noteSource.service";
-import { buildSourceNoteFallbackItems, convertNoteToTask, loadNoteBucket, performNoteResourceOpenExecution, resolveNoteResourceOpenExecutionPlan, updateNote, type NotePageDataMode } from "./notePage.service";
+import { convertNoteToTask, loadNoteBucket, performNoteResourceOpenExecution, resolveNoteResourceOpenExecutionPlan, updateNote, type NotePageDataMode } from "./notePage.service";
 import {
   buildSourceNoteEditorDraftFromNote,
   createEmptySourceNoteEditorDraft,
   createSourceNoteEditorDraftSignature,
+  formatSourceNoteEditorContent,
+  formatSourceNoteScheduleInputValue,
   parseSourceNoteEditorBlocks,
+  removeSourceNoteEditorBlock,
+  resolveSourceNoteDraftBucketForSchedule,
+  sanitizeSourceNoteBodyText,
   serializeSourceNoteEditorDraft,
+  serializeSourceNoteScheduleInputValue,
+  updateSourceNoteEditorDraftContent,
   upsertSourceNoteEditorBlock,
 } from "./sourceNoteEditor";
-import type { NoteDetailAction, NoteListItem, NotePreviewGroupKey, SourceNoteDocument, SourceNoteEditorDraft } from "./notePage.types";
+import type { NoteDetailAction, NoteListItem, NotePreviewGroupKey, SourceNoteDocument, SourceNoteEditorBlock, SourceNoteEditorDraft } from "./notePage.types";
 import { NoteDetailPanel } from "./components/NoteDetailPanel";
 import { NoteEmptyState } from "./components/NoteEmptyState";
 import { NotePreviewCard } from "./components/NotePreviewCard";
 import { NotePreviewSection } from "./components/NotePreviewSection";
 import { SourceNoteStudio } from "./components/SourceNoteStudio";
+import { loadStoredValue, removeStoredValue, saveStoredValue } from "@/platform/storage";
 import "./notePage.css";
 
 type NoteCanvasCard = {
@@ -59,6 +67,12 @@ type NoteDrawerDragPreview = {
   y: number;
 };
 
+type PersistedNoteBoardState = {
+  boardSeeded: boolean;
+  canvasCards: NoteCanvasCard[];
+  overdueAutoReturnedKeys: string[];
+};
+
 type PendingCreatedSourceNote = {
   path: string;
   sourceLine?: number | null;
@@ -71,16 +85,59 @@ type SourceNoteIdentity = {
   title: string;
 };
 
+type SourceNotePathLookup = Map<string, SourceNoteDocument[]>;
+
 const NOTE_CANVAS_CARD_WIDTH = 360;
 const NOTE_CANVAS_CARD_HEIGHT = 280;
 const NOTE_CANVAS_GRID_SIZE = 28;
 const SOURCE_NOTE_INDEX_POLL_INTERVAL_MS = 2_500;
+const NOTE_BOARD_STORAGE_KEY = "cialloclaw.dashboard.notes.board";
 const NOTE_CANVAS_SEED_POSITIONS = [
   { x: 56, y: 48 },
   { x: 448, y: 56 },
   { x: 840, y: 84 },
   { x: 280, y: 320 },
 ];
+
+function isPersistedNoteCanvasCard(value: unknown): value is NoteCanvasCard {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const itemId = Reflect.get(value, "itemId");
+  const x = Reflect.get(value, "x");
+  const y = Reflect.get(value, "y");
+  const zIndex = Reflect.get(value, "zIndex");
+
+  return typeof itemId === "string"
+    && Number.isFinite(x)
+    && Number.isFinite(y)
+    && Number.isFinite(zIndex);
+}
+
+function loadPersistedNoteBoardState(): PersistedNoteBoardState | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const storedState = loadStoredValue<PersistedNoteBoardState>(NOTE_BOARD_STORAGE_KEY);
+    if (!storedState) {
+      return null;
+    }
+
+    return {
+      boardSeeded: storedState.boardSeeded === true,
+      canvasCards: Array.isArray(storedState.canvasCards) ? storedState.canvasCards.filter(isPersistedNoteCanvasCard) : [],
+      overdueAutoReturnedKeys: Array.isArray(storedState.overdueAutoReturnedKeys)
+        ? storedState.overdueAutoReturnedKeys.filter((value): value is string => typeof value === "string" && value.length > 0)
+        : [],
+    };
+  } catch {
+    removeStoredValue(NOTE_BOARD_STORAGE_KEY);
+    return null;
+  }
+}
 
 function snapCanvasCoordinate(value: number, max: number) {
   return Math.min(max, Math.max(0, Math.round(value / NOTE_CANVAS_GRID_SIZE) * NOTE_CANVAS_GRID_SIZE));
@@ -106,14 +163,195 @@ function normalizeSourceNoteKey(value: string) {
   return value.trim().replace(/\\/g, "/").toLowerCase();
 }
 
+function normalizeSourceNoteRelativeKey(value: string) {
+  return normalizeSourceNoteKey(value).replace(/^\.?\//, "");
+}
+
 function normalizeSourceNoteTitleKey(value: string) {
   return value.trim().toLowerCase();
+}
+
+function normalizeSourceNoteBodyKey(value: string | null | undefined) {
+  return value ? value.trim().replace(/\r\n/g, "\n").toLowerCase() : "";
+}
+
+function getNoteConvertSuccessFeedback(status: Task["status"]) {
+  if (status === "waiting_auth") {
+    return "已按这条便签生成任务，正在打开任务详情；后续还需要处理授权。";
+  }
+
+  return "已按这条便签生成任务，正在打开任务详情。";
+}
+
+function registerSourceNoteLookupKey(
+  lookup: SourceNotePathLookup,
+  key: string,
+  note: SourceNoteDocument,
+) {
+  const normalizedKey = normalizeSourceNoteKey(key);
+  if (normalizedKey === "") {
+    return;
+  }
+
+  const existing = lookup.get(normalizedKey) ?? [];
+  if (existing.some((candidate) => candidate.path === note.path)) {
+    return;
+  }
+
+  lookup.set(normalizedKey, [...existing, note]);
+}
+
+function getSourceNoteLookupCandidates(lookup: SourceNotePathLookup, key: string) {
+  return lookup.get(normalizeSourceNoteKey(key)) ?? [];
+}
+
+function scoreSourceNoteBlockCandidate(item: NoteListItem, block: SourceNoteEditorBlock) {
+  const sourceLine = item.sourceNote?.sourceLine ?? readTodoSourceLine(item.item);
+  const itemTitle = item.sourceNote?.title ?? item.item.title;
+  const normalizedTitle = normalizeSourceNoteTitleKey(itemTitle);
+  const normalizedNoteText = normalizeSourceNoteBodyKey(
+    sanitizeSourceNoteBodyText(item.item.note_text ?? item.experience.noteText, { title: itemTitle }),
+  );
+  const normalizedRepeatRule = normalizeSourceNoteBodyKey(item.item.repeat_rule ?? item.experience.repeatRule);
+  const normalizedRecentInstanceStatus = normalizeSourceNoteBodyKey(item.item.recent_instance_status ?? item.experience.recentInstanceStatus);
+  const normalizedDueAt = (item.item.due_at ?? item.experience.plannedAt ?? "").trim();
+  let score = 0;
+
+  if (typeof sourceLine === "number" && sourceLine > 0) {
+    if (block.sourceLine !== sourceLine) {
+      return -1;
+    }
+
+    score += 8;
+  }
+
+  if (normalizeSourceNoteTitleKey(block.title) === normalizedTitle) {
+    score += 4;
+  } else if (!sourceLine) {
+    return -1;
+  }
+
+  if (
+    normalizedNoteText !== ""
+    && normalizeSourceNoteBodyKey(sanitizeSourceNoteBodyText(block.noteText, { title: block.title || itemTitle })) === normalizedNoteText
+  ) {
+    score += 2;
+  }
+
+  if (normalizedRepeatRule !== "" && normalizeSourceNoteBodyKey(block.repeatRule) === normalizedRepeatRule) {
+    score += 1;
+  }
+
+  if (normalizedRecentInstanceStatus !== "" && normalizeSourceNoteBodyKey(block.recentInstanceStatus) === normalizedRecentInstanceStatus) {
+    score += 1;
+  }
+
+  if (normalizedDueAt !== "" && block.dueAt === normalizedDueAt) {
+    score += 1;
+  }
+
+  return score;
+}
+
+/**
+ * When multiple task roots expose the same relative file path, the backend can
+ * still point formal note items at `workspace/<relative>`. Resolve those
+ * collisions locally by matching only against note blocks from that relative
+ * path instead of falling back to unrelated titles across the whole workspace.
+ */
+function resolveAmbiguousSourceNoteCandidate(
+  item: NoteListItem,
+  candidates: SourceNoteDocument[],
+  sourceNoteBlocksByPath: Map<string, SourceNoteEditorBlock[]>,
+) {
+  let bestMatch: SourceNoteDocument | null = null;
+  let bestScore = -1;
+  let tied = false;
+
+  candidates.forEach((candidate) => {
+    const blocks = sourceNoteBlocksByPath.get(candidate.path) ?? [];
+    const candidateScore = blocks.reduce((maxScore, block) => Math.max(maxScore, scoreSourceNoteBlockCandidate(item, block)), -1);
+    if (candidateScore < 0) {
+      return;
+    }
+
+    if (candidateScore > bestScore) {
+      bestMatch = candidate;
+      bestScore = candidateScore;
+      tied = false;
+      return;
+    }
+
+    if (candidateScore === bestScore) {
+      tied = true;
+    }
+  });
+
+  if (!bestMatch || tied) {
+    return;
+  }
+
+  return bestMatch;
+}
+
+function resolveSourceNoteLookupMatch(
+  item: NoteListItem,
+  lookup: SourceNotePathLookup,
+  sourceNoteBlocksByPath: Map<string, SourceNoteEditorBlock[]>,
+  key: string,
+) {
+  const candidates = getSourceNoteLookupCandidates(lookup, key);
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  if (candidates.length === 1) {
+    return candidates[0];
+  }
+
+  return resolveAmbiguousSourceNoteCandidate(item, candidates, sourceNoteBlocksByPath) ?? null;
+}
+
+function buildSourceNotePathLookup(sourceNotes: SourceNoteDocument[]) {
+  const lookup: SourceNotePathLookup = new Map();
+
+  sourceNotes.forEach((note) => {
+    registerSourceNoteLookupKey(lookup, note.path, note);
+
+    const normalizedNotePath = normalizeSourceNoteKey(note.path);
+    const normalizedSourceRoot = normalizeSourceNoteKey(note.sourceRoot);
+    const rootPrefix = normalizedSourceRoot.endsWith("/") ? normalizedSourceRoot : `${normalizedSourceRoot}/`;
+    if (!normalizedSourceRoot || !normalizedNotePath.startsWith(rootPrefix)) {
+      return;
+    }
+
+    const relativePath = normalizeSourceNoteRelativeKey(normalizedNotePath.slice(rootPrefix.length));
+    if (!relativePath) {
+      return;
+    }
+
+    registerSourceNoteLookupKey(lookup, relativePath, note);
+    registerSourceNoteLookupKey(lookup, `workspace/${relativePath}`, note);
+  });
+
+  return lookup;
 }
 
 function buildSourceNoteBlockKey(path: string, title: string, sourceLine?: number | null) {
   return typeof sourceLine === "number" && sourceLine > 0
     ? `${normalizeSourceNoteKey(path)}::line:${sourceLine}`
     : `${normalizeSourceNoteKey(path)}::title:${normalizeSourceNoteTitleKey(title)}`;
+}
+
+/**
+ * A source note can temporarily exist as both a renderer-local fallback card
+ * and a formal notepad item. Keep both the exact block key and the title alias
+ * so the page can collapse them into one visible note during inspector syncs.
+ */
+function buildSourceNoteBlockAliases(path: string, title: string, sourceLine?: number | null) {
+  const exactKey = buildSourceNoteBlockKey(path, title, sourceLine);
+  const titleKey = buildSourceNoteBlockKey(path, title, null);
+  return exactKey === titleKey ? [exactKey] : [exactKey, titleKey];
 }
 
 function readTodoSourcePath(item: NoteListItem["item"]) {
@@ -136,12 +374,16 @@ function findReplacementItemIdForSourceNote(
   }
 
   const candidateIds = noteItemIdsBySourcePath.get(normalizeSourceNoteKey(sourceIdentity.path)) ?? [];
-  if (candidateIds.length === 0) {
+  const formalCandidateIds = candidateIds.filter((itemId) => {
+    const item = noteItemsById.get(itemId);
+    return item ? !item.sourceNote?.localOnly : false;
+  });
+  if (formalCandidateIds.length === 0) {
     return null;
   }
 
   if (typeof sourceIdentity.sourceLine === "number" && sourceIdentity.sourceLine > 0) {
-    const exactLineCandidate = candidateIds.find((itemId) => {
+    const exactLineCandidate = formalCandidateIds.find((itemId) => {
       const item = noteItemsById.get(itemId);
       return item ? readTodoSourceLine(item.item) === sourceIdentity.sourceLine : false;
     });
@@ -151,7 +393,7 @@ function findReplacementItemIdForSourceNote(
   }
 
   const normalizedTitle = normalizeSourceNoteTitleKey(sourceIdentity.title);
-  const exactCandidate = candidateIds.find((itemId) => {
+  const exactCandidate = formalCandidateIds.find((itemId) => {
     const item = noteItemsById.get(itemId);
     return item ? normalizeSourceNoteTitleKey(item.item.title) === normalizedTitle : false;
   });
@@ -159,25 +401,69 @@ function findReplacementItemIdForSourceNote(
     return exactCandidate;
   }
 
-  return candidateIds.length === 1 ? candidateIds[0] : null;
+  return formalCandidateIds.length === 1 ? formalCandidateIds[0] : null;
+}
+
+function findPreferredItemIdForSourceNote(
+  noteItemsById: Map<string, NoteListItem>,
+  noteItemIdsBySourcePath: Map<string, string[]>,
+  sourceIdentity: SourceNoteIdentity | PendingCreatedSourceNote | null,
+) {
+  if (!sourceIdentity) {
+    return null;
+  }
+
+  const candidateIds = noteItemIdsBySourcePath.get(normalizeSourceNoteKey(sourceIdentity.path)) ?? [];
+  if (candidateIds.length === 0) {
+    return null;
+  }
+
+  const formalCandidateIds = candidateIds.filter((itemId) => {
+    const item = noteItemsById.get(itemId);
+    return item ? !item.sourceNote?.localOnly : false;
+  });
+  const fallbackCandidateIds = candidateIds.filter((itemId) => !formalCandidateIds.includes(itemId));
+  const orderedCandidateIds = [...formalCandidateIds, ...fallbackCandidateIds];
+
+  if (typeof sourceIdentity.sourceLine === "number" && sourceIdentity.sourceLine > 0) {
+    const exactLineCandidate = orderedCandidateIds.find((itemId) => {
+      const item = noteItemsById.get(itemId);
+      return item ? readTodoSourceLine(item.item) === sourceIdentity.sourceLine : false;
+    });
+    if (exactLineCandidate) {
+      return exactLineCandidate;
+    }
+  }
+
+  const normalizedTitle = normalizeSourceNoteTitleKey(sourceIdentity.title);
+  const exactCandidate = orderedCandidateIds.find((itemId) => {
+    const item = noteItemsById.get(itemId);
+    return item ? normalizeSourceNoteTitleKey(item.item.title) === normalizedTitle : false;
+  });
+  if (exactCandidate) {
+    return exactCandidate;
+  }
+
+  return orderedCandidateIds.length === 1 ? orderedCandidateIds[0] : null;
 }
 
 function resolveNoteItemSourceNotePath(
   item: NoteListItem,
-  sourceNotesByPath: Map<string, SourceNoteDocument>,
+  sourceNotesByPath: SourceNotePathLookup,
+  sourceNoteBlocksByPath: Map<string, SourceNoteEditorBlock[]>,
 ) {
   const sourcePath = readTodoSourcePath(item.item);
   if (sourcePath) {
-    return sourcePath;
+    return resolveSourceNoteLookupMatch(item, sourceNotesByPath, sourceNoteBlocksByPath, sourcePath)?.path ?? null;
   }
 
   if (item.sourceNote?.path) {
-    return item.sourceNote.path;
+    return resolveSourceNoteLookupMatch(item, sourceNotesByPath, sourceNoteBlocksByPath, item.sourceNote.path)?.path ?? null;
   }
 
   const resourceMatch = item.experience.relatedResources
-    .map((resource) => sourceNotesByPath.get(normalizeSourceNoteKey(resource.path)))
-    .find((note) => note !== undefined);
+    .map((resource) => resolveSourceNoteLookupMatch(item, sourceNotesByPath, sourceNoteBlocksByPath, resource.path))
+    .find((note): note is SourceNoteDocument => note !== null);
   if (resourceMatch) {
     return resourceMatch.path;
   }
@@ -188,10 +474,238 @@ function resolveNoteItemSourceNotePath(
 function matchesSourceNotePath(
   item: NoteListItem,
   sourceNotePath: string,
-  sourceNotesByPath: Map<string, SourceNoteDocument>,
+  sourceNotesByPath: SourceNotePathLookup,
+  sourceNoteBlocksByPath: Map<string, SourceNoteEditorBlock[]>,
 ) {
-  const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath);
+  const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath, sourceNoteBlocksByPath);
   return matchedPath !== null && normalizeSourceNoteKey(matchedPath) === normalizeSourceNoteKey(sourceNotePath);
+}
+
+function resolveSourceNoteBlockAliases(
+  item: NoteListItem,
+  sourceNotesByPath: SourceNotePathLookup,
+  sourceNoteBlocksByPath: Map<string, SourceNoteEditorBlock[]>,
+) {
+  const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath, sourceNoteBlocksByPath);
+  if (!matchedPath) {
+    return [];
+  }
+
+  return buildSourceNoteBlockAliases(
+    matchedPath,
+    item.sourceNote?.title ?? item.item.title,
+    item.sourceNote?.sourceLine ?? readTodoSourceLine(item.item),
+  );
+}
+
+function resolveSourceNoteBlockForItem(
+  item: NoteListItem,
+  sourceNotesByPath: SourceNotePathLookup,
+  sourceNoteBlocksByPath: Map<string, SourceNoteEditorBlock[]>,
+): SourceNoteEditorBlock | null {
+  const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath, sourceNoteBlocksByPath);
+  if (!matchedPath) {
+    return null;
+  }
+
+  const blocks = sourceNoteBlocksByPath.get(matchedPath) ?? [];
+  let bestBlock: SourceNoteEditorBlock | null = null;
+  let bestScore = -1;
+  let tied = false;
+
+  blocks.forEach((block) => {
+    const candidateScore = scoreSourceNoteBlockCandidate(item, block);
+    if (candidateScore < 0) {
+      return;
+    }
+
+    if (candidateScore > bestScore) {
+      bestBlock = block;
+      bestScore = candidateScore;
+      tied = false;
+      return;
+    }
+
+    if (candidateScore === bestScore) {
+      tied = true;
+    }
+  });
+
+  if (!bestBlock || tied) {
+    return null;
+  }
+
+  return bestBlock;
+}
+
+function readSourceNoteRecurringEnabledOverride(block: SourceNoteEditorBlock | null) {
+  if (!block) {
+    return null;
+  }
+
+  const metadataValue = block.extraMetadata
+    .find((entry) => normalizeSourceNoteTitleKey(entry.key) === "recurring_enabled")
+    ?.value.trim()
+    .toLowerCase();
+
+  if (metadataValue === "false" || metadataValue === "0" || metadataValue === "paused") {
+    return false;
+  }
+
+  if (metadataValue === "true" || metadataValue === "1") {
+    return true;
+  }
+
+  const normalizedRecentStatus = normalizeSourceNoteBodyKey(block.recentInstanceStatus);
+  if (normalizedRecentStatus === "paused" || normalizedRecentStatus.includes("暂停")) {
+    return false;
+  }
+
+  return null;
+}
+
+function applySourceNoteDisplayOverrides(
+  item: NoteListItem,
+  sourceNotesByPath: SourceNotePathLookup,
+  sourceNoteBlocksByPath: Map<string, SourceNoteEditorBlock[]>,
+): NoteListItem {
+  if (item.sourceNote?.localOnly || item.item.bucket !== "recurring_rule") {
+    return item;
+  }
+
+  const matchedBlock = resolveSourceNoteBlockForItem(item, sourceNotesByPath, sourceNoteBlocksByPath);
+  const recurringEnabledOverride = readSourceNoteRecurringEnabledOverride(matchedBlock);
+  if (recurringEnabledOverride !== false) {
+    return item;
+  }
+
+  const recurringStatusText = matchedBlock?.recentInstanceStatus?.trim() || item.experience.recentInstanceStatus || "paused";
+
+  return {
+    ...item,
+    experience: {
+      ...item.experience,
+      detailStatus: "重复规则已暂停",
+      detailStatusTone: "warn",
+      isRecurringEnabled: false,
+      nextOccurrenceAt: null,
+      plannedAt: null,
+      previewStatus: "规则已暂停",
+      recentInstanceStatus: recurringStatusText,
+      summaryLabel: "重复规则已暂停",
+      timeHint: "已暂停",
+    },
+  };
+}
+
+/**
+ * A board card can temporarily stay on the canvas as a renderer-local fallback
+ * while the formal bucket item for the same source block has already arrived.
+ * Treat either representation as one visible note so the rail never shows a
+ * duplicate beside the board.
+ */
+function isNoteItemRepresentedOnCanvas(
+  item: NoteListItem,
+  canvasItemIdSet: Set<string>,
+  canvasRepresentedSourceNoteBlocks: Set<string>,
+  sourceNotesByPath: SourceNotePathLookup,
+  sourceNoteBlocksByPath: Map<string, SourceNoteEditorBlock[]>,
+) {
+  return canvasItemIdSet.has(item.item.item_id)
+    || resolveSourceNoteBlockAliases(item, sourceNotesByPath, sourceNoteBlocksByPath).some((alias) => canvasRepresentedSourceNoteBlocks.has(alias));
+}
+
+function createEmptyBucketGroups(): Record<NotePreviewGroupKey, NoteListItem[]> {
+  return {
+    closed: [],
+    later: [],
+    recurring_rule: [],
+    upcoming: [],
+  };
+}
+
+/**
+ * Overdue upcoming notes should leave the active planning rail and appear under
+ * the closed sidebar section without rewriting the formal bucket value.
+ */
+function resolveRailBucketForItem(item: NoteListItem, displayedBucket: NotePreviewGroupKey): NotePreviewGroupKey {
+  if (displayedBucket === "upcoming" && item.item.status === "overdue") {
+    return "closed";
+  }
+
+  return displayedBucket;
+}
+
+function resolveOverdueCanvasAutoReturnKeys(
+  item: NoteListItem,
+  sourceNotesByPath: SourceNotePathLookup,
+  sourceNoteBlocksByPath: Map<string, SourceNoteEditorBlock[]>,
+) {
+  const aliases = resolveSourceNoteBlockAliases(item, sourceNotesByPath, sourceNoteBlocksByPath);
+  return aliases.length > 0 ? aliases : [`item:${item.item.item_id}`];
+}
+
+function findFormalReplacementItemIdForSourceNoteEntry(
+  itemId: string,
+  noteItemsById: Map<string, NoteListItem>,
+  noteItemIdsBySourcePath: Map<string, string[]>,
+  sourceNoteIdentityByItemId: Map<string, SourceNoteIdentity>,
+) {
+  const sourceIdentity = sourceNoteIdentityByItemId.get(itemId) ?? null;
+  if (!sourceIdentity) {
+    return null;
+  }
+
+  const replacementItemId = findReplacementItemIdForSourceNote(noteItemsById, noteItemIdsBySourcePath, sourceIdentity);
+  return replacementItemId && replacementItemId !== itemId ? replacementItemId : null;
+}
+
+function updateRememberedFormalBucketForItem(
+  rememberedBucketByAlias: Map<string, NotePreviewGroupKey>,
+  item: NoteListItem,
+  nextBucket: NotePreviewGroupKey | null,
+  sourceNotesByPath: SourceNotePathLookup,
+  sourceNoteBlocksByPath: Map<string, SourceNoteEditorBlock[]>,
+  options: {
+    allowLaterReset?: boolean;
+  } = {},
+) {
+  if (item.sourceNote?.localOnly) {
+    return;
+  }
+
+  resolveSourceNoteBlockAliases(item, sourceNotesByPath, sourceNoteBlocksByPath).forEach((alias) => {
+    if (!nextBucket) {
+      rememberedBucketByAlias.delete(alias);
+      return;
+    }
+
+    if (nextBucket === "later") {
+      if (options.allowLaterReset) {
+        rememberedBucketByAlias.delete(alias);
+      }
+      return;
+    }
+
+    rememberedBucketByAlias.set(alias, nextBucket);
+  });
+}
+
+function resolveRememberedFormalBucket(
+  rememberedBucketByAlias: Map<string, NotePreviewGroupKey>,
+  item: NoteListItem,
+  sourceNotesByPath: SourceNotePathLookup,
+  sourceNoteBlocksByPath: Map<string, SourceNoteEditorBlock[]>,
+) {
+  if (item.sourceNote?.localOnly || item.item.bucket !== "later") {
+    return null;
+  }
+
+  const rememberedAlias = resolveSourceNoteBlockAliases(item, sourceNotesByPath, sourceNoteBlocksByPath).find((alias) => {
+    const bucket = rememberedBucketByAlias.get(alias);
+    return bucket !== undefined && bucket !== "later";
+  });
+  return rememberedAlias ? rememberedBucketByAlias.get(rememberedAlias) ?? null : null;
 }
 
 /**
@@ -203,6 +717,7 @@ function matchesSourceNotePath(
 export function NotePage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const persistedBoardStateRef = useRef<PersistedNoteBoardState | null>(loadPersistedNoteBoardState());
   const boardLayerRef = useRef<HTMLDivElement | null>(null);
   const railRef = useRef<HTMLElement | null>(null);
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
@@ -211,7 +726,8 @@ export function NotePage() {
   const [expandedBucket, setExpandedBucket] = useState<NotePreviewGroupKey>("upcoming");
   const [showMoreClosed, setShowMoreClosed] = useState(false);
   const [canvasCards, setCanvasCards] = useState<NoteCanvasCard[]>([]);
-  const [boardSeeded, setBoardSeeded] = useState(false);
+  const [boardSeeded, setBoardSeeded] = useState(() => persistedBoardStateRef.current?.boardSeeded ?? false);
+  const [boardStateHydrated, setBoardStateHydrated] = useState(() => persistedBoardStateRef.current === null);
   const [isBoardDropTarget, setIsBoardDropTarget] = useState(false);
   const [isRailDropTarget, setIsRailDropTarget] = useState(false);
   const [activeRailDropBucket, setActiveRailDropBucket] = useState<NotePreviewGroupKey | null>(null);
@@ -224,14 +740,24 @@ export function NotePage() {
   const [selectedSourceNotePath, setSelectedSourceNotePath] = useState<string | null>(null);
   const [sourceNoteDraft, setSourceNoteDraft] = useState<SourceNoteEditorDraft>(() => createEmptySourceNoteEditorDraft());
   const [sourceNoteBaseline, setSourceNoteBaseline] = useState(() => createSourceNoteEditorDraftSignature(createEmptySourceNoteEditorDraft()));
+  const [sourceNoteEditorContent, setSourceNoteEditorContent] = useState(() => formatSourceNoteEditorContent(createEmptySourceNoteEditorDraft()));
+  const [sourceNoteEditorBaselineContent, setSourceNoteEditorBaselineContent] = useState(() => formatSourceNoteEditorContent(createEmptySourceNoteEditorDraft()));
   const [sourceNoteBaselineContent, setSourceNoteBaselineContent] = useState("");
   const [sourceEditorItemId, setSourceEditorItemId] = useState<string | null>(null);
   const [sourceNoteSyncMessage, setSourceNoteSyncMessage] = useState<string | null>(null);
   const [isCreatingSourceNote, setIsCreatingSourceNote] = useState(false);
   const [sourceStudioOpen, setSourceStudioOpen] = useState(false);
   const [isSavingSourceNote, setIsSavingSourceNote] = useState(false);
+  const [noteScheduleEditing, setNoteScheduleEditing] = useState(false);
+  const [noteResourcePickerOpen, setNoteResourcePickerOpen] = useState(false);
+  const [noteScheduleDueAt, setNoteScheduleDueAt] = useState("");
+  const [noteScheduleRepeatRule, setNoteScheduleRepeatRule] = useState("");
+  const [isSavingNoteSchedule, setIsSavingNoteSchedule] = useState(false);
   const [isRunningInspection, setIsRunningInspection] = useState(false);
+  const [overdueCanvasAutoReturnedKeysVersion, setOverdueCanvasAutoReturnedKeysVersion] = useState(0);
   const feedbackTimeoutRef = useRef<number | null>(null);
+  const rememberedFormalBucketByAliasRef = useRef(new Map<string, NotePreviewGroupKey>());
+  const overdueCanvasAutoReturnedKeysRef = useRef(new Set<string>());
   const sourceNoteIndexFingerprintRef = useRef<string | null>(null);
   const pendingCreatedSourceNoteRef = useRef<PendingCreatedSourceNote | null>(null);
   const noteSourceIdentityByItemIdRef = useRef(new Map<string, SourceNoteIdentity>());
@@ -335,92 +861,204 @@ export function NotePage() {
     retry: false,
   });
 
-  const rpcUpcomingItems = sortNotesByUrgency(upcomingQuery.data?.items ?? []);
-  const rpcLaterItems = sortNotesByUrgency(laterQuery.data?.items ?? []);
-  const recurringItems = sortNotesByUrgency(recurringQuery.data?.items ?? []);
-  const closedItems = sortClosedNotes(closedQuery.data?.items ?? []);
   const sourceNotesData = sourceNotesQuery.data?.notes;
   const sourceNoteIndexData = sourceNoteIndexQuery.data?.notes;
   const sourceRootsData = sourceNotesQuery.data?.sourceRoots;
+  const noteBucketsResolved = !upcomingQuery.isPending && !laterQuery.isPending && !recurringQuery.isPending && !closedQuery.isPending;
   const sourceNotes = useMemo(() => sourceNotesData ?? [], [sourceNotesData]);
   const resolvedSourceRoots = useMemo(() => sourceRootsData ?? taskSourceRoots, [sourceRootsData, taskSourceRoots]);
-  const sourceNotesByPath = useMemo(
-    () => new Map(sourceNotes.map((note) => [normalizeSourceNoteKey(note.path), note])),
+  const sourceNotesByPath = useMemo(() => buildSourceNotePathLookup(sourceNotes), [sourceNotes]);
+  const sourceNoteBlocksByPath = useMemo(
+    () => new Map(sourceNotes.map((note) => [note.path, parseSourceNoteEditorBlocks(note)])),
     [sourceNotes],
   );
-  const representedSourceNoteBlocks = useMemo(() => {
+  const rawRpcItems = useMemo(
+    () => [
+      ...(upcomingQuery.data?.items ?? []),
+      ...(laterQuery.data?.items ?? []),
+      ...(recurringQuery.data?.items ?? []),
+      ...(closedQuery.data?.items ?? []),
+    ],
+    [closedQuery.data?.items, laterQuery.data?.items, recurringQuery.data?.items, upcomingQuery.data?.items],
+  );
+  useEffect(() => {
+    rawRpcItems.forEach((item) => {
+      updateRememberedFormalBucketForItem(
+        rememberedFormalBucketByAliasRef.current,
+        item,
+        item.item.bucket,
+        sourceNotesByPath,
+        sourceNoteBlocksByPath,
+      );
+    });
+  }, [rawRpcItems, sourceNoteBlocksByPath, sourceNotesByPath]);
+  useEffect(() => {
+    if (boardStateHydrated || !boardLayerSize || !noteBucketsResolved) {
+      return;
+    }
+
+    const persistedBoardState = persistedBoardStateRef.current;
+    if (!persistedBoardState) {
+      setBoardStateHydrated(true);
+      return;
+    }
+
+    overdueCanvasAutoReturnedKeysRef.current = new Set(persistedBoardState.overdueAutoReturnedKeys);
+    setCanvasCards(
+      persistedBoardState.canvasCards.map((entry) => ({
+        ...entry,
+        ...clampCanvasPlacement({ x: entry.x, y: entry.y }, boardLayerSize),
+      })),
+    );
+    setBoardSeeded(persistedBoardState.boardSeeded);
+    setBoardStateHydrated(true);
+  }, [boardLayerSize, boardStateHydrated, noteBucketsResolved]);
+  useEffect(() => {
+    if (!boardStateHydrated) {
+      return;
+    }
+
+    const activeOverdueKeys = new Set<string>();
+
+    rawRpcItems.forEach((item) => {
+      const displayedBucket = resolveRememberedFormalBucket(
+        rememberedFormalBucketByAliasRef.current,
+        item,
+        sourceNotesByPath,
+        sourceNoteBlocksByPath,
+      ) ?? item.item.bucket;
+      const railBucket = resolveRailBucketForItem(item, displayedBucket);
+      if (railBucket !== displayedBucket) {
+        resolveOverdueCanvasAutoReturnKeys(item, sourceNotesByPath, sourceNoteBlocksByPath).forEach((key) => activeOverdueKeys.add(key));
+      }
+    });
+    replaceOverdueCanvasAutoReturnedKeys(
+      [...overdueCanvasAutoReturnedKeysRef.current].filter((key) => activeOverdueKeys.has(key)),
+    );
+  }, [boardStateHydrated, rawRpcItems, sourceNoteBlocksByPath, sourceNotesByPath]);
+  const displayRpcItems = useMemo(
+    () => rawRpcItems.map((item) => applySourceNoteDisplayOverrides(item, sourceNotesByPath, sourceNoteBlocksByPath)),
+    [rawRpcItems, sourceNoteBlocksByPath, sourceNotesByPath],
+  );
+  const rpcItemsByBucket = useMemo(() => {
+    const nextGroups = createEmptyBucketGroups();
+
+    displayRpcItems
+      .forEach((item) => {
+        const displayedBucket = resolveRememberedFormalBucket(
+          rememberedFormalBucketByAliasRef.current,
+          item,
+          sourceNotesByPath,
+          sourceNoteBlocksByPath,
+        ) ?? item.item.bucket;
+        nextGroups[resolveRailBucketForItem(item, displayedBucket)].push(item);
+      });
+
+    nextGroups.upcoming = sortNotesByUrgency(nextGroups.upcoming);
+    nextGroups.later = sortNotesByUrgency(nextGroups.later);
+    nextGroups.recurring_rule = sortNotesByUrgency(nextGroups.recurring_rule);
+    nextGroups.closed = sortClosedNotes(nextGroups.closed);
+
+    return nextGroups;
+  }, [displayRpcItems, sourceNoteBlocksByPath, sourceNotesByPath]);
+  const rpcUpcomingItems = rpcItemsByBucket.upcoming;
+  const rpcLaterItems = rpcItemsByBucket.later;
+  const rpcRecurringItems = rpcItemsByBucket.recurring_rule;
+  const rpcClosedItems = rpcItemsByBucket.closed;
+  const upcomingItems = rpcUpcomingItems;
+  const laterItems = rpcLaterItems;
+  const recurringItems = rpcRecurringItems;
+  const closedItems = rpcClosedItems;
+  const formalUpcomingItems = rpcUpcomingItems;
+  const formalLaterItems = rpcLaterItems;
+  const formalRecurringItems = rpcRecurringItems;
+  const formalClosedItems = rpcClosedItems;
+  const allItems = useMemo(() => [...upcomingItems, ...laterItems, ...recurringItems, ...closedItems], [upcomingItems, laterItems, recurringItems, closedItems]);
+  const noteItemsById = useMemo(() => new Map(allItems.map((item) => [item.item.item_id, item])), [allItems]);
+  const canvasItemIdSet = useMemo(() => new Set(canvasCards.map((entry) => entry.itemId)), [canvasCards]);
+  const canvasRepresentedSourceNoteBlocks = useMemo(() => {
     const representedBlocks = new Set<string>();
 
-    [...rpcUpcomingItems, ...rpcLaterItems, ...recurringItems, ...closedItems].forEach((item) => {
-      const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath);
-      if (!matchedPath) {
+    canvasCards.forEach((entry) => {
+      const item = noteItemsById.get(entry.itemId);
+      if (!item) {
         return;
       }
 
-      representedBlocks.add(
-        buildSourceNoteBlockKey(
-          matchedPath,
-          item.item.title,
-          readTodoSourceLine(item.item),
-        ),
-      );
+      resolveSourceNoteBlockAliases(item, sourceNotesByPath, sourceNoteBlocksByPath).forEach((alias) => {
+        representedBlocks.add(alias);
+      });
     });
 
     return representedBlocks;
-  }, [closedItems, recurringItems, rpcLaterItems, rpcUpcomingItems, sourceNotesByPath]);
-  const sourceNoteFallbackItems = useMemo(
+  }, [canvasCards, noteItemsById, sourceNoteBlocksByPath, sourceNotesByPath]);
+  const visibleUpcomingItems = useMemo(
     () =>
-      sourceNotes
-        .sort((left, right) => (right.modifiedAtMs ?? 0) - (left.modifiedAtMs ?? 0))
-        .flatMap((note) => buildSourceNoteFallbackItems(note))
-        .filter((item) => {
-          const path = item.sourceNote?.path ?? readTodoSourcePath(item.item);
-          if (!path) {
-            return true;
-          }
-
-          return !representedSourceNoteBlocks.has(
-            buildSourceNoteBlockKey(
-              path,
-              item.sourceNote?.title ?? item.item.title,
-              item.sourceNote?.sourceLine ?? readTodoSourceLine(item.item),
-            ),
-          );
-        }),
-    [representedSourceNoteBlocks, sourceNotes],
+      upcomingItems.filter(
+        (item) => !isNoteItemRepresentedOnCanvas(item, canvasItemIdSet, canvasRepresentedSourceNoteBlocks, sourceNotesByPath, sourceNoteBlocksByPath),
+      ),
+    [canvasItemIdSet, canvasRepresentedSourceNoteBlocks, sourceNoteBlocksByPath, sourceNotesByPath, upcomingItems],
   );
-  const upcomingItems = rpcUpcomingItems;
-  const laterItems = useMemo(() => [...sourceNoteFallbackItems, ...rpcLaterItems], [rpcLaterItems, sourceNoteFallbackItems]);
-  const canvasItemIdSet = useMemo(() => new Set(canvasCards.map((entry) => entry.itemId)), [canvasCards]);
-  const visibleUpcomingItems = useMemo(() => upcomingItems.filter((item) => !canvasItemIdSet.has(item.item.item_id)), [canvasItemIdSet, upcomingItems]);
-  const visibleLaterItems = useMemo(() => laterItems.filter((item) => !canvasItemIdSet.has(item.item.item_id)), [canvasItemIdSet, laterItems]);
-  const visibleRecurringItems = useMemo(() => recurringItems.filter((item) => !canvasItemIdSet.has(item.item.item_id)), [canvasItemIdSet, recurringItems]);
-  const visibleClosedItems = useMemo(() => closedItems.filter((item) => !canvasItemIdSet.has(item.item.item_id)), [canvasItemIdSet, closedItems]);
-  const closedGroups = useMemo(() => groupClosedNotes(visibleClosedItems, showMoreClosed), [showMoreClosed, visibleClosedItems]);
+  const visibleLaterItems = useMemo(
+    () =>
+      laterItems.filter(
+        (item) => !isNoteItemRepresentedOnCanvas(item, canvasItemIdSet, canvasRepresentedSourceNoteBlocks, sourceNotesByPath, sourceNoteBlocksByPath),
+      ),
+    [canvasItemIdSet, canvasRepresentedSourceNoteBlocks, laterItems, sourceNoteBlocksByPath, sourceNotesByPath],
+  );
+  const visibleRecurringItems = useMemo(
+    () =>
+      recurringItems.filter(
+        (item) => !isNoteItemRepresentedOnCanvas(item, canvasItemIdSet, canvasRepresentedSourceNoteBlocks, sourceNotesByPath, sourceNoteBlocksByPath),
+      ),
+    [canvasItemIdSet, canvasRepresentedSourceNoteBlocks, recurringItems, sourceNoteBlocksByPath, sourceNotesByPath],
+  );
+  const visibleClosedItems = useMemo(
+    () =>
+      closedItems.filter(
+        (item) => !isNoteItemRepresentedOnCanvas(item, canvasItemIdSet, canvasRepresentedSourceNoteBlocks, sourceNotesByPath, sourceNoteBlocksByPath),
+      ),
+    [canvasItemIdSet, canvasRepresentedSourceNoteBlocks, closedItems, sourceNoteBlocksByPath, sourceNotesByPath],
+  );
+  /**
+   * Keep renderer-local source note cards on the canvas only. The sidebar
+   * should list formal note items instead of duplicating local markdown
+   * fallback cards beside the board.
+   */
+  const railUpcomingItems = useMemo(() => visibleUpcomingItems.filter((item) => !item.sourceNote?.localOnly), [visibleUpcomingItems]);
+  const railLaterItems = useMemo(() => visibleLaterItems.filter((item) => !item.sourceNote?.localOnly), [visibleLaterItems]);
+  const railRecurringItems = useMemo(() => visibleRecurringItems.filter((item) => !item.sourceNote?.localOnly), [visibleRecurringItems]);
+  const railClosedItems = useMemo(() => visibleClosedItems.filter((item) => !item.sourceNote?.localOnly), [visibleClosedItems]);
+  const preferredUpcomingItem = useMemo(() => railUpcomingItems[0] ?? formalUpcomingItems[0] ?? null, [formalUpcomingItems, railUpcomingItems]);
+  const preferredLaterItem = useMemo(() => railLaterItems[0] ?? formalLaterItems[0] ?? null, [formalLaterItems, railLaterItems]);
+  const preferredRecurringItem = useMemo(() => railRecurringItems[0] ?? formalRecurringItems[0] ?? null, [formalRecurringItems, railRecurringItems]);
+  const preferredClosedItem = useMemo(() => railClosedItems[0] ?? formalClosedItems[0] ?? null, [formalClosedItems, railClosedItems]);
+  const closedGroups = useMemo(() => groupClosedNotes(railClosedItems, showMoreClosed), [railClosedItems, showMoreClosed]);
   const hasOlderClosedItems = useMemo(() => {
     const now = Date.now();
 
-    return visibleClosedItems.some((item) => {
+    return railClosedItems.some((item) => {
       const endedAt = item.experience.endedAt ? new Date(item.experience.endedAt).getTime() : now;
       const diffDays = (now - endedAt) / (1000 * 60 * 60 * 24);
       return diffDays > 7;
     });
-  }, [visibleClosedItems]);
-  const summary = useMemo(() => buildNoteSummary({ recurring_rule: recurringItems, upcoming: upcomingItems }), [recurringItems, upcomingItems]);
-  const allItems = useMemo(() => [...upcomingItems, ...laterItems, ...recurringItems, ...closedItems], [upcomingItems, laterItems, recurringItems, closedItems]);
-  const noteItemsById = useMemo(() => new Map(allItems.map((item) => [item.item.item_id, item])), [allItems]);
+  }, [railClosedItems]);
+  const summary = useMemo(
+    () => buildNoteSummary({ recurring_rule: formalRecurringItems, upcoming: formalUpcomingItems }),
+    [formalRecurringItems, formalUpcomingItems],
+  );
   const noteItemSourcePathById = useMemo(() => {
     const itemPathMap = new Map<string, string>();
 
     allItems.forEach((item) => {
-      const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath);
+      const matchedPath = resolveNoteItemSourceNotePath(item, sourceNotesByPath, sourceNoteBlocksByPath);
       if (matchedPath) {
         itemPathMap.set(item.item.item_id, matchedPath);
       }
     });
 
     return itemPathMap;
-  }, [allItems, sourceNotesByPath]);
+  }, [allItems, sourceNoteBlocksByPath, sourceNotesByPath]);
   const noteItemIdsBySourcePath = useMemo(() => {
     const pathItemMap = new Map<string, string[]>();
 
@@ -434,9 +1072,31 @@ export function NotePage() {
     return pathItemMap;
   }, [noteItemSourcePathById]);
   const selectedItem = useMemo(
-    () => allItems.find((entry) => entry.item.item_id === selectedItemId) ?? upcomingItems[0] ?? laterItems[0] ?? recurringItems[0] ?? closedItems[0] ?? null,
-    [allItems, closedItems, laterItems, recurringItems, selectedItemId, upcomingItems],
+    () =>
+      allItems.find((entry) => entry.item.item_id === selectedItemId)
+      ?? preferredUpcomingItem
+      ?? preferredLaterItem
+      ?? preferredRecurringItem
+      ?? preferredClosedItem
+      ?? null,
+    [allItems, preferredClosedItem, preferredLaterItem, preferredRecurringItem, preferredUpcomingItem, selectedItemId],
   );
+  const canScheduleSelectedItem = selectedItem !== null && selectedItem.item.bucket !== "closed";
+  const scheduleActionLabel = useMemo(() => {
+    if (!selectedItem) {
+      return "安排时间";
+    }
+
+    if (selectedItem.experience.repeatRule) {
+      return "修改时间/规则";
+    }
+
+    if (selectedItem.experience.plannedAt) {
+      return "修改时间";
+    }
+
+    return "安排时间";
+  }, [selectedItem]);
   const sourceStudioItem = useMemo(
     () => (sourceEditorItemId ? noteItemsById.get(sourceEditorItemId) ?? null : null),
     [noteItemsById, sourceEditorItemId],
@@ -446,8 +1106,8 @@ export function NotePage() {
     () => sourceNotes.find((note) => note.path === selectedSourceNotePath) ?? primarySourceNote,
     [primarySourceNote, selectedSourceNotePath, sourceNotes],
   );
-  const sourceStudioFileLabel = selectedSourceNote?.fileName ?? primarySourceNote?.fileName ?? null;
-  const sourceEditorDirty = createSourceNoteEditorDraftSignature(sourceNoteDraft) !== sourceNoteBaseline;
+  const sourceEditorDirty = sourceNoteEditorContent !== sourceNoteEditorBaselineContent
+    || createSourceNoteEditorDraftSignature(sourceNoteDraft) !== sourceNoteBaseline;
   const sourceNoteIndexFingerprint = useMemo(
     () => (sourceNoteIndexData ?? []).map((note) => `${note.path}:${note.modifiedAtMs ?? 0}:${note.sizeBytes}`).join("|"),
     [sourceNoteIndexData],
@@ -541,13 +1201,14 @@ export function NotePage() {
     ];
   }
 
-  async function triggerAutoTaskExecutionForSourceNote(
+  async function syncCreatedSourceNoteToBoard(
     savedNote: SourceNoteDocument,
     sourceIdentity: PendingCreatedSourceNote,
   ) {
     const latestSourceNotesResult = await sourceNotesQuery.refetch();
     const latestSourceNotes = latestSourceNotesResult.data?.notes ?? sourceNotes;
-    const latestSourceNotesByPath = new Map(latestSourceNotes.map((note) => [normalizeSourceNoteKey(note.path), note]));
+    const latestSourceNotesByPath = buildSourceNotePathLookup(latestSourceNotes);
+    const latestSourceNoteBlocksByPath = new Map(latestSourceNotes.map((note) => [note.path, parseSourceNoteEditorBlocks(note)]));
     const normalizedExpectedPath = normalizeSourceNoteKey(sourceIdentity.path);
     const normalizedExpectedTitle = normalizeSourceNoteTitleKey(sourceIdentity.title);
     const refetchedItems = await refetchAllNoteBuckets();
@@ -556,7 +1217,7 @@ export function NotePage() {
         return false;
       }
 
-      const matchedPath = resolveNoteItemSourceNotePath(item, latestSourceNotesByPath);
+      const matchedPath = resolveNoteItemSourceNotePath(item, latestSourceNotesByPath, latestSourceNoteBlocksByPath);
       if (!matchedPath || normalizeSourceNoteKey(matchedPath) !== normalizedExpectedPath) {
         return false;
       }
@@ -571,7 +1232,7 @@ export function NotePage() {
         (item) =>
           !item.sourceNote?.localOnly
           && normalizeSourceNoteTitleKey(item.item.title) === normalizedExpectedTitle
-          && matchesSourceNotePath(item, savedNote.path, latestSourceNotesByPath),
+          && matchesSourceNotePath(item, savedNote.path, latestSourceNotesByPath, latestSourceNoteBlocksByPath),
       );
 
     if (!matchedItem) {
@@ -579,16 +1240,12 @@ export function NotePage() {
       return;
     }
 
-    try {
-      const outcome = await convertNoteToTask(matchedItem.item.item_id, dataMode);
-      await invalidateNoteBuckets(outcome.result.refresh_groups);
-      await refetchAllNoteBuckets();
-      setSelectedItemId(matchedItem.item.item_id);
-      showFeedback("新便签已保存，并已触发后端开始执行。");
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "触发后端执行失败，请稍后重试。";
-      showFeedback(`新便签已保存，但触发后端执行失败：${message}`);
-    }
+    pendingCreatedSourceNoteRef.current = null;
+    setDrawerOpen(true);
+    setExpandedBucket(matchedItem.item.bucket);
+    setSelectedItemId(matchedItem.item.item_id);
+    pinNoteToCanvasRef.current(matchedItem.item.item_id);
+    showFeedback("新便签已同步到便签页，并放到了网格里。");
   }
 
   async function refreshInspection(reason: string, prefix?: string) {
@@ -630,9 +1287,17 @@ export function NotePage() {
   }
 
   function applySourceNoteDraft(nextDraft: SourceNoteEditorDraft, fileContent: string) {
+    const nextEditorContent = formatSourceNoteEditorContent(nextDraft);
     setSourceNoteDraft(nextDraft);
     setSourceNoteBaseline(createSourceNoteEditorDraftSignature(nextDraft));
+    setSourceNoteEditorContent(nextEditorContent);
+    setSourceNoteEditorBaselineContent(nextEditorContent);
     setSourceNoteBaselineContent(fileContent);
+  }
+
+  function handleSourceNoteEditorChange(content: string) {
+    setSourceNoteEditorContent(content);
+    setSourceNoteDraft((currentDraft) => updateSourceNoteEditorDraftContent(currentDraft, content));
   }
 
   function startCreatingSourceNote() {
@@ -644,10 +1309,10 @@ export function NotePage() {
     applySourceNoteDraft(nextDraft, primarySourceNote?.content ?? "");
     setSourceNoteSyncMessage(
       primarySourceNote?.path
-        ? `新便签会追加到 ${primarySourceNote.path}`
+        ? `开始新便签后，点击“保存便签”会追加到 ${formatNoteDisplayPath(primarySourceNote.path)}`
         : resolvedSourceRoots[0]
-          ? `新便签会追加到 ${resolvedSourceRoots[0]} 下的主 markdown 便签文件`
-          : "新便签会追加到第一个任务来源目录下的主 markdown 便签文件。",
+          ? `开始新便签后，点击“保存便签”会追加到 ${formatNoteDisplayPath(resolvedSourceRoots[0])} 下的主 markdown 便签文件`
+          : "开始新便签后，点击“保存便签”会追加到第一个任务来源目录下的主 markdown 便签文件。",
     );
   }
 
@@ -658,21 +1323,124 @@ export function NotePage() {
   }
 
   function resolveSourceNotePathForItem(item: NoteListItem) {
-    return resolveNoteItemSourceNotePath(item, sourceNotesByPath);
+    return resolveNoteItemSourceNotePath(item, sourceNotesByPath, sourceNoteBlocksByPath);
+  }
+
+  function resolveSourceNoteDocumentForItem(item: NoteListItem) {
+    const matchedPath = resolveSourceNotePathForItem(item) ?? item.sourceNote?.path ?? null;
+    if (matchedPath) {
+      return getSourceNoteLookupCandidates(sourceNotesByPath, matchedPath)[0] ?? null;
+    }
+
+    return sourceNotes.length === 1 ? sourceNotes[0] ?? null : null;
+  }
+
+  function resolveSourceNoteEditorContextForItem(item: NoteListItem) {
+    const matchedNote = resolveSourceNoteDocumentForItem(item);
+    if (!matchedNote) {
+      return null;
+    }
+
+    return {
+      draft: buildSourceNoteEditorDraftFromNote(matchedNote, item),
+      note: matchedNote,
+    };
+  }
+
+  /**
+   * Formal note actions can change more than just the visible bucket. Keep the
+   * markdown source block aligned with the returned formal item while preserving
+   * hidden metadata that only exists in the source file.
+   */
+  function buildSourceNoteDraftFromFormalItem(
+    context: {
+      draft: SourceNoteEditorDraft;
+      note: SourceNoteDocument;
+    },
+    nextItem: TodoItem,
+  ): SourceNoteEditorDraft {
+    const nextNoteText = nextItem.note_text === null || nextItem.note_text === undefined
+      ? context.draft.noteText
+      : sanitizeSourceNoteBodyText(nextItem.note_text, { title: nextItem.title });
+    const nextExtraMetadata = context.draft.extraMetadata.filter(
+      (entry) => normalizeSourceNoteTitleKey(entry.key) !== "recurring_enabled",
+    );
+
+    if (nextItem.bucket === "recurring_rule" && nextItem.recurring_enabled === false) {
+      nextExtraMetadata.push({
+        key: "recurring_enabled",
+        value: "false",
+      });
+    }
+
+    return {
+      ...context.draft,
+      agentSuggestion: nextItem.agent_suggestion?.trim() ?? "",
+      bucket: nextItem.bucket,
+      checked: nextItem.status === "completed",
+      dueAt: nextItem.due_at?.trim() ?? "",
+      effectiveScope: nextItem.effective_scope?.trim() ?? "",
+      endedAt: nextItem.ended_at?.trim() ?? "",
+      extraMetadata: nextExtraMetadata,
+      nextOccurrenceAt: nextItem.next_occurrence_at?.trim() ?? "",
+      noteText: nextNoteText,
+      prerequisite: nextItem.prerequisite?.trim() ?? "",
+      recentInstanceStatus:
+        nextItem.recent_instance_status?.trim()
+        ?? (nextItem.bucket === "recurring_rule" && nextItem.recurring_enabled === false ? "paused" : ""),
+      repeatRule: nextItem.repeat_rule?.trim() ?? "",
+      sourceLine: context.draft.sourceLine,
+      sourcePath: context.draft.sourcePath ?? context.note.path,
+      title: nextItem.title.trim() || context.draft.title,
+    };
+  }
+
+  async function persistSourceNoteMutationForItem(
+    item: NoteListItem,
+    nextItem: TodoItem | null,
+    deletedItemId: string | null,
+  ) {
+    if (sourceNoteAvailabilityMessage !== null || taskSourceRoots.length === 0) {
+      return false;
+    }
+
+    const context = resolveSourceNoteEditorContextForItem(item);
+    if (!context) {
+      return false;
+    }
+
+    if (!nextItem && deletedItemId === item.item.item_id) {
+      const nextSourceFile = removeSourceNoteEditorBlock(context.note, context.draft);
+      if (!nextSourceFile.removed) {
+        return false;
+      }
+      skipNextSourceNoteRefreshRef.current = true;
+      await saveNoteSource(taskSourceRoots, context.note.path, nextSourceFile.content);
+      await Promise.all([sourceNotesQuery.refetch(), sourceNoteIndexQuery.refetch()]);
+      return true;
+    }
+
+    if (!nextItem) {
+      return false;
+    }
+
+    const nextDraft = buildSourceNoteDraftFromFormalItem(context, nextItem);
+    const nextSourceFile = upsertSourceNoteEditorBlock(context.note, nextDraft);
+    skipNextSourceNoteRefreshRef.current = true;
+    await saveNoteSource(taskSourceRoots, context.note.path, nextSourceFile.content);
+    await Promise.all([sourceNotesQuery.refetch(), sourceNoteIndexQuery.refetch()]);
+    return true;
   }
 
   function openSourceStudioForItem(item: NoteListItem) {
-    const matchedPath = resolveSourceNotePathForItem(item) ?? primarySourceNote?.path ?? null;
-    const matchedNote = matchedPath
-      ? sourceNotesByPath.get(normalizeSourceNoteKey(matchedPath)) ?? primarySourceNote
-      : primarySourceNote;
+    const matchedNote = resolveSourceNoteDocumentForItem(item) ?? primarySourceNote;
 
     if (matchedNote) {
       setIsCreatingSourceNote(false);
       setSourceEditorItemId(item.item.item_id);
       setSelectedSourceNotePath(matchedNote.path);
       applySourceNoteDraft(buildSourceNoteEditorDraftFromNote(matchedNote, item), matchedNote.content);
-      setSourceNoteSyncMessage("正在编辑当前便签的 markdown 元数据。");
+      setSourceNoteSyncMessage("正在编辑当前便签内容，系统会保留既有 markdown 元数据。");
       setDetailOpen(false);
       setSourceStudioOpen(true);
       if (sourceNoteAvailabilityMessage) {
@@ -685,6 +1453,24 @@ export function NotePage() {
     showFeedback(sourceNoteAvailabilityMessage ?? "还没有主 markdown 便签文件，先为你打开空白便签。");
   }
 
+  function startScheduleEditingForItem(item: NoteListItem) {
+    if (sourceNoteAvailabilityMessage !== null) {
+      showFeedback(sourceNoteAvailabilityMessage);
+      return;
+    }
+
+    const context = resolveSourceNoteEditorContextForItem(item);
+    if (!context) {
+      showFeedback("还没定位到这条便签对应的 markdown 源块，请先执行一次巡检。");
+      return;
+    }
+
+    const plannedAt = context.draft.dueAt || context.draft.nextOccurrenceAt;
+    setNoteScheduleDueAt(formatSourceNoteScheduleInputValue(plannedAt));
+    setNoteScheduleRepeatRule(context.draft.repeatRule);
+    setNoteScheduleEditing(true);
+  }
+
   async function handleSaveSourceNote() {
     if (sourceNoteAvailabilityMessage !== null || taskSourceRoots.length === 0) {
       const message = sourceNoteAvailabilityMessage ?? "请先配置任务来源目录。";
@@ -693,7 +1479,7 @@ export function NotePage() {
       return;
     }
 
-    if (isSavingSourceNote || (sourceNoteDraft.title.trim() === "" && sourceNoteDraft.noteText.trim() === "")) {
+    if (isSavingSourceNote || sourceNoteEditorContent.trim() === "") {
       return;
     }
 
@@ -701,18 +1487,16 @@ export function NotePage() {
     try {
       const createdSourceNote = isCreatingSourceNote;
       const sourceNoteTarget = selectedSourceNote ?? primarySourceNote;
-      const { blockContent, normalizedDraft } = serializeSourceNoteEditorDraft(sourceNoteDraft);
+      const nextDraft = updateSourceNoteEditorDraftContent(sourceNoteDraft, sourceNoteEditorContent);
+      const { blockContent, normalizedDraft } = serializeSourceNoteEditorDraft(nextDraft);
       let savedNote: SourceNoteDocument;
       let resolvedSourceLine: number | null = null;
       let createdSourceNoteIdentity: PendingCreatedSourceNote | null = null;
 
       if (createdSourceNote || !sourceNoteTarget) {
         savedNote = await createNoteSource(taskSourceRoots, blockContent);
-        const createdBlock = parseSourceNoteEditorBlocks(savedNote)
-          .filter((block) => normalizeSourceNoteTitleKey(block.title) === normalizeSourceNoteTitleKey(normalizedDraft.title))
-          .reverse()
-          .find((block) => block.updatedAt === normalizedDraft.updatedAt)
-          ?? null;
+        const createdBlocks = parseSourceNoteEditorBlocks(savedNote);
+        const createdBlock = createdBlocks[createdBlocks.length - 1] ?? null;
         resolvedSourceLine = createdBlock?.sourceLine ?? null;
         createdSourceNoteIdentity = {
           path: savedNote.path,
@@ -720,7 +1504,7 @@ export function NotePage() {
           title: normalizedDraft.title,
         };
       } else {
-        const nextSourceFile = upsertSourceNoteEditorBlock(sourceNoteTarget, sourceNoteDraft);
+        const nextSourceFile = upsertSourceNoteEditorBlock(sourceNoteTarget, nextDraft);
         resolvedSourceLine = nextSourceFile.sourceLine;
         savedNote = await saveNoteSource(taskSourceRoots, sourceNoteTarget.path, nextSourceFile.content);
       }
@@ -744,7 +1528,7 @@ export function NotePage() {
         createdSourceNote ? `已创建 ${savedNote.fileName}` : `已保存 ${savedNote.fileName}`,
       );
       if (createdSourceNote && createdSourceNoteIdentity) {
-        await triggerAutoTaskExecutionForSourceNote(savedNote, createdSourceNoteIdentity);
+        await syncCreatedSourceNoteToBoard(savedNote, createdSourceNoteIdentity);
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : "markdown 便签保存失败。";
@@ -752,6 +1536,61 @@ export function NotePage() {
       showFeedback(message);
     } finally {
       setIsSavingSourceNote(false);
+    }
+  }
+
+  async function handleSaveNoteSchedule() {
+    if (!selectedItem) {
+      return;
+    }
+
+    if (sourceNoteAvailabilityMessage !== null || taskSourceRoots.length === 0) {
+      showFeedback(sourceNoteAvailabilityMessage ?? "请先配置任务来源目录。");
+      return;
+    }
+
+    const context = resolveSourceNoteEditorContextForItem(selectedItem);
+    if (!context) {
+      showFeedback("还没定位到这条便签对应的 markdown 源块，请先执行一次巡检。");
+      return;
+    }
+
+    const nextDueAt = serializeSourceNoteScheduleInputValue(noteScheduleDueAt);
+    const nextRepeatRule = noteScheduleRepeatRule.trim();
+    if (nextRepeatRule !== "" && nextDueAt === "") {
+      showFeedback("设置重复规则前请先填写首次时间。");
+      return;
+    }
+
+    setIsSavingNoteSchedule(true);
+    try {
+      const scheduleChanged = nextDueAt !== context.draft.dueAt.trim() || nextRepeatRule !== context.draft.repeatRule.trim();
+      const nextDraft: SourceNoteEditorDraft = {
+        ...context.draft,
+        bucket: resolveSourceNoteDraftBucketForSchedule({
+          dueAt: nextDueAt,
+          repeatRule: nextRepeatRule,
+        }),
+        dueAt: nextDueAt,
+        endedAt: "",
+        nextOccurrenceAt: scheduleChanged ? "" : context.draft.nextOccurrenceAt,
+        recentInstanceStatus: scheduleChanged ? "" : context.draft.recentInstanceStatus,
+        repeatRule: nextRepeatRule,
+      };
+      const nextSourceFile = upsertSourceNoteEditorBlock(context.note, nextDraft);
+      skipNextSourceNoteRefreshRef.current = true;
+      await saveNoteSource(taskSourceRoots, context.note.path, nextSourceFile.content);
+      await Promise.all([sourceNotesQuery.refetch(), sourceNoteIndexQuery.refetch()]);
+      setNoteScheduleEditing(false);
+      setSourceNoteSyncMessage(nextRepeatRule !== "" ? "重复规则已保存，正在同步巡检结果。" : nextDueAt !== "" ? "计划时间已保存，正在同步巡检结果。" : "已清除时间安排，正在同步巡检结果。");
+      await refreshInspection(
+        "notes_schedule_saved",
+        nextRepeatRule !== "" ? "已更新重复规则" : nextDueAt !== "" ? "已安排时间" : "已清除时间安排",
+      );
+    } catch (error) {
+      showFeedback(error instanceof Error ? error.message : "便签时间安排保存失败。");
+    } finally {
+      setIsSavingNoteSchedule(false);
     }
   }
 
@@ -790,7 +1629,7 @@ export function NotePage() {
     mutationFn: (itemId: string) => convertNoteToTask(itemId, dataMode),
     onSuccess: async (outcome) => {
       await invalidateNoteBuckets(outcome.result.refresh_groups);
-      showFeedback("已为这条事项生成任务，正在跳转到任务页。");
+      showFeedback(getNoteConvertSuccessFeedback(outcome.result.task.status));
       navigateToDashboardTaskDetail(navigate, outcome.result.task.task_id);
     },
     onError: (error) => {
@@ -802,6 +1641,30 @@ export function NotePage() {
   const updateMutation = useMutation({
     mutationFn: ({ action, itemId }: { action: NotepadAction; itemId: string }) => updateNote(itemId, action, dataMode),
     onSuccess: async (outcome, variables) => {
+      const updatedBucket = outcome.result.notepad_item?.bucket ?? null;
+      const updatedItem = noteItemsById.get(variables.itemId);
+      let sourceNoteSyncError: string | null = null;
+      if (updatedItem) {
+        updateRememberedFormalBucketForItem(
+          rememberedFormalBucketByAliasRef.current,
+          updatedItem,
+          updatedBucket,
+          sourceNotesByPath,
+          sourceNoteBlocksByPath,
+          { allowLaterReset: true },
+        );
+
+        try {
+          await persistSourceNoteMutationForItem(
+            updatedItem,
+            outcome.result.notepad_item,
+            outcome.result.deleted_item_id ?? null,
+          );
+        } catch (error) {
+          sourceNoteSyncError = error instanceof Error ? error.message : "请稍后再试。";
+        }
+      }
+
       await invalidateNoteBuckets(outcome.result.refresh_groups);
 
       const feedbackByAction: Record<NotepadAction, string> = {
@@ -815,7 +1678,11 @@ export function NotePage() {
           outcome.result.notepad_item?.recurring_enabled === false ? "已暂停重复规则。" : "已重新开启重复规则。",
       };
 
-      showFeedback(feedbackByAction[variables.action]);
+      showFeedback(
+        sourceNoteSyncError
+          ? `${feedbackByAction[variables.action]} 但 markdown 同步失败：${sourceNoteSyncError}`
+          : feedbackByAction[variables.action],
+      );
       if (!outcome.result.notepad_item && outcome.result.deleted_item_id === selectedItem?.item.item_id) {
         setDetailOpen(false);
       }
@@ -847,6 +1714,10 @@ export function NotePage() {
     }
   }
 
+  function openLinkedTaskDetail(taskId: string) {
+    navigateToDashboardTaskDetail(navigate, taskId);
+  }
+
   function handleDetailAction(action: NoteDetailAction) {
     if (!selectedItem) {
       return;
@@ -862,17 +1733,39 @@ export function NotePage() {
       return;
     }
 
+    if (action === "open-linked-task") {
+      if (!selectedItem.item.linked_task_id) {
+        showFeedback("当前还没有关联任务。");
+        return;
+      }
+
+      showFeedback("正在打开关联任务详情。");
+      openLinkedTaskDetail(selectedItem.item.linked_task_id);
+      return;
+    }
+
     if (action === "open-resource") {
       const firstResource = selectedItem.experience.relatedResources[0];
       if (!firstResource) {
         showFeedback("当前没有可打开的相关资料。");
         return;
       }
+
+      if (selectedItem.experience.relatedResources.length > 1) {
+        setNoteResourcePickerOpen(true);
+        return;
+      }
+
       void handleResourceOpen(firstResource.id);
       return;
     }
 
     if (action === "edit") {
+      if (selectedItem.item.bucket === "recurring_rule") {
+        startScheduleEditingForItem(selectedItem);
+        return;
+      }
+
       openSourceStudioForItem(selectedItem);
       return;
     }
@@ -907,10 +1800,11 @@ export function NotePage() {
       return;
     }
 
+    setNoteResourcePickerOpen(false);
     const plan = resolveNoteResourceOpenExecutionPlan(resource);
     showFeedback(await performNoteResourceOpenExecution(plan, {
       onOpenTaskDetail: ({ taskId }) => {
-        navigateToDashboardTaskDetail(navigate, taskId);
+        openLinkedTaskDetail(taskId);
         return plan.feedback;
       },
     }));
@@ -919,6 +1813,17 @@ export function NotePage() {
   useEffect(() => {
     sourceNoteIndexFingerprintRef.current = null;
   }, [dataMode, taskSourceRoots]);
+
+  useEffect(() => {
+    if (!detailOpen) {
+      setNoteScheduleEditing(false);
+      setNoteResourcePickerOpen(false);
+    }
+  }, [detailOpen]);
+
+  useEffect(() => {
+    setNoteScheduleEditing(false);
+  }, [selectedItemId]);
 
   useEffect(() => {
     noteItemSourcePathById.forEach((path, itemId) => {
@@ -1027,29 +1932,30 @@ export function NotePage() {
       return;
     }
 
-    const selectedExists = selectedItemId ? allItems.some((entry) => entry.item.item_id === selectedItemId) : false;
-    if (selectedExists) {
-      return;
-    }
-
     if (selectedItemId) {
-      const selectedSourceIdentity = noteSourceIdentityByItemIdRef.current.get(selectedItemId) ?? null;
-      const replacementItemId = findReplacementItemIdForSourceNote(
+      const selectedItem = noteItemsById.get(selectedItemId);
+      const replacementItemId = findFormalReplacementItemIdForSourceNoteEntry(
+        selectedItemId,
         noteItemsById,
         noteItemIdsBySourcePath,
-        selectedSourceIdentity,
+        noteSourceIdentityByItemIdRef.current,
       );
-      if (replacementItemId) {
+      if (replacementItemId && (selectedItem?.sourceNote?.localOnly || !selectedItem)) {
         setSelectedItemId(replacementItemId);
         return;
       }
     }
 
-    const nextItem = upcomingItems[0] ?? laterItems[0] ?? recurringItems[0] ?? closedItems[0];
+    const selectedExists = selectedItemId ? allItems.some((entry) => entry.item.item_id === selectedItemId) : false;
+    if (selectedExists) {
+      return;
+    }
+
+    const nextItem = preferredUpcomingItem ?? preferredLaterItem ?? preferredRecurringItem ?? preferredClosedItem;
     if (nextItem) {
       setSelectedItemId(nextItem.item.item_id);
     }
-  }, [allItems, closedItems, laterItems, noteItemIdsBySourcePath, noteItemsById, recurringItems, selectedItemId, upcomingItems]);
+  }, [allItems, noteItemIdsBySourcePath, noteItemsById, preferredClosedItem, preferredLaterItem, preferredRecurringItem, preferredUpcomingItem, selectedItemId]);
 
   useUnmount(() => {
     if (feedbackTimeoutRef.current) {
@@ -1086,13 +1992,13 @@ export function NotePage() {
     }
 
     append(selectedItem);
-    append(upcomingItems[0]);
-    append(laterItems[0]);
-    append(recurringItems[0]);
-    append(closedItems[0]);
+    append(preferredUpcomingItem);
+    append(preferredLaterItem);
+    append(preferredRecurringItem);
+    append(preferredClosedItem);
 
     return picked.slice(0, NOTE_CANVAS_SEED_POSITIONS.length).map((item) => item.item.item_id);
-  }, [closedItems, laterItems, recurringItems, selectedItem, upcomingItems]);
+  }, [preferredClosedItem, preferredLaterItem, preferredRecurringItem, preferredUpcomingItem, selectedItem]);
 
   const boardItems = useMemo(
     () =>
@@ -1148,7 +2054,7 @@ export function NotePage() {
   }, []);
 
   useEffect(() => {
-    if (boardSeeded || defaultBoardItemIds.length === 0 || !boardLayerSize) {
+    if (!boardStateHydrated || boardSeeded || defaultBoardItemIds.length === 0 || !boardLayerSize) {
       return;
     }
 
@@ -1166,7 +2072,7 @@ export function NotePage() {
       })),
     );
     setBoardSeeded(true);
-  }, [boardLayerSize, boardSeeded, defaultBoardItemIds]);
+  }, [boardLayerSize, boardSeeded, boardStateHydrated, defaultBoardItemIds]);
 
   useEffect(() => {
     // Keep the canvas purely local to this page. Once a card is placed, detail
@@ -1174,27 +2080,44 @@ export function NotePage() {
     const boardBounds = getBoardLayerBounds();
     setCanvasCards((current) => {
       let changed = false;
+      let removedForRailBucket = false;
       const seenItemIds = new Set<string>();
       const next: NoteCanvasCard[] = [];
 
       current.forEach((entry) => {
-        if (noteItemsById.has(entry.itemId)) {
-          seenItemIds.add(entry.itemId);
-          next.push(entry);
-          return;
-        }
-
-        const sourceIdentity = noteSourceIdentityByItemIdRef.current.get(entry.itemId) ?? null;
-        const replacementItemId = findReplacementItemIdForSourceNote(
+        const currentItem = noteItemsById.get(entry.itemId);
+        const replacementItemId = findFormalReplacementItemIdForSourceNoteEntry(
+          entry.itemId,
           noteItemsById,
           noteItemIdsBySourcePath,
-          sourceIdentity,
+          noteSourceIdentityByItemIdRef.current,
         );
 
-        if (replacementItemId && !seenItemIds.has(replacementItemId)) {
+        if (replacementItemId && (currentItem?.sourceNote?.localOnly || !currentItem) && !seenItemIds.has(replacementItemId)) {
           changed = true;
           seenItemIds.add(replacementItemId);
           next.push({ ...entry, itemId: replacementItemId });
+          return;
+        }
+
+        if (currentItem) {
+          const displayedBucket = resolveRememberedFormalBucket(
+            rememberedFormalBucketByAliasRef.current,
+            currentItem,
+            sourceNotesByPath,
+            sourceNoteBlocksByPath,
+          ) ?? currentItem.item.bucket;
+          const railBucket = resolveRailBucketForItem(currentItem, displayedBucket);
+          const autoReturnKeys = resolveOverdueCanvasAutoReturnKeys(currentItem, sourceNotesByPath, sourceNoteBlocksByPath);
+          if (railBucket !== displayedBucket && autoReturnKeys.some((key) => !overdueCanvasAutoReturnedKeysRef.current.has(key))) {
+            changed = true;
+            removedForRailBucket = true;
+            addOverdueCanvasAutoReturnedKeys(autoReturnKeys);
+            return;
+          }
+
+          seenItemIds.add(entry.itemId);
+          next.push(entry);
           return;
         }
 
@@ -1202,7 +2125,7 @@ export function NotePage() {
       });
 
       if (changed) {
-        if (next.length === 0 && current.length > 0 && defaultBoardItemIds.length > 0 && boardBounds) {
+        if (!removedForRailBucket && next.length === 0 && current.length > 0 && defaultBoardItemIds.length > 0 && boardBounds) {
           return defaultBoardItemIds.map((itemId, index) => ({
             itemId,
             ...clampCanvasPlacement(
@@ -1222,24 +2145,25 @@ export function NotePage() {
       return current;
     });
 
-    if (draggingBoardItemId && !noteItemsById.has(draggingBoardItemId)) {
-      const sourceIdentity = noteSourceIdentityByItemIdRef.current.get(draggingBoardItemId) ?? null;
-      const replacementItemId = findReplacementItemIdForSourceNote(
+    if (draggingBoardItemId) {
+      const draggingItem = noteItemsById.get(draggingBoardItemId);
+      const replacementItemId = findFormalReplacementItemIdForSourceNoteEntry(
+        draggingBoardItemId,
         noteItemsById,
         noteItemIdsBySourcePath,
-        sourceIdentity,
+        noteSourceIdentityByItemIdRef.current,
       );
-      if (replacementItemId) {
+      if (replacementItemId && (draggingItem?.sourceNote?.localOnly || !draggingItem)) {
         if (dragStateRef.current?.itemId === draggingBoardItemId) {
           dragStateRef.current = { ...dragStateRef.current, itemId: replacementItemId };
         }
         setDraggingBoardItemId(replacementItemId);
-      } else {
+      } else if (!draggingItem) {
         setDraggingBoardItemId(null);
         dragStateRef.current = null;
       }
     }
-  }, [defaultBoardItemIds, draggingBoardItemId, noteItemIdsBySourcePath, noteItemsById]);
+  }, [defaultBoardItemIds, draggingBoardItemId, noteItemIdsBySourcePath, noteItemsById, sourceNoteBlocksByPath, sourceNotesByPath]);
 
   useEffect(() => {
     if (!boardLayerSize) {
@@ -1264,6 +2188,22 @@ export function NotePage() {
       return changed ? next : current;
     });
   }, [boardLayerSize]);
+  useEffect(() => {
+    if (!boardStateHydrated) {
+      return;
+    }
+
+    if (!boardSeeded && canvasCards.length === 0 && overdueCanvasAutoReturnedKeysRef.current.size === 0) {
+      removeStoredValue(NOTE_BOARD_STORAGE_KEY);
+      return;
+    }
+
+    saveStoredValue<PersistedNoteBoardState>(NOTE_BOARD_STORAGE_KEY, {
+      boardSeeded,
+      canvasCards,
+      overdueAutoReturnedKeys: [...overdueCanvasAutoReturnedKeysRef.current],
+    });
+  }, [boardSeeded, boardStateHydrated, canvasCards, overdueCanvasAutoReturnedKeysVersion]);
 
   function openNoteDetail(itemId: string) {
     setSelectedItemId(itemId);
@@ -1274,6 +2214,38 @@ export function NotePage() {
     setCanvasCards((current) => {
       if (current.some((entry) => entry.itemId === itemId)) {
         return current;
+      }
+
+      const targetItem = noteItemsById.get(itemId);
+      if (targetItem) {
+        const displayedBucket = resolveRememberedFormalBucket(
+          rememberedFormalBucketByAliasRef.current,
+          targetItem,
+          sourceNotesByPath,
+          sourceNoteBlocksByPath,
+        ) ?? targetItem.item.bucket;
+        const railBucket = resolveRailBucketForItem(targetItem, displayedBucket);
+        if (railBucket !== displayedBucket) {
+          addOverdueCanvasAutoReturnedKeys(resolveOverdueCanvasAutoReturnKeys(targetItem, sourceNotesByPath, sourceNoteBlocksByPath));
+        }
+      }
+
+      const targetAliases = targetItem ? resolveSourceNoteBlockAliases(targetItem, sourceNotesByPath, sourceNoteBlocksByPath) : [];
+      if (targetAliases.length > 0) {
+        const replacementIndex = current.findIndex((entry) => {
+          const currentItem = noteItemsById.get(entry.itemId);
+          if (!currentItem) {
+            return false;
+          }
+
+          return resolveSourceNoteBlockAliases(currentItem, sourceNotesByPath, sourceNoteBlocksByPath).some((alias) => targetAliases.includes(alias));
+        });
+
+        if (replacementIndex >= 0) {
+          const next = [...current];
+          next[replacementIndex] = { ...next[replacementIndex], itemId };
+          return next;
+        }
       }
 
       const seedIndex = current.length % NOTE_CANVAS_SEED_POSITIONS.length;
@@ -1290,13 +2262,47 @@ export function NotePage() {
   }
   pinNoteToCanvasRef.current = pinNoteToCanvas;
 
+  function replaceOverdueCanvasAutoReturnedKeys(keys: Iterable<string>) {
+    const nextKeys = new Set(keys);
+    const currentKeys = overdueCanvasAutoReturnedKeysRef.current;
+    if (currentKeys.size === nextKeys.size && [...nextKeys].every((key) => currentKeys.has(key))) {
+      return;
+    }
+
+    overdueCanvasAutoReturnedKeysRef.current = nextKeys;
+    setOverdueCanvasAutoReturnedKeysVersion((current) => current + 1);
+  }
+
+  function addOverdueCanvasAutoReturnedKeys(keys: Iterable<string>) {
+    const nextKeys = new Set(overdueCanvasAutoReturnedKeysRef.current);
+    let changed = false;
+
+    Array.from(keys).forEach((key) => {
+      if (!nextKeys.has(key)) {
+        nextKeys.add(key);
+        changed = true;
+      }
+    });
+
+    if (!changed) {
+      return;
+    }
+
+    overdueCanvasAutoReturnedKeysRef.current = nextKeys;
+  }
+
   useEffect(() => {
     const pendingSourceNote = pendingCreatedSourceNoteRef.current;
     if (!pendingSourceNote) {
       return;
     }
 
-    const nextItemId = findReplacementItemIdForSourceNote(
+    const replacementItemId = findReplacementItemIdForSourceNote(
+      noteItemsById,
+      noteItemIdsBySourcePath,
+      pendingSourceNote,
+    );
+    const nextItemId = replacementItemId ?? findPreferredItemIdForSourceNote(
       noteItemsById,
       noteItemIdsBySourcePath,
       pendingSourceNote,
@@ -1314,6 +2320,10 @@ export function NotePage() {
     setExpandedBucket(nextItem.item.bucket);
     setSelectedItemId(nextItemId);
     pinNoteToCanvasRef.current(nextItemId);
+    if (nextItem.sourceNote?.localOnly) {
+      showFeedback("新便签已放到网格里，正在同步正式分组。");
+      return;
+    }
     pendingCreatedSourceNoteRef.current = null;
     showFeedback("新便签已同步到便签页，并放到了网格里。");
   }, [noteItemIdsBySourcePath, noteItemsById]);
@@ -1340,8 +2350,37 @@ export function NotePage() {
 
   async function runNoteUpdateForRailDrop(itemId: string, action: NotepadAction) {
     const outcome = await updateNote(itemId, action, dataMode);
+    const updatedItem = noteItemsById.get(itemId);
+    let sourceNoteSyncError: string | null = null;
+    if (updatedItem) {
+      updateRememberedFormalBucketForItem(
+        rememberedFormalBucketByAliasRef.current,
+        updatedItem,
+        outcome.result.notepad_item?.bucket ?? null,
+        sourceNotesByPath,
+        sourceNoteBlocksByPath,
+        { allowLaterReset: true },
+      );
+
+      try {
+        await persistSourceNoteMutationForItem(
+          updatedItem,
+          outcome.result.notepad_item,
+          outcome.result.deleted_item_id ?? null,
+        );
+      } catch (error) {
+        sourceNoteSyncError = error instanceof Error ? error.message : "请稍后再试。";
+      }
+    }
     await invalidateNoteBuckets(outcome.result.refresh_groups);
-    return outcome.result.notepad_item;
+    return {
+      notepadItem: outcome.result.notepad_item,
+      sourceBucketSyncError: sourceNoteSyncError,
+    };
+  }
+
+  function appendSourceBucketSyncFailure(message: string, sourceBucketSyncError: string | null) {
+    return sourceBucketSyncError ? `${message} 但 markdown 分组回写失败：${sourceBucketSyncError}` : message;
   }
 
   /**
@@ -1375,41 +2414,41 @@ export function NotePage() {
       }
 
       if (sourceBucket === "later" && targetBucket === "upcoming") {
-        await runNoteUpdateForRailDrop(item.item.item_id, "move_upcoming");
+        const moveOutcome = await runNoteUpdateForRailDrop(item.item.item_id, "move_upcoming");
         if (drawerOpen) {
           setExpandedBucket("upcoming");
         }
-        presentRailFeedback("已放进近期分组，并同步更新便签状态。");
+        presentRailFeedback(appendSourceBucketSyncFailure("已放进近期分组，并同步更新便签状态。", moveOutcome.sourceBucketSyncError));
         return;
       }
 
       if (sourceBucket === "recurring_rule" && targetBucket === "closed") {
-        await runNoteUpdateForRailDrop(item.item.item_id, "cancel_recurring");
+        const cancelRecurringOutcome = await runNoteUpdateForRailDrop(item.item.item_id, "cancel_recurring");
         if (drawerOpen) {
           setExpandedBucket("closed");
         }
-        presentRailFeedback("已放进已结束分组，并结束这条重复规则。");
+        presentRailFeedback(appendSourceBucketSyncFailure("已放进已结束分组，并结束这条重复规则。", cancelRecurringOutcome.sourceBucketSyncError));
         return;
       }
 
       if (sourceBucket === "closed") {
-        const restoredItem = await runNoteUpdateForRailDrop(item.item.item_id, "restore");
-        const restoredBucket = restoredItem?.bucket ?? sourceBucket;
+        const restoreOutcome = await runNoteUpdateForRailDrop(item.item.item_id, "restore");
+        const restoredBucket = restoreOutcome.notepadItem?.bucket ?? sourceBucket;
 
         if (restoredBucket === targetBucket) {
           if (drawerOpen) {
             setExpandedBucket(restoredBucket);
           }
-          presentRailFeedback(`已恢复到${targetLabel}分组。`);
+          presentRailFeedback(appendSourceBucketSyncFailure(`已恢复到${targetLabel}分组。`, restoreOutcome.sourceBucketSyncError));
           return;
         }
 
         if (restoredBucket === "later" && targetBucket === "upcoming") {
-          await runNoteUpdateForRailDrop(item.item.item_id, "move_upcoming");
+          const moveOutcome = await runNoteUpdateForRailDrop(item.item.item_id, "move_upcoming");
           if (drawerOpen) {
             setExpandedBucket("upcoming");
           }
-          presentRailFeedback("已恢复并提前到近期分组。");
+          presentRailFeedback(appendSourceBucketSyncFailure("已恢复并提前到近期分组。", moveOutcome.sourceBucketSyncError));
           return;
         }
 
@@ -1663,6 +2702,9 @@ export function NotePage() {
   }
 
   function renderBoardCard(item: NoteListItem, placement: { x: number; y: number; zIndex: number }) {
+    const boardCardCopy = item.experience.noteText.trim();
+    const hasBoardCardCopy = boardCardCopy !== "";
+
     return (
       <button
         key={item.item.item_id}
@@ -1682,15 +2724,22 @@ export function NotePage() {
         <div className="note-preview-page__board-card-top">
           <div>
             <p className="note-preview-page__board-kicker">{getNoteBucketLabel(item.item.bucket)}</p>
-            <h3 className="note-preview-page__board-card-title">{item.item.title}</h3>
+            <h3
+              className={cn(
+                "note-preview-page__board-card-title",
+                !hasBoardCardCopy && "note-preview-page__board-card-title--spacious",
+              )}
+            >
+              {item.item.title}
+            </h3>
           </div>
           <Badge className={cn("border-0 px-3 py-1 text-[0.72rem] ring-1", getNoteStatusBadgeClass(item.item.status))}>{item.experience.previewStatus}</Badge>
         </div>
 
-        <p className="note-preview-page__board-card-copy">{item.experience.noteText || describeNotePreview(item.item, item.experience)}</p>
+        {hasBoardCardCopy ? <p className="note-preview-page__board-card-copy">{boardCardCopy}</p> : null}
 
         <div className="note-preview-page__board-card-footer">
-          <span>{item.experience.timeHint}</span>
+          <span>{formatNoteBoardTimeHint(item.item, item.experience)}</span>
           <span>{item.experience.typeLabel}</span>
         </div>
 
@@ -1789,7 +2838,7 @@ export function NotePage() {
                       emptyLabel={upcomingQuery.isPending && !upcomingQuery.data ? "加载中" : "这组便签已全部放到网格。"}
                       isDropTarget={activeRailDropBucket === "upcoming"}
                       isExpanded={expandedBucket === "upcoming"}
-                      items={visibleUpcomingItems}
+                      items={railUpcomingItems}
                       onCanvasDragEnd={handleDrawerCardDragEnd}
                       onCanvasDragMove={handleDrawerCardDragMove}
                       onCanvasDragStart={handleDrawerCardDragStart}
@@ -1797,7 +2846,7 @@ export function NotePage() {
                       onToggle={() => toggleBucket("upcoming")}
                       stackCards
                       title="近期"
-                      trailing={<span className="note-preview-shell__count">{upcomingQuery.isPending && !upcomingQuery.data ? "..." : visibleUpcomingItems.length}</span>}
+                      trailing={<span className="note-preview-shell__count">{upcomingQuery.isPending && !upcomingQuery.data ? "..." : railUpcomingItems.length}</span>}
                     />
 
                     <NotePreviewSection
@@ -1807,7 +2856,7 @@ export function NotePage() {
                       emptyLabel={laterQuery.isPending && !laterQuery.data ? "加载中" : "这组便签已全部放到网格。"}
                       isDropTarget={activeRailDropBucket === "later"}
                       isExpanded={expandedBucket === "later"}
-                      items={visibleLaterItems}
+                      items={railLaterItems}
                       onCanvasDragEnd={handleDrawerCardDragEnd}
                       onCanvasDragMove={handleDrawerCardDragMove}
                       onCanvasDragStart={handleDrawerCardDragStart}
@@ -1815,7 +2864,7 @@ export function NotePage() {
                       onToggle={() => toggleBucket("later")}
                       stackCards
                       title="后续"
-                      trailing={<span className="note-preview-shell__count">{laterQuery.isPending && !laterQuery.data ? "..." : visibleLaterItems.length}</span>}
+                      trailing={<span className="note-preview-shell__count">{laterQuery.isPending && !laterQuery.data ? "..." : railLaterItems.length}</span>}
                     />
 
                     <NotePreviewSection
@@ -1825,7 +2874,7 @@ export function NotePage() {
                       emptyLabel={recurringQuery.isPending && !recurringQuery.data ? "加载中" : "这组便签已全部放到网格。"}
                       isDropTarget={activeRailDropBucket === "recurring_rule"}
                       isExpanded={expandedBucket === "recurring_rule"}
-                      items={visibleRecurringItems}
+                      items={railRecurringItems}
                       onCanvasDragEnd={handleDrawerCardDragEnd}
                       onCanvasDragMove={handleDrawerCardDragMove}
                       onCanvasDragStart={handleDrawerCardDragStart}
@@ -1833,13 +2882,13 @@ export function NotePage() {
                       onToggle={() => toggleBucket("recurring_rule")}
                       stackCards
                       title="重复"
-                      trailing={<span className="note-preview-shell__count">{recurringQuery.isPending && !recurringQuery.data ? "..." : visibleRecurringItems.length}</span>}
+                      trailing={<span className="note-preview-shell__count">{recurringQuery.isPending && !recurringQuery.data ? "..." : railRecurringItems.length}</span>}
                     />
 
                     <article className={cn("dashboard-card note-preview-shell", activeRailDropBucket === "closed" && "is-drop-target", expandedBucket === "closed" ? "is-expanded" : "is-collapsed")}>
                       <button aria-expanded={expandedBucket === "closed"} className="note-preview-shell__bucket-toggle" onClick={() => toggleBucket("closed")} type="button">
                         <p className="dashboard-card__kicker">已结束</p>
-                        <span className="note-preview-shell__count">{closedQuery.isPending && !closedQuery.data ? "..." : visibleClosedItems.length}</span>
+                        <span className="note-preview-shell__count">{closedQuery.isPending && !closedQuery.data ? "..." : railClosedItems.length}</span>
                       </button>
 
                       {expandedBucket === "closed" ? (
@@ -1857,7 +2906,7 @@ export function NotePage() {
                                     <p className="note-preview-finished-group__description">{group.description}</p>
                                   </div>
                                   <div className={cn("note-preview-shell__list", group.items.length > 1 && "note-preview-shell__list--stacked")}>
-                                    {group.items.map((entry) => (
+                                    {group.items.map((entry, index) => (
                                       <NotePreviewCard
                                         draggableToCanvas
                                         key={entry.item.item_id}
@@ -1867,6 +2916,7 @@ export function NotePage() {
                                         onCanvasDragMove={handleDrawerCardDragMove}
                                         onCanvasDragStart={handleDrawerCardDragStart}
                                         onSelect={openNoteDetail}
+                                        stackOrder={group.items.length > 1 ? index + 1 : undefined}
                                       />
                                     ))}
                                   </div>
@@ -1937,10 +2987,97 @@ export function NotePage() {
                   initial={{ opacity: 0, scale: 0.98, y: 16 }}
                   transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
                 >
-                  <NoteDetailPanel feedback={feedback} item={selectedItem} onAction={handleDetailAction} onClose={() => setDetailOpen(false)} onResourceOpen={handleResourceOpen} />
+                  <NoteDetailPanel
+                    feedback={feedback}
+                    item={selectedItem}
+                    onAction={handleDetailAction}
+                    onClose={() => setDetailOpen(false)}
+                    onOpenLinkedTask={selectedItem.item.linked_task_id ? () => {
+                      showFeedback("正在打开关联任务详情。");
+                      openLinkedTaskDetail(selectedItem.item.linked_task_id!);
+                    } : undefined}
+                    onOpenResource={(resourceId) => {
+                      void handleResourceOpen(resourceId);
+                    }}
+                    onToggleRecurring={selectedItem.item.bucket === "recurring_rule" ? () => handleDetailAction("toggle-recurring") : undefined}
+                    scheduleActionLabel={scheduleActionLabel}
+                    scheduleDisabledReason={sourceNoteAvailabilityMessage}
+                    scheduleDueAt={noteScheduleDueAt}
+                    scheduleEditing={noteScheduleEditing}
+                    scheduleRepeatRule={noteScheduleRepeatRule}
+                    isSavingSchedule={isSavingNoteSchedule}
+                    onCancelScheduleEdit={() => setNoteScheduleEditing(false)}
+                    onResetSchedule={() => {
+                      setNoteScheduleDueAt("");
+                      setNoteScheduleRepeatRule("");
+                    }}
+                    onSaveSchedule={() => void handleSaveNoteSchedule()}
+                    onScheduleDueAtChange={setNoteScheduleDueAt}
+                    onScheduleRepeatRuleChange={setNoteScheduleRepeatRule}
+                    onStartScheduleEdit={canScheduleSelectedItem ? () => startScheduleEditingForItem(selectedItem) : undefined}
+                  />
                 </motion.div>
               </>
             ) : null}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {noteResourcePickerOpen && selectedItem ? (
+            <>
+              <motion.button
+                animate={{ opacity: 1 }}
+                className="note-detail-modal__backdrop note-resource-modal__backdrop"
+                exit={{ opacity: 0 }}
+                initial={{ opacity: 0 }}
+                onClick={() => setNoteResourcePickerOpen(false)}
+                type="button"
+              />
+              <motion.div
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                className="note-detail-modal note-detail-modal--resource"
+                exit={{ opacity: 0, scale: 0.98, y: 20 }}
+                initial={{ opacity: 0, scale: 0.98, y: 16 }}
+                transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
+              >
+                <section className="note-schedule-modal note-resource-modal">
+                  <div className="note-schedule-modal__header">
+                    <div>
+                      <p className="note-preview-page__eyebrow">Related Resources</p>
+                      <h2 className="note-schedule-modal__title">选择相关资料</h2>
+                      <p className="note-schedule-modal__subtitle">{selectedItem.item.title}</p>
+                    </div>
+                    <Button className="note-schedule-modal__close" onClick={() => setNoteResourcePickerOpen(false)} size="icon-sm" type="button" variant="ghost">
+                      <X className="h-4 w-4" />
+                      <span className="sr-only">关闭相关资料列表</span>
+                    </Button>
+                  </div>
+
+                  <div className="note-schedule-modal__body note-resource-modal__body">
+                    <p className="note-schedule-modal__hint">这条便签关联了多份资料，选择其中一份继续打开。</p>
+                    <div className="note-detail-resource-list">
+                      {selectedItem.experience.relatedResources.map((resource) => (
+                        <button
+                          key={resource.id}
+                          className="note-detail-resource-item note-detail-resource-item--button"
+                          onClick={() => {
+                            void handleResourceOpen(resource.id);
+                          }}
+                          type="button"
+                        >
+                          <ArrowUpRight className="h-4 w-4" />
+                          <div>
+                            <p className="note-detail-resource-item__title">{resource.label}</p>
+                            <p className="note-detail-resource-item__meta">{resource.type}</p>
+                            <p className="note-detail-resource-item__path">{resource.url ?? formatNoteDisplayPath(resource.path)}</p>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </section>
+              </motion.div>
+            </>
+          ) : null}
         </AnimatePresence>
 
         <AnimatePresence>
@@ -1965,25 +3102,25 @@ export function NotePage() {
                     <div className="note-source-modal__header">
                       <div>
                         <p className="note-preview-page__eyebrow">Source Notes</p>
-                        <h2 className="note-source-modal__title">{isCreatingSourceNote ? "空白便签" : "任务来源便签"}</h2>
+                        <h2 className="note-source-modal__title">{isCreatingSourceNote ? "新建便签" : "编辑便签"}</h2>
                       </div>
                       <Button className="note-source-modal__close" onClick={() => setSourceStudioOpen(false)} size="icon-sm" type="button" variant="ghost">
                         <X className="h-4 w-4" />
-                        <span className="sr-only">关闭源便签编辑器</span>
+                        <span className="sr-only">关闭便签编辑器</span>
                       </Button>
                     </div>
 
                     <SourceNoteStudio
                       availabilityMessage={sourceNoteAvailabilityMessage}
                       draft={sourceNoteDraft}
+                      editorContent={sourceNoteEditorContent}
                       editingItem={sourceStudioItem}
-                      fileLabel={sourceStudioFileLabel}
                       isCreating={isCreatingSourceNote}
                       isDirty={sourceEditorDirty}
                       isInspecting={isRunningInspection}
                       isLoading={sourceNotesLoading}
                       isSaving={isSavingSourceNote}
-                      onChange={(value) => setSourceNoteDraft(value)}
+                      onChange={handleSourceNoteEditorChange}
                       onClose={() => setSourceStudioOpen(false)}
                       onCreate={openCreateSourceNoteStudio}
                       onInspect={() => void refreshInspection("notes_page_manual_run")}

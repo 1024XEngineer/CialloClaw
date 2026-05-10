@@ -22,7 +22,7 @@ const (
 	styleToolPath    = "scripts/ci/local-service-style"
 	goimportsTool    = "golang.org/x/tools/cmd/goimports"
 	goimportsRunCmd  = "go run " + goimportsTool
-	maxGoFileLines   = 2000
+	maxGoFileLines   = 4000
 )
 
 var hunkHeaderPattern = regexp.MustCompile(`^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@`)

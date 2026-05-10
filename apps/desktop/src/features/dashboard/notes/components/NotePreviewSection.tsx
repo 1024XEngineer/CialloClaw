@@ -78,7 +78,7 @@ export function NotePreviewSection({
             {errorMessage ? (
               <div className="note-preview-shell__empty note-preview-shell__empty--error">{errorMessage}</div>
             ) : items.length > 0 ? (
-              items.map((item) => (
+              items.map((item, index) => (
                 <NotePreviewCard
                   key={item.item.item_id}
                   draggableToCanvas={draggableToCanvas}
@@ -88,6 +88,7 @@ export function NotePreviewSection({
                   onCanvasDragMove={onCanvasDragMove}
                   onCanvasDragStart={onCanvasDragStart}
                   onSelect={onSelect}
+                  stackOrder={stackCards && items.length > 1 ? index + 1 : undefined}
                 />
               ))
             ) : (

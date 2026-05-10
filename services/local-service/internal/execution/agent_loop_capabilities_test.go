@@ -6,10 +6,10 @@ import (
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/sidecarclient"
@@ -51,7 +51,7 @@ func TestAgentLoopToolDefinitionsUseSharedCatalog(t *testing.T) {
 
 func TestAgentLoopToolDefinitionsExposeBrowserToolsWhenSnapshotSupportsAttach(t *testing.T) {
 	service := newAgentLoopCapabilityTestService(t, true)
-	definitions := service.agentLoopToolDefinitionsForSnapshot(contextsvc.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"})
+	definitions := service.agentLoopToolDefinitionsForSnapshot(taskcontext.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"})
 	if len(definitions) != 7 {
 		t.Fatalf("expected browser-capable snapshot to expose seven planner-visible tools, got %+v", definitions)
 	}
@@ -71,7 +71,7 @@ func TestAgentLoopToolDefinitionsExposeBrowserToolsWhenSnapshotSupportsAttach(t 
 
 func TestAgentLoopToolDefinitionsAllowSparseBrowserContextForDiscoveryTools(t *testing.T) {
 	service := newAgentLoopCapabilityTestService(t, true)
-	definitions := service.agentLoopToolDefinitionsForSnapshot(contextsvc.TaskContextSnapshot{BrowserKind: "edge"})
+	definitions := service.agentLoopToolDefinitionsForSnapshot(taskcontext.TaskContextSnapshot{BrowserKind: "edge"})
 	names := make([]string, 0, len(definitions))
 	for _, definition := range definitions {
 		names = append(names, definition.Name)
@@ -113,16 +113,16 @@ func TestAgentLoopToolAllowlistRequiresCatalogMembershipAndRegistryPresence(t *t
 	if withPlaywright.isAllowedAgentLoopTool("browser_attach_current") {
 		t.Fatal("expected browser_attach_current to stay hidden without attach-capable snapshot hints")
 	}
-	if !withPlaywright.isAllowedAgentLoopToolForSnapshot("browser_attach_current", contextsvc.TaskContextSnapshot{BrowserKind: "edge", PageURL: "https://example.com", WindowTitle: "Example"}) {
+	if !withPlaywright.isAllowedAgentLoopToolForSnapshot("browser_attach_current", taskcontext.TaskContextSnapshot{BrowserKind: "edge", PageURL: "https://example.com", WindowTitle: "Example"}) {
 		t.Fatal("expected browser_attach_current to be allowed when the snapshot exposes an attach-capable browser")
 	}
-	if withPlaywright.isAllowedAgentLoopToolForSnapshot("browser_attach_current", contextsvc.TaskContextSnapshot{BrowserKind: "chrome"}) {
+	if withPlaywright.isAllowedAgentLoopToolForSnapshot("browser_attach_current", taskcontext.TaskContextSnapshot{BrowserKind: "chrome"}) {
 		t.Fatal("expected browser_attach_current to stay hidden for sparse browser context without target hints")
 	}
-	if withPlaywright.isAllowedAgentLoopToolForSnapshot("browser_tabs_list", contextsvc.TaskContextSnapshot{BrowserKind: "chrome"}) {
+	if withPlaywright.isAllowedAgentLoopToolForSnapshot("browser_tabs_list", taskcontext.TaskContextSnapshot{BrowserKind: "chrome"}) {
 		t.Fatal("expected browser_tabs_list to stay hidden until loop governance can pause for approval")
 	}
-	if withPlaywright.isAllowedAgentLoopToolForSnapshot("browser_navigate", contextsvc.TaskContextSnapshot{BrowserKind: "edge", PageURL: "https://example.com", WindowTitle: "Example"}) {
+	if withPlaywright.isAllowedAgentLoopToolForSnapshot("browser_navigate", taskcontext.TaskContextSnapshot{BrowserKind: "edge", PageURL: "https://example.com", WindowTitle: "Example"}) {
 		t.Fatal("expected browser_navigate to stay hidden until loop governance can pause for approval")
 	}
 	if withPlaywright.isAllowedAgentLoopTool("browser_interact") {

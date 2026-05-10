@@ -78,11 +78,11 @@ export function getShellBallInputBarMode(state: ShellBallVisualState): ShellBall
     case "idle":
       return "hidden";
     case "hover_input":
+    case "confirming_intent":
       return "interactive";
     case "voice_listening":
     case "voice_locked":
       return "hidden";
-    case "confirming_intent":
     case "processing":
     case "waiting_auth":
       return "readonly";

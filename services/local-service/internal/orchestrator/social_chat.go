@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 const (
@@ -25,7 +25,7 @@ type inputRouteDecision struct {
 // routeUnanchoredSubmitInput separates lightweight chat from task creation
 // before the formal task/run mapping exists. Invalid or unavailable classifier
 // output fails open to the task path so executable requests are not dropped.
-func (s *Service) routeUnanchoredSubmitInput(ctx context.Context, snapshot contextsvc.TaskContextSnapshot, suggestion intent.Suggestion, confirmRequired bool) (inputRouteDecision, bool) {
+func (s *Service) routeUnanchoredSubmitInput(ctx context.Context, snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, confirmRequired bool) (inputRouteDecision, bool) {
 	if !shouldRouteUnanchoredSubmitInput(snapshot, suggestion, confirmRequired) || s == nil || s.model == nil {
 		return inputRouteDecision{}, false
 	}
@@ -42,7 +42,7 @@ func (s *Service) routeUnanchoredSubmitInput(ctx context.Context, snapshot conte
 	return decision, true
 }
 
-func shouldRouteUnanchoredSubmitInput(snapshot contextsvc.TaskContextSnapshot, suggestion intent.Suggestion, confirmRequired bool) bool {
+func shouldRouteUnanchoredSubmitInput(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, confirmRequired bool) bool {
 	if confirmRequired || snapshot.InputType != "text" || strings.TrimSpace(snapshot.Text) == "" {
 		return false
 	}
@@ -52,7 +52,7 @@ func shouldRouteUnanchoredSubmitInput(snapshot contextsvc.TaskContextSnapshot, s
 	return stringValue(suggestion.Intent, "name", "") == "agent_loop"
 }
 
-func buildInputRoutePrompt(snapshot contextsvc.TaskContextSnapshot) string {
+func buildInputRoutePrompt(snapshot taskcontext.TaskContextSnapshot) string {
 	sections := []string{
 		"Classify whether this near-field desktop input should create a formal task.",
 		"",
@@ -78,7 +78,7 @@ func buildInputRoutePrompt(snapshot contextsvc.TaskContextSnapshot) string {
 	return strings.Join(sections, "\n")
 }
 
-func passiveInputRouteContext(snapshot contextsvc.TaskContextSnapshot) string {
+func passiveInputRouteContext(snapshot taskcontext.TaskContextSnapshot) string {
 	parts := make([]string, 0, 4)
 	if strings.TrimSpace(snapshot.AppName) != "" {
 		parts = append(parts, "app="+snapshot.AppName)

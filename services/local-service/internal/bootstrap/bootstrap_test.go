@@ -15,8 +15,9 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
-func TestNewWiresStorageBackedMemoryService(t *testing.T) {
-	cfg := config.Config{
+func newBootstrapTestConfig(t *testing.T) config.Config {
+	t.Helper()
+	return config.Config{
 		RPC: config.RPCConfig{
 			Transport:        "named_pipe",
 			NamedPipeName:    `\\.\pipe\cialloclaw-rpc-test`,
@@ -36,6 +37,10 @@ func TestNewWiresStorageBackedMemoryService(t *testing.T) {
 			ContextKeepRecent:    4,
 		},
 	}
+}
+
+func seedBootstrapModelSecret(t *testing.T, cfg config.Config) {
+	t.Helper()
 	seed := storage.NewService(platform.NewLocalStorageAdapter(cfg.DatabasePath))
 	if err := seed.SecretStore().PutSecret(context.Background(), storage.SecretRecord{
 		Namespace: "model",
@@ -46,6 +51,11 @@ func TestNewWiresStorageBackedMemoryService(t *testing.T) {
 		t.Fatalf("seed secret store: %v", err)
 	}
 	_ = seed.Close()
+}
+
+func TestNewWiresStorageBackedMemoryService(t *testing.T) {
+	cfg := newBootstrapTestConfig(t)
+	seedBootstrapModelSecret(t, cfg)
 
 	app, err := New(cfg)
 	if err != nil {
@@ -131,6 +141,54 @@ func TestNewWiresStorageBackedMemoryService(t *testing.T) {
 	}
 	if app.media == nil {
 		t.Fatal("expected media runtime to be wired")
+	}
+}
+
+func TestBuildCoreDepsSeedsBootstrapInfrastructure(t *testing.T) {
+	cfg := newBootstrapTestConfig(t)
+	core, err := buildCoreDeps(cfg)
+	if err != nil {
+		t.Fatalf("buildCoreDeps returned error: %v", err)
+	}
+	defer func() { _ = core.storageService.Close() }()
+
+	if core.storageService == nil || core.auditService == nil || core.checkpointService == nil {
+		t.Fatalf("expected core stage to wire persistence and governance services, got %+v", core)
+	}
+	if core.fileSystem == nil || core.executionBackend == nil || core.osCapability == nil {
+		t.Fatalf("expected core stage to wire platform adapters, got %+v", core)
+	}
+	if core.pluginService == nil {
+		t.Fatal("expected core stage to wire plugin service")
+	}
+	pluginManifests, total, err := core.storageService.PluginManifestStore().ListPluginManifests(context.Background(), 10, 0)
+	if err != nil || total == 0 || len(pluginManifests) == 0 {
+		t.Fatalf("expected core stage to persist plugin manifests, total=%d len=%d err=%v", total, len(pluginManifests), err)
+	}
+}
+
+func TestBuildRuntimesRegistersToolsAndModelRuntime(t *testing.T) {
+	cfg := newBootstrapTestConfig(t)
+	seedBootstrapModelSecret(t, cfg)
+
+	core, err := buildCoreDeps(cfg)
+	if err != nil {
+		t.Fatalf("buildCoreDeps returned error: %v", err)
+	}
+	defer func() { _ = core.storageService.Close() }()
+
+	runtimes, err := buildRuntimes(core)
+	if err != nil {
+		t.Fatalf("buildRuntimes returned error: %v", err)
+	}
+	if runtimes.modelService == nil {
+		t.Fatal("expected runtime stage to resolve a model service")
+	}
+	if runtimes.toolRegistry == nil || runtimes.toolExecutor == nil {
+		t.Fatal("expected runtime stage to wire tools")
+	}
+	if runtimes.toolRegistry.Count() != 21 {
+		t.Fatalf("expected runtime stage to register 21 tools, got %d", runtimes.toolRegistry.Count())
 	}
 }
 
