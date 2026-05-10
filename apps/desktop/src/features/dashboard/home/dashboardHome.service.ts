@@ -321,6 +321,19 @@ function appendDistinctContextItem(
   return items;
 }
 
+function normalizeDashboardHomeCopy(value: string | null | undefined) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value
+    .replace(/\uFFFD/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return normalized === "" ? null : normalized;
+}
+
 function dedupeSummonTemplates(templates: Array<Omit<DashboardHomeSummonEvent, "id">>) {
   const seen = new Set<string>();
 
@@ -799,21 +812,29 @@ function buildReferenceMirrorState(
   }
 
   const state = createFormalMirrorStateBase(stateKey);
-  const summary = latestReference.summary || latestReference.reason || "最近有一条长期记忆再次命中当前协作。";
+  const summary =
+    normalizeDashboardHomeCopy(latestReference.summary)
+    ?? normalizeDashboardHomeCopy(latestReference.reason)
+    ?? "最近有一条长期记忆再次命中当前协作。";
+  const reason = normalizeDashboardHomeCopy(latestReference.reason);
   state.headline = "近期被调用记忆";
   state.subline = summary;
-  state.context = [
-    {
-      iconKey: "link",
-      text: `记忆 ID：${latestReference.memory_id}`,
-      type: "hint",
-    },
-    {
-      iconKey: "brain",
-      text: `命中内容：${summary}`,
-      type: "active",
-    },
-  ];
+  state.context = [];
+  appendDistinctContextItem(state.context, {
+    iconKey: "link",
+    text: "来源：近期长期记忆命中",
+    type: "hint",
+  });
+  appendDistinctContextItem(
+    state.context,
+    reason && reason !== summary
+      ? {
+          iconKey: "brain",
+          text: reason,
+          type: "active",
+        }
+      : null,
+  );
   state.insights = undefined;
   state.navigationTarget = buildMirrorDetailNavigationTarget("memory", "打开镜子页", latestReference.memory_id);
   return state;

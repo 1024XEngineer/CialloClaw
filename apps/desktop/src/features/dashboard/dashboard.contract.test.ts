@@ -7168,8 +7168,8 @@ test("dashboard home prefers formal mirror references over profile copy when bot
 
       assert.equal(data.stateMap.memory_habit?.headline, "近期被调用记忆");
       assert.equal(data.stateMap.memory_habit?.subline, "本周战略复盘已被近期任务再次引用。");
-      assert.equal(data.stateMap.memory_habit?.context?.[0]?.text, "记忆 ID：memory_strategy_weekly");
-      assert.equal(data.stateMap.memory_habit?.context?.[1]?.text, "命中内容：本周战略复盘已被近期任务再次引用。");
+      assert.equal(data.stateMap.memory_habit?.context?.[0]?.text, "来源：近期长期记忆命中");
+      assert.equal(data.stateMap.memory_habit?.context?.[1]?.text, "近期任务再次命中这段长期记忆。");
     },
     {
       getDashboardModule: async (params: unknown) => ({
@@ -7210,6 +7210,73 @@ test("dashboard home prefers formal mirror references over profile copy when bot
           preferred_output: "bubble",
           work_style: "偏好即时结果回显",
         },
+      }),
+      listNotepad: async () => ({
+        items: [],
+        page: {
+          has_more: false,
+          limit: 12,
+          offset: 0,
+          total: 0,
+        },
+      }),
+    },
+  );
+});
+
+test("dashboard home sanitizes mirror reference copy before surfacing it on the home orb", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<{
+          stateMap: Record<string, { subline: string; context?: Array<{ text: string }> }>;
+        }>;
+      };
+
+      const data = await service.loadDashboardHomeData();
+
+      assert.equal(data.stateMap.memory_habit?.subline, "任务完成，意图=agent_loop，输入=你知道我现在在么...");
+      assert.equal(data.stateMap.memory_habit?.context?.[0]?.text, "来源：近期长期记忆命中");
+      assert.equal(data.stateMap.memory_habit?.context?.[1]?.text, "这条长期记忆再次命中了当前协作。");
+    },
+    {
+      getDashboardModule: async (params: unknown) => ({
+        highlights: [],
+        module: (params as { module?: string }).module ?? "unknown",
+        summary: {},
+        tab: "overview",
+      }),
+      getDashboardOverview: async () => ({
+        overview: {
+          focus_summary: null,
+          high_value_signal: [],
+          quick_actions: [],
+          trust_summary: {
+            has_restore_point: false,
+            pending_authorizations: 0,
+            risk_level: "green",
+            workspace_path: "workspace",
+          },
+        },
+      }),
+      getRecommendations: async () => ({
+        cooldown_hit: false,
+        items: [],
+      }),
+      getMirrorOverview: async () => ({
+        daily_summary: null,
+        history_summary: [],
+        memory_references: [
+          {
+            memory_id: "memory_strategy_weekly",
+            reason: "这条长期记忆再次命中了当前协作。",
+            summary: " 任务完成，意图=agent_loop，输入=你知道我现在在么�... ",
+          },
+        ],
+        profile: null,
       }),
       listNotepad: async () => ({
         items: [],
