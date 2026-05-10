@@ -282,22 +282,34 @@ func intentPayload(name string) map[string]any {
 }
 
 func subjectText(snapshot contextsvc.TaskContextSnapshot) string {
+	candidates := make([]string, 0, 7)
+	hasPrimaryText := false
 	switch {
 	case len(snapshot.Files) > 0:
-		return filepath.Base(snapshot.Files[0])
-	case strings.TrimSpace(snapshot.SelectionText) != "":
-		return truncateText(snapshot.SelectionText, subjectPreviewMaxLength)
-	case strings.TrimSpace(snapshot.Text) != "":
-		return truncateText(snapshot.Text, subjectPreviewMaxLength)
-	case strings.TrimSpace(snapshot.ErrorText) != "":
-		return truncateText(snapshot.ErrorText, subjectPreviewMaxLength)
-	case strings.TrimSpace(snapshot.PageTitle) != "":
-		return truncateText(snapshot.PageTitle, subjectPreviewMaxLength)
-	case strings.TrimSpace(snapshot.WindowTitle) != "":
-		return truncateText(snapshot.WindowTitle, subjectPreviewMaxLength)
-	default:
-		return "当前内容"
+		candidates = append(candidates, filepath.Base(snapshot.Files[0]))
 	}
+	if strings.TrimSpace(snapshot.SelectionText) != "" {
+		candidates = append(candidates, snapshot.SelectionText)
+		hasPrimaryText = true
+	}
+	if strings.TrimSpace(snapshot.Text) != "" {
+		candidates = append(candidates, snapshot.Text)
+		hasPrimaryText = true
+	}
+	if strings.TrimSpace(snapshot.ErrorText) != "" {
+		candidates = append(candidates, snapshot.ErrorText)
+		hasPrimaryText = true
+	}
+	if !hasPrimaryText && strings.TrimSpace(snapshot.PageTitle) != "" {
+		candidates = append(candidates, snapshot.PageTitle)
+	}
+	if !hasPrimaryText && strings.TrimSpace(snapshot.WindowTitle) != "" {
+		candidates = append(candidates, snapshot.WindowTitle)
+	}
+	if !hasPrimaryText && strings.TrimSpace(snapshot.ScreenSummary) != "" {
+		candidates = append(candidates, snapshot.ScreenSummary)
+	}
+	return textutil.CompactSubject(candidates, "当前内容", subjectPreviewMaxLength)
 }
 
 func screenSubjectText(snapshot contextsvc.TaskContextSnapshot) string {
