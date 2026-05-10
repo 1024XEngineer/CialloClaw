@@ -2183,7 +2183,110 @@ func TestServiceConfirmTaskRewritesPlaceholderTitleAfterCorrection(t *testing.T)
 	}
 }
 
-func TestServiceConfirmTaskIgnoresCorrectedIntentWhenConfirmedTrue(t *testing.T) {
+func TestServiceConfirmTaskConsumesCorrectionTextOnSameTask(t *testing.T) {
+	calls := 0
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			calls++
+			if calls > 1 {
+				return model.GenerateTextResponse{
+					TaskID:     request.TaskID,
+					RunID:      request.RunID,
+					RequestID:  "req_corrected_execution",
+					Provider:   "openai_responses",
+					ModelID:    "gpt-5.4",
+					OutputText: "Explained selected paragraph.",
+				}, nil
+			}
+			if !strings.Contains(request.Input, "Explain this selected paragraph instead.") {
+				t.Fatalf("expected correction text in model prompt, got %q", request.Input)
+			}
+			if !strings.Contains(request.Input, "selected paragraph") || !strings.Contains(request.Input, "Issue 474") {
+				t.Fatalf("expected original task context in correction prompt, got %q", request.Input)
+			}
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_correction",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: `{"intent":{"name":"explain","arguments":{"detail":"brief"}},"reason":"user corrected the target action"}`,
+			}, nil
+		},
+	})
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_confirm_correction_text",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "selected paragraph",
+			"page_context": map[string]any{
+				"title": "Issue 474",
+				"url":   "https://example.test/issues/474",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+
+	confirmResult, err := service.ConfirmTask(map[string]any{
+		"task_id":         taskID,
+		"confirmed":       false,
+		"correction_text": "Explain this selected paragraph instead.",
+	})
+	if err != nil {
+		t.Fatalf("confirm task correction failed: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("expected one correction model call, got %d", calls)
+	}
+	task := confirmResult["task"].(map[string]any)
+	if task["task_id"] != taskID {
+		t.Fatalf("expected correction to stay on same task, got %+v", task)
+	}
+	if task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
+		t.Fatalf("expected corrected task to keep confirmation gate, got %+v", task)
+	}
+	intentValue := task["intent"].(map[string]any)
+	if intentValue["name"] != "explain" {
+		t.Fatalf("expected model-corrected explain intent, got %+v", intentValue)
+	}
+	bubble := confirmResult["bubble_message"].(map[string]any)
+	if bubble["type"] != "intent_confirm" {
+		t.Fatalf("expected corrected intent confirmation bubble, got %+v", bubble)
+	}
+	if confirmResult["delivery_result"] != nil {
+		t.Fatalf("expected correction to avoid execution before next confirmation, got %+v", confirmResult["delivery_result"])
+	}
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected corrected task to remain in runtime")
+	}
+	if record.SessionID != "sess_confirm_correction_text" || record.Snapshot.Text != "selected paragraph" || record.Snapshot.PageTitle != "Issue 474" {
+		t.Fatalf("expected correction to preserve original task context, got %+v", record)
+	}
+	executionResult, err := service.ConfirmTask(map[string]any{
+		"task_id":   taskID,
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("confirm corrected task failed: %v", err)
+	}
+	executedTask := executionResult["task"].(map[string]any)
+	if executedTask["task_id"] != taskID || executedTask["status"] != "completed" {
+		t.Fatalf("expected next confirmation to execute corrected same task, got %+v", executedTask)
+	}
+	executedIntent := executedTask["intent"].(map[string]any)
+	if executedIntent["name"] != "explain" {
+		t.Fatalf("expected corrected intent to drive execution, got %+v", executedIntent)
+	}
+}
+
+func TestServiceConfirmTaskRejectsCorrectionPayloadConflicts(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Explained content.")
 
 	startResult, err := service.StartTask(map[string]any{
@@ -2201,7 +2304,7 @@ func TestServiceConfirmTaskIgnoresCorrectedIntentWhenConfirmedTrue(t *testing.T)
 	startTask := startResult["task"].(map[string]any)
 
 	taskID := startTask["task_id"].(string)
-	confirmResult, err := service.ConfirmTask(map[string]any{
+	_, err = service.ConfirmTask(map[string]any{
 		"task_id":   taskID,
 		"confirmed": true,
 		"corrected_intent": map[string]any{
@@ -2211,17 +2314,20 @@ func TestServiceConfirmTaskIgnoresCorrectedIntentWhenConfirmedTrue(t *testing.T)
 			},
 		},
 	})
-	if err != nil {
-		t.Fatalf("confirm task failed: %v", err)
+	if err == nil || !errors.Is(err, errTaskConfirmCorrectionPayloadInvalid) {
+		t.Fatalf("expected confirmed=true correction payload to be rejected, got %v", err)
 	}
-
-	task := confirmResult["task"].(map[string]any)
-	intentValue, ok := task["intent"].(map[string]any)
-	if !ok || !reflect.DeepEqual(intentValue, startTask["intent"]) {
-		t.Fatalf("expected confirm=true to keep the original task intent, got %+v", task["intent"])
-	}
-	if task["title"] != startTask["title"] {
-		t.Fatalf("expected confirm=true to keep the original title, got %v", task["title"])
+	_, err = service.ConfirmTask(map[string]any{
+		"task_id":         taskID,
+		"confirmed":       false,
+		"correction_text": "translate this instead",
+		"corrected_intent": map[string]any{
+			"name":      "translate",
+			"arguments": map[string]any{"target_language": "en"},
+		},
+	})
+	if err == nil || !errors.Is(err, errTaskConfirmCorrectionPayloadInvalid) {
+		t.Fatalf("expected correction_text and corrected_intent conflict to be rejected, got %v", err)
 	}
 }
 

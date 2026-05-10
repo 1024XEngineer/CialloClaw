@@ -21,6 +21,13 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	}
 	confirmed := boolValue(params, "confirmed", false)
 	correctedIntent := mapValue(params, "corrected_intent")
+	correctionText := strings.TrimSpace(stringValue(params, "correction_text", ""))
+	if err := validateTaskConfirmCorrectionPayload(confirmed, correctedIntent, correctionText); err != nil {
+		return nil, err
+	}
+	if !confirmed && correctionText != "" {
+		return s.reinferTaskIntentFromCorrection(task, correctionText)
+	}
 	intentValue := cloneMap(task.Intent)
 	if !confirmed && len(correctedIntent) > 0 {
 		intentValue = correctedIntent
