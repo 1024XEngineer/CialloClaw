@@ -102,7 +102,7 @@ export function getTaskDeliveryOpenLabel(deliveryResult: DeliveryResult | null |
  * target. Inline bubble outputs stay readable in place and should not render a
  * dead-end open action.
  */
-export function canOpenTaskDeliveryResult(deliveryResult: DeliveryResult | null | undefined): boolean {
+export function canOpenTaskDeliveryResult(deliveryResult: DeliveryResult | null | undefined, fallbackTaskId: string | null = null): boolean {
   if (!deliveryResult) {
     return false;
   }
@@ -116,7 +116,7 @@ export function canOpenTaskDeliveryResult(deliveryResult: DeliveryResult | null 
   }
 
   if (deliveryResult.type === "task_detail") {
-    return Boolean(deliveryResult.payload.task_id || deliveryResult.payload.path || deliveryResult.payload.url);
+    return Boolean(deliveryResult.payload.task_id || fallbackTaskId);
   }
 
   return false;

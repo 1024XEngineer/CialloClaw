@@ -164,7 +164,7 @@ export function DashboardResultPage() {
           <iframe
             className="dashboard-result-page__frame"
             referrerPolicy="no-referrer"
-            sandbox="allow-downloads allow-forms allow-popups allow-popups-to-escape-sandbox allow-scripts"
+            sandbox="allow-downloads allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"
             src={resultUrl}
             title={routeState?.title?.trim() || "dashboard-result-page"}
           />

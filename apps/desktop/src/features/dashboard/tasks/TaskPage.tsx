@@ -627,7 +627,7 @@ export function TaskPage() {
       return;
     }
 
-    if (!canOpenTaskDeliveryResult(detailData?.detail.delivery_result ?? null)) {
+    if (!canOpenTaskDeliveryResult(detailData?.detail.delivery_result ?? null, selectedTaskControlTargetId)) {
       return;
     }
 

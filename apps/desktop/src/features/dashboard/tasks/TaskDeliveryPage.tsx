@@ -114,7 +114,7 @@ export function TaskDeliveryPage() {
   );
   const evidenceArtifacts = artifactItems.filter((artifact) => evidenceArtifactRefs.has(artifact.artifact_id) || evidenceArtifactRefs.has(artifact.path));
   const outputArtifacts = artifactItems.filter((artifact) => !evidenceArtifactRefs.has(artifact.artifact_id) && !evidenceArtifactRefs.has(artifact.path));
-  const canOpenFormalDelivery = canOpenTaskDeliveryResult(formalDeliveryResult);
+  const canOpenFormalDelivery = canOpenTaskDeliveryResult(formalDeliveryResult, taskId);
 
   useEffect(() => {
     return () => {

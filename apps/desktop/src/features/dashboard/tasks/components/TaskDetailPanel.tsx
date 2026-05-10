@@ -158,8 +158,8 @@ export function TaskDetailPanel({
   const hasRuntimeProcessContent = hasRuntimeSummarySignals || eventItems.length > 0 || eventLoading || eventErrorMessage !== null;
   const hasFormalOutput = formalDeliveryResult !== null && !formalDeliveryDuplicatesArtifact;
   const hasOutputContent = hasFormalOutput || hasOutputArtifacts;
-  const canOpenFormalOutput = canOpenTaskDeliveryResult(formalDeliveryResult);
-  const canOpenFallbackDelivery = canOpenTaskDeliveryResult(detailData?.detail.delivery_result ?? null);
+  const canOpenFormalOutput = canOpenTaskDeliveryResult(formalDeliveryResult, task?.task_id ?? null);
+  const canOpenFallbackDelivery = canOpenTaskDeliveryResult(detailData?.detail.delivery_result ?? null, task?.task_id ?? null);
   const isInlineBubbleOutput = formalDeliveryResult?.type === "bubble";
   const shouldHideEndedResultCopy = ended && isInlineBubbleOutput && !hasOutputArtifacts;
 

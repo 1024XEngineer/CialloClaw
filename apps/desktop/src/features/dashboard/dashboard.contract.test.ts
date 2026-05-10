@@ -429,15 +429,16 @@ function loadTaskOutputServiceModule(
       loadTaskArtifactPage: (taskId: string, source: "rpc") => Promise<AgentTaskArtifactListResult>;
       openTaskArtifactForTask: (taskId: string, artifactId: string, source: "rpc") => Promise<AgentTaskArtifactOpenResult>;
       openTaskDeliveryForTask: (taskId: string, artifactId: string | undefined, source: "rpc") => Promise<AgentDeliveryOpenResult>;
+      canOpenTaskDeliveryResult: (deliveryResult: AgentDeliveryOpenResult["delivery_result"] | null | undefined, fallbackTaskId?: string | null) => boolean;
       resolveTaskOpenExecutionPlan: (result: AgentTaskArtifactOpenResult | AgentDeliveryOpenResult) => {
-        mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+        mode: "task_detail" | "open_result_page" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
         taskId: string | null;
         path: string | null;
         url: string | null;
         feedback: string;
       };
       performTaskOpenExecution: (plan: {
-        mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+        mode: "task_detail" | "open_result_page" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
         taskId: string | null;
         path: string | null;
         url: string | null;
@@ -445,7 +446,7 @@ function loadTaskOutputServiceModule(
       }, options?: {
         onOpenTaskDetail?: (input: {
           plan: {
-            mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+            mode: "task_detail" | "open_result_page" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
             taskId: string | null;
             path: string | null;
             url: string | null;
@@ -2075,6 +2076,7 @@ test("dashboard result page only embeds trusted loopback shell origins and auto-
   assert.match(resultPageSource, /lastBrowserFallbackUrlRef/);
   assert.match(resultPageSource, /if \(lastBrowserFallbackUrlRef\.current === resultUrl\) \{/);
   assert.match(resultPageSource, /不在站内可信嵌入白名单内，已切换为浏览器承接模式/);
+  assert.match(resultPageSource, /sandbox="allow-downloads allow-forms allow-popups allow-popups-to-escape-sandbox allow-same-origin allow-scripts"/);
 });
 
 test("mirror page stays RPC-only instead of exposing a page-level mock toggle", () => {
@@ -5869,6 +5871,25 @@ test("task output helpers normalize open actions from existing rpc contracts", a
     },
   );
 
+  assert.equal(
+    outputService.canOpenTaskDeliveryResult({
+      type: "task_detail",
+      title: "Task detail",
+      preview_text: "回到任务详情",
+      payload: { path: "workspace/result.md", url: null, task_id: null },
+    }),
+    false,
+  );
+  assert.equal(
+    outputService.canOpenTaskDeliveryResult({
+      type: "task_detail",
+      title: "Task detail",
+      preview_text: "回到任务详情",
+      payload: { path: null, url: null, task_id: null },
+    }, "task_dashboard_001"),
+    true,
+  );
+
   assert.deepEqual(
     outputService.resolveTaskOpenExecutionPlan({
       open_action: "result_page",
@@ -6374,7 +6395,7 @@ test("task workspace routes formal delivery through a dedicated page and keeps l
   assert.match(taskDeliverySource, /const artifactItems = useMemo\([\s\S]*mergeTaskArtifactItems\(artifactListQuery\.data\?\.items \?\? \[\], taskDetailArtifacts\)/);
   assert.doesNotMatch(taskDeliverySource, /const artifactItems = artifactListQuery\.data\?\.items \?\? detailData\?\.detail\.artifacts \?\? \[\];/);
   assert.match(taskDeliverySource, /canOpenTaskDeliveryResult/);
-  assert.match(taskDeliverySource, /const canOpenFormalDelivery = canOpenTaskDeliveryResult\(formalDeliveryResult\);/);
+  assert.match(taskDeliverySource, /const canOpenFormalDelivery = canOpenTaskDeliveryResult\(formalDeliveryResult, taskId\);/);
   assert.match(taskDeliverySource, /const plan = resolveTaskOpenExecutionPlan\(result, taskId\);/);
   assert.match(taskDeliverySource, /getTaskDeliveryOpenLabel/);
   assert.match(taskDeliverySource, /buildDashboardTaskDetailRouteState/);
@@ -6397,7 +6418,7 @@ test("task workspace routes formal delivery through a dedicated page and keeps l
   assert.match(taskPageSource, /openTaskDeliveryForTask/);
   assert.match(taskPageSource, /const deliveryOpenMutation = useMutation\(/);
   assert.match(taskPageSource, /canOpenTaskDeliveryResult/);
-  assert.match(taskPageSource, /if \(!canOpenTaskDeliveryResult\(detailData\?\.detail\.delivery_result \?\? null\)\) \{/);
+  assert.match(taskPageSource, /if \(!canOpenTaskDeliveryResult\(detailData\?\.detail\.delivery_result \?\? null, selectedTaskControlTargetId\)\) \{/);
   assert.match(taskPageSource, /deliveryOpenMutation\.mutate\(\{ taskId: selectedTaskControlTargetId \}\);/);
 
   assert.match(taskDeliveryNavigationSource, /dashboardTaskDeliveryRoutePattern = "delivery\/:taskId"/);
@@ -9700,7 +9721,7 @@ test("TaskDetailPanel renders formal delivery as a first-class output entry", ()
   assert.match(panelSource, /formalDeliveryResult\.type === "workspace_document" \|\| formalDeliveryResult\.type === "open_file" \|\| formalDeliveryResult\.type === "reveal_in_folder"/);
   assert.match(panelSource, /outputArtifacts\.some\(\(artifact\) => artifact\.path\.trim\(\) === formalDeliveryPath\)/);
   assert.match(panelSource, /const hasFormalOutput = formalDeliveryResult !== null && !formalDeliveryDuplicatesArtifact;/);
-  assert.match(panelSource, /const canOpenFallbackDelivery = canOpenTaskDeliveryResult\(detailData\?\.detail\.delivery_result \?\? null\);/);
+  assert.match(panelSource, /const canOpenFallbackDelivery = canOpenTaskDeliveryResult\(detailData\?\.detail\.delivery_result \?\? null, task\?\.task_id \?\? null\);/);
   assert.match(panelSource, /const hasOutputContent = hasFormalOutput \|\| hasOutputArtifacts;/);
   assert.match(panelSource, /canOpenTaskDeliveryResult/);
   assert.match(panelSource, /getTaskDeliveryOpenLabel\(formalDeliveryResult\)/);
