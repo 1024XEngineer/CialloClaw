@@ -49,92 +49,51 @@ type Service struct {
 	taskStartTaps    map[uint64]func(taskID, sessionID, traceID string)
 }
 
-// NewService returns a minimally usable orchestrator with required runtime
-// dependencies and default optional services. It does not start background work;
-// bootstrap may replace optional collaborators through With* methods before use.
-func NewService(
-	context *contextsvc.Service,
-	intent *intent.Service,
-	runEngine *runengine.Engine,
-	delivery *delivery.Service,
-	memory *memory.Service,
-	risk *risk.Service,
-	model *model.Service,
-	tools *tools.Registry,
-	plugin *plugin.Service,
-) *Service {
-	return &Service{
-		context:          context,
-		intent:           intent,
-		runEngine:        runEngine,
-		delivery:         delivery,
-		memory:           memory,
-		risk:             risk,
-		model:            model,
-		tools:            tools,
-		plugin:           plugin,
-		audit:            audit.NewService(),
-		recommendation:   recommendation.NewService(),
-		traceEval:        traceeval.NewService(nil, nil),
-		inspector:        taskinspector.NewService(nil),
-		executionTimeout: defaultTaskExecutionTimeout,
+// NewService builds the task-centric orchestrator from one explicit dependency
+// graph. Required collaborators must be present in deps before construction,
+// while nil optional collaborators fall back to bootstrap-safe defaults here.
+func NewService(deps Deps) *Service {
+	service := &Service{
+		context:          deps.Context,
+		intent:           deps.Intent,
+		runEngine:        deps.RunEngine,
+		delivery:         deps.Delivery,
+		memory:           deps.Memory,
+		risk:             deps.Risk,
+		model:            deps.Model,
+		tools:            deps.Tools,
+		plugin:           deps.Plugin,
+		audit:            deps.auditService(),
+		recommendation:   deps.recommendationService(),
+		traceEval:        deps.traceEvalService(),
+		inspector:        deps.inspectorService(),
+		storage:          deps.Storage,
+		executionTimeout: deps.resolvedExecutionTimeout(),
 		runtimeTaps:      map[uint64]func(taskID, method string, params map[string]any){},
 		taskStartTaps:    map[uint64]func(taskID, sessionID, traceID string){},
 	}
+	service.attachExecutor(deps.Executor)
+	return service
 }
 
-// WithAudit replaces the default audit service when bootstrap owns a shared
-// audit store. A nil value leaves the default in-memory audit service intact.
-func (s *Service) WithAudit(auditService *audit.Service) *Service {
-	if auditService != nil {
-		s.audit = auditService
-	}
-	return s
-}
-
-// WithExecutor attaches the execution service used by the main task loop and
-// wires runtime notifications plus steering polls back into task state.
-func (s *Service) WithExecutor(executorService *execution.Service) *Service {
+// attachExecutor wires runtime notifications plus steering polls back into task
+// state. The dependency is explicit at construction time because production
+// task execution should not rely on a later mutation step.
+func (s *Service) attachExecutor(executorService *execution.Service) {
 	s.executor = executorService
-	if executorService != nil {
-		executorService.WithNotificationEmitter(func(taskID, method string, params map[string]any) {
-			s.publishRuntimeNotification(taskID, method, params)
-			_, _ = s.runEngine.EmitRuntimeNotification(taskID, method, params)
-		}).WithSteeringPoller(func(taskID string) []string {
-			messages, ok := s.runEngine.DrainSteeringMessages(taskID)
-			if !ok {
-				return nil
-			}
-			return messages
-		})
+	if executorService == nil {
+		return
 	}
-	return s
-}
-
-// WithTaskInspector replaces the default inspector service used by inspection
-// RPCs. A nil value keeps the default no-storage inspector.
-func (s *Service) WithTaskInspector(inspectorService *taskinspector.Service) *Service {
-	if inspectorService != nil {
-		s.inspector = inspectorService
-	}
-	return s
-}
-
-// WithStorage attaches shared storage for governance and query-side hydration.
-func (s *Service) WithStorage(storageService *storage.Service) *Service {
-	if storageService != nil {
-		s.storage = storageService
-	}
-	return s
-}
-
-// WithTraceEval replaces the default trace/eval recorder used after execution.
-// A nil value keeps the default recorder so task execution remains available.
-func (s *Service) WithTraceEval(traceEvalService *traceeval.Service) *Service {
-	if traceEvalService != nil {
-		s.traceEval = traceEvalService
-	}
-	return s
+	executorService.WithNotificationEmitter(func(taskID, method string, params map[string]any) {
+		s.publishRuntimeNotification(taskID, method, params)
+		_, _ = s.runEngine.EmitRuntimeNotification(taskID, method, params)
+	}).WithSteeringPoller(func(taskID string) []string {
+		messages, ok := s.runEngine.DrainSteeringMessages(taskID)
+		if !ok {
+			return nil
+		}
+		return messages
+	})
 }
 
 // Snapshot returns the minimal debug summary for health endpoints. It is a

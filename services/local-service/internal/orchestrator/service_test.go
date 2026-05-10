@@ -814,17 +814,22 @@ func newTestServiceWithModelClient(t *testing.T, client model.Client) (*Service,
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
 	executor := execution.NewService(fileSystem, platform.LocalExecutionBackend{}, sidecarclient.NewNoopPlaywrightSidecarClient(), sidecarclient.NewNoopOCRWorkerClient(), sidecarclient.NewNoopMediaWorkerClient(), sidecarclient.NewLocalScreenCaptureClient(fileSystem), modelService, auditService, checkpoint.NewService(storageService.RecoveryPointWriter()), deliveryService, toolRegistry, toolExecutor, pluginService).WithArtifactStore(storageService.ArtifactStore()).WithExtensionAssetCatalog(storageService)
 
-	service := NewService(
-		contextsvc.NewService(),
-		intent.NewService(),
-		mustNewStoredEngine(t, storageService.TaskRunStore()),
-		deliveryService,
-		memory.NewServiceFromStorage(storageService.MemoryStore(), storageService.Capabilities().MemoryRetrievalBackend),
-		risk.NewService(),
-		modelService,
-		toolRegistry,
-		pluginService,
-	).WithAudit(auditService).WithStorage(storageService).WithExecutor(executor).WithTaskInspector(taskinspector.NewService(fileSystem)).WithTraceEval(traceeval.NewService(storageService.TraceStore(), storageService.EvalStore()))
+	service := NewService(Deps{
+		Context:   contextsvc.NewService(),
+		Intent:    intent.NewService(),
+		RunEngine: mustNewStoredEngine(t, storageService.TaskRunStore()),
+		Delivery:  deliveryService,
+		Memory:    memory.NewServiceFromStorage(storageService.MemoryStore(), storageService.Capabilities().MemoryRetrievalBackend),
+		Risk:      risk.NewService(),
+		Model:     modelService,
+		Tools:     toolRegistry,
+		Plugin:    pluginService,
+		Audit:     auditService,
+		TraceEval: traceeval.NewService(storageService.TraceStore(), storageService.EvalStore()),
+		Executor:  executor,
+		Inspector: taskinspector.NewService(fileSystem),
+		Storage:   storageService,
+	})
 	return service, workspaceRoot
 }
 
@@ -878,17 +883,22 @@ func newTestServiceWithExecutionWorkersAndScreen(t *testing.T, modelOutput strin
 	}
 	executor := execution.NewService(fileSystem, executionBackend, playwrightClient, ocrClient, mediaClient, screenClient, modelService, auditService, checkpoint.NewService(checkpointWriter), deliveryService, toolRegistry, toolExecutor, pluginService).WithArtifactStore(storageService.ArtifactStore()).WithExtensionAssetCatalog(storageService)
 
-	service := NewService(
-		contextsvc.NewService(),
-		intent.NewService(),
-		mustNewStoredEngine(t, storageService.TaskRunStore()),
-		deliveryService,
-		memory.NewServiceFromStorage(storageService.MemoryStore(), storageService.Capabilities().MemoryRetrievalBackend),
-		risk.NewService(),
-		modelService,
-		toolRegistry,
-		pluginService,
-	).WithAudit(auditService).WithStorage(storageService).WithExecutor(executor).WithTaskInspector(taskinspector.NewService(fileSystem)).WithTraceEval(traceeval.NewService(storageService.TraceStore(), storageService.EvalStore()))
+	service := NewService(Deps{
+		Context:   contextsvc.NewService(),
+		Intent:    intent.NewService(),
+		RunEngine: mustNewStoredEngine(t, storageService.TaskRunStore()),
+		Delivery:  deliveryService,
+		Memory:    memory.NewServiceFromStorage(storageService.MemoryStore(), storageService.Capabilities().MemoryRetrievalBackend),
+		Risk:      risk.NewService(),
+		Model:     modelService,
+		Tools:     toolRegistry,
+		Plugin:    pluginService,
+		Audit:     auditService,
+		TraceEval: traceeval.NewService(storageService.TraceStore(), storageService.EvalStore()),
+		Executor:  executor,
+		Inspector: taskinspector.NewService(fileSystem),
+		Storage:   storageService,
+	})
 
 	return service, workspaceRoot
 }
@@ -959,17 +969,17 @@ func newTestService() *Service {
 	if err := sidecarclient.RegisterMediaTools(toolRegistry); err != nil {
 		panic(err)
 	}
-	return NewService(
-		contextsvc.NewService(),
-		intent.NewService(),
-		runengine.NewEngine(),
-		delivery.NewService(),
-		memory.NewService(),
-		risk.NewService(),
-		model.NewService(modelConfig()),
-		toolRegistry,
-		plugin.NewService(),
-	)
+	return NewService(Deps{
+		Context:   contextsvc.NewService(),
+		Intent:    intent.NewService(),
+		RunEngine: runengine.NewEngine(),
+		Delivery:  delivery.NewService(),
+		Memory:    memory.NewService(),
+		Risk:      risk.NewService(),
+		Model:     model.NewService(modelConfig()),
+		Tools:     toolRegistry,
+		Plugin:    plugin.NewService(),
+	})
 }
 
 func activeApprovalIDForTask(t *testing.T, service *Service, taskID string) string {
@@ -1064,17 +1074,17 @@ func replaceStrongholdProvider(t *testing.T, service *storage.Service, provider 
 // TestServiceStartTaskAndConfirmFlow verifies that a confirmed standard task
 // continues execution and completes delivery.
 func TestServiceStartTaskAndConfirmFlow(t *testing.T) {
-	service := NewService(
-		contextsvc.NewService(),
-		intent.NewService(),
-		runengine.NewEngine(),
-		delivery.NewService(),
-		memory.NewService(),
-		risk.NewService(),
-		model.NewService(modelConfig()),
-		tools.NewRegistry(),
-		plugin.NewService(),
-	)
+	service := NewService(Deps{
+		Context:   contextsvc.NewService(),
+		Intent:    intent.NewService(),
+		RunEngine: runengine.NewEngine(),
+		Delivery:  delivery.NewService(),
+		Memory:    memory.NewService(),
+		Risk:      risk.NewService(),
+		Model:     model.NewService(modelConfig()),
+		Tools:     tools.NewRegistry(),
+		Plugin:    plugin.NewService(),
+	})
 
 	startResult, err := service.StartTask(map[string]any{
 		"session_id": "sess_demo",
@@ -2682,17 +2692,17 @@ func TestServiceNotepadConvertToTaskRollsBackTaskWhenLinkPersistenceFails(t *tes
 		t.Fatalf("swap to failing todo store failed: %v", err)
 	}
 
-	service := NewService(
-		contextsvc.NewService(),
-		intent.NewService(),
-		engine,
-		delivery.NewService(),
-		memory.NewService(),
-		risk.NewService(),
-		model.NewService(modelConfig()),
-		tools.NewRegistry(),
-		plugin.NewService(),
-	)
+	service := NewService(Deps{
+		Context:   contextsvc.NewService(),
+		Intent:    intent.NewService(),
+		RunEngine: engine,
+		Delivery:  delivery.NewService(),
+		Memory:    memory.NewService(),
+		Risk:      risk.NewService(),
+		Model:     model.NewService(modelConfig()),
+		Tools:     tools.NewRegistry(),
+		Plugin:    plugin.NewService(),
+	})
 
 	_, err = service.NotepadConvertToTask(map[string]any{
 		"item_id":   "todo_link_failure",
@@ -4073,17 +4083,17 @@ func TestServiceSubmitInputWithFilesDoesNotWaitForInput(t *testing.T) {
 // TestServiceSubmitInputEmptyTextReturnsWaitingInput verifies that empty text
 // submissions enter waiting_input.
 func TestServiceSubmitInputEmptyTextReturnsWaitingInput(t *testing.T) {
-	service := NewService(
-		contextsvc.NewService(),
-		intent.NewService(),
-		runengine.NewEngine(),
-		delivery.NewService(),
-		memory.NewService(),
-		risk.NewService(),
-		model.NewService(modelConfig()),
-		tools.NewRegistry(),
-		plugin.NewService(),
-	)
+	service := NewService(Deps{
+		Context:   contextsvc.NewService(),
+		Intent:    intent.NewService(),
+		RunEngine: runengine.NewEngine(),
+		Delivery:  delivery.NewService(),
+		Memory:    memory.NewService(),
+		Risk:      risk.NewService(),
+		Model:     model.NewService(modelConfig()),
+		Tools:     tools.NewRegistry(),
+		Plugin:    plugin.NewService(),
+	})
 
 	result, err := service.SubmitInput(map[string]any{
 		"session_id": "sess_demo",
@@ -4135,17 +4145,17 @@ func TestServiceSubmitInputEmptyTextReturnsWaitingInput(t *testing.T) {
 // TestServiceDirectStartBuildsMemoryAndDeliveryHandoffs verifies direct starts
 // attach memory and delivery handoffs.
 func TestServiceDirectStartBuildsMemoryAndDeliveryHandoffs(t *testing.T) {
-	service := NewService(
-		contextsvc.NewService(),
-		intent.NewService(),
-		runengine.NewEngine(),
-		delivery.NewService(),
-		memory.NewService(),
-		risk.NewService(),
-		model.NewService(modelConfig()),
-		tools.NewRegistry(),
-		plugin.NewService(),
-	)
+	service := NewService(Deps{
+		Context:   contextsvc.NewService(),
+		Intent:    intent.NewService(),
+		RunEngine: runengine.NewEngine(),
+		Delivery:  delivery.NewService(),
+		Memory:    memory.NewService(),
+		Risk:      risk.NewService(),
+		Model:     model.NewService(modelConfig()),
+		Tools:     tools.NewRegistry(),
+		Plugin:    plugin.NewService(),
+	})
 
 	startResult, err := service.StartTask(map[string]any{
 		"session_id": "sess_demo",
@@ -4509,17 +4519,17 @@ func TestServiceConfirmTaskRespectsStoredPreferredDelivery(t *testing.T) {
 }
 
 func TestServiceStartTaskWaitingAuthDoesNotSetFinishedAt(t *testing.T) {
-	service := NewService(
-		contextsvc.NewService(),
-		intent.NewService(),
-		runengine.NewEngine(),
-		delivery.NewService(),
-		memory.NewService(),
-		risk.NewService(),
-		model.NewService(modelConfig()),
-		tools.NewRegistry(),
-		plugin.NewService(),
-	)
+	service := NewService(Deps{
+		Context:   contextsvc.NewService(),
+		Intent:    intent.NewService(),
+		RunEngine: runengine.NewEngine(),
+		Delivery:  delivery.NewService(),
+		Memory:    memory.NewService(),
+		Risk:      risk.NewService(),
+		Model:     model.NewService(modelConfig()),
+		Tools:     tools.NewRegistry(),
+		Plugin:    plugin.NewService(),
+	})
 
 	startResult, err := service.StartTask(map[string]any{
 		"session_id": "sess_demo",
@@ -4562,17 +4572,17 @@ func TestServiceStartTaskWaitingAuthDoesNotSetFinishedAt(t *testing.T) {
 // TestServiceConfirmCanEnterWaitingAuth verifies confirm flows can enter
 // waiting_auth.
 func TestServiceConfirmCanEnterWaitingAuth(t *testing.T) {
-	service := NewService(
-		contextsvc.NewService(),
-		intent.NewService(),
-		runengine.NewEngine(),
-		delivery.NewService(),
-		memory.NewService(),
-		risk.NewService(),
-		model.NewService(modelConfig()),
-		tools.NewRegistry(),
-		plugin.NewService(),
-	)
+	service := NewService(Deps{
+		Context:   contextsvc.NewService(),
+		Intent:    intent.NewService(),
+		RunEngine: runengine.NewEngine(),
+		Delivery:  delivery.NewService(),
+		Memory:    memory.NewService(),
+		Risk:      risk.NewService(),
+		Model:     model.NewService(modelConfig()),
+		Tools:     tools.NewRegistry(),
+		Plugin:    plugin.NewService(),
+	})
 
 	startResult, err := service.StartTask(map[string]any{
 		"session_id": "sess_demo",
@@ -4727,17 +4737,17 @@ func TestServiceConfirmTaskReturnsStorageErrorWhenApprovalPersistenceFails(t *te
 // TestServiceSecurityRespondAllowOnceResumesAndCompletes verifies allow-once
 // resumes execution and completes delivery.
 func TestServiceSecurityRespondAllowOnceResumesAndCompletes(t *testing.T) {
-	service := NewService(
-		contextsvc.NewService(),
-		intent.NewService(),
-		runengine.NewEngine(),
-		delivery.NewService(),
-		memory.NewService(),
-		risk.NewService(),
-		model.NewService(modelConfig()),
-		tools.NewRegistry(),
-		plugin.NewService(),
-	)
+	service := NewService(Deps{
+		Context:   contextsvc.NewService(),
+		Intent:    intent.NewService(),
+		RunEngine: runengine.NewEngine(),
+		Delivery:  delivery.NewService(),
+		Memory:    memory.NewService(),
+		Risk:      risk.NewService(),
+		Model:     model.NewService(modelConfig()),
+		Tools:     tools.NewRegistry(),
+		Plugin:    plugin.NewService(),
+	})
 
 	startResult, err := service.StartTask(map[string]any{
 		"session_id": "sess_demo",
@@ -4888,17 +4898,17 @@ func TestServiceSecurityRespondRespectsFallbackDelivery(t *testing.T) {
 }
 
 func TestServiceSecurityRespondDenyOnceCancelsTask(t *testing.T) {
-	service := NewService(
-		contextsvc.NewService(),
-		intent.NewService(),
-		runengine.NewEngine(),
-		delivery.NewService(),
-		memory.NewService(),
-		risk.NewService(),
-		model.NewService(modelConfig()),
-		tools.NewRegistry(),
-		plugin.NewService(),
-	)
+	service := NewService(Deps{
+		Context:   contextsvc.NewService(),
+		Intent:    intent.NewService(),
+		RunEngine: runengine.NewEngine(),
+		Delivery:  delivery.NewService(),
+		Memory:    memory.NewService(),
+		Risk:      risk.NewService(),
+		Model:     model.NewService(modelConfig()),
+		Tools:     tools.NewRegistry(),
+		Plugin:    plugin.NewService(),
+	})
 
 	startResult, err := service.StartTask(map[string]any{
 		"session_id": "sess_demo",

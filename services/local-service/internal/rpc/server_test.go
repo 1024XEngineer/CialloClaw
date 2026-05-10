@@ -2336,10 +2336,9 @@ func TestDispatchMapsTaskControlFinishedErrors(t *testing.T) {
 }
 
 func TestDispatchReturnsSecurityAuditList(t *testing.T) {
-	server := newTestServer()
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "audit.db")))
 	defer func() { _ = storageService.Close() }()
-	server.orchestrator.WithStorage(storageService)
+	server := newTestServerWithStorage(storageService)
 	err := storageService.AuditWriter().WriteAuditRecord(context.Background(), audit.Record{
 		AuditID:   "audit_001",
 		TaskID:    "task_001",
@@ -2379,10 +2378,9 @@ func TestDispatchReturnsSecurityAuditList(t *testing.T) {
 }
 
 func TestDispatchReturnsSecurityRestorePointsList(t *testing.T) {
-	server := newTestServer()
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "restore.db")))
 	defer func() { _ = storageService.Close() }()
-	server.orchestrator.WithStorage(storageService)
+	server := newTestServerWithStorage(storageService)
 	err := storageService.RecoveryPointWriter().WriteRecoveryPoint(context.Background(), checkpoint.RecoveryPoint{
 		RecoveryPointID: "rp_001",
 		TaskID:          "task_001",
@@ -2419,10 +2417,9 @@ func TestDispatchReturnsSecurityRestorePointsList(t *testing.T) {
 }
 
 func TestDispatchReturnsSecurityRestoreApplyResult(t *testing.T) {
-	server := newTestServer()
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "restore-apply.db")))
 	defer func() { _ = storageService.Close() }()
-	server.orchestrator.WithStorage(storageService)
+	server := newTestServerWithStorage(storageService)
 	startResult, err := server.orchestrator.StartTask(map[string]any{
 		"session_id": "sess_restore",
 		"source":     "floating_ball",
@@ -2507,10 +2504,9 @@ func TestDispatchReturnsNotepadUpdateResult(t *testing.T) {
 }
 
 func TestDispatchReturnsTaskArtifactList(t *testing.T) {
-	server := newTestServer()
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "artifact-list.db")))
 	defer func() { _ = storageService.Close() }()
-	server.orchestrator.WithStorage(storageService)
+	server := newTestServerWithStorage(storageService)
 	err := storageService.ArtifactStore().SaveArtifacts(context.Background(), []storage.ArtifactRecord{{
 		ArtifactID:          "art_rpc_001",
 		TaskID:              "task_rpc_001",
@@ -2546,10 +2542,9 @@ func TestDispatchReturnsTaskArtifactList(t *testing.T) {
 }
 
 func TestDispatchReturnsTaskArtifactOpen(t *testing.T) {
-	server := newTestServer()
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "artifact-open.db")))
 	defer func() { _ = storageService.Close() }()
-	server.orchestrator.WithStorage(storageService)
+	server := newTestServerWithStorage(storageService)
 	err := storageService.ArtifactStore().SaveArtifacts(context.Background(), []storage.ArtifactRecord{{
 		ArtifactID:          "art_rpc_open_001",
 		TaskID:              "task_rpc_open_001",
@@ -2597,10 +2592,9 @@ func TestDispatchMapsArtifactNotFoundErrors(t *testing.T) {
 }
 
 func TestDispatchReturnsDeliveryOpenForArtifact(t *testing.T) {
-	server := newTestServer()
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "delivery-open-artifact.db")))
 	defer func() { _ = storageService.Close() }()
-	server.orchestrator.WithStorage(storageService)
+	server := newTestServerWithStorage(storageService)
 	err := storageService.ArtifactStore().SaveArtifacts(context.Background(), []storage.ArtifactRecord{{
 		ArtifactID:          "art_delivery_rpc_001",
 		TaskID:              "task_delivery_rpc_001",
@@ -2785,12 +2779,11 @@ func TestDispatchMapsTaskInspectorSourceErrorsExplicitly(t *testing.T) {
 }
 
 func TestDispatchReturnsFormalTaskInspectorRunSourceErrors(t *testing.T) {
-	server := newTestServer()
 	pathPolicy, err := platform.NewLocalPathPolicy(filepath.Join(t.TempDir(), "rpc-task-inspector"))
 	if err != nil {
 		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
 	}
-	server.orchestrator.WithTaskInspector(taskinspector.NewService(platform.NewLocalFileSystemAdapter(pathPolicy)))
+	server := newTestServerWithTaskInspector(taskinspector.NewService(platform.NewLocalFileSystemAdapter(pathPolicy)))
 	tests := []struct {
 		name          string
 		requestID     string
@@ -2898,10 +2891,9 @@ func TestJSONRPCHandlerWrappersCoverPrimitiveDecodersAndTracingHelpers(t *testin
 }
 
 func TestDispatchReturnsSettingsGet(t *testing.T) {
-	server := newTestServer()
 	storageService := storage.NewService(testStorageAdapter{databasePath: filepath.Join(t.TempDir(), "settings-get.db")})
 	defer func() { _ = storageService.Close() }()
-	server.orchestrator.WithStorage(storageService)
+	server := newTestServerWithStorage(storageService)
 	response := server.dispatch(requestEnvelope{
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-settings-get"`),
@@ -2920,10 +2912,9 @@ func TestDispatchReturnsSettingsGet(t *testing.T) {
 }
 
 func TestDispatchReturnsSettingsUpdate(t *testing.T) {
-	server := newTestServer()
 	storageService := storage.NewService(testStorageAdapter{databasePath: filepath.Join(t.TempDir(), "settings-update.db")})
 	defer func() { _ = storageService.Close() }()
-	server.orchestrator.WithStorage(storageService)
+	server := newTestServerWithStorage(storageService)
 	response := server.dispatch(requestEnvelope{
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-settings-update"`),
@@ -3025,7 +3016,7 @@ func TestDispatchReturnsPluginList(t *testing.T) {
 }
 
 func TestDispatchReturnsPluginDetail(t *testing.T) {
-	server, toolRegistry, pluginService := newTestServerWithDependencies(nil)
+	server, toolRegistry, pluginService := newTestServerWithDependencies(nil, nil, nil)
 	response := server.dispatch(requestEnvelope{
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-plugin-detail"`),
@@ -3223,10 +3214,9 @@ func TestDispatchTaskListClampsPagingParams(t *testing.T) {
 }
 
 func TestDispatchTaskEventsListReturnsLoopEvents(t *testing.T) {
-	server := newTestServer()
 	storageService := storage.NewService(testStorageAdapter{databasePath: filepath.Join(t.TempDir(), "rpc-loop-events.db")})
 	defer func() { _ = storageService.Close() }()
-	server.orchestrator.WithStorage(storageService)
+	server := newTestServerWithStorage(storageService)
 	if err := storageService.LoopRuntimeStore().SaveEvents(context.Background(), []storage.EventRecord{{
 		EventID:     "evt_rpc_loop_001",
 		RunID:       "run_rpc_loop_001",
@@ -3265,10 +3255,9 @@ func TestDispatchTaskEventsListReturnsLoopEvents(t *testing.T) {
 }
 
 func TestDispatchTaskToolCallsListReturnsPersistedToolCalls(t *testing.T) {
-	server := newTestServer()
 	storageService := storage.NewService(testStorageAdapter{databasePath: filepath.Join(t.TempDir(), "rpc-tool-calls.db")})
 	defer func() { _ = storageService.Close() }()
-	server.orchestrator.WithStorage(storageService)
+	server := newTestServerWithStorage(storageService)
 	if err := storageService.ToolCallStore().SaveToolCall(context.Background(), tools.ToolCallRecord{
 		ToolCallID: "tool_call_rpc_001",
 		RunID:      "run_rpc_tool_001",
@@ -3360,16 +3349,26 @@ func TestNewServerSkipsDebugHTTPWhenDisabled(t *testing.T) {
 }
 
 func newTestServer() *Server {
-	server, _, _ := newTestServerWithDependencies(nil)
+	server, _, _ := newTestServerWithDependencies(nil, nil, nil)
 	return server
 }
 
 func newTestServerWithModelClient(client model.Client) *Server {
-	server, _, _ := newTestServerWithDependencies(client)
+	server, _, _ := newTestServerWithDependencies(client, nil, nil)
 	return server
 }
 
-func newTestServerWithDependencies(client model.Client) (*Server, *tools.Registry, *plugin.Service) {
+func newTestServerWithStorage(storageService *storage.Service) *Server {
+	server, _, _ := newTestServerWithDependencies(nil, storageService, nil)
+	return server
+}
+
+func newTestServerWithTaskInspector(inspectorService *taskinspector.Service) *Server {
+	server, _, _ := newTestServerWithDependencies(nil, nil, inspectorService)
+	return server
+}
+
+func newTestServerWithDependencies(client model.Client, storageService *storage.Service, inspectorService *taskinspector.Service) (*Server, *tools.Registry, *plugin.Service) {
 	toolRegistry := tools.NewRegistry()
 	_ = builtin.RegisterBuiltinTools(toolRegistry)
 	_ = sidecarclient.RegisterPlaywrightTools(toolRegistry)
@@ -3394,21 +3393,24 @@ func newTestServerWithDependencies(client model.Client) (*Server, *tools.Registr
 		toolExecutor,
 		pluginService,
 	)
-	orch := orchestrator.NewService(
-		contextsvc.NewService(),
-		intent.NewService(),
-		runengine.NewEngine(),
-		delivery.NewService(),
-		memory.NewService(),
-		risk.NewService(),
-		model.NewService(serviceconfig.ModelConfig{
+	orch := orchestrator.NewService(orchestrator.Deps{
+		Context:   contextsvc.NewService(),
+		Intent:    intent.NewService(),
+		RunEngine: runengine.NewEngine(),
+		Delivery:  delivery.NewService(),
+		Memory:    memory.NewService(),
+		Risk:      risk.NewService(),
+		Model: model.NewService(serviceconfig.ModelConfig{
 			Provider: "openai_responses",
 			ModelID:  "gpt-5.4",
 			Endpoint: "https://api.openai.com/v1/responses",
 		}),
-		toolRegistry,
-		pluginService,
-	).WithExecutor(executionService)
+		Tools:     toolRegistry,
+		Plugin:    pluginService,
+		Executor:  executionService,
+		Storage:   storageService,
+		Inspector: inspectorService,
+	})
 
 	server := NewServer(serviceconfig.RPCConfig{
 		Transport:        "named_pipe",
