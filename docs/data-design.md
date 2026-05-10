@@ -294,7 +294,7 @@
 - `todo_items.bucket`：事项桶位，区分 `upcoming / later / recurring_rule / closed` 这类用户可见分组。
 - `todo_items.status`：事项状态，不得直接映射成 `task.status`。
 - `todo_items.source_bucket / previous_bucket / previous_due_at / previous_status`：记录事项最近一次关闭前的可恢复位置、计划时间和状态，用于重启后仍可正确 restore。
-- `todo_items.note_text / prerequisite / planned_at / ended_at / related_resources_json / linked_task_id`：承接 notes 详情补强字段，并投影到当前稳定 `TodoItem` 协议对象。
+- `todo_items.note_text / note_text_origin / prerequisite / planned_at / ended_at / related_resources_json / linked_task_id`：承接 notes 详情补强字段，并投影到当前稳定 `TodoItem` 协议对象；其中 `note_text_origin` 用于区分用户正文和运行时补出的展示文案，避免重启后把 display-only 文本误当成正式 task 输入。
 - `todo_items.linked_task_id`：事项被升级为正式任务后才允许写入，用于建立来源追踪。
 - `todo_items.source_path / source_line`：用于把巡检结果精确回链到 Markdown 来源。
 - `recurring_rules.rule_type / cron_expr / interval_*`：用于描述规则引擎侧的重复规则计算输入，不直接等价于前端展示文本。
@@ -453,6 +453,7 @@ CREATE TABLE todo_items (
     tags_json TEXT,                              -- 标签(JSON)
     agent_suggestion TEXT,                       -- Agent建议
     note_text TEXT,                              -- 备注正文/详情摘要
+    note_text_origin TEXT,                       -- note_text 来源(user_provided/derived_default)
     prerequisite TEXT,                           -- 前置条件
     planned_at TEXT,                             -- 原计划时间
     previous_bucket TEXT,                        -- 最近一次关闭前桶位

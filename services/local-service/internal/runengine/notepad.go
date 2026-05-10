@@ -740,6 +740,9 @@ func restoreNotepadItemsFromStore(items []storage.TodoItemRecord, rules []storag
 			"created_at":       record.CreatedAt,
 			"updated_at":       record.UpdatedAt,
 		}
+		if record.NoteTextOrigin != "" {
+			item["note_text_origin"] = record.NoteTextOrigin
+		}
 		if record.SourceBucket != "" {
 			item["source_bucket"] = record.SourceBucket
 		}
@@ -755,7 +758,7 @@ func restoreNotepadItemsFromStore(items []storage.TodoItemRecord, rules []storag
 		if record.LinkedTaskID != "" {
 			item["linked_task_id"] = record.LinkedTaskID
 		}
-		if resources := decodeRelatedResources(record.RelatedResourcesJSON); len(resources) > 0 {
+		if resources := restoreStoredRelatedResources(item, decodeRelatedResources(record.RelatedResourcesJSON)); len(resources) > 0 {
 			item["related_resources"] = resources
 		}
 		if tags := decodeTags(record.TagsJSON); len(tags) > 0 {
@@ -774,9 +777,109 @@ func restoreNotepadItemsFromStore(items []storage.TodoItemRecord, rules []storag
 			item["recent_instance_status"] = nullableMapString(rule.RecentInstanceStatus)
 			item["effective_scope"] = nullableMapString(rule.EffectiveScope)
 		}
+		if origin := restoreStoredNoteTextOrigin(item, record.NoteTextOrigin); origin != "" {
+			item["note_text_origin"] = origin
+		}
 		result = append(result, item)
 	}
 	return result
+}
+
+// restoreStoredNoteTextOrigin preserves persisted provenance for title-only
+// notes and only falls back to content heuristics for legacy rows created
+// before the origin marker existed.
+func restoreStoredNoteTextOrigin(item map[string]any, persistedOrigin string) string {
+	if origin := strings.TrimSpace(persistedOrigin); origin != "" {
+		return origin
+	}
+	noteText := strings.TrimSpace(stringValue(item, "note_text", ""))
+	if noteText == "" {
+		return ""
+	}
+	title := strings.TrimSpace(stringValue(item, "title", "待办事项"))
+	suggestion := strings.TrimSpace(stringValue(item, "agent_suggestion", ""))
+	if noteText == deriveSyntheticNotepadNoteText(title, suggestion) {
+		return "derived_default"
+	}
+	return "user_provided"
+}
+
+// restoreStoredRelatedResources upgrades legacy persisted dashboard fallback
+// resources so later task conversion can still distinguish them from explicit
+// user attachments after a restart.
+func restoreStoredRelatedResources(item map[string]any, resources []map[string]any) []map[string]any {
+	if len(resources) == 0 {
+		return nil
+	}
+
+	legacyDefaults := deriveNotepadRelatedResources(itemWithoutRelatedResources(item))
+	defaultsBySignature := make(map[string]struct{}, len(legacyDefaults)+4)
+	for _, resource := range legacyDefaults {
+		defaultsBySignature[relatedResourceSignature(resource)] = struct{}{}
+	}
+	for _, resource := range knownDerivedDefaultNotepadResources() {
+		defaultsBySignature[relatedResourceSignature(resource)] = struct{}{}
+	}
+
+	for _, resource := range resources {
+		if strings.TrimSpace(stringValue(resource, "resource_origin", "")) != "" {
+			continue
+		}
+		if _, ok := defaultsBySignature[relatedResourceSignature(resource)]; ok {
+			resource["resource_origin"] = "derived_default"
+		}
+	}
+	return resources
+}
+
+func knownDerivedDefaultNotepadResources() []map[string]any {
+	return []map[string]any{
+		{
+			"label":       "任务源目录",
+			"path":        defaultTaskSourcePath,
+			"type":        "directory",
+			"target_kind": "folder",
+		},
+		{
+			"label":       "归档目录",
+			"path":        "workspace/archive",
+			"type":        "directory",
+			"target_kind": "folder",
+		},
+		{
+			"label":       "关联模板",
+			"path":        "workspace/templates",
+			"type":        "directory",
+			"target_kind": "folder",
+		},
+		{
+			"label":       "草稿目录",
+			"path":        "workspace/drafts",
+			"type":        "directory",
+			"target_kind": "folder",
+		},
+		{
+			"label":       "默认工作区",
+			"path":        defaultWorkspaceRoot,
+			"type":        "directory",
+			"target_kind": "folder",
+		},
+	}
+}
+
+func itemWithoutRelatedResources(item map[string]any) map[string]any {
+	cloned := cloneMap(item)
+	delete(cloned, "related_resources")
+	return cloned
+}
+
+func relatedResourceSignature(resource map[string]any) string {
+	return strings.Join([]string{
+		strings.TrimSpace(stringValue(resource, "path", "")),
+		strings.TrimSpace(stringValue(resource, "label", "")),
+		strings.TrimSpace(firstNonEmpty(stringValue(resource, "resource_type", ""), stringValue(resource, "type", ""))),
+		strings.TrimSpace(stringValue(resource, "target_kind", "")),
+	}, "|")
 }
 
 func todoItemRecordFromMap(item map[string]any, now time.Time) (storage.TodoItemRecord, error) {
@@ -808,6 +911,7 @@ func todoItemRecordFromMap(item map[string]any, now time.Time) (storage.TodoItem
 		TagsJSON:             tagsJSON,
 		AgentSuggestion:      stringValue(item, "agent_suggestion", ""),
 		NoteText:             stringValue(item, "note_text", ""),
+		NoteTextOrigin:       stringValue(item, "note_text_origin", ""),
 		Prerequisite:         stringValue(item, "prerequisite", ""),
 		PlannedAt:            stringValue(item, "planned_at", ""),
 		PreviousBucket:       stringValue(item, "previous_bucket", ""),
