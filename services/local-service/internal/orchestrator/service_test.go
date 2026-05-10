@@ -2831,6 +2831,46 @@ func TestServiceNotepadConvertToTaskKeepsDerivedDefaultResourcesOutOfSnapshot(t 
 	}
 }
 
+func TestServiceNotepadConvertToTaskKeepsLegacyPersistedFallbacksOutOfSnapshot(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Converted legacy fallback notepad task finished.")
+	todoStore := storage.NewInMemoryTodoStore()
+	if err := todoStore.ReplaceTodoState(context.Background(), []storage.TodoItemRecord{{
+		ItemID:               "todo_legacy_fallbacks",
+		Title:                "周报模板",
+		Bucket:               "upcoming",
+		Status:               "normal",
+		NoteText:             "周报模板。当前处于便签巡检域，等待进入正式执行。",
+		RelatedResourcesJSON: `[{"id":"todo_legacy_fallbacks_drafts","label":"草稿目录","path":"workspace/drafts","type":"directory","target_kind":"folder"},{"id":"todo_legacy_fallbacks_workspace","label":"默认工作区","path":"workspace","type":"directory","target_kind":"folder"}]`,
+		CreatedAt:            "2026-04-20T10:00:00Z",
+		UpdatedAt:            "2026-04-20T10:00:00Z",
+	}}, nil); err != nil {
+		t.Fatalf("seed legacy todo store failed: %v", err)
+	}
+	if err := service.runEngine.WithTodoStore(todoStore); err != nil {
+		t.Fatalf("attach todo store failed: %v", err)
+	}
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_legacy_fallbacks",
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected converted task to remain available in runtime")
+	}
+	if record.Snapshot.Text != "周报模板" {
+		t.Fatalf("expected legacy synthetic note_text to collapse back to title, got %+v", record.Snapshot)
+	}
+	if len(record.Snapshot.Files) != 0 {
+		t.Fatalf("expected legacy fallback resources to stay out of task snapshot files, got %+v", record.Snapshot.Files)
+	}
+}
+
 func TestServiceNotepadConvertToTaskCarriesLegacyPathResourcesIntoSnapshotFiles(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Converted legacy-resource notepad task finished.")
 	service.runEngine.ReplaceNotepadItems([]map[string]any{{

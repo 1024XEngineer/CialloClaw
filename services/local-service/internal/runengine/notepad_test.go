@@ -1,6 +1,7 @@
 package runengine
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -191,6 +192,7 @@ func TestEngineTodoStorePersistsAndReloadsNotepadState(t *testing.T) {
 		"source_path":        "workspace/todos/weekly.md",
 		"source_line":        2,
 		"note_text":          "从真实任务源解析出来的说明。",
+		"note_text_origin":   "user_provided",
 		"repeat_rule_text":   "每两周一次",
 		"next_occurrence_at": now.Add(14 * 24 * time.Hour).Format(time.RFC3339),
 		"related_resources": []map[string]any{{
@@ -220,9 +222,57 @@ func TestEngineTodoStorePersistsAndReloadsNotepadState(t *testing.T) {
 	if detail["repeat_rule_text"] != "每两周一次" || detail["source_path"] != "workspace/todos/weekly.md" {
 		t.Fatalf("expected recurring note metadata to reload, got %+v", detail)
 	}
+	if detail["note_text_origin"] != "user_provided" {
+		t.Fatalf("expected note_text_origin to persist across reload, got %+v", detail)
+	}
 	resources, ok := detail["related_resources"].([]map[string]any)
 	if !ok || len(resources) != 1 {
 		t.Fatalf("expected related resources to reload, got %+v", detail["related_resources"])
+	}
+}
+
+func TestEngineTodoStoreReloadMarksLegacySyntheticNoteTextAndDerivedResources(t *testing.T) {
+	todoStore := storage.NewInMemoryTodoStore()
+	now := time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC)
+	legacySynthetic := deriveSyntheticNotepadNoteText("周报模板", "")
+
+	if err := todoStore.ReplaceTodoState(context.Background(), []storage.TodoItemRecord{{
+		ItemID:               "todo_legacy_defaults",
+		Title:                "周报模板",
+		Bucket:               notepadBucketUpcoming,
+		Status:               "normal",
+		NoteText:             legacySynthetic,
+		RelatedResourcesJSON: `[{"id":"todo_legacy_defaults_drafts","label":"草稿目录","path":"workspace/drafts","type":"directory","target_kind":"folder"},{"id":"todo_legacy_defaults_workspace","label":"默认工作区","path":"workspace","type":"directory","target_kind":"folder"}]`,
+		CreatedAt:            now.Format(time.RFC3339),
+		UpdatedAt:            now.Format(time.RFC3339),
+	}}, nil); err != nil {
+		t.Fatalf("seed legacy todo store state failed: %v", err)
+	}
+
+	reloaded, err := NewEngineWithStore(storage.NewInMemoryTaskRunStore())
+	if err != nil {
+		t.Fatalf("new reload engine failed: %v", err)
+	}
+	reloaded.now = func() time.Time { return now }
+	if err := reloaded.WithTodoStore(todoStore); err != nil {
+		t.Fatalf("attach todo store on reload failed: %v", err)
+	}
+
+	detail, ok := reloaded.NotepadItem("todo_legacy_defaults")
+	if !ok {
+		t.Fatal("expected legacy note to reload from todo store")
+	}
+	if detail["note_text_origin"] != "derived_default" {
+		t.Fatalf("expected legacy synthetic note_text to be marked derived_default, got %+v", detail)
+	}
+	resources, ok := detail["related_resources"].([]map[string]any)
+	if !ok || len(resources) != 2 {
+		t.Fatalf("expected legacy related resources to reload, got %+v", detail["related_resources"])
+	}
+	for _, resource := range resources {
+		if resource["resource_origin"] != "derived_default" {
+			t.Fatalf("expected legacy fallback resource to be marked derived_default, got %+v", resources)
+		}
 	}
 }
 
