@@ -132,6 +132,67 @@ func (s *streamPendingState) isBlocked() bool {
 	return s != nil && s.blocked.Load()
 }
 
+type streamConnNotificationTracker struct {
+	mu     sync.Mutex
+	counts map[string]int
+}
+
+func newStreamConnNotificationTracker() *streamConnNotificationTracker {
+	return &streamConnNotificationTracker{
+		counts: map[string]int{},
+	}
+}
+
+func (t *streamConnNotificationTracker) reserve(method, taskID string, params map[string]any) string {
+	if t == nil {
+		return ""
+	}
+	key := streamConnNotificationKey(method, taskID, params)
+	t.mu.Lock()
+	t.counts[key]++
+	t.mu.Unlock()
+	return key
+}
+
+func (t *streamConnNotificationTracker) release(key string) {
+	if t == nil || key == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.counts[key] == 0 {
+		return
+	}
+	t.counts[key]--
+	if t.counts[key] == 0 {
+		delete(t.counts, key)
+	}
+}
+
+func (t *streamConnNotificationTracker) shouldSkipBuffered(method, taskID string, params map[string]any) bool {
+	if t == nil {
+		return false
+	}
+	key := streamConnNotificationKey(method, taskID, params)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.counts[key] == 0 {
+		return false
+	}
+	t.counts[key]--
+	if t.counts[key] == 0 {
+		delete(t.counts, key)
+	}
+	return true
+}
+
+func streamConnNotificationKey(method, taskID string, params map[string]any) string {
+	if method == "task.updated" {
+		return method + ":" + runtimeNotificationTaskID(taskID, params)
+	}
+	return notificationKey(method, taskID, params)
+}
+
 type streamTaskLockEntry struct {
 	mu   sync.Mutex
 	refs int
@@ -216,6 +277,7 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 		onWriteError: connState.close,
 	}
 	connectionTasks := newStreamConnTaskSet()
+	connectionNotifications := newStreamConnNotificationTracker()
 	unsubscribeConnectionRuntime := s.orchestrator.SubscribeRuntimeNotifications(func(taskID string, method string, params map[string]any) {
 		if connState.isClosed() || method != "task.updated" {
 			return
@@ -224,7 +286,10 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 		if notificationTaskID == "" || !connectionTasks.has(notificationTaskID) {
 			return
 		}
-		_ = writer.writeEnvelope(newNotificationEnvelope(method, params))
+		reservationKey := connectionNotifications.reserve(method, notificationTaskID, params)
+		if err := writer.writeEnvelope(newNotificationEnvelope(method, params)); err != nil {
+			connectionNotifications.release(reservationKey)
+		}
 	})
 	defer unsubscribeConnectionRuntime()
 	taskCoordinator := newStreamTaskCoordinator()
@@ -289,7 +354,7 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 				})
 			}
 			defer releasePending()
-			s.handleStreamRequest(request, writer, connState, connectionTasks, pendingState, taskCoordinator, &taskStartRequestMu, releasePending)
+			s.handleStreamRequest(request, writer, connState, connectionTasks, connectionNotifications, pendingState, taskCoordinator, &taskStartRequestMu, releasePending)
 		}(request)
 	}
 }
@@ -320,7 +385,7 @@ func streamReaderReachedEOF(reader *bufio.Reader, conn net.Conn) bool {
 	return !errors.As(err, &netErr)
 }
 
-func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnvelopeWriter, connState *streamConnState, connectionTasks *streamConnTaskSet, pendingState *streamPendingState, taskCoordinator *streamTaskCoordinator, taskStartMu *sync.RWMutex, releasePending func()) {
+func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnvelopeWriter, connState *streamConnState, connectionTasks *streamConnTaskSet, connectionNotifications *streamConnNotificationTracker, pendingState *streamPendingState, taskCoordinator *streamTaskCoordinator, taskStartMu *sync.RWMutex, releasePending func()) {
 	if connState.isClosed() {
 		return
 	}
@@ -431,6 +496,9 @@ func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnve
 				for _, notification := range notifications {
 					method := stringValue(notification, "method", "task.updated")
 					params := mapValue(notification, "params")
+					if connectionNotifications.shouldSkipBuffered(method, taskID, params) {
+						continue
+					}
 					if tracker.shouldSkipBufferedRuntime(method, taskID, params) {
 						continue
 					}

@@ -2199,11 +2199,15 @@ func TestServiceStartTaskUsesGeneratedTaskTitleFromFullContext(t *testing.T) {
 		"session_id": "sess_generated_title",
 		"source":     "floating_ball",
 		"trigger":    "hover_text_input",
-		"intent":     map[string]any{"name": "translate"},
-		"options":    map[string]any{"confirm_required": true},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
 		"input": map[string]any{
 			"type": "text",
-			"text": "请帮我翻译这次发布复盘，并补齐风险项和后续跟进安排",
+			"text": "请帮我整理这次发布复盘，并补齐风险项和后续跟进安排",
 		},
 	})
 	if err != nil {
@@ -2224,7 +2228,42 @@ func TestServiceStartTaskUsesGeneratedTaskTitleFromFullContext(t *testing.T) {
 	t.Fatalf("expected async task title refinement, got %+v", record)
 }
 
-func TestServiceStartTaskDoesNotBlockOnTitleGeneration(t *testing.T) {
+func TestServiceStartTaskConfirmingIntentDoesNotGenerateTitleBeforeConfirmation(t *testing.T) {
+	modelClient := &blockingModelClient{
+		started:  make(chan string, 1),
+		released: make(chan struct{}, 1),
+	}
+	service, _ := newTestServiceWithModelClient(t, modelClient)
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_confirm_title_boundary",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"intent":     map[string]any{"name": "translate"},
+		"options":    map[string]any{"confirm_required": true},
+		"input": map[string]any{
+			"type": "text",
+			"text": "请帮我翻译这次发布复盘，并补齐风险项和后续跟进安排",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	select {
+	case taskID := <-modelClient.started:
+		t.Fatalf("expected confirming_intent start to avoid title generation, got %s", taskID)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	task := startResult["task"].(map[string]any)
+	if task["status"] != "confirming_intent" {
+		t.Fatalf("expected confirming_intent status, got %+v", task)
+	}
+}
+
+func TestServiceStartTaskDoesNotBlockOnAsyncTitleGeneration(t *testing.T) {
 	modelClient := &blockingModelClient{
 		started:  make(chan string, 1),
 		released: make(chan struct{}, 1),
@@ -2239,11 +2278,15 @@ func TestServiceStartTaskDoesNotBlockOnTitleGeneration(t *testing.T) {
 			"session_id": "sess_non_blocking_title",
 			"source":     "floating_ball",
 			"trigger":    "hover_text_input",
-			"intent":     map[string]any{"name": "translate"},
-			"options":    map[string]any{"confirm_required": true},
+			"intent": map[string]any{
+				"name": "write_file",
+				"arguments": map[string]any{
+					"require_authorization": true,
+				},
+			},
 			"input": map[string]any{
 				"type": "text",
-				"text": "请帮我翻译这次发布复盘，并补齐风险项和后续跟进安排",
+				"text": "请帮我整理这次发布复盘，并补齐风险项和后续跟进安排",
 			},
 		})
 		if err != nil {

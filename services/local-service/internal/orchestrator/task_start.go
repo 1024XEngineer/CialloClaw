@@ -123,7 +123,9 @@ func (s *Service) createTaskFromEntryFlow(flow taskEntryFlow) runengine.TaskReco
 	})
 	s.publishTaskStart(task.TaskID, task.SessionID, requestTraceID(flow.Params))
 	s.attachMemoryReadPlans(task.TaskID, task.RunID, flow.Snapshot, flow.Suggestion.Intent)
-	s.scheduleTaskTitleRefresh(task.TaskID, flow.Snapshot, flow.Suggestion.Intent, task.Title)
+	if !flow.Suggestion.RequiresConfirm {
+		s.scheduleTaskTitleRefresh(task.TaskID, flow.Snapshot, flow.Suggestion.Intent, task.Title)
+	}
 	return task
 }
 

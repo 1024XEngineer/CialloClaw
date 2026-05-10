@@ -105,6 +105,17 @@ func (s *Service) GenerateNoteTitle(ctx context.Context, item map[string]any, fa
 	return title
 }
 
+// CachedNoteTitle exposes note-title cache hits so callers can keep manual
+// generation budgets aligned with actual model invocations.
+func (s *Service) CachedNoteTitle(item map[string]any, fallback string) (string, bool) {
+	if s == nil {
+		return "", false
+	}
+	prompt := buildNoteTitlePrompt(item, s.maxTitle)
+	cacheKey := noteTitleCacheKey(prompt, fallback, s.maxTitle)
+	return s.cachedNoteTitle(cacheKey)
+}
+
 func (s *Service) generate(ctx context.Context, requestID string, prompt string, fallback string) (string, bool) {
 	fallback = normalizeTitle(fallback, s.maxTitle)
 	if strings.TrimSpace(prompt) == "" {

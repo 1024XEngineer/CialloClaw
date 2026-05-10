@@ -350,6 +350,68 @@ func TestServiceRunDoesNotSpendGenerationBudgetOnFallbackOnlyNotes(t *testing.T)
 	}
 }
 
+func TestServiceRunDoesNotSpendGenerationBudgetOnCachedNoteTitles(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	notePath := filepath.Join(workspaceRoot, "todos", "weekly.md")
+	initialContent := strings.Join([]string{
+		"- [ ] Weekly retro",
+		"  note: review blockers and next steps",
+		"- [ ] Release checklist",
+		"  note: verify owners and rollback steps",
+		"- [ ] Hiring sync",
+		"  note: gather open questions and decisions",
+	}, "\n")
+	if err := os.WriteFile(notePath, []byte(initialContent), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	callCount := &atomic.Int32{}
+	service := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"模型标题"}`,
+		calls:  callCount,
+	})))
+
+	if _, err := service.Run(RunInput{
+		AllowGeneratedTitles: true,
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+	}); err != nil {
+		t.Fatalf("first Run returned error: %v", err)
+	}
+	if got := callCount.Load(); got != defaultGeneratedTitleLimit {
+		t.Fatalf("expected first pass to consume budget on the first %d notes, got %d", defaultGeneratedTitleLimit, got)
+	}
+
+	updatedContent := initialContent + "\n- [ ] Infra backlog\n  note: clean stale alerts and ticket links\n"
+	if err := os.WriteFile(notePath, []byte(updatedContent), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	result, err := service.Run(RunInput{
+		AllowGeneratedTitles: true,
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+	})
+	if err != nil {
+		t.Fatalf("second Run returned error: %v", err)
+	}
+	if got := callCount.Load(); got != defaultGeneratedTitleLimit+1 {
+		t.Fatalf("expected cached titles to preserve budget for one new note, got %d calls", got)
+	}
+	if len(result.NotepadItems) != 4 {
+		t.Fatalf("expected four parsed notes, got %+v", result.NotepadItems)
+	}
+	if result.NotepadItems[3]["title"] != "模型标题" {
+		t.Fatalf("expected later uncached note to still receive generated title, got %+v", result.NotepadItems[3])
+	}
+}
+
 func TestServiceRunUsesNoteTextAsFallbackWhenGeneratorUnavailable(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)

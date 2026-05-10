@@ -556,12 +556,20 @@ func (s *Service) normalizeParsedNotepadItem(item map[string]any, sourcePath str
 		"待办事项",
 	))
 	shouldGenerateTitle := allowGeneratedTitles && s != nil && s.titlegen != nil && shouldGenerateNoteTitle(item)
-	// Consume the manual-generation budget only for notes that would actually
-	// call the title model, so simple checklist items do not starve later notes
-	// with richer context in the same inspection pass.
-	if shouldGenerateTitle && canGenerateTitleNow(remainingGeneratedTitles) {
-		item["title"] = s.titlegen.GenerateNoteTitle(context.Background(), item, fallbackTitle)
+	if shouldGenerateTitle {
+		if cachedTitle, ok := s.titlegen.CachedNoteTitle(item, fallbackTitle); ok {
+			item["title"] = cachedTitle
+		} else if canGenerateTitleNow(remainingGeneratedTitles) {
+			// Consume the manual-generation budget only for cache misses that will
+			// actually call the title model, so repeated inspector passes do not let
+			// earlier cached notes starve later uncached notes.
+			item["title"] = s.titlegen.GenerateNoteTitle(context.Background(), item, fallbackTitle)
+		} else {
+			item["title"] = fallbackTitle
+		}
 	} else {
+		// Simple checklist items stay on the local fallback path and never spend
+		// the limited synchronous generation budget.
 		item["title"] = fallbackTitle
 	}
 	if stringValue(item, "planned_at") == "" {
