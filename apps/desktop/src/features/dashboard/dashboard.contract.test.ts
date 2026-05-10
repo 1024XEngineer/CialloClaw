@@ -7055,6 +7055,103 @@ test("dashboard home only uses quick actions for task summons that can truly dee
   );
 });
 
+test("dashboard home keeps task-detail CTA copy when the first quick action targets a different route", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<{
+          stateMap: Record<string, { navigationTarget?: { kind: string; label: string; taskId?: string } }>;
+          summonTemplates: Array<{ message: string; module: string; nextStep?: string; stateKey: string }>;
+        }>;
+      };
+
+      const data = await service.loadDashboardHomeData();
+
+      const taskSummon = data.summonTemplates.find((item) => item.stateKey === "task_working");
+      assert.equal(taskSummon?.module, "tasks");
+      assert.equal(taskSummon?.message, "整理 Q3 复盘要点");
+      assert.equal(taskSummon?.nextStep, "打开任务详情");
+      assert.equal(data.stateMap.task_working?.navigationTarget?.kind, "task_detail");
+      assert.equal(data.stateMap.task_working?.navigationTarget?.taskId, "task_focus_001");
+    },
+    {
+      getDashboardModule: async (params: unknown) => {
+        const moduleName = (params as { module?: string }).module ?? "unknown";
+
+        if (moduleName === "tasks") {
+          return {
+            highlights: ["继续推进当前摘要任务"],
+            module: moduleName,
+            summary: {
+              blocked_tasks: 0,
+              focus_runtime_summary: {
+                active_steering_count: 0,
+                events_count: 1,
+                latest_event_type: null,
+                loop_stop_reason: null,
+                observation_signals: [],
+              },
+              focus_task_id: "task_focus_001",
+              processing_tasks: 1,
+              waiting_auth_tasks: 1,
+            },
+            tab: "focus",
+          };
+        }
+
+        return {
+          highlights: [],
+          module: moduleName,
+          summary: {},
+          tab: "overview",
+        };
+      },
+      getDashboardOverview: async () => ({
+        overview: {
+          focus_summary: {
+            current_step: "生成摘要",
+            next_action: "等待处理完成",
+            status: "processing",
+            task_id: "task_focus_001",
+            title: "整理 Q3 复盘要点",
+            updated_at: "2026-04-07T10:40:00+08:00",
+          },
+          high_value_signal: ["当前有 1 项操作等待授权"],
+          quick_actions: ["处理待授权操作", "打开任务详情"],
+          trust_summary: {
+            has_restore_point: true,
+            pending_authorizations: 1,
+            risk_level: "yellow",
+            workspace_path: "workspace",
+          },
+        },
+      }),
+      getRecommendations: async () => ({
+        cooldown_hit: false,
+        items: [],
+      }),
+      getMirrorOverview: async () => ({
+        daily_summary: null,
+        history_summary: [],
+        memory_references: [],
+        profile: null,
+      }),
+      listNotepad: async () => ({
+        items: [],
+        page: {
+          has_more: false,
+          limit: 12,
+          offset: 0,
+          total: 0,
+        },
+      }),
+    },
+  );
+});
+
 test("dashboard home prefers formal mirror references over profile copy when both exist", async () => {
   await withDesktopAliasRuntime(
     async (requireFn) => {

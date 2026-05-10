@@ -283,8 +283,17 @@ function getOverviewQuickActions(overview: AgentDashboardOverviewGetResult) {
     : [];
 }
 
+function matchesNavigationActionLabel(state: DashboardHomeStateData, actionLabel: string) {
+  return state.navigationTarget?.label.trim() === actionLabel.trim();
+}
+
 function getSummonNextStep(state: DashboardHomeStateData, quickActions?: string[]) {
-  if (state.module === "tasks" && state.navigationTarget?.kind === "task_detail" && quickActions?.[0]) {
+  if (
+    state.module === "tasks" &&
+    state.navigationTarget?.kind === "task_detail" &&
+    quickActions?.[0] &&
+    matchesNavigationActionLabel(state, quickActions[0])
+  ) {
     return quickActions[0];
   }
 
