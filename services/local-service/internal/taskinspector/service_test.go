@@ -305,6 +305,51 @@ func TestServiceRunLimitsGeneratedNoteTitlesPerManualPass(t *testing.T) {
 	}
 }
 
+func TestServiceRunDoesNotSpendGenerationBudgetOnFallbackOnlyNotes(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	content := strings.Join([]string{
+		"- [ ] plain checklist one",
+		"- [ ] plain checklist two",
+		"- [ ] plain checklist three",
+		"- [ ] Weekly retro",
+		"  note: review blockers and next steps",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "mixed.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	callCount := &atomic.Int32{}
+	service := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"每周复盘阻塞项"}`,
+		calls:  callCount,
+	})))
+
+	result, err := service.Run(RunInput{
+		AllowGeneratedTitles: true,
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if got := callCount.Load(); got != 1 {
+		t.Fatalf("expected only the rich-context note to consume generation budget, got %d calls", got)
+	}
+	if len(result.NotepadItems) != 4 {
+		t.Fatalf("expected four parsed notes, got %+v", result.NotepadItems)
+	}
+	if result.NotepadItems[3]["title"] != "每周复盘阻塞项" {
+		t.Fatalf("expected later rich-context note to still receive generated title, got %+v", result.NotepadItems[3])
+	}
+}
+
 func TestServiceRunUsesNoteTextAsFallbackWhenGeneratorUnavailable(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)

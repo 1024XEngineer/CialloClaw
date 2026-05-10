@@ -277,6 +277,80 @@ func TestHandleStreamConnStreamsAsyncTaskTitleUpdatesAfterResponse(t *testing.T)
 	}
 }
 
+func TestHandleStreamConnDoesNotSubscribeFailedTaskScopedRequests(t *testing.T) {
+	server := newTestServer()
+
+	startResult, err := server.orchestrator.StartTask(map[string]any{
+		"session_id": "sess_stream_failed_task_scope",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "task updates should stay private after failed task requests",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	if _, err := server.orchestrator.DrainNotifications(taskID); err != nil {
+		t.Fatalf("drain seed notifications: %v", err)
+	}
+
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+
+	go server.handleStreamConn(left)
+
+	encoder := json.NewEncoder(right)
+	decoder := json.NewDecoder(right)
+	request := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-stream-failed-task-scope"`),
+		Method:  "agent.task.control",
+		Params: mustMarshal(t, map[string]any{
+			"task_id": taskID,
+			"action":  "skip",
+		}),
+	}
+	if err := encoder.Encode(request); err != nil {
+		t.Fatalf("encode failed task-scoped request: %v", err)
+	}
+
+	var response errorEnvelope
+	if err := decoder.Decode(&response); err != nil {
+		t.Fatalf("decode failed task-scoped response: %v", err)
+	}
+	if response.Error.Code != errInvalidParams {
+		t.Fatalf("expected invalid params error for unsupported action, got %+v", response)
+	}
+
+	if _, err := server.orchestrator.TaskControl(map[string]any{
+		"task_id":   taskID,
+		"action":    "cancel",
+		"arguments": map[string]any{"reason": "separate_update"},
+	}); err != nil {
+		t.Fatalf("cancel task after failed request: %v", err)
+	}
+
+	if err := right.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
+		t.Fatalf("set post-failure deadline: %v", err)
+	}
+	defer right.SetReadDeadline(time.Time{})
+
+	var envelope notificationEnvelope
+	if err := decoder.Decode(&envelope); err == nil {
+		t.Fatalf("expected failed task-scoped request to avoid future task subscription, got %+v", envelope)
+	}
+}
+
 func TestHandleStreamConnReturnsDecodeErrorForMalformedPayload(t *testing.T) {
 	server := newTestServer()
 	left, right := net.Pipe()

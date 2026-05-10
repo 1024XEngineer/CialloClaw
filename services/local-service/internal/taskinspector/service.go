@@ -555,7 +555,11 @@ func (s *Service) normalizeParsedNotepadItem(item map[string]any, sourcePath str
 		stringValue(item, "title"),
 		"待办事项",
 	))
-	if allowGeneratedTitles && canGenerateTitleNow(remainingGeneratedTitles) && s != nil && s.titlegen != nil && shouldGenerateNoteTitle(item) {
+	shouldGenerateTitle := allowGeneratedTitles && s != nil && s.titlegen != nil && shouldGenerateNoteTitle(item)
+	// Consume the manual-generation budget only for notes that would actually
+	// call the title model, so simple checklist items do not starve later notes
+	// with richer context in the same inspection pass.
+	if shouldGenerateTitle && canGenerateTitleNow(remainingGeneratedTitles) {
 		item["title"] = s.titlegen.GenerateNoteTitle(context.Background(), item, fallbackTitle)
 	} else {
 		item["title"] = fallbackTitle

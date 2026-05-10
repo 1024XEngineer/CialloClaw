@@ -326,7 +326,6 @@ func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnve
 	}
 
 	tracker := newStreamRequestTracker(request)
-	connectionTasks.addAll(tracker.taskIDsSnapshot())
 	initialTaskIDs := tracker.taskIDsSnapshot()
 	shouldProbeBlockedDisconnect := len(initialTaskIDs) > 0 || tracker.shouldSubscribeTaskStart()
 	if tracker.shouldSubscribeTaskStart() {
@@ -417,6 +416,9 @@ func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnve
 			}
 			if err := writer.writeEnvelope(response); err != nil {
 				return
+			}
+			if _, ok := response.(successEnvelope); ok {
+				connectionTasks.addAll(initialTaskIDs)
 			}
 			connectionTasks.addSlice(taskIDsFromResponse(response))
 
