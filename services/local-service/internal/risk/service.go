@@ -1,7 +1,11 @@
 // Package risk implements the minimal governance assessment layer.
 package risk
 
-import "strings"
+import (
+	"net"
+	"net/url"
+	"strings"
+)
 
 // Service evaluates tool risk without mutating orchestrator state.
 type Service struct{}
@@ -63,6 +67,13 @@ func (s *Service) Assess(input AssessmentInput) AssessmentResult {
 	}
 
 	if isLowRiskBrowserObservationOperation(input.OperationName) {
+		return result
+	}
+
+	if requiresApprovalForSensitiveWebTarget(input.OperationName, input.TargetObject) {
+		result.RiskLevel = RiskLevelYellow
+		result.ApprovalRequired = true
+		result.Reason = ReasonWebpageApproval
 		return result
 	}
 
@@ -155,6 +166,41 @@ func isLowRiskBrowserObservationOperation(operationName string) bool {
 	default:
 		return false
 	}
+}
+
+// requiresApprovalForSensitiveWebTarget keeps read-only web tools low risk for
+// ordinary public pages while restoring authorization for local, loopback, and
+// private-network targets that could expose host-only services through the
+// browser sidecar path.
+func requiresApprovalForSensitiveWebTarget(operationName, targetObject string) bool {
+	switch strings.TrimSpace(operationName) {
+	case "page_read", "page_search":
+		return isSensitiveWebTarget(targetObject)
+	default:
+		return false
+	}
+}
+
+func isSensitiveWebTarget(targetObject string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(targetObject))
+	if err != nil {
+		return true
+	}
+	if scheme := strings.ToLower(strings.TrimSpace(parsed.Scheme)); scheme != "http" && scheme != "https" {
+		return true
+	}
+	hostname := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	if hostname == "" {
+		return true
+	}
+	if hostname == "localhost" || strings.HasSuffix(hostname, ".localhost") {
+		return true
+	}
+	ip := net.ParseIP(hostname)
+	if ip == nil {
+		return false
+	}
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
 }
 
 func isWorkspaceWriteOperation(operationName string) bool {

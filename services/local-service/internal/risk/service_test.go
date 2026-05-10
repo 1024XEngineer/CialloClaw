@@ -106,6 +106,26 @@ func TestServiceAssess(t *testing.T) {
 			want: AssessmentResult{RiskLevel: RiskLevelGreen, Reason: ReasonNormal, ImpactScope: ImpactScope{Webpages: []string{"https://example.com/demo"}}},
 		},
 		{
+			name: "webpage_read_loopback_requires_approval",
+			input: AssessmentInput{
+				OperationName:       "page_read",
+				TargetObject:        "http://127.0.0.1:8080/admin",
+				CapabilityAvailable: true,
+				ImpactScope:         ImpactScope{Webpages: []string{"http://127.0.0.1:8080/admin"}},
+			},
+			want: AssessmentResult{RiskLevel: RiskLevelYellow, ApprovalRequired: true, Reason: ReasonWebpageApproval, ImpactScope: ImpactScope{Webpages: []string{"http://127.0.0.1:8080/admin"}}},
+		},
+		{
+			name: "webpage_search_private_network_requires_approval",
+			input: AssessmentInput{
+				OperationName:       "page_search",
+				TargetObject:        "http://192.168.1.20/admin",
+				CapabilityAvailable: true,
+				ImpactScope:         ImpactScope{Webpages: []string{"http://192.168.1.20/admin"}},
+			},
+			want: AssessmentResult{RiskLevel: RiskLevelYellow, ApprovalRequired: true, Reason: ReasonWebpageApproval, ImpactScope: ImpactScope{Webpages: []string{"http://192.168.1.20/admin"}}},
+		},
+		{
 			name: "browser_snapshot_is_low_risk_observation",
 			input: AssessmentInput{
 				OperationName:       "browser_snapshot",

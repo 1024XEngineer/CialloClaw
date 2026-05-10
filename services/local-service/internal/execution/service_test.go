@@ -3450,6 +3450,31 @@ func TestAssessGovernancePageReadStaysLowRiskByDefault(t *testing.T) {
 	}
 }
 
+func TestAssessGovernancePageReadRequiresApprovalForLoopbackTarget(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_page_read_loopback",
+		RunID:  "run_page_read_loopback",
+		Intent: map[string]any{"name": "page_read", "arguments": map[string]any{
+			"url": "http://127.0.0.1:8080/admin",
+		}},
+		DeliveryType: "bubble",
+		ResultTitle:  "本地网页读取结果",
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected loopback page_read governance path to be handled")
+	}
+	if !assessment.ApprovalRequired {
+		t.Fatalf("expected loopback page_read to require approval, got %+v", assessment)
+	}
+	if assessment.RiskLevel != string(risk.RiskLevelYellow) {
+		t.Fatalf("expected loopback page_read yellow risk level, got %+v", assessment)
+	}
+}
+
 func TestAssessGovernanceStructuredDOMStillRequiresApproval(t *testing.T) {
 	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
 	assessment, handled, err := service.AssessGovernance(context.Background(), Request{

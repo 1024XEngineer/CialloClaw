@@ -16960,8 +16960,16 @@ func TestServiceStartTaskWithRealLocalPageReadDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start task failed: %v", err)
 	}
-	if result["task"].(map[string]any)["status"] != "completed" {
-		t.Fatalf("expected real page_read task to complete without authorization, got %+v", result)
+	if result["task"].(map[string]any)["status"] != "waiting_auth" {
+		t.Fatalf("expected real page_read task to wait for authorization for loopback target, got %+v", result)
+	}
+	result, err = service.SecurityRespond(map[string]any{
+		"task_id":     result["task"].(map[string]any)["task_id"],
+		"approval_id": activeApprovalIDForTask(t, service, result["task"].(map[string]any)["task_id"].(string)),
+		"decision":    "allow_once",
+	})
+	if err != nil {
+		t.Fatalf("security respond failed: %v", err)
 	}
 	deliveryResult := result["delivery_result"].(map[string]any)
 	if deliveryResult["type"] != "bubble" {

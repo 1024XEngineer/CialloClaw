@@ -237,6 +237,26 @@ func TestBuildRiskPrecheckInputBrowserSnapshotCapturesAppScope(t *testing.T) {
 	}
 }
 
+func TestBuildRiskPrecheckInputPageReadRequiresApprovalForLoopbackTarget(t *testing.T) {
+	execCtx := &ToolExecuteContext{
+		WorkspacePath: "/workspace",
+		Platform:      riskPlatformStub{workspacePath: "/workspace"},
+	}
+	input := BuildRiskPrecheckInput(
+		ToolMetadata{Name: "page_read", DisplayName: "Page Read", Source: ToolSourceSidecar},
+		"page_read",
+		execCtx,
+		map[string]any{"url": "http://127.0.0.1:8080/admin"},
+	)
+	result, err := DefaultRiskPrechecker{}.Precheck(context.Background(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RiskLevel != RiskLevelYellow || !result.ApprovalRequired {
+		t.Fatalf("expected loopback page_read to require approval, got %+v", result)
+	}
+}
+
 func TestBuildRiskPrecheckInputBrowserNavigateUsesDestinationURL(t *testing.T) {
 	execCtx := &ToolExecuteContext{
 		WorkspacePath: "/workspace",
