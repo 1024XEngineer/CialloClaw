@@ -135,7 +135,7 @@ func TestTaskDetailGetResponseMapNormalizesUnknownFields(t *testing.T) {
 		"approval_request":     nil,
 		"authorization_record": nil,
 		"audit_record":         nil,
-		"security_summary":     map[string]any{"pending_authorizations": 0, "latest_restore_point": nil, "unknown": "drop-me"},
+		"security_summary":     map[string]any{"security_status": "normal", "risk_level": "green", "pending_authorizations": 0, "latest_restore_point": nil, "unknown": "drop-me"},
 		"runtime_summary":      map[string]any{"loop_stop_reason": nil, "events_count": 0, "latest_event_type": nil, "active_steering_count": 0, "latest_failure_code": nil, "latest_failure_category": nil, "latest_failure_summary": nil, "observation_signals": []string{}, "unknown": "drop-me"},
 		"unknown":              "drop-me",
 	})
@@ -195,7 +195,7 @@ func TestTaskDetailGetResponseMapDropsAuthorizationRecordRunID(t *testing.T) {
 			"created_at":              "2026-05-10T00:00:02Z",
 		},
 		"audit_record":     nil,
-		"security_summary": map[string]any{"pending_authorizations": 0, "latest_restore_point": nil},
+		"security_summary": map[string]any{"security_status": "normal", "risk_level": "yellow", "pending_authorizations": 0, "latest_restore_point": nil},
 		"runtime_summary":  map[string]any{"events_count": 0, "active_steering_count": 0, "observation_signals": []string{}},
 	})
 	if err != nil {
@@ -240,5 +240,178 @@ func TestTaskDetailGetResponseRejectsMalformedDeclaredObjects(t *testing.T) {
 	_, err := newTaskDetailGetResponse(map[string]any{"task": "not-an-object"})
 	if err == nil {
 		t.Fatal("expected malformed declared task object to fail response dto construction")
+	}
+}
+
+func TestTaskDetailGetResponseRejectsMissingRequiredSummaryObjects(t *testing.T) {
+	basePayload := map[string]any{
+		"task": map[string]any{
+			"task_id":      "task_detail_required_objects",
+			"title":        "Required task detail objects",
+			"source_type":  "floating_ball",
+			"status":       "completed",
+			"current_step": "deliver_result",
+			"risk_level":   "green",
+			"updated_at":   "2026-05-10T00:00:01Z",
+		},
+		"timeline":             []map[string]any{},
+		"delivery_result":      nil,
+		"artifacts":            []map[string]any{},
+		"citations":            []map[string]any{},
+		"mirror_references":    []map[string]any{},
+		"approval_request":     nil,
+		"authorization_record": nil,
+		"audit_record":         nil,
+		"security_summary": map[string]any{
+			"security_status":        "safe",
+			"risk_level":             "green",
+			"pending_authorizations": 0,
+			"latest_restore_point":   nil,
+		},
+		"runtime_summary": map[string]any{
+			"events_count":            0,
+			"active_steering_count":   0,
+			"observation_signals":     []string{},
+			"latest_event_type":       nil,
+			"latest_failure_code":     nil,
+			"latest_failure_category": nil,
+			"latest_failure_summary":  nil,
+			"loop_stop_reason":        nil,
+		},
+	}
+
+	testCases := []struct {
+		name    string
+		missing string
+	}{
+		{name: "missing security_summary", missing: "security_summary"},
+		{name: "missing runtime_summary", missing: "runtime_summary"},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			payload := cloneMap(basePayload)
+			delete(payload, testCase.missing)
+			if _, err := newTaskDetailGetResponse(payload); err == nil {
+				t.Fatalf("expected missing %s to fail task detail dto construction", testCase.missing)
+			}
+		})
+	}
+}
+
+func TestTaskDetailGetResponseRejectsMissingRequiredSummaryFields(t *testing.T) {
+	testCases := []struct {
+		name    string
+		payload map[string]any
+	}{
+		{
+			name: "security_summary pending_authorizations",
+			payload: map[string]any{
+				"task": map[string]any{
+					"task_id":      "task_detail_missing_security_field",
+					"title":        "Missing security field",
+					"source_type":  "floating_ball",
+					"status":       "completed",
+					"current_step": "deliver_result",
+					"risk_level":   "green",
+					"updated_at":   "2026-05-10T00:00:01Z",
+				},
+				"timeline":             []map[string]any{},
+				"delivery_result":      nil,
+				"artifacts":            []map[string]any{},
+				"citations":            []map[string]any{},
+				"mirror_references":    []map[string]any{},
+				"approval_request":     nil,
+				"authorization_record": nil,
+				"audit_record":         nil,
+				"security_summary": map[string]any{
+					"security_status":      "safe",
+					"risk_level":           "green",
+					"latest_restore_point": nil,
+				},
+				"runtime_summary": map[string]any{
+					"events_count":          0,
+					"active_steering_count": 0,
+					"observation_signals":   []string{},
+				},
+			},
+		},
+		{
+			name: "runtime_summary observation_signals",
+			payload: map[string]any{
+				"task": map[string]any{
+					"task_id":      "task_detail_missing_runtime_field",
+					"title":        "Missing runtime field",
+					"source_type":  "floating_ball",
+					"status":       "completed",
+					"current_step": "deliver_result",
+					"risk_level":   "green",
+					"updated_at":   "2026-05-10T00:00:01Z",
+				},
+				"timeline":             []map[string]any{},
+				"delivery_result":      nil,
+				"artifacts":            []map[string]any{},
+				"citations":            []map[string]any{},
+				"mirror_references":    []map[string]any{},
+				"approval_request":     nil,
+				"authorization_record": nil,
+				"audit_record":         nil,
+				"security_summary": map[string]any{
+					"security_status":        "safe",
+					"risk_level":             "green",
+					"pending_authorizations": 0,
+					"latest_restore_point":   nil,
+				},
+				"runtime_summary": map[string]any{
+					"events_count":          0,
+					"active_steering_count": 0,
+				},
+			},
+		},
+		{
+			name: "delivery_result payload",
+			payload: map[string]any{
+				"task": map[string]any{
+					"task_id":      "task_detail_missing_delivery_payload",
+					"title":        "Missing delivery payload",
+					"source_type":  "floating_ball",
+					"status":       "completed",
+					"current_step": "deliver_result",
+					"risk_level":   "green",
+					"updated_at":   "2026-05-10T00:00:01Z",
+				},
+				"timeline": []map[string]any{},
+				"delivery_result": map[string]any{
+					"type":         "bubble",
+					"title":        "Result",
+					"preview_text": "Preview",
+				},
+				"artifacts":            []map[string]any{},
+				"citations":            []map[string]any{},
+				"mirror_references":    []map[string]any{},
+				"approval_request":     nil,
+				"authorization_record": nil,
+				"audit_record":         nil,
+				"security_summary": map[string]any{
+					"security_status":        "safe",
+					"risk_level":             "green",
+					"pending_authorizations": 0,
+					"latest_restore_point":   nil,
+				},
+				"runtime_summary": map[string]any{
+					"events_count":          0,
+					"active_steering_count": 0,
+					"observation_signals":   []string{},
+				},
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, err := newTaskDetailGetResponse(testCase.payload); err == nil {
+				t.Fatalf("expected missing required declared field to fail for %s", testCase.name)
+			}
+		})
 	}
 }

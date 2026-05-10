@@ -39,7 +39,13 @@ func (s *Service) TaskList(params map[string]any) (map[string]any, error) {
 // It keeps structured storage authoritative for formal evidence while allowing
 // live runtime state to fill task status fields that have not persisted yet.
 func (s *Service) TaskDetailGet(request TaskDetailGetRequest) (TaskDetailGetResponse, error) {
-	response, err := s.taskDetailGet(request.paramsMap())
+	return s.TaskDetailGetFromParams(request.ProtocolParamsMap())
+}
+
+// TaskDetailGetFromParams lets the RPC layer pass its normalized stable payload
+// straight into task-detail assembly without rebuilding the same protocol map.
+func (s *Service) TaskDetailGetFromParams(params map[string]any) (TaskDetailGetResponse, error) {
+	response, err := s.taskDetailGet(params)
 	if err != nil {
 		return TaskDetailGetResponse{}, err
 	}
@@ -91,6 +97,19 @@ func (s *Service) taskDetailGet(params map[string]any) (map[string]any, error) {
 	securitySummary["pending_authorizations"] = 0
 	if approvalRequest != nil {
 		securitySummary["pending_authorizations"] = 1
+	}
+	if strings.TrimSpace(stringValue(securitySummary, "security_status", "")) == "" {
+		if approvalRequest != nil {
+			securitySummary["security_status"] = "pending_confirmation"
+		} else {
+			securitySummary["security_status"] = "normal"
+		}
+	}
+	if strings.TrimSpace(stringValue(securitySummary, "risk_level", "")) == "" {
+		securitySummary["risk_level"] = firstNonEmptyString(
+			stringValue(approvalRequest, "risk_level", ""),
+			firstNonEmptyString(task.RiskLevel, s.risk.DefaultLevel()),
+		)
 	}
 	latestRestorePoint := s.normalizeTaskDetailRestorePoint(task.TaskID, securitySummary)
 	if latestRestorePoint == nil {

@@ -12,7 +12,13 @@ import (
 // It captures context, derives an intent suggestion, then either waits for more
 // input, asks for confirmation, or creates the task/run pair for execution.
 func (s *Service) SubmitInput(request SubmitInputRequest) (TaskEntryResponse, error) {
-	response, err := s.submitInput(request.paramsMap())
+	return s.SubmitInputFromParams(request.ProtocolParamsMap())
+}
+
+// SubmitInputFromParams lets the RPC layer reuse the normalized protocol map it
+// already validated so submit-input requests avoid an extra DTO-to-map bounce.
+func (s *Service) SubmitInputFromParams(params map[string]any) (TaskEntryResponse, error) {
+	response, err := s.submitInput(params)
 	if err != nil {
 		return TaskEntryResponse{}, err
 	}
