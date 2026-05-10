@@ -333,6 +333,18 @@ type DashboardContractDesktopHostOverrides = {
   invoke?: (command: string, args?: Record<string, unknown>) => Promise<unknown> | unknown;
 };
 
+type DashboardContractWindowControllerOverrides = {
+  openOrFocusDesktopWindow?: (label: "dashboard" | "control-panel") => Promise<string> | string;
+};
+
+type DashboardContractWindowApiOverrides = {
+  getCurrentWindow?: () => {
+    emit: (eventName: string, payload?: unknown) => Promise<void> | void;
+    emitTo: (label: string, eventName: string, payload?: unknown) => Promise<void> | void;
+    label: string;
+  };
+};
+
 function loadNotePageServiceModule(desktopLocalPath?: DashboardContractDesktopLocalPathOverrides) {
   return withDesktopAliasRuntime((requireFn) => {
     const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/notes/notePage.service.js");
@@ -402,7 +414,11 @@ function loadNotePageServiceModule(desktopLocalPath?: DashboardContractDesktopLo
   }, undefined, desktopLocalPath);
 }
 
-function loadTaskOutputServiceModule(desktopLocalPath?: DashboardContractDesktopLocalPathOverrides) {
+function loadTaskOutputServiceModule(
+  desktopLocalPath?: DashboardContractDesktopLocalPathOverrides,
+  windowController?: DashboardContractWindowControllerOverrides,
+  windowApi?: DashboardContractWindowApiOverrides,
+) {
   return withDesktopAliasRuntime((requireFn) => {
     const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/tasks/taskOutput.service.js");
     delete requireFn.cache[modulePath];
@@ -437,9 +453,19 @@ function loadTaskOutputServiceModule(desktopLocalPath?: DashboardContractDesktop
           };
           taskId: string;
         }) => Promise<string | void> | string | void;
+        onOpenTaskDelivery?: (input: {
+          plan: {
+            mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+            taskId: string | null;
+            path: string | null;
+            url: string | null;
+            feedback: string;
+          };
+          taskId: string;
+        }) => Promise<string | void> | string | void;
       }) => Promise<string>;
     };
-  }, undefined, desktopLocalPath);
+  }, undefined, desktopLocalPath, undefined, windowController, windowApi);
 }
 
 function loadTaskPageMapperModule() {
@@ -1273,18 +1299,24 @@ function withDesktopAliasRuntime<T>(
   rpcMethods?: DashboardContractRpcMethodOverrides,
   desktopLocalPath?: DashboardContractDesktopLocalPathOverrides,
   desktopHost?: DashboardContractDesktopHostOverrides,
+  windowController?: DashboardContractWindowControllerOverrides,
+  windowApi?: DashboardContractWindowApiOverrides,
 ): Promise<T>;
 function withDesktopAliasRuntime<T>(
   callback: (requireFn: NodeRequire) => T,
   rpcMethods?: DashboardContractRpcMethodOverrides,
   desktopLocalPath?: DashboardContractDesktopLocalPathOverrides,
   desktopHost?: DashboardContractDesktopHostOverrides,
+  windowController?: DashboardContractWindowControllerOverrides,
+  windowApi?: DashboardContractWindowApiOverrides,
 ): T;
 function withDesktopAliasRuntime<T>(
   callback: (requireFn: NodeRequire) => T | Promise<T>,
   rpcMethods?: DashboardContractRpcMethodOverrides,
   desktopLocalPath?: DashboardContractDesktopLocalPathOverrides,
   desktopHost?: DashboardContractDesktopHostOverrides,
+  windowController?: DashboardContractWindowControllerOverrides,
+  windowApi?: DashboardContractWindowApiOverrides,
 ): T | Promise<T> {
   const NodeModule = require("node:module") as {
     _load: (request: string, parent: unknown, isMain: boolean) => unknown;
@@ -1358,6 +1390,18 @@ function withDesktopAliasRuntime<T>(
         invoke:
           desktopHost?.invoke ??
           (() => Promise.reject(new Error("invoke should not run in dashboard contract tests"))),
+      };
+    }
+
+    if (request === "@tauri-apps/api/window") {
+      return {
+        getCurrentWindow:
+          windowApi?.getCurrentWindow ??
+          (() => ({
+            label: "dashboard",
+            emit: () => Promise.resolve(),
+            emitTo: () => Promise.resolve(),
+          })),
       };
     }
 
@@ -1479,6 +1523,14 @@ function withDesktopAliasRuntime<T>(
         revealDesktopLocalPath:
           desktopLocalPath?.revealDesktopLocalPath ??
           (() => Promise.resolve()),
+      };
+    }
+
+    if (request === "@/platform/windowController") {
+      return {
+        openOrFocusDesktopWindow:
+          windowController?.openOrFocusDesktopWindow ??
+          (() => Promise.resolve("dashboard")),
       };
     }
 
@@ -5836,6 +5888,30 @@ test("task output helpers normalize open actions from existing rpc contracts", a
   );
 });
 
+test("task delivery navigation helpers keep dashboard result-page hrefs stable", async () => {
+  await withDesktopAliasRuntime((requireFn) => {
+    const navigationModule = requireFn(resolve(desktopRoot, "src/features/dashboard/tasks/taskDeliveryNavigation.ts")) as {
+      isDashboardTaskDeliveryHref: (url: string) => boolean;
+      resolveDashboardTaskDeliveryRouteHref: (taskId: string) => string;
+      resolveDashboardTaskDeliveryRoutePath: (taskId: string) => string;
+    };
+
+    assert.equal(
+      navigationModule.resolveDashboardTaskDeliveryRoutePath("task result/001"),
+      "/tasks/delivery/task%20result%2F001",
+    );
+    assert.equal(
+      navigationModule.resolveDashboardTaskDeliveryRouteHref("task result/001"),
+      "./dashboard.html#/tasks/delivery/task%20result%2F001",
+    );
+    assert.equal(
+      navigationModule.isDashboardTaskDeliveryHref("./dashboard.html#/tasks/delivery/task%20result%2F001"),
+      true,
+    );
+    assert.equal(navigationModule.isDashboardTaskDeliveryHref("https://example.test/result"), false);
+  });
+});
+
 test("task output service exposes artifact list and open flows through formal RPC payloads", async () => {
   await withDesktopAliasRuntime(
     async (requireFn) => {
@@ -6116,6 +6192,66 @@ test("task output execution delegates task-detail routing through the shared cal
   assert.equal(feedback, "已在仪表盘中打开任务详情。");
 });
 
+test("task output execution routes dashboard result pages through the formal delivery window path", async () => {
+  const openedWindowLabels: string[] = [];
+  const emittedRequests: Array<{ eventName: string; label: string; payload: unknown }> = [];
+  const outputService = loadTaskOutputServiceModule(
+    undefined,
+    {
+      openOrFocusDesktopWindow: async (label) => {
+        openedWindowLabels.push(label);
+        return label;
+      },
+    },
+    {
+      getCurrentWindow: () => ({
+        label: "shell-ball",
+        emit: () => Promise.resolve(),
+        emitTo: (label, eventName, payload) => {
+          emittedRequests.push({ eventName, label, payload });
+          return Promise.resolve();
+        },
+      }),
+    },
+  );
+
+  const feedback = await outputService.performTaskOpenExecution({
+    mode: "open_url",
+    taskId: "task_dashboard_001",
+    path: null,
+    url: "./dashboard.html#/tasks/delivery/task_dashboard_001",
+    feedback: "已打开结果页。",
+  });
+
+  assert.deepEqual(openedWindowLabels, ["dashboard"]);
+  assert.equal(feedback, "已打开结果页。");
+  assert.equal(emittedRequests.length, 1);
+  assert.equal(emittedRequests[0]?.label, "dashboard");
+  assert.match(emittedRequests[0]?.eventName ?? "", /task-delivery-open/);
+  assert.equal((emittedRequests[0]?.payload as { task_id?: string } | undefined)?.task_id, "task_dashboard_001");
+});
+
+test("task output execution delegates dashboard result pages through the shared callback when provided", async () => {
+  const outputService = loadTaskOutputServiceModule();
+  const openedTaskIds: string[] = [];
+
+  const feedback = await outputService.performTaskOpenExecution({
+    mode: "open_url",
+    taskId: "task_dashboard_001",
+    path: null,
+    url: "./dashboard.html#/tasks/delivery/task_dashboard_001",
+    feedback: "已打开结果页。",
+  }, {
+    onOpenTaskDelivery: ({ taskId }) => {
+      openedTaskIds.push(taskId);
+      return "已在仪表盘中打开结果页。";
+    },
+  });
+
+  assert.deepEqual(openedTaskIds, ["task_dashboard_001"]);
+  assert.equal(feedback, "已在仪表盘中打开结果页。");
+});
+
 test("note resource execution delegates task-detail routing through the shared callback", async () => {
   const noteService = loadNotePageServiceModule();
   const openedTaskIds: string[] = [];
@@ -6138,6 +6274,7 @@ test("note resource execution delegates task-detail routing through the shared c
 });
 
 test("task workspace routes formal delivery through a dedicated page and keeps list refresh task-updated aware", () => {
+  const dashboardRootSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/DashboardRoot.tsx"), "utf8");
   const tasksPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TasksPage.tsx"), "utf8");
   const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");
   const taskDeliverySource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskDeliveryPage.tsx"), "utf8");
@@ -6194,11 +6331,16 @@ test("task workspace routes formal delivery through a dedicated page and keeps l
 
   assert.match(taskDeliveryNavigationSource, /dashboardTaskDeliveryRoutePattern = "delivery\/:taskId"/);
   assert.match(taskDeliveryNavigationSource, /encodeURIComponent\(taskId\)/);
+  assert.match(taskDeliveryNavigationSource, /dashboardTaskDeliveryNavigationEvent/);
+  assert.match(taskDeliveryNavigationSource, /requestDashboardTaskDeliveryOpen/);
   assert.doesNotMatch(taskOutputSource, /isRpcChannelUnavailable/);
   assert.doesNotMatch(taskOutputSource, /logRpcMockFallback/);
   assert.match(taskOutputSource, /isAllowedTaskOpenUrl/);
   assert.match(taskOutputSource, /onOpenTaskDetail/);
+  assert.match(taskOutputSource, /requestDashboardTaskDeliveryOpen/);
   assert.match(taskDetailNavigationSource, /requestDashboardTaskDetailOpen/);
+  assert.match(dashboardRootSource, /dashboardTaskDeliveryNavigationEvent/);
+  assert.match(dashboardRootSource, /navigateToDashboardTaskDelivery/);
 });
 
 test("dashboard task-detail routing deduplicates retry request ids and accepts tasks outside loaded buckets", () => {
