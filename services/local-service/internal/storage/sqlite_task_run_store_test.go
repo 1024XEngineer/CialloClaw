@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
+	taskcontext "github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 func TestInMemoryTaskRunStoreSaveLoadAndAllocate(t *testing.T) {
@@ -595,7 +595,7 @@ func sampleTaskRunRecord() TaskRunRecord {
 		DeliveryResult: map[string]any{"type": "workspace_document", "payload": map[string]any{"path": "workspace/result.md"}},
 		Artifacts:      []map[string]any{{"artifact_id": "art_001", "task_id": "task_001"}},
 		Citations:      []map[string]any{{"citation_id": "cit_001", "task_id": "task_001", "run_id": "run_001", "source_type": "file", "source_ref": "art_001", "label": "workspace evidence"}},
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			Source:        "floating_ball",
 			Trigger:       "hover_text_input",
 			InputType:     "text",

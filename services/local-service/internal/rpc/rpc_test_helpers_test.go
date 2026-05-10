@@ -11,7 +11,6 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/execution"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
@@ -23,6 +22,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	taskcontext "github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
@@ -175,7 +175,7 @@ func newTestServerWithDependencies(client model.Client, storageService *storage.
 		pluginService,
 	)
 	orch, err := orchestrator.NewService(orchestrator.Deps{
-		Context:   contextsvc.NewService(),
+		Context:   taskcontext.NewCaptureService(),
 		Intent:    intent.NewService(),
 		RunEngine: runengine.NewEngine(),
 		Delivery:  delivery.NewService(),

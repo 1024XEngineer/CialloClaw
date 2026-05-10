@@ -10,12 +10,12 @@ import (
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/agentloop"
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/execution"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	taskcontext "github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/traceeval"
 )
@@ -80,7 +80,7 @@ func (s *Service) evaluateBudgetAutoDowngrade(task runengine.TaskRecord, taskInt
 
 // applyBudgetAutoDowngrade mutates the execution request shape so the downgrade
 // decision changes the real path instead of only updating settings summaries.
-func (s *Service) applyBudgetAutoDowngrade(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, decision budgetDowngradeDecision) (runengine.TaskRecord, contextsvc.TaskContextSnapshot, map[string]any) {
+func (s *Service) applyBudgetAutoDowngrade(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any, decision budgetDowngradeDecision) (runengine.TaskRecord, taskcontext.TaskContextSnapshot, map[string]any) {
 	if !decision.Applied {
 		return task, snapshot, taskIntent
 	}
@@ -212,7 +212,7 @@ func firstNonEmptyString(primary, fallback string) string {
 	return fallback
 }
 
-func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, []map[string]any, error) {
+func (s *Service) executeTask(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, []map[string]any, error) {
 	return s.executeTaskAttempt(task, task, snapshot, taskIntent)
 }
 
@@ -220,7 +220,7 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot contextsvc.Tas
 // task snapshot for execution segment classification. Restart needs this split:
 // the new run must execute, but the executor still needs the old run_id to mark
 // the segment as restart instead of initial.
-func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, []map[string]any, error) {
+func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, []map[string]any, error) {
 	var processingTask runengine.TaskRecord
 	ok := false
 	if s.isPreparedRestartAttempt(task) {
@@ -366,7 +366,7 @@ func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, sn
 // shell-ball submits that still resolve to bubble delivery. Longer structured
 // flows already carry their own internal timeouts and should not inherit the
 // short near-field deadline.
-func shouldBoundTaskExecution(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, deliveryType string) bool {
+func shouldBoundTaskExecution(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any, deliveryType string) bool {
 	if strings.TrimSpace(stringValue(taskIntent, "name", "")) == "screen_analyze_candidate" {
 		return false
 	}
@@ -597,7 +597,7 @@ func executionSegmentKind(previousTask, processingTask runengine.TaskRecord) str
 	return executionSegmentInitial
 }
 
-func (s *Service) captureExecutionTrace(task runengine.TaskRecord, snapshot contextsvc.TaskContextSnapshot, taskIntent map[string]any, result execution.Result, executionErr error) (traceeval.CaptureResult, error) {
+func (s *Service) captureExecutionTrace(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any, result execution.Result, executionErr error) (traceeval.CaptureResult, error) {
 	if s.traceEval == nil {
 		return traceeval.CaptureResult{}, nil
 	}

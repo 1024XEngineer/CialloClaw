@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
+	taskcontext "github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 func TestResolveTaskContinuationContextUsesSingleActiveSession(t *testing.T) {
@@ -69,7 +69,7 @@ func TestResolveTaskContinuationContextSkipsPausedTasks(t *testing.T) {
 }
 
 func TestBuildTaskContinuationPromptRedactsSensitivePayloads(t *testing.T) {
-	snapshot := contextsvc.TaskContextSnapshot{
+	snapshot := taskcontext.TaskContextSnapshot{
 		Trigger:       "hover_text_input",
 		InputType:     "text",
 		Text:          "Focus on the database timeout and keep the scope narrow.",
@@ -89,7 +89,7 @@ func TestBuildTaskContinuationPromptRedactsSensitivePayloads(t *testing.T) {
 		SourceType:  "hover_input",
 		UpdatedAt:   time.Now().Add(-30 * time.Second),
 		Intent:      map[string]any{"name": "agent_loop"},
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			Files:     []string{"logs/private.log"},
 			PageTitle: "Production dashboard",
 		},
@@ -139,7 +139,7 @@ func TestBuildTaskContinuationPromptRedactsSensitivePayloads(t *testing.T) {
 }
 
 func TestTaskContinuationInputSummaryUsesConfirmationPolicy(t *testing.T) {
-	snapshot := contextsvc.TaskContextSnapshot{
+	snapshot := taskcontext.TaskContextSnapshot{
 		Trigger:   "file_drop",
 		InputType: "file",
 		Text:      "Summarize the attachment.",
@@ -184,7 +184,7 @@ func TestPendingContinuationRequiresConfirmAndIntentPreserveConfirmationTasks(t 
 		Status: "confirming_intent",
 		Intent: map[string]any{"name": "summarize", "arguments": map[string]any{"style": "bullet_points"}},
 	}
-	snapshot := contextsvc.TaskContextSnapshot{
+	snapshot := taskcontext.TaskContextSnapshot{
 		Trigger:   "hover_text_input",
 		InputType: "text",
 		Text:      "Please focus on the outage timeline.",
@@ -213,7 +213,7 @@ func TestPendingContinuationRequiresConfirmAndIntentPreserveConfirmationTasks(t 
 }
 
 func TestBuildTaskContinuationBubbleTextOmitsInternalReason(t *testing.T) {
-	snapshot := contextsvc.TaskContextSnapshot{
+	snapshot := taskcontext.TaskContextSnapshot{
 		Trigger:   "hover_text_input",
 		InputType: "text",
 		Text:      "Use markdown headings in the next reply.",
@@ -237,7 +237,7 @@ func TestClassifyTaskContinuationContinuesExplicitWaitingTaskWithoutSignalWords(
 	service.model = nil
 
 	decision := service.classifyTaskContinuation(
-		contextsvc.TaskContextSnapshot{
+		taskcontext.TaskContextSnapshot{
 			Trigger:   "hover_text_input",
 			InputType: "text",
 			Text:      "把输出换成表格格式。",
@@ -267,7 +267,7 @@ func TestClassifyTaskContinuationStartsNewTaskForExplicitIntentWithoutAnchors(t 
 	service.model = nil
 
 	decision := service.classifyTaskContinuation(
-		contextsvc.TaskContextSnapshot{
+		taskcontext.TaskContextSnapshot{
 			Trigger:   "hover_text_input",
 			InputType: "text",
 			Text:      "顺便帮我写一份周报。",
@@ -300,7 +300,7 @@ func TestClassifyTaskContinuationRejectsWaitingTaskWhenAnchorsConflict(t *testin
 	service.model = nil
 
 	decision := service.classifyTaskContinuation(
-		contextsvc.TaskContextSnapshot{
+		taskcontext.TaskContextSnapshot{
 			Trigger:   "hover_text_input",
 			InputType: "text",
 			Text:      "检查新的报错。",
@@ -315,7 +315,7 @@ func TestClassifyTaskContinuationRejectsWaitingTaskWhenAnchorsConflict(t *testin
 				Status:      "waiting_input",
 				CurrentStep: "collect_input",
 				UpdatedAt:   time.Now().Add(-10 * time.Second),
-				Snapshot: contextsvc.TaskContextSnapshot{
+				Snapshot: taskcontext.TaskContextSnapshot{
 					PageURL: "https://example.com/build-a",
 					AppName: "Chrome",
 				},
@@ -334,7 +334,7 @@ func TestClassifyTaskContinuationContinuesConfirmRequiredPendingTaskWithMatching
 	service.model = nil
 
 	decision := service.classifyTaskContinuation(
-		contextsvc.TaskContextSnapshot{
+		taskcontext.TaskContextSnapshot{
 			Trigger:   "file_drop",
 			InputType: "file",
 			Files:     []string{"logs/network.log"},
@@ -350,7 +350,7 @@ func TestClassifyTaskContinuationContinuesConfirmRequiredPendingTaskWithMatching
 				Status:      "waiting_input",
 				CurrentStep: "collect_input",
 				UpdatedAt:   time.Now().Add(-10 * time.Second),
-				Snapshot: contextsvc.TaskContextSnapshot{
+				Snapshot: taskcontext.TaskContextSnapshot{
 					PageTitle:   "Build Dashboard",
 					PageURL:     "https://example.com/build-a",
 					AppName:     "Chrome",
@@ -371,7 +371,7 @@ func TestClassifyTaskContinuationStartsNewConfirmRequiredTaskWithoutTaskEvidence
 	service.model = nil
 
 	decision := service.classifyTaskContinuation(
-		contextsvc.TaskContextSnapshot{
+		taskcontext.TaskContextSnapshot{
 			Trigger:   "file_drop",
 			InputType: "file",
 			Files:     []string{"logs/network.log"},
@@ -387,7 +387,7 @@ func TestClassifyTaskContinuationStartsNewConfirmRequiredTaskWithoutTaskEvidence
 				Status:      "waiting_input",
 				CurrentStep: "collect_input",
 				UpdatedAt:   time.Now().Add(-10 * time.Second),
-				Snapshot: contextsvc.TaskContextSnapshot{
+				Snapshot: taskcontext.TaskContextSnapshot{
 					PageTitle:   "Build Dashboard",
 					PageURL:     "https://example.com/build-a",
 					AppName:     "Chrome",
@@ -422,7 +422,7 @@ func TestClassifyTaskContinuationStartsNewStructuredMultiCandidateWithoutUniqueM
 	})
 
 	decision := service.classifyTaskContinuation(
-		contextsvc.TaskContextSnapshot{
+		taskcontext.TaskContextSnapshot{
 			Trigger:     "file_drop",
 			InputType:   "file",
 			Files:       []string{"logs/network.log"},
@@ -440,7 +440,7 @@ func TestClassifyTaskContinuationStartsNewStructuredMultiCandidateWithoutUniqueM
 					Status:      "waiting_input",
 					CurrentStep: "collect_input",
 					UpdatedAt:   time.Now().Add(-10 * time.Second),
-					Snapshot: contextsvc.TaskContextSnapshot{
+					Snapshot: taskcontext.TaskContextSnapshot{
 						PageTitle:   "Build Dashboard",
 						PageURL:     "https://example.com/build",
 						AppName:     "Chrome",
@@ -452,7 +452,7 @@ func TestClassifyTaskContinuationStartsNewStructuredMultiCandidateWithoutUniqueM
 					Status:      "waiting_input",
 					CurrentStep: "collect_input",
 					UpdatedAt:   time.Now().Add(-9 * time.Second),
-					Snapshot: contextsvc.TaskContextSnapshot{
+					Snapshot: taskcontext.TaskContextSnapshot{
 						PageTitle:   "Issue Tracker",
 						PageURL:     "https://example.com/issues",
 						AppName:     "Chrome",
@@ -477,7 +477,7 @@ func TestClassifyTaskContinuationStartsNewTaskForProcessingStructuredEvidence(t 
 	service.model = nil
 
 	decision := service.classifyTaskContinuation(
-		contextsvc.TaskContextSnapshot{
+		taskcontext.TaskContextSnapshot{
 			Trigger:   "file_drop",
 			InputType: "file",
 			Files:     []string{"logs/network.log"},
@@ -492,7 +492,7 @@ func TestClassifyTaskContinuationStartsNewTaskForProcessingStructuredEvidence(t 
 				Status:      "processing",
 				CurrentStep: "agent_loop",
 				UpdatedAt:   time.Now().Add(-10 * time.Second),
-				Snapshot: contextsvc.TaskContextSnapshot{
+				Snapshot: taskcontext.TaskContextSnapshot{
 					PageURL: "https://example.com/build",
 					AppName: "Chrome",
 				},
@@ -508,7 +508,7 @@ func TestClassifyTaskContinuationStartsNewTaskForProcessingStructuredEvidence(t 
 
 func TestHeuristicTaskContinuationDecisionDoesNotAutoMergeBareFileDropWithoutAnchors(t *testing.T) {
 	decision := heuristicTaskContinuationDecision(
-		contextsvc.TaskContextSnapshot{
+		taskcontext.TaskContextSnapshot{
 			Trigger:   "file_drop",
 			InputType: "file",
 			Files:     []string{"logs/network.log"},
@@ -536,7 +536,7 @@ func TestClassifyTaskContinuationDoesNotAutoMergeSameExplicitIntentName(t *testi
 	service.model = nil
 
 	decision := service.classifyTaskContinuation(
-		contextsvc.TaskContextSnapshot{
+		taskcontext.TaskContextSnapshot{
 			Trigger:   "hover_text_input",
 			InputType: "text",
 			Text:      "Draft a new release checklist.",
@@ -570,7 +570,7 @@ func TestClassifyTaskContinuationDoesNotAutoMergeGenericFocusCueWithoutContext(t
 	service.model = nil
 
 	decision := service.classifyTaskContinuation(
-		contextsvc.TaskContextSnapshot{
+		taskcontext.TaskContextSnapshot{
 			Trigger:   "hover_text_input",
 			InputType: "text",
 			Text:      "Focus on drafting a release checklist.",

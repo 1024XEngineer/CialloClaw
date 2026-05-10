@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
+	taskcontext "github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 func TestEngineContinueTaskMergesContinuationStateAndDrainsSteeringMessages(t *testing.T) {
@@ -16,7 +16,7 @@ func TestEngineContinueTaskMergesContinuationStateAndDrainsSteeringMessages(t *t
 		Status:      "processing",
 		CurrentStep: "collect_input",
 		RiskLevel:   "green",
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			Source:      "floating_ball",
 			Text:        "original text",
 			BrowserKind: "chrome",
@@ -33,7 +33,7 @@ func TestEngineContinueTaskMergesContinuationStateAndDrainsSteeringMessages(t *t
 		BubbleMessage: map[string]any{
 			"content": "continuation bubble",
 		},
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			Text:          "updated text",
 			SelectionText: "important paragraph",
 			BrowserKind:   "edge",

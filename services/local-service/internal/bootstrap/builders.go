@@ -6,7 +6,6 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/execution"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
@@ -19,6 +18,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/rpc"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	taskcontext "github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/sidecarclient"
@@ -182,7 +182,7 @@ func buildServices(core coreDeps, runtimes runtimeDeps) (serviceDeps, error) {
 	}
 
 	orchestratorService, err := orchestrator.NewService(orchestrator.Deps{
-		Context:   contextsvc.NewService(),
+		Context:   taskcontext.NewCaptureService(),
 		Intent:    intent.NewService(),
 		RunEngine: runEngine,
 		Delivery:  deliveryService,

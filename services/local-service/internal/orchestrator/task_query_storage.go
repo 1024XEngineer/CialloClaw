@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	taskcontext "github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 // taskMap converts a runengine task record into the protocol-facing task shape.
@@ -519,7 +519,7 @@ func taskRecordWithSnapshotAnchors(selected, runtimeTask, storageTask runengine.
 	return selected
 }
 
-func snapshotWithMissingAnchors(selected, fallback contextsvc.TaskContextSnapshot) contextsvc.TaskContextSnapshot {
+func snapshotWithMissingAnchors(selected, fallback taskcontext.TaskContextSnapshot) taskcontext.TaskContextSnapshot {
 	if isEmptySnapshot(selected) {
 		if isEmptySnapshot(fallback) {
 			return selected

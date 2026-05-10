@@ -4,9 +4,9 @@ import (
 	"errors"
 	"fmt"
 
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
+	taskcontext "github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 // NotepadList returns lightweight notepad items from storage without promoting
@@ -116,7 +116,7 @@ func (s *Service) rollbackLinkedNotepadTask(itemID, taskID string, cause error) 
 	return cause
 }
 
-func (s *Service) createNotepadTask(snapshot contextsvc.TaskContextSnapshot, suggestion intent.Suggestion) runengine.TaskRecord {
+func (s *Service) createNotepadTask(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) runengine.TaskRecord {
 	status := taskStatusForSuggestion(suggestion.RequiresConfirm)
 	currentStep := currentStepForSuggestion(suggestion.RequiresConfirm, suggestion.Intent)
 	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
@@ -137,7 +137,7 @@ func (s *Service) createNotepadTask(snapshot contextsvc.TaskContextSnapshot, sug
 	return task
 }
 
-func (s *Service) finishNotepadTask(snapshot contextsvc.TaskContextSnapshot, suggestion intent.Suggestion, task runengine.TaskRecord) (map[string]any, error) {
+func (s *Service) finishNotepadTask(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, task runengine.TaskRecord) (map[string]any, error) {
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForStart(suggestion), task.StartedAt.Format(dateTimeLayout))
 	if suggestion.RequiresConfirm {
 		task = s.persistTaskPresentation(task, bubble)

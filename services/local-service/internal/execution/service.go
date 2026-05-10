@@ -19,13 +19,13 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/agentloop"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
 	risksvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	taskcontext "github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textdecode"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
@@ -136,7 +136,7 @@ type Request struct {
 	Intent               map[string]any
 	AttemptIndex         int
 	SegmentKind          string
-	Snapshot             contextsvc.TaskContextSnapshot
+	Snapshot             taskcontext.TaskContextSnapshot
 	MemoryReadPlans      []map[string]any
 	SteeringMessages     []string
 	DeliveryType         string
@@ -338,7 +338,7 @@ func (s *Service) AssessGovernance(ctx context.Context, request Request) (Govern
 // currently captured browser page through the default local endpoint. Explicit
 // selectors for other tabs or explicit endpoint overrides must be promoted
 // back onto the approval path.
-func requiresBrowserObservationApproval(toolName string, arguments map[string]any, toolInput map[string]any, snapshot contextsvc.TaskContextSnapshot) bool {
+func requiresBrowserObservationApproval(toolName string, arguments map[string]any, toolInput map[string]any, snapshot taskcontext.TaskContextSnapshot) bool {
 	switch strings.TrimSpace(toolName) {
 	case "browser_attach_current", "browser_snapshot":
 	default:
@@ -1196,7 +1196,7 @@ func (s *Service) resolveToolExecution(request Request, deliveryResult map[strin
 	return intentName, input, true
 }
 
-func resolveDirectToolInput(intentName string, args map[string]any, snapshot contextsvc.TaskContextSnapshot) (map[string]any, bool) {
+func resolveDirectToolInput(intentName string, args map[string]any, snapshot taskcontext.TaskContextSnapshot) (map[string]any, bool) {
 	switch intentName {
 	case "read_file":
 		pathValue := stringValue(args, "path", stringValue(args, "target_path", ""))
@@ -1911,7 +1911,7 @@ func toolBubbleText(toolName string, result *tools.ToolExecutionResult) string {
 	return fmt.Sprintf("%s 执行完成。", toolName)
 }
 
-func (s *Service) buildExecutionInput(snapshot contextsvc.TaskContextSnapshot, memoryReadPlans []map[string]any) string {
+func (s *Service) buildExecutionInput(snapshot taskcontext.TaskContextSnapshot, memoryReadPlans []map[string]any) string {
 	sections := make([]string, 0, 7)
 	if snapshot.SelectionText != "" {
 		sections = append(sections, "选中文本:\n"+strings.TrimSpace(snapshot.SelectionText))
@@ -3409,7 +3409,7 @@ func approvedTargetKeys(intentName string) []string {
 	}
 }
 
-func resolveBrowserToolInput(intentName string, arguments map[string]any, snapshot contextsvc.TaskContextSnapshot) (map[string]any, bool) {
+func resolveBrowserToolInput(intentName string, arguments map[string]any, snapshot taskcontext.TaskContextSnapshot) (map[string]any, bool) {
 	if explicitInput, ok := resolveExplicitBrowserToolInput(intentName, arguments); ok {
 		return explicitInput, true
 	}
@@ -3513,7 +3513,7 @@ func mergeExplicitBrowserAttachInput(attachInput map[string]any, arguments map[s
 	return merged
 }
 
-func buildBrowserAttachInput(browserKind string, snapshot contextsvc.TaskContextSnapshot, arguments map[string]any, useSnapshotTarget, allowEmptyTarget, requireStableTarget bool) map[string]any {
+func buildBrowserAttachInput(browserKind string, snapshot taskcontext.TaskContextSnapshot, arguments map[string]any, useSnapshotTarget, allowEmptyTarget, requireStableTarget bool) map[string]any {
 	target := map[string]any{}
 	if pageIndex, ok := browserAttachPageIndex(arguments["page_index"]); ok {
 		target["page_index"] = pageIndex
@@ -3663,7 +3663,7 @@ func browserTargetOverrideMissing(arguments map[string]any) bool {
 	return strings.TrimSpace(stringValue(arguments, "title_contains", "")) == ""
 }
 
-func resolvePageToolInput(intentName string, arguments map[string]any, snapshot contextsvc.TaskContextSnapshot) (map[string]any, bool) {
+func resolvePageToolInput(intentName string, arguments map[string]any, snapshot taskcontext.TaskContextSnapshot) (map[string]any, bool) {
 	urlValue := strings.TrimSpace(stringValue(arguments, "url", ""))
 	if urlValue == "" {
 		return nil, false
@@ -3690,7 +3690,7 @@ func resolvePageToolInput(intentName string, arguments map[string]any, snapshot 
 	return input, true
 }
 
-func pageAttachInput(urlValue string, arguments map[string]any, snapshot contextsvc.TaskContextSnapshot) map[string]any {
+func pageAttachInput(urlValue string, arguments map[string]any, snapshot taskcontext.TaskContextSnapshot) map[string]any {
 	// Page-level attach hints must come from trusted desktop context. The planner
 	// can request a page tool, but it must not steer browser kind or CDP endpoint
 	// away from the observed foreground session.
