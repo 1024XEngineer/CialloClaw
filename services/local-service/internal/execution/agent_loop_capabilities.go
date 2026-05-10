@@ -3,8 +3,8 @@ package execution
 import (
 	"strings"
 
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -155,10 +155,10 @@ type agentLoopCapabilitySpec struct {
 // shared catalog and the live registry. Missing registry entries are skipped so
 // partially wired environments never advertise tools that cannot execute.
 func (s *Service) agentLoopToolDefinitions() []model.ToolDefinition {
-	return s.agentLoopToolDefinitionsForSnapshot(contextsvc.TaskContextSnapshot{})
+	return s.agentLoopToolDefinitionsForSnapshot(taskcontext.TaskContextSnapshot{})
 }
 
-func (s *Service) agentLoopToolDefinitionsForSnapshot(snapshot contextsvc.TaskContextSnapshot) []model.ToolDefinition {
+func (s *Service) agentLoopToolDefinitionsForSnapshot(snapshot taskcontext.TaskContextSnapshot) []model.ToolDefinition {
 	if s == nil || s.tools == nil {
 		return nil
 	}
@@ -181,10 +181,10 @@ func (s *Service) agentLoopToolDefinitionsForSnapshot(snapshot contextsvc.TaskCo
 // catalog and the live registry. This prevents hallucinated or unregistered
 // tool names from slipping past the allowlist.
 func (s *Service) isAllowedAgentLoopTool(name string) bool {
-	return s.isAllowedAgentLoopToolForSnapshot(name, contextsvc.TaskContextSnapshot{})
+	return s.isAllowedAgentLoopToolForSnapshot(name, taskcontext.TaskContextSnapshot{})
 }
 
-func (s *Service) isAllowedAgentLoopToolForSnapshot(name string, snapshot contextsvc.TaskContextSnapshot) bool {
+func (s *Service) isAllowedAgentLoopToolForSnapshot(name string, snapshot taskcontext.TaskContextSnapshot) bool {
 	if s == nil || s.tools == nil {
 		return false
 	}
@@ -204,7 +204,7 @@ func (s *Service) agentLoopToolMetadata(name string) (tools.ToolMetadata, bool) 
 	return tool.Metadata(), true
 }
 
-func resolveAgentLoopToolInput(toolName string, arguments map[string]any, snapshot contextsvc.TaskContextSnapshot) (map[string]any, bool) {
+func resolveAgentLoopToolInput(toolName string, arguments map[string]any, snapshot taskcontext.TaskContextSnapshot) (map[string]any, bool) {
 	trimmedName := strings.TrimSpace(toolName)
 	if browserInput, ok := resolveBrowserToolInput(trimmedName, arguments, snapshot); ok {
 		return browserInput, true
@@ -259,7 +259,7 @@ func joinCapabilityConstraints(values []string) string {
 	return strings.Join(cleaned, ", ")
 }
 
-func (c agentLoopCapabilitySpec) allowedForSnapshot(snapshot contextsvc.TaskContextSnapshot) bool {
+func (c agentLoopCapabilitySpec) allowedForSnapshot(snapshot taskcontext.TaskContextSnapshot) bool {
 	if !c.RequiresCurrentBrowser {
 		return true
 	}

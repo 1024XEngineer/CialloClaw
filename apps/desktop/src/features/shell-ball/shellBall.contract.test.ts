@@ -1454,7 +1454,7 @@ test("shell-ball helper window sync maps visual states into visibility and snaps
 
   assert.deepEqual(getShellBallHelperWindowVisibility("idle"), {
     bubble: false,
-    input: false,
+    input: true,
     voice: false,
   });
 
@@ -4606,7 +4606,7 @@ test("shell-ball input bar removes keyboard focus stops outside interactive mode
   assert.match(voiceMarkup, /tabindex="-1"/i);
 });
 
-test("shell-ball input bar uses a resizable textarea for focused draft editing", () => {
+test("shell-ball input bar renders the floating textarea shell", () => {
   const interactiveMarkup = renderToStaticMarkup(
     createElement(ShellBallInputBar, {
       mode: "interactive",
@@ -4622,18 +4622,13 @@ test("shell-ball input bar uses a resizable textarea for focused draft editing",
   const shellBallStyles = readFileSync(resolve(desktopRoot, "src/features/shell-ball/shellBall.css"), "utf8");
 
   assert.match(interactiveMarkup, /<textarea/);
-  assert.match(interactiveMarkup, /shell-ball-input-bar__resize-handle/);
+  assert.match(interactiveMarkup, /shell-ball-uiverse-placeholder/);
   assert.match(inputBarSource, /if \(event\.key !== "Enter" \|\| event\.shiftKey \|\| submitDisabled\) \{/);
-  assert.match(inputBarSource, /focusShellBallInputField\(inputRef\.current\);/);
-  assert.match(inputBarSource, /const restingWidth = measureShellBallInputRestingWidth\(field\);/);
-  assert.doesNotMatch(inputBarSource, /defaultFieldWidthRef/);
-  assert.match(inputBarSource, /!isInteractive \? null : \(/);
-  assert.doesNotMatch(inputBarSource, /inputRef\.current\.select\(\)/);
-  assert.match(shellBallStyles, /\.shell-ball-input-bar__resize-handle \{[\s\S]*cursor:\s*nwse-resize;/);
-  assert.match(shellBallStyles, /\.shell-ball-input-bar__field \{[\s\S]*overflow-y:\s*hidden;/);
-  assert.match(shellBallStyles, /\.shell-ball-input-bar__field::-webkit-scrollbar-thumb \{/);
-  assert.match(shellBallStyles, /\.shell-ball-input-bar--interactive:focus-within \{[\s\S]*border-radius:\s*1rem;/);
-  assert.match(shellBallStyles, /\.shell-ball-input-bar--interactive:focus-within::before \{[\s\S]*border-radius:\s*1rem;/);
+  assert.match(inputBarSource, /function restoreInputFocus\(\) \{/);
+  assert.match(inputBarSource, /const visiblePlaceholder = placeholder\?\.trim\(\) \|\| SHELL_BALL_INPUT_DEFAULT_PLACEHOLDER;/);
+  assert.match(shellBallStyles, /\.shell-ball-uiverse-inputbox::before \{/);
+  assert.match(shellBallStyles, /\.shell-ball-uiverse-fill \{/);
+  assert.match(shellBallStyles, /\.shell-ball-uiverse-placeholder \{/);
 });
 
 test("shell-ball input helpers clamp manual resize and autosize heights", () => {
@@ -4795,11 +4790,11 @@ test("shell-ball input focus helper keeps the caret at the end of the draft", ()
   assert.deepEqual(calls, ["focus", "range:10:10"]);
 });
 
-test("shell-ball bubble roles keep asymmetric straight bottom corners", () => {
+test("shell-ball bubble roles keep asymmetric softened bottom corners", () => {
   const shellBallStyles = readFileSync(resolve(desktopRoot, "src/features/shell-ball/shellBall.css"), "utf8");
 
-  assert.match(shellBallStyles, /\.shell-ball-bubble-message--agent \{[\s\S]*border-bottom-left-radius:\s*0;/);
-  assert.match(shellBallStyles, /\.shell-ball-bubble-message--user \{[\s\S]*border-bottom-right-radius:\s*0;/);
+  assert.match(shellBallStyles, /\.shell-ball-bubble-message--agent \{[\s\S]*border-bottom-left-radius:\s*0\.3rem;/);
+  assert.match(shellBallStyles, /\.shell-ball-bubble-message--user \{[\s\S]*border-bottom-right-radius:\s*0\.3rem;/);
 });
 
 test("shell-ball app drops page-shell copy while preserving the floating shell surface", () => {
@@ -5017,10 +5012,11 @@ test("shell-ball bubble zone renders per-bubble pin and delete controls", () => 
     }),
   );
 
-  assert.match(markup, /shell-ball-bubble-message__pin-control/g);
-  assert.match(markup, /shell-ball-bubble-message__delete-control/g);
-  assert.equal(markup.match(/data-bubble-action="pin"/g)?.length, 2);
+  assert.match(markup, /shell-ball-bubble-message__hover-controls/g);
+  assert.match(markup, /shell-ball-bubble-message__hover-control-icon/g);
+  assert.doesNotMatch(markup, /data-bubble-action="pin"/);
   assert.equal(markup.match(/data-bubble-action="delete"/g)?.length, 2);
+  assert.doesNotMatch(markup, /data-tooltip=/);
 });
 
 test("shell-ball pending-approval bubbles render inline allow and deny controls", () => {
@@ -8906,25 +8902,25 @@ test("shell-ball app routes real selection snapshots into the formal selected-te
   );
 });
 
-test("shell-ball resize drag keeps pointer capture and releases resize state on cleanup", () => {
+test("shell-ball input bar no longer relies on resize drag pointer capture", () => {
   const inputBarSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallInputBar.tsx"), "utf8");
 
-  assert.match(inputBarSource, /onResizeStateChange\(true\);/);
-  assert.match(inputBarSource, /handle\.setPointerCapture\(pointerId\);/);
-  assert.match(inputBarSource, /handle\.addEventListener\("lostpointercapture", cleanup\);/);
-  assert.match(inputBarSource, /window\.addEventListener\("blur", cleanup\);/);
-  assert.match(inputBarSource, /onResizeStateChange\(false\);/);
+  assert.doesNotMatch(inputBarSource, /onResizeStateChange\(true\);/);
+  assert.doesNotMatch(inputBarSource, /handle\.setPointerCapture\(pointerId\);/);
+  assert.doesNotMatch(inputBarSource, /handle\.addEventListener\("lostpointercapture", cleanup\);/);
+  assert.doesNotMatch(inputBarSource, /window\.addEventListener\("blur", cleanup\);/);
+  assert.doesNotMatch(inputBarSource, /onResizeStateChange\(false\);/);
 });
 
 test("shell-ball input bar restores textarea focus after attach and send actions", () => {
   const inputBarSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallInputBar.tsx"), "utf8");
 
-  assert.match(inputBarSource, /function restoreTextareaFocus\(\) \{/);
+  assert.match(inputBarSource, /function restoreInputFocus\(\) \{/);
   assert.match(inputBarSource, /field\.focus\(\);/);
   assert.match(inputBarSource, /field\.setSelectionRange\(selectionIndex, selectionIndex\);/);
   assert.match(inputBarSource, /onMouseDown=\{\(event\) => \{\s*event\.preventDefault\(\);/);
-  assert.match(inputBarSource, /onAttachFile\(\);\s*restoreTextareaFocus\(\);/);
-  assert.match(inputBarSource, /onSubmit\(\);\s*restoreTextareaFocus\(\);/);
+  assert.match(inputBarSource, /onAttachFile\(\);\s*restoreInputFocus\(\);/);
+  assert.match(inputBarSource, /onSubmit\(\);\s*restoreInputFocus\(\);/);
 });
 
 test("shell-ball app dashboard-open gate stays blocked for consumed or non-resting double clicks", () => {
@@ -8988,7 +8984,7 @@ test("shell-ball inline input preserves readonly snapshots and only upgrades hid
 });
 
 test("shell-ball input bar mode stays aligned with visual states", () => {
-  assert.equal(getShellBallInputBarMode("idle"), "hidden");
+  assert.equal(getShellBallInputBarMode("idle"), "interactive");
   assert.equal(getShellBallInputBarMode("hover_input"), "interactive");
   assert.equal(getShellBallInputBarMode("confirming_intent"), "interactive");
   assert.equal(getShellBallInputBarMode("waiting_auth"), "readonly");

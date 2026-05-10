@@ -229,7 +229,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 ### 5.1 任务状态 `task_status`
 
 - `processing`：任务正在执行。
-- `waiting_auth`：命中高风险动作，等待授权。
+- `waiting_auth`：命中高风险动作，等待授权；既包括执行前的治理预检，也包括 `agent_loop` 在运行中选中具体工具后触发的正式授权暂停。
 - `waiting_input`：等待用户补充必要输入。
 - `confirming_intent`：系统已识别出候选意图，等待用户确认或纠偏。
 - `paused`：任务被用户或系统主动暂停。
@@ -270,7 +270,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - `bubble`：气泡轻量交付。
 - `workspace_document`：写入工作区文档。
-- `result_page`：结果页交付。
+- `result_page`：结果页交付；正式载荷应通过 `payload.url` 指向结果页入口，`payload.path` 保持为空。
 - `open_file`：直接打开文件。
 - `reveal_in_folder`：打开文件夹并高亮文件。
 - `task_detail`：跳转任务详情。
@@ -1193,6 +1193,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - **系统处理**：
   - 若携带 `artifact_id`，优先基于真实 artifact 解析打开动作
   - 若未携带 `artifact_id`，则基于任务当前 `delivery_result` 解析打开动作
+  - 当 `delivery_result.type = result_page` 时，`open_action` 仍为 `result_page`，且 `resolved_payload.url` 必须回落到稳定结果页入口
   - 返回统一的 `delivery_result`、`open_action`、`resolved_payload`
 - **入参**：任务 ID，可选产物 ID
 - **出参**：交付结果、打开动作、解析后的载荷，按需附带产物对象
@@ -1227,7 +1228,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | ----------------------- | ---------------- |
 | `data.delivery_result`  | 主交付对象       |
 | `data.open_action`      | 最终打开动作     |
-| `data.resolved_payload` | 解析后的打开载荷 |
+| `data.resolved_payload` | 解析后的打开载荷；可包含 `path` 或 `url` |
 | `data.artifact`         | 命中的产物对象   |
 
 ### agent.delivery.open 出参示例
@@ -1239,17 +1240,20 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
   "result": {
     "data": {
       "delivery_result": {
-        "type": "workspace_document",
-        "title": "处理结果",
+        "type": "result_page",
+        "title": "网页读取结果",
         "payload": {
-          "path": "D:/CialloClawWorkspace/Q3复盘.md",
-          "task_id": "task_201"
+          "path": null,
+          "task_id": "task_201",
+          "url": "./dashboard.html#/tasks/delivery/task_201"
         },
-        "preview_text": "已为你写入文档并打开"
+        "preview_text": "结果已生成，正在打开结果页"
       },
-      "open_action": "open_file",
+      "open_action": "result_page",
       "resolved_payload": {
-        "path": "D:/CialloClawWorkspace/Q3复盘.md"
+        "path": null,
+        "task_id": "task_201",
+        "url": "./dashboard.html#/tasks/delivery/task_201"
       },
       "artifact": null
     },
@@ -4329,7 +4333,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - `task.updated`：任务主状态或关键摘要变化；通知参数至少包含 `task_id`、`session_id`、`status`
 - `delivery.ready`：正式交付已可被前端承接
-- `approval.pending`：出现待授权动作
+- `approval.pending`：出现待授权动作；既可来自执行前治理预检，也可来自 `agent_loop` 运行中命中的具体工具调用
 - `task.steered`：运行中补充要求已经写入任务链
 - `task.session_queued`：同一 `session` 下的新任务进入串行等待
 - `task.session_resumed`：队列中的任务重新恢复执行

@@ -590,6 +590,7 @@ type ToolExecuteContext struct {
 	ApprovalGranted      bool
 	ApprovedOperation    string
 	ApprovedTargetObject string
+	ApprovedToolInput    map[string]any
 
 	Storage    StorageCapability
 	Platform   PlatformCapability
