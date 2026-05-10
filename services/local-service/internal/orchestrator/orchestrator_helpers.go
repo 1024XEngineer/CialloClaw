@@ -48,7 +48,9 @@ func cloneTimePointer(value *time.Time) *time.Time {
 
 // notepadSnapshot rebuilds a free-text task snapshot from one notepad item so
 // convert_to_task can reuse the normal task pipeline without narrowing the
-// user's goal into a notepad-specific intent bucket first.
+// user's goal into a notepad-specific intent bucket first. related_resources
+// remain display/open context on the source note; they are not formal execution
+// inputs until a separate explicit attachment channel records that intent.
 func notepadSnapshot(item map[string]any) taskcontext.TaskContextSnapshot {
 	text := firstNonEmptyString(
 		stringValue(item, "note_text", ""),
@@ -61,76 +63,9 @@ func notepadSnapshot(item map[string]any) taskcontext.TaskContextSnapshot {
 		InputType: "text",
 		InputMode: "text",
 		Text:      text,
-		Files:     notepadResourcePaths(item),
 		PageTitle: "notepad",
 		AppName:   "dashboard",
 	}
-}
-
-func notepadResourcePaths(item map[string]any) []string {
-	resources := relatedResourceMaps(item["related_resources"])
-	if len(resources) == 0 {
-		return nil
-	}
-
-	paths := make([]string, 0, len(resources))
-	for _, resource := range resources {
-		// Derived defaults keep notepad cards actionable in the dashboard, but
-		// they must not widen the formal task snapshot as if the user attached
-		// those paths explicitly.
-		if strings.TrimSpace(stringValue(resource, "resource_origin", "")) == "derived_default" {
-			continue
-		}
-		path := strings.TrimSpace(stringValue(resource, "path", ""))
-		if path == "" {
-			continue
-		}
-
-		resourceType := firstNonEmptyString(
-			stringValue(resource, "resource_type", ""),
-			stringValue(resource, "type", ""),
-		)
-		switch resourceType {
-		case "file", "folder", "directory":
-			paths = append(paths, path)
-		case "":
-			switch strings.TrimSpace(stringValue(resource, "target_kind", "")) {
-			case "file", "folder":
-				paths = append(paths, path)
-			}
-		default:
-			if strings.TrimSpace(stringValue(resource, "target_kind", "")) == "folder" {
-				paths = append(paths, path)
-			}
-		}
-	}
-
-	if len(paths) == 0 {
-		return nil
-	}
-	return paths
-}
-
-func relatedResourceMaps(rawValue any) []map[string]any {
-	if resources, ok := rawValue.([]map[string]any); ok {
-		return cloneMapSlice(resources)
-	}
-	anyResources, ok := rawValue.([]any)
-	if !ok {
-		return nil
-	}
-	result := make([]map[string]any, 0, len(anyResources))
-	for _, rawResource := range anyResources {
-		resource, ok := rawResource.(map[string]any)
-		if !ok {
-			continue
-		}
-		result = append(result, cloneMap(resource))
-	}
-	if len(result) == 0 {
-		return nil
-	}
-	return result
 }
 
 func latestOutputPathFromTasks(tasks []runengine.TaskRecord) string {

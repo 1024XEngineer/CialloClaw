@@ -2433,7 +2433,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `data.items[].effective_scope`        | 生效范围                 |
 | `data.items[].ended_at`               | 结束时间                 |
 | `data.items[].linked_task_id`         | 已转正式任务后的 task ID |
-| `data.items[].related_resources`      | 相关资料列表             |
+| `data.items[].related_resources`      | 相关资料列表，仅作为展示与打开上下文 |
 | `data.page`                           | 分页信息                 |
 
 ### agent.notepad.list 出参示例
@@ -2577,7 +2577,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户点击“交给 Agent 处理”时
-- **系统处理**：将事项按原文与用户显式关联的相关资料升级为正式任务，并保留来源关系
+- **系统处理**：将事项按 `note_text / title` 升级为正式任务，并保留来源事项关系；`related_resources` 只作为来源事项的展示与打开上下文，不自动成为正式任务的文件输入
 - **入参**：事项 ID、确认标记
 - **出参**：主任务入口返回对象、更新后的来源事项、建议刷新的事项分组
 
@@ -2631,7 +2631,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
     "data": {
       "task": {
         "task_id": "task_401",
-        "title": "处理：Q3-review",
+        "title": "处理：整理 Q3 复盘要点",
         "source_type": "todo",
         "status": "processing"
       },

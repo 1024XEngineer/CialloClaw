@@ -868,6 +868,7 @@ flowchart TB
 - 重复事项补强字段中，`repeat_rule_text`、`next_occurrence_at`、`recent_instance_status`、`effective_scope` 用于规则引擎与巡检底座；前端稳定消费的协议字段仍以 `TodoItem.repeat_rule / next_occurrence_at / recent_instance_status / effective_scope / recurring_enabled` 为准。
 - complete / cancel / restore / toggle-recurring / delete 等事项动作已经通过 `agent.notepad.update` 进入稳定 RPC 面；运行态与存储层继续负责真实生命周期收敛。
 - “打开相关资料”当前通过 `related_resources[].open_action / open_payload` 与共享 delivery open 语义承接，不额外冻结专用 `agent.notepad.open_resource` 接口。
+- `agent.notepad.convert_to_task` 以 `note_text / title` 作为正式任务文本输入；`related_resources` 只保留为来源事项的展示与打开上下文，不自动写入 `TaskContextSnapshot.Files`。后续若需要把资料作为执行输入，必须通过独立的显式附件通道表达。
 
 ### 3.7.4 镜子记忆与长期协作域
 
