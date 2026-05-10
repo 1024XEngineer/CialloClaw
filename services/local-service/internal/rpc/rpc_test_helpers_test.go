@@ -22,6 +22,8 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/sidecarclient"
@@ -128,16 +130,26 @@ func (a testStorageAdapter) SecretStorePath() string {
 }
 
 func newTestServer() *Server {
-	server, _, _ := newTestServerWithDependencies(nil)
+	server, _, _ := newTestServerWithDependencies(nil, nil, nil)
 	return server
 }
 
 func newTestServerWithModelClient(client model.Client) *Server {
-	server, _, _ := newTestServerWithDependencies(client)
+	server, _, _ := newTestServerWithDependencies(client, nil, nil)
 	return server
 }
 
-func newTestServerWithDependencies(client model.Client) (*Server, *tools.Registry, *plugin.Service) {
+func newTestServerWithStorage(storageService *storage.Service) *Server {
+	server, _, _ := newTestServerWithDependencies(nil, storageService, nil)
+	return server
+}
+
+func newTestServerWithTaskInspector(inspectorService *taskinspector.Service) *Server {
+	server, _, _ := newTestServerWithDependencies(nil, nil, inspectorService)
+	return server
+}
+
+func newTestServerWithDependencies(client model.Client, storageService *storage.Service, inspectorService *taskinspector.Service) (*Server, *tools.Registry, *plugin.Service) {
 	toolRegistry := tools.NewRegistry()
 	_ = builtin.RegisterBuiltinTools(toolRegistry)
 	_ = sidecarclient.RegisterPlaywrightTools(toolRegistry)
@@ -162,21 +174,27 @@ func newTestServerWithDependencies(client model.Client) (*Server, *tools.Registr
 		toolExecutor,
 		pluginService,
 	)
-	orch := orchestrator.NewService(
-		contextsvc.NewService(),
-		intent.NewService(),
-		runengine.NewEngine(),
-		delivery.NewService(),
-		memory.NewService(),
-		risk.NewService(),
-		model.NewService(serviceconfig.ModelConfig{
+	orch, err := orchestrator.NewService(orchestrator.Deps{
+		Context:   contextsvc.NewService(),
+		Intent:    intent.NewService(),
+		RunEngine: runengine.NewEngine(),
+		Delivery:  delivery.NewService(),
+		Memory:    memory.NewService(),
+		Risk:      risk.NewService(),
+		Model: model.NewService(serviceconfig.ModelConfig{
 			Provider: "openai_responses",
 			ModelID:  "gpt-5.4",
 			Endpoint: "https://api.openai.com/v1/responses",
 		}),
-		toolRegistry,
-		pluginService,
-	).WithExecutor(executionService)
+		Tools:     toolRegistry,
+		Plugin:    pluginService,
+		Executor:  executionService,
+		Storage:   storageService,
+		Inspector: inspectorService,
+	})
+	if err != nil {
+		panic(err)
+	}
 
 	server := NewServer(serviceconfig.RPCConfig{
 		Transport:        "named_pipe",
