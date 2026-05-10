@@ -29,7 +29,7 @@ func TestStartTaskRequestFromParamsNormalizesUnknownFields(t *testing.T) {
 		"unknown_field": "drop-me",
 	})
 
-	params := request.paramsMap()
+	params := request.ProtocolParamsMap()
 	if _, ok := params["unknown_field"]; ok {
 		t.Fatalf("expected typed request normalization to drop unknown top-level fields, got %+v", params)
 	}

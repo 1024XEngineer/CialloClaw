@@ -184,6 +184,34 @@ type TaskDetailGetResponse struct {
 	RuntimeSummary      TaskRuntimeSummaryDTO   `json:"runtime_summary"`
 }
 
+type startTaskProtocolParams struct {
+	RequestMeta RequestMeta         `json:"request_meta"`
+	SessionID   string              `json:"session_id,omitempty"`
+	Source      string              `json:"source,omitempty"`
+	Trigger     string              `json:"trigger,omitempty"`
+	Input       TaskStartInput      `json:"input"`
+	Context     *InputContext       `json:"context,omitempty"`
+	Delivery    *DeliveryPreference `json:"delivery,omitempty"`
+	Options     *TaskStartOptions   `json:"options,omitempty"`
+	Intent      map[string]any      `json:"intent,omitempty"`
+}
+
+type submitInputProtocolParams struct {
+	RequestMeta RequestMeta         `json:"request_meta"`
+	SessionID   string              `json:"session_id,omitempty"`
+	Source      string              `json:"source,omitempty"`
+	Trigger     string              `json:"trigger,omitempty"`
+	Input       InputSubmitInput    `json:"input"`
+	Context     *InputContext       `json:"context,omitempty"`
+	VoiceMeta   *VoiceMeta          `json:"voice_meta,omitempty"`
+	Options     *InputSubmitOptions `json:"options,omitempty"`
+}
+
+type taskDetailGetProtocolParams struct {
+	RequestMeta RequestMeta `json:"request_meta"`
+	TaskID      string      `json:"task_id"`
+}
+
 // StartTaskRequestFromParams adapts RPC-decoded params to the typed
 // orchestrator request. The adapter stays manual so hot RPC entrypoints avoid
 // extra JSON round-trips after the boundary has already validated the payload.
@@ -230,84 +258,44 @@ func TaskDetailGetRequestFromParams(params map[string]any) TaskDetailGetRequest 
 	}
 }
 
-func (r StartTaskRequest) paramsMap() map[string]any {
-	return r.ProtocolParamsMap()
-}
-
 // ProtocolParamsMap exports the normalized protocol payload for RPC adapters
 // that have already validated the transport envelope.
 func (r StartTaskRequest) ProtocolParamsMap() map[string]any {
-	params := map[string]any{
-		"request_meta": r.RequestMeta.protocolMap(),
-		"input":        r.Input.protocolMap(),
-	}
-	if strings.TrimSpace(r.SessionID) != "" {
-		params["session_id"] = r.SessionID
-	}
-	if strings.TrimSpace(r.Source) != "" {
-		params["source"] = r.Source
-	}
-	if strings.TrimSpace(r.Trigger) != "" {
-		params["trigger"] = r.Trigger
-	}
-	if r.Context != nil {
-		params["context"] = r.Context.protocolMap()
-	}
-	if r.Delivery != nil {
-		params["delivery"] = r.Delivery.protocolMap()
-	}
-	if r.Options != nil {
-		params["options"] = r.Options.protocolMap()
-	}
-	if len(r.Intent) > 0 {
-		params["intent"] = cloneMap(r.Intent)
-	}
-	return params
-}
-
-func (r SubmitInputRequest) paramsMap() map[string]any {
-	return r.ProtocolParamsMap()
+	return protocolMapFromDTO(startTaskProtocolParams{
+		RequestMeta: r.RequestMeta,
+		SessionID:   strings.TrimSpace(r.SessionID),
+		Source:      strings.TrimSpace(r.Source),
+		Trigger:     strings.TrimSpace(r.Trigger),
+		Input:       r.Input,
+		Context:     r.Context,
+		Delivery:    r.Delivery,
+		Options:     r.Options,
+		Intent:      cloneMap(r.Intent),
+	})
 }
 
 // ProtocolParamsMap exports the normalized protocol payload for RPC adapters
 // that have already validated the transport envelope.
 func (r SubmitInputRequest) ProtocolParamsMap() map[string]any {
-	params := map[string]any{
-		"request_meta": r.RequestMeta.protocolMap(),
-		"input":        r.Input.protocolMap(),
-	}
-	if strings.TrimSpace(r.SessionID) != "" {
-		params["session_id"] = r.SessionID
-	}
-	if strings.TrimSpace(r.Source) != "" {
-		params["source"] = r.Source
-	}
-	if strings.TrimSpace(r.Trigger) != "" {
-		params["trigger"] = r.Trigger
-	}
-	if r.Context != nil {
-		params["context"] = r.Context.protocolMap()
-	}
-	if r.VoiceMeta != nil {
-		params["voice_meta"] = r.VoiceMeta.protocolMap()
-	}
-	if r.Options != nil {
-		params["options"] = r.Options.protocolMap()
-	}
-	return params
-}
-
-func (r TaskDetailGetRequest) paramsMap() map[string]any {
-	return r.ProtocolParamsMap()
+	return protocolMapFromDTO(submitInputProtocolParams{
+		RequestMeta: r.RequestMeta,
+		SessionID:   strings.TrimSpace(r.SessionID),
+		Source:      strings.TrimSpace(r.Source),
+		Trigger:     strings.TrimSpace(r.Trigger),
+		Input:       r.Input,
+		Context:     r.Context,
+		VoiceMeta:   r.VoiceMeta,
+		Options:     r.Options,
+	})
 }
 
 // ProtocolParamsMap exports the normalized protocol payload for RPC adapters
 // that have already validated the transport envelope.
 func (r TaskDetailGetRequest) ProtocolParamsMap() map[string]any {
-	return map[string]any{
-		"request_meta": r.RequestMeta.protocolMap(),
-		"task_id":      r.TaskID,
-	}
+	return protocolMapFromDTO(taskDetailGetProtocolParams{
+		RequestMeta: r.RequestMeta,
+		TaskID:      strings.TrimSpace(r.TaskID),
+	})
 }
 
 func newTaskEntryResponse(payload map[string]any) (TaskEntryResponse, error) {
@@ -408,13 +396,13 @@ func newTaskDetailGetResponse(payload map[string]any) (TaskDetailGetResponse, er
 // Map returns the protocol payload as a map for package tests that assert
 // individual fields. Production callers should consume the typed DTO directly.
 func (r TaskEntryResponse) Map() map[string]any {
-	return responseDTOToProtocolMap(r)
+	return protocolMapFromDTO(r)
 }
 
 // Map returns the protocol payload as a map for package tests that assert
 // individual fields. Production callers should consume the typed DTO directly.
 func (r TaskDetailGetResponse) Map() map[string]any {
-	return responseDTOToProtocolMap(r)
+	return protocolMapFromDTO(r)
 }
 
 func taskDTOPointerFromMap(values map[string]any, key string) (*TaskDTO, error) {
@@ -1344,13 +1332,6 @@ func requestMetaFromMap(values map[string]any) RequestMeta {
 	}
 }
 
-func (m RequestMeta) protocolMap() map[string]any {
-	return map[string]any{
-		"trace_id":    m.TraceID,
-		"client_time": m.ClientTime,
-	}
-}
-
 func pageContextPointerFromMap(values map[string]any) *PageContext {
 	if len(values) == 0 {
 		return nil
@@ -1368,41 +1349,6 @@ func pageContextPointerFromMap(values map[string]any) *PageContext {
 	}
 }
 
-func (c *PageContext) protocolMap() map[string]any {
-	if c == nil {
-		return nil
-	}
-	params := map[string]any{}
-	if c.Title != "" {
-		params["title"] = c.Title
-	}
-	if c.AppName != "" {
-		params["app_name"] = c.AppName
-	}
-	if c.URL != "" {
-		params["url"] = c.URL
-	}
-	if c.BrowserKind != "" {
-		params["browser_kind"] = c.BrowserKind
-	}
-	if c.ProcessPath != "" {
-		params["process_path"] = c.ProcessPath
-	}
-	if c.ProcessID != 0 {
-		params["process_id"] = c.ProcessID
-	}
-	if c.WindowTitle != "" {
-		params["window_title"] = c.WindowTitle
-	}
-	if c.VisibleText != "" {
-		params["visible_text"] = c.VisibleText
-	}
-	if c.HoverTarget != "" {
-		params["hover_target"] = c.HoverTarget
-	}
-	return params
-}
-
 func screenContextPointerFromMap(values map[string]any) *ScreenContext {
 	if len(values) == 0 {
 		return nil
@@ -1414,29 +1360,6 @@ func screenContextPointerFromMap(values map[string]any) *ScreenContext {
 		WindowTitle:   stringValue(values, "window_title", ""),
 		HoverTarget:   stringValue(values, "hover_target", ""),
 	}
-}
-
-func (c *ScreenContext) protocolMap() map[string]any {
-	if c == nil {
-		return nil
-	}
-	params := map[string]any{}
-	if c.Summary != "" {
-		params["summary"] = c.Summary
-	}
-	if c.ScreenSummary != "" {
-		params["screen_summary"] = c.ScreenSummary
-	}
-	if c.VisibleText != "" {
-		params["visible_text"] = c.VisibleText
-	}
-	if c.WindowTitle != "" {
-		params["window_title"] = c.WindowTitle
-	}
-	if c.HoverTarget != "" {
-		params["hover_target"] = c.HoverTarget
-	}
-	return params
 }
 
 func behaviorContextPointerFromMap(values map[string]any) *BehaviorContext {
@@ -1452,41 +1375,11 @@ func behaviorContextPointerFromMap(values map[string]any) *BehaviorContext {
 	}
 }
 
-func (c *BehaviorContext) protocolMap() map[string]any {
-	if c == nil {
-		return nil
-	}
-	params := map[string]any{}
-	if c.LastAction != "" {
-		params["last_action"] = c.LastAction
-	}
-	if c.DwellMillis != 0 {
-		params["dwell_millis"] = c.DwellMillis
-	}
-	if c.CopyCount != 0 {
-		params["copy_count"] = c.CopyCount
-	}
-	if c.WindowSwitchCount != 0 {
-		params["window_switch_count"] = c.WindowSwitchCount
-	}
-	if c.PageSwitchCount != 0 {
-		params["page_switch_count"] = c.PageSwitchCount
-	}
-	return params
-}
-
 func selectionContextPointerFromMap(values map[string]any) *SelectionContext {
 	if len(values) == 0 {
 		return nil
 	}
 	return &SelectionContext{Text: stringValue(values, "text", "")}
-}
-
-func (c *SelectionContext) protocolMap() map[string]any {
-	if c == nil || c.Text == "" {
-		return nil
-	}
-	return map[string]any{"text": c.Text}
 }
 
 func errorContextPointerFromMap(values map[string]any) *ErrorContext {
@@ -1496,25 +1389,11 @@ func errorContextPointerFromMap(values map[string]any) *ErrorContext {
 	return &ErrorContext{Message: stringValue(values, "message", "")}
 }
 
-func (c *ErrorContext) protocolMap() map[string]any {
-	if c == nil || c.Message == "" {
-		return nil
-	}
-	return map[string]any{"message": c.Message}
-}
-
 func clipboardContextPointerFromMap(values map[string]any) *ClipboardContext {
 	if len(values) == 0 {
 		return nil
 	}
 	return &ClipboardContext{Text: stringValue(values, "text", "")}
-}
-
-func (c *ClipboardContext) protocolMap() map[string]any {
-	if c == nil || c.Text == "" {
-		return nil
-	}
-	return map[string]any{"text": c.Text}
 }
 
 func inputContextPointerFromMap(values map[string]any) *InputContext {
@@ -1543,68 +1422,6 @@ func inputContextPointerFromMap(values map[string]any) *InputContext {
 	}
 }
 
-func (c *InputContext) protocolMap() map[string]any {
-	if c == nil {
-		return nil
-	}
-	params := map[string]any{}
-	if page := c.Page.protocolMap(); len(page) > 0 {
-		params["page"] = page
-	}
-	if screen := c.Screen.protocolMap(); len(screen) > 0 {
-		params["screen"] = screen
-	}
-	if behavior := c.Behavior.protocolMap(); len(behavior) > 0 {
-		params["behavior"] = behavior
-	}
-	if selection := c.Selection.protocolMap(); len(selection) > 0 {
-		params["selection"] = selection
-	}
-	if errValue := c.Error.protocolMap(); len(errValue) > 0 {
-		params["error"] = errValue
-	}
-	if clipboard := c.Clipboard.protocolMap(); len(clipboard) > 0 {
-		params["clipboard"] = clipboard
-	}
-	if c.Text != "" {
-		params["text"] = c.Text
-	}
-	if c.SelectionText != "" {
-		params["selection_text"] = c.SelectionText
-	}
-	if len(c.Files) > 0 {
-		params["files"] = append([]string(nil), c.Files...)
-	}
-	if len(c.FilePaths) > 0 {
-		params["file_paths"] = append([]string(nil), c.FilePaths...)
-	}
-	if c.ScreenSummary != "" {
-		params["screen_summary"] = c.ScreenSummary
-	}
-	if c.ClipboardText != "" {
-		params["clipboard_text"] = c.ClipboardText
-	}
-	if c.HoverTarget != "" {
-		params["hover_target"] = c.HoverTarget
-	}
-	if c.LastAction != "" {
-		params["last_action"] = c.LastAction
-	}
-	if c.DwellMillis != 0 {
-		params["dwell_millis"] = c.DwellMillis
-	}
-	if c.CopyCount != 0 {
-		params["copy_count"] = c.CopyCount
-	}
-	if c.WindowSwitchCount != 0 {
-		params["window_switch_count"] = c.WindowSwitchCount
-	}
-	if c.PageSwitchCount != 0 {
-		params["page_switch_count"] = c.PageSwitchCount
-	}
-	return params
-}
-
 func voiceMetaPointerFromMap(values map[string]any) *VoiceMeta {
 	if len(values) == 0 {
 		return nil
@@ -1617,46 +1434,12 @@ func voiceMetaPointerFromMap(values map[string]any) *VoiceMeta {
 	}
 }
 
-func (m *VoiceMeta) protocolMap() map[string]any {
-	if m == nil {
-		return nil
-	}
-	params := map[string]any{}
-	if m.VoiceSessionID != "" {
-		params["voice_session_id"] = m.VoiceSessionID
-	}
-	if m.IsLockedSession {
-		params["is_locked_session"] = true
-	}
-	if m.ASRConfidence != 0 {
-		params["asr_confidence"] = m.ASRConfidence
-	}
-	if m.SegmentID != "" {
-		params["segment_id"] = m.SegmentID
-	}
-	return params
-}
-
 func inputSubmitInputFromMap(values map[string]any) InputSubmitInput {
 	return InputSubmitInput{
 		Type:      stringValue(values, "type", ""),
 		Text:      stringValue(values, "text", ""),
 		InputMode: stringValue(values, "input_mode", ""),
 	}
-}
-
-func (i InputSubmitInput) protocolMap() map[string]any {
-	params := map[string]any{}
-	if i.Type != "" {
-		params["type"] = i.Type
-	}
-	if i.Text != "" {
-		params["text"] = i.Text
-	}
-	if i.InputMode != "" {
-		params["input_mode"] = i.InputMode
-	}
-	return params
 }
 
 func inputSubmitOptionsPointerFromMap(values map[string]any) *InputSubmitOptions {
@@ -1669,20 +1452,6 @@ func inputSubmitOptionsPointerFromMap(values map[string]any) *InputSubmitOptions
 	}
 }
 
-func (o *InputSubmitOptions) protocolMap() map[string]any {
-	if o == nil {
-		return nil
-	}
-	params := map[string]any{}
-	if o.ConfirmRequired {
-		params["confirm_required"] = true
-	}
-	if o.PreferredDelivery != "" {
-		params["preferred_delivery"] = o.PreferredDelivery
-	}
-	return params
-}
-
 func taskStartInputFromMap(values map[string]any) TaskStartInput {
 	return TaskStartInput{
 		Type:         stringValue(values, "type", ""),
@@ -1691,26 +1460,6 @@ func taskStartInputFromMap(values map[string]any) TaskStartInput {
 		PageContext:  pageContextPointerFromMap(mapValue(values, "page_context")),
 		ErrorMessage: stringValue(values, "error_message", ""),
 	}
-}
-
-func (i TaskStartInput) protocolMap() map[string]any {
-	params := map[string]any{}
-	if i.Type != "" {
-		params["type"] = i.Type
-	}
-	if i.Text != "" {
-		params["text"] = i.Text
-	}
-	if len(i.Files) > 0 {
-		params["files"] = append([]string(nil), i.Files...)
-	}
-	if pageContext := i.PageContext.protocolMap(); len(pageContext) > 0 {
-		params["page_context"] = pageContext
-	}
-	if i.ErrorMessage != "" {
-		params["error_message"] = i.ErrorMessage
-	}
-	return params
 }
 
 func deliveryPreferencePointerFromMap(values map[string]any) *DeliveryPreference {
@@ -1723,20 +1472,6 @@ func deliveryPreferencePointerFromMap(values map[string]any) *DeliveryPreference
 	}
 }
 
-func (p *DeliveryPreference) protocolMap() map[string]any {
-	if p == nil {
-		return nil
-	}
-	params := map[string]any{}
-	if p.Preferred != "" {
-		params["preferred"] = p.Preferred
-	}
-	if p.Fallback != "" {
-		params["fallback"] = p.Fallback
-	}
-	return params
-}
-
 func taskStartOptionsPointerFromMap(values map[string]any) *TaskStartOptions {
 	if len(values) == 0 {
 		return nil
@@ -1744,16 +1479,6 @@ func taskStartOptionsPointerFromMap(values map[string]any) *TaskStartOptions {
 	return &TaskStartOptions{
 		ConfirmRequired: boolValue(values, "confirm_required", false),
 	}
-}
-
-func (o *TaskStartOptions) protocolMap() map[string]any {
-	if o == nil {
-		return nil
-	}
-	if !o.ConfirmRequired {
-		return map[string]any{}
-	}
-	return map[string]any{"confirm_required": true}
 }
 
 func floatValue(values map[string]any, key string, fallback float64) float64 {
@@ -1777,7 +1502,7 @@ func floatValue(values map[string]any, key string, fallback float64) float64 {
 	}
 }
 
-func responseDTOToProtocolMap(value any) map[string]any {
+func protocolMapFromDTO(value any) map[string]any {
 	result, ok := protocolValueFromReflect(reflect.ValueOf(value)).(map[string]any)
 	if !ok || result == nil {
 		return map[string]any{}

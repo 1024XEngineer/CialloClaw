@@ -18,7 +18,7 @@ func (s *Service) resumeQueuedControlledTask(task runengine.TaskRecord) (runengi
 	}
 	approvalState, err := s.buildScreenAnalysisApprovalState(task)
 	if err != nil {
-		failedTask, _ := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, err)
+		failedTask, _ := s.failExecutionTask(task, protocolIntentMap("screen_analyze", nil), execution.Result{}, err)
 		return failedTask, true, nil
 	}
 	approvalRequest := approvalState.approvalRequestMap()

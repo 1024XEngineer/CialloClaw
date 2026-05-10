@@ -14,6 +14,28 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
+type screenIntentDTO struct {
+	Name      string         `json:"name"`
+	Arguments map[string]any `json:"arguments,omitempty"`
+}
+
+type emptyIntentArguments struct{}
+
+type screenAnalyzeCandidateIntentArguments struct {
+	TaskID          string `json:"task_id"`
+	RunID           string `json:"run_id"`
+	ScreenSessionID string `json:"screen_session_id"`
+	FrameID         string `json:"frame_id"`
+	Path            string `json:"path"`
+	CaptureMode     string `json:"capture_mode"`
+	Source          string `json:"source"`
+	CapturedAt      string `json:"captured_at"`
+	RetentionPolicy string `json:"retention_policy"`
+	Language        string `json:"language"`
+	EvidenceRole    string `json:"evidence_role"`
+	TargetObject    string `json:"target_object"`
+}
+
 func (s *Service) handleScreenAnalyzeStart(params map[string]any, snapshot taskcontext.TaskContextSnapshot, explicitIntent map[string]any) (map[string]any, bool, error) {
 	if stringValue(explicitIntent, "name", "") != "screen_analyze" || s.executor == nil || !s.executor.ScreenCapabilitySnapshot().Available {
 		return nil, false, nil
@@ -79,10 +101,7 @@ func (s *Service) normalizeSuggestedIntentForAvailability(snapshot taskcontext.T
 		return suggestion
 	}
 	fallback := suggestion
-	fallback.Intent = map[string]any{
-		"name":      "agent_loop",
-		"arguments": map[string]any{},
-	}
+	fallback.Intent = protocolIntentMap("agent_loop", emptyIntentArguments{})
 	fallback.IntentConfirmed = true
 	// Preserve the caller's confirmation gate when screen-specific handling is
 	// unavailable so the downgrade does not auto-execute a generic task.
@@ -145,7 +164,7 @@ func (s *Service) resolveScreenAnalyzeIntent(snapshot taskcontext.TaskContextSna
 	updatedIntent := cloneMap(current)
 	arguments := cloneMap(mapValue(updatedIntent, "arguments"))
 	if arguments == nil {
-		arguments = map[string]any{}
+		arguments = make(map[string]any)
 	}
 	if strings.TrimSpace(stringValue(arguments, "language", "")) == "" {
 		arguments["language"] = "eng"
@@ -277,7 +296,7 @@ func inferredScreenEvidenceRole(snapshot taskcontext.TaskContextSnapshot, argume
 
 func (s *Service) executeScreenAnalysisAfterApproval(task runengine.TaskRecord, pendingExecution map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, error) {
 	if s.executor == nil || s.executor.ScreenClient() == nil {
-		failedTask, failureBubble := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, tools.ErrScreenCaptureNotSupported)
+		failedTask, failureBubble := s.failExecutionTask(task, protocolIntentMap("screen_analyze", nil), execution.Result{}, tools.ErrScreenCaptureNotSupported)
 		return failedTask, failureBubble, nil, nil
 	}
 	screenClient := s.executor.ScreenClient()
@@ -292,32 +311,29 @@ func (s *Service) executeScreenAnalysisAfterApproval(task runengine.TaskRecord, 
 		CaptureMode: captureMode,
 	})
 	if err != nil {
-		failedTask, failureBubble := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, err)
+		failedTask, failureBubble := s.failExecutionTask(task, protocolIntentMap("screen_analyze", nil), execution.Result{}, err)
 		return failedTask, failureBubble, nil, nil
 	}
 	candidate, err := captureScreenCandidateAfterApproval(screenClient, screenSession.ScreenSessionID, task, pendingExecution, captureMode)
 	if err != nil {
 		expireAndCleanupScreenSession(screenClient, screenSession.ScreenSessionID, "capture_failed")
-		failedTask, failureBubble := s.failExecutionTask(task, map[string]any{"name": "screen_analyze"}, execution.Result{}, err)
+		failedTask, failureBubble := s.failExecutionTask(task, protocolIntentMap("screen_analyze", nil), execution.Result{}, err)
 		return failedTask, failureBubble, nil, nil
 	}
-	execIntent := map[string]any{
-		"name": "screen_analyze_candidate",
-		"arguments": map[string]any{
-			"task_id":           task.TaskID,
-			"run_id":            task.RunID,
-			"screen_session_id": screenSession.ScreenSessionID,
-			"frame_id":          candidate.FrameID,
-			"path":              candidate.Path,
-			"capture_mode":      string(candidate.CaptureMode),
-			"source":            candidate.Source,
-			"captured_at":       candidate.CapturedAt.UTC().Format(time.RFC3339),
-			"retention_policy":  string(candidate.RetentionPolicy),
-			"language":          stringValue(pendingExecution, "language", "eng"),
-			"evidence_role":     stringValue(pendingExecution, "evidence_role", "error_evidence"),
-			"target_object":     stringValue(pendingExecution, "target_object", "current_screen"),
-		},
-	}
+	execIntent := protocolIntentMap("screen_analyze_candidate", screenAnalyzeCandidateIntentArguments{
+		TaskID:          task.TaskID,
+		RunID:           task.RunID,
+		ScreenSessionID: screenSession.ScreenSessionID,
+		FrameID:         candidate.FrameID,
+		Path:            candidate.Path,
+		CaptureMode:     string(candidate.CaptureMode),
+		Source:          candidate.Source,
+		CapturedAt:      candidate.CapturedAt.UTC().Format(time.RFC3339),
+		RetentionPolicy: string(candidate.RetentionPolicy),
+		Language:        stringValue(pendingExecution, "language", "eng"),
+		EvidenceRole:    stringValue(pendingExecution, "evidence_role", "error_evidence"),
+		TargetObject:    stringValue(pendingExecution, "target_object", "current_screen"),
+	})
 	updatedTask, bubble, deliveryResult, _, err := s.executeTask(task, snapshotFromTask(task), execIntent)
 	if err != nil {
 		expireAndCleanupScreenSession(screenClient, screenSession.ScreenSessionID, "analysis_failed")
@@ -333,6 +349,14 @@ func (s *Service) executeScreenAnalysisAfterApproval(task runengine.TaskRecord, 
 		expireAndCleanupScreenSession(screenClient, screenSession.ScreenSessionID, "analysis_failed")
 	}
 	return updatedTask, bubble, deliveryResult, nil
+}
+
+func protocolIntentMap(name string, arguments any) map[string]any {
+	intent := screenIntentDTO{Name: name}
+	if arguments != nil {
+		intent.Arguments = protocolMapFromDTO(arguments)
+	}
+	return protocolMapFromDTO(intent)
 }
 
 // captureScreenCandidateAfterApproval keeps the controlled screen entry on one
