@@ -208,6 +208,18 @@ export function getShellBallInputInteractionState(input: {
     };
   }
 
+  if (
+    input.visualState === "idle" &&
+    input.regionActive === false &&
+    input.inputFocused === false &&
+    input.inputHovered === false &&
+    input.hasDraft === false
+  ) {
+    return {
+      clickThrough: true,
+    };
+  }
+
   return {
     clickThrough: false,
   };
