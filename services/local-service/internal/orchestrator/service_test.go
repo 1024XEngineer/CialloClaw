@@ -3430,6 +3430,59 @@ func TestServiceTaskControlResumeHumanLoopReplanReturnsToIntentConfirmation(t *t
 	}
 }
 
+func TestServiceTaskControlResumeHumanLoopReplanDoesNotGenerateTitleBeforeReconfirmation(t *testing.T) {
+	modelClient := &blockingModelClient{
+		started:  make(chan string, 1),
+		released: make(chan struct{}, 1),
+	}
+	service, _ := newTestServiceWithModelClient(t, modelClient)
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_hitl_replan_title_boundary",
+		Title:       "Please summarize this after review",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+		Snapshot: taskcontext.TaskContextSnapshot{
+			Text:      "Please summarize this after review",
+			InputType: "text",
+			Trigger:   "hover_text_input",
+		},
+	})
+	if _, ok := service.runEngine.EscalateHumanLoop(task.TaskID, map[string]any{
+		"reason":           "doom_loop",
+		"status":           "pending",
+		"suggested_action": "review_and_replan",
+	}, map[string]any{"task_id": task.TaskID, "type": "status", "text": "需要人工介入"}); !ok {
+		t.Fatal("expected human escalation to succeed")
+	}
+
+	result, err := service.TaskControl(map[string]any{
+		"task_id": task.TaskID,
+		"action":  "resume",
+		"arguments": map[string]any{
+			"review": map[string]any{
+				"decision":         "replan",
+				"corrected_intent": map[string]any{"name": "translate", "arguments": map[string]any{"target_language": "en"}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("resume with replan failed: %v", err)
+	}
+	if result["task"].(map[string]any)["status"] != "confirming_intent" {
+		t.Fatalf("expected replan decision to return task to confirming_intent, got %+v", result["task"])
+	}
+
+	select {
+	case taskID := <-modelClient.started:
+		t.Fatalf("expected replanned confirming_intent task to avoid title generation, got %s", taskID)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
 func TestServiceTaskControlResumeHumanLoopReplanClearsAuthorizationBeforeReconfirm(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Recovered after review.")
 	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
@@ -15993,6 +16046,52 @@ func TestServiceSubmitInputPlainTextKeepsConfirmingTaskBehindConfirmation(t *tes
 	}
 	if len(modelTaskIDs) > 0 {
 		t.Fatalf("expected plain text follow-up to keep confirmation gate without model execution, got model calls %v", modelTaskIDs)
+	}
+}
+
+func TestServiceSubmitInputConfirmingTaskDoesNotGenerateTitleBeforeConfirmation(t *testing.T) {
+	modelClient := &blockingModelClient{
+		started:  make(chan string, 1),
+		released: make(chan struct{}, 1),
+	}
+	service, _ := newTestServiceWithModelClient(t, modelClient)
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_confirming_title_follow_up",
+		Title:       "Confirm build analysis",
+		SourceType:  "hover_input",
+		Status:      "confirming_intent",
+		CurrentStep: "intent_confirmation",
+		RiskLevel:   "green",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		Snapshot: taskcontext.TaskContextSnapshot{
+			InputType: "text",
+			Text:      "Analyze the build failure.",
+			Trigger:   "hover_text_input",
+		},
+	})
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": activeTask.SessionID,
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "Use the latest customer impact numbers.",
+			"input_mode": "text",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit plain text follow-up for confirming task failed: %v", err)
+	}
+	if result["task"].(map[string]any)["status"] != "confirming_intent" {
+		t.Fatalf("expected follow-up task to stay in confirming_intent, got %+v", result["task"])
+	}
+
+	select {
+	case taskID := <-modelClient.started:
+		t.Fatalf("expected confirming_intent follow-up to avoid title generation, got %s", taskID)
+	case <-time.After(200 * time.Millisecond):
 	}
 }
 func TestServiceStartTaskPlainTextImplicitPendingTaskStartsNewWithoutExplicitConfirmation(t *testing.T) {

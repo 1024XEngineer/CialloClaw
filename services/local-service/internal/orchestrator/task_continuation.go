@@ -743,7 +743,6 @@ func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot taskco
 	if !changed {
 		return nil, ErrTaskNotFound
 	}
-	s.scheduleTaskTitleRefresh(updatedTask.TaskID, snapshotFromTask(updatedTask), suggestion.Intent, updatedTask.Title)
 	if suggestion.RequiresConfirm {
 		return map[string]any{
 			"task":            taskMap(updatedTask),
@@ -751,6 +750,7 @@ func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot taskco
 			"delivery_result": nil,
 		}, nil
 	}
+	s.scheduleTaskTitleRefresh(updatedTask.TaskID, snapshotFromTask(updatedTask), suggestion.Intent, updatedTask.Title)
 
 	governedTask, governedResponse, handled, governanceErr := s.handleTaskGovernanceDecision(updatedTask, suggestion.Intent)
 	if governanceErr != nil {

@@ -164,10 +164,10 @@ func TestHandleStreamConnSkipsBufferedLiveRuntimeReplay(t *testing.T) {
 	}
 }
 
-func TestStreamConnNotificationTrackerSkipsBufferedTaskUpdatedByTaskID(t *testing.T) {
+func TestStreamConnNotificationTrackerSkipsBufferedIdenticalTaskUpdate(t *testing.T) {
 	tracker := newStreamConnNotificationTracker()
 
-	key := tracker.reserve("task.updated", "", map[string]any{
+	key := tracker.reserve("task.updated", "task_001", map[string]any{
 		"task_id":    "task_001",
 		"session_id": "sess_001",
 		"status":     "processing",
@@ -178,23 +178,40 @@ func TestStreamConnNotificationTrackerSkipsBufferedTaskUpdatedByTaskID(t *testin
 	if !tracker.shouldSkipBuffered("task.updated", "task_001", map[string]any{
 		"task_id":    "task_001",
 		"session_id": "sess_001",
-		"status":     "completed",
+		"status":     "processing",
 	}) {
-		t.Fatal("expected one live task.updated to suppress one buffered task.updated for the same task")
+		t.Fatal("expected one live task.updated to suppress the identical buffered task.updated")
 	}
+	if tracker.shouldSkipBuffered("task.updated", "task_001", map[string]any{
+		"task_id":    "task_001",
+		"session_id": "sess_001",
+		"status":     "processing",
+	}) {
+		t.Fatal("expected reservation to be consumed after one buffered replay skip")
+	}
+}
+
+func TestStreamConnNotificationTrackerDoesNotSkipDifferentTaskUpdatePayloads(t *testing.T) {
+	tracker := newStreamConnNotificationTracker()
+
+	tracker.reserve("task.updated", "task_001", map[string]any{
+		"task_id":    "task_001",
+		"session_id": "sess_001",
+		"status":     "processing",
+	})
 	if tracker.shouldSkipBuffered("task.updated", "task_001", map[string]any{
 		"task_id":    "task_001",
 		"session_id": "sess_001",
 		"status":     "completed",
 	}) {
-		t.Fatal("expected reservation to be consumed after one buffered replay skip")
+		t.Fatal("expected different task.updated payloads to replay instead of being swallowed")
 	}
 }
 
 func TestStreamConnNotificationTrackerDoesNotSkipDifferentTaskUpdates(t *testing.T) {
 	tracker := newStreamConnNotificationTracker()
 
-	tracker.reserve("task.updated", "", map[string]any{
+	tracker.reserve("task.updated", "task_001", map[string]any{
 		"task_id":    "task_001",
 		"session_id": "sess_001",
 		"status":     "processing",

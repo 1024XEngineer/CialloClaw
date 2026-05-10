@@ -187,9 +187,6 @@ func (t *streamConnNotificationTracker) shouldSkipBuffered(method, taskID string
 }
 
 func streamConnNotificationKey(method, taskID string, params map[string]any) string {
-	if method == "task.updated" {
-		return method + ":" + runtimeNotificationTaskID(taskID, params)
-	}
 	return notificationKey(method, taskID, params)
 }
 

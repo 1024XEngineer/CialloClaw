@@ -701,7 +701,6 @@ func (s *Service) resumeHumanLoopTask(task runengine.TaskRecord, reviewDecision 
 		if !ok {
 			return runengine.TaskRecord{}, nil, nil, false, ErrTaskNotFound
 		}
-		s.scheduleTaskTitleRefresh(replannedTask.TaskID, snapshotFromTask(replannedTask), intentValue, replannedTask.Title)
 		return replannedTask, replanBubble, nil, true, nil
 	}
 	resultBubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleReviewContinue, nil), task.UpdatedAt.Format(dateTimeLayout))
