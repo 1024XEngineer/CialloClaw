@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/languagepolicy"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
@@ -35,7 +36,7 @@ func (s *Service) routeUnanchoredSubmitInput(ctx context.Context, snapshot taskc
 	if err != nil {
 		return inputRouteDecision{}, false
 	}
-	decision, ok := parseInputRouteDecision(response.OutputText)
+	decision, ok := parseInputRouteDecision(response.OutputText, snapshot.Text)
 	if !ok {
 		return inputRouteDecision{}, false
 	}
@@ -95,7 +96,7 @@ func passiveInputRouteContext(snapshot taskcontext.TaskContextSnapshot) string {
 	return strings.Join(parts, "\n")
 }
 
-func parseInputRouteDecision(raw string) (inputRouteDecision, bool) {
+func parseInputRouteDecision(raw string, inputText string) (inputRouteDecision, bool) {
 	payload := extractJSONObject(raw)
 	if payload == "" {
 		return inputRouteDecision{}, false
@@ -114,7 +115,7 @@ func parseInputRouteDecision(raw string) (inputRouteDecision, bool) {
 	switch decision.Route {
 	case inputRouteSocialChat:
 		if decision.Reply == "" {
-			decision.Reply = "我在。"
+			decision.Reply = socialChatFallbackReply(inputText)
 		}
 		return decision, true
 	case inputRouteClarificationNeeded, inputRouteTaskRequest:
@@ -122,6 +123,13 @@ func parseInputRouteDecision(raw string) (inputRouteDecision, bool) {
 	default:
 		return inputRouteDecision{}, false
 	}
+}
+
+func socialChatFallbackReply(inputText string) string {
+	if languagepolicy.PreferredReplyLanguage(inputText) == languagepolicy.ReplyLanguageEnglish {
+		return "I'm here."
+	}
+	return "我在。"
 }
 
 func extractJSONObject(raw string) string {

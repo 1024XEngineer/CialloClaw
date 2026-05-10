@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/languagepolicy"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
@@ -660,7 +661,33 @@ func isAgentLoopIntent(taskIntent map[string]any) bool {
 
 func buildPlannerInput(inputText string, history []string, toolDefinitions []model.ToolDefinition, compressChars, keepRecent int) (string, []string) {
 	compressedHistory := compactHistory(history, compressChars, keepRecent)
-	sections := []string{
+	english := languagepolicy.PreferredReplyLanguage(inputText) == languagepolicy.ReplyLanguageEnglish
+	sections := plannerInstructionSections(english)
+	if capabilityLines := buildToolCapabilityLines(toolDefinitions); len(capabilityLines) > 0 {
+		sections = append(sections, "", plannerCapabilityHeading(english))
+		sections = append(sections, capabilityLines...)
+	}
+	sections = append(sections, "", plannerContextHeading(english), strings.TrimSpace(inputText))
+	if len(compressedHistory) > 0 {
+		sections = append(sections, "", plannerHistoryHeading(english))
+		sections = append(sections, compressedHistory...)
+	}
+	return strings.Join(sections, "\n"), compressedHistory
+}
+
+func plannerInstructionSections(english bool) []string {
+	if english {
+		return []string{
+			"You are the planning round for a desktop agent.",
+			"Use English for this request unless the user explicitly asks for another language.",
+			"First decide whether you can answer directly; call tools only when they will clearly improve the result.",
+			"If an available tool can help finish the task, prefer using the tool instead of claiming you cannot do it.",
+			"Lead with the conclusion, stay concise, and avoid filler.",
+			"Do not invent file contents, directory entries, or webpage contents.",
+			"If the task is already clear and does not need tools, give the final answer directly.",
+		}
+	}
+	return []string{
 		"你是桌面 Agent 的规划轮次。",
 		"默认使用中文回答；只有在用户明确要求其他语言时才切换。",
 		"先判断能否直接回答；只有在工具能明显提升结果时才调用工具。",
@@ -669,16 +696,27 @@ func buildPlannerInput(inputText string, history []string, toolDefinitions []mod
 		"不要编造文件内容、目录项或网页内容。",
 		"如果任务已经足够清晰且不需要工具，直接给最终答复。",
 	}
-	if capabilityLines := buildToolCapabilityLines(toolDefinitions); len(capabilityLines) > 0 {
-		sections = append(sections, "", "当前可用能力：")
-		sections = append(sections, capabilityLines...)
+}
+
+func plannerCapabilityHeading(english bool) string {
+	if english {
+		return "Available tools:"
 	}
-	sections = append(sections, "", "用户上下文：", strings.TrimSpace(inputText))
-	if len(compressedHistory) > 0 {
-		sections = append(sections, "", "已观察到的工具结果：")
-		sections = append(sections, compressedHistory...)
+	return "当前可用能力："
+}
+
+func plannerContextHeading(english bool) string {
+	if english {
+		return "User context:"
 	}
-	return strings.Join(sections, "\n"), compressedHistory
+	return "用户上下文："
+}
+
+func plannerHistoryHeading(english bool) string {
+	if english {
+		return "Observed tool results:"
+	}
+	return "已观察到的工具结果："
 }
 
 func filterAllowedToolDefinitions(toolDefinitions []model.ToolDefinition, allowedTool func(string) bool) []model.ToolDefinition {

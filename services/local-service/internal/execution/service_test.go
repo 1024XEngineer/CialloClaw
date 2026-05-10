@@ -3293,6 +3293,25 @@ func TestFallbackOutputRequestsClarificationForAgentLoopWhenGoalIsUnderspecified
 	}
 }
 
+func TestBuildPromptUsesEnglishPolicyForEnglishOnlyInput(t *testing.T) {
+	prompt := buildPrompt(Request{Intent: map[string]any{"name": "summarize"}}, "hello world")
+
+	if !strings.Contains(prompt, "return a clear English summary") {
+		t.Fatalf("expected english-only summarize prompt to stay in english, got %s", prompt)
+	}
+	if strings.Contains(prompt, "输入内容:") {
+		t.Fatalf("expected english-only summarize prompt to avoid chinese envelope, got %s", prompt)
+	}
+}
+
+func TestFallbackOutputUsesEnglishClarificationForEnglishOnlyInput(t *testing.T) {
+	output := fallbackOutput(Request{Intent: map[string]any{"name": defaultAgentLoopIntentName}}, "hello there")
+
+	if !strings.Contains(output, "Please clarify your goal") {
+		t.Fatalf("expected english-only fallback clarification, got %s", output)
+	}
+}
+
 func TestAssessGovernanceRequiresAuthorizationForRestoreWrite(t *testing.T) {
 	service, workspaceRoot := newTestExecutionService(t, "unused")
 
@@ -4288,10 +4307,10 @@ func TestExecutionHelperBranchesAndConfigurationAccessors(t *testing.T) {
 	if !containsExecutionString([]string{"a", "b"}, "b") || containsExecutionString([]string{"a"}, "c") {
 		t.Fatal("expected containsExecutionString to match only exact values")
 	}
-	if !strings.Contains(buildPrompt(request, "hello"), "翻译成English") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "rewrite"}}, "hello"), "改写") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "explain"}}, "hello"), "解释") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "write_file"}}, "hello"), "保存为文档") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "summarize"}}, "hello"), "摘要") {
+	if !strings.Contains(buildPrompt(request, "你好"), "翻译成English") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "rewrite"}}, "你好"), "改写") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "explain"}}, "你好"), "解释") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "write_file"}}, "你好"), "保存为文档") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "summarize"}}, "你好"), "摘要") {
 		t.Fatal("expected buildPrompt to cover major intent variants")
 	}
-	if !strings.Contains(fallbackOutput(request, "hello world"), presentation.Text(presentation.MessageFallbackTranslate, map[string]string{"target_language": "English"})) ||
+	if !strings.Contains(fallbackOutput(request, "你好世界"), presentation.Text(presentation.MessageFallbackTranslate, map[string]string{"target_language": "English"})) ||
 		workspaceDocumentContent("", "plain text") == "plain text" ||
 		previewTextForOutput("", "bubble") != presentation.Text(presentation.MessagePreviewGenerated, nil) ||
 		previewTextForDeliveryType("workspace_document") != presentation.Text(presentation.MessagePreviewWorkspaceDoc, nil) ||

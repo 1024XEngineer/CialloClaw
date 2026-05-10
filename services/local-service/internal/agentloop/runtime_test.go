@@ -204,7 +204,7 @@ func TestRunCompactsHistoryBeforeLaterPlannerRounds(t *testing.T) {
 
 func TestBuildPlannerInputIncludesToolCatalogAndConcisePolicy(t *testing.T) {
 	plannerInput, compactedHistory := buildPlannerInput(
-		"Inspect workspace notes and answer.",
+		"请检查工作区笔记并回答。",
 		nil,
 		[]model.ToolDefinition{
 			{
@@ -243,6 +243,17 @@ func TestBuildPlannerInputIncludesToolCatalogAndConcisePolicy(t *testing.T) {
 	}
 	if !strings.Contains(plannerInput, "- page_search: Search for text on a page. 必填参数：url, query") {
 		t.Fatalf("expected planner input to include page_search capability, got %q", plannerInput)
+	}
+}
+
+func TestBuildPlannerInputUsesEnglishPolicyForEnglishOnlyInput(t *testing.T) {
+	plannerInput, _ := buildPlannerInput("Inspect workspace notes and answer.", nil, nil, 0, 0)
+
+	if !strings.Contains(plannerInput, "Use English for this request unless the user explicitly asks for another language.") {
+		t.Fatalf("expected english-only input to switch planner language contract, got %q", plannerInput)
+	}
+	if strings.Contains(plannerInput, "用户上下文：") || strings.Contains(plannerInput, "当前可用能力：") {
+		t.Fatalf("expected english-only planner input to avoid chinese headings, got %q", plannerInput)
 	}
 }
 
