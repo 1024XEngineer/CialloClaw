@@ -18,7 +18,7 @@ func (s *Service) StartTask(request StartTaskRequest) (TaskEntryResponse, error)
 	if err != nil {
 		return TaskEntryResponse{}, err
 	}
-	return newTaskEntryResponse(response), nil
+	return newTaskEntryResponse(response)
 }
 
 func (s *Service) startTask(params map[string]any) (map[string]any, error) {

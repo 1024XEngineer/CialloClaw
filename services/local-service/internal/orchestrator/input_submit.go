@@ -16,7 +16,7 @@ func (s *Service) SubmitInput(request SubmitInputRequest) (TaskEntryResponse, er
 	if err != nil {
 		return TaskEntryResponse{}, err
 	}
-	return newTaskEntryResponse(response), nil
+	return newTaskEntryResponse(response)
 }
 
 func (s *Service) submitInput(params map[string]any) (map[string]any, error) {

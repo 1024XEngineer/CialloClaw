@@ -138,7 +138,7 @@ func (s *Service) buildScreenAnalysisApprovalState(task runengine.TaskRecord) (s
 		},
 	}
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleScreenApproval, nil), task.UpdatedAt.Format(dateTimeLayout))
-	return newScreenAnalysisApprovalState(approvalRequest, pendingExecution, bubble), nil
+	return newScreenAnalysisApprovalState(approvalRequest, pendingExecution, bubble)
 }
 
 func (s *Service) resolveScreenAnalyzeIntent(snapshot taskcontext.TaskContextSnapshot, current map[string]any) map[string]any {

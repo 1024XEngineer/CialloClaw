@@ -43,7 +43,7 @@ func (s *Service) TaskDetailGet(request TaskDetailGetRequest) (TaskDetailGetResp
 	if err != nil {
 		return TaskDetailGetResponse{}, err
 	}
-	return newTaskDetailGetResponse(response), nil
+	return newTaskDetailGetResponse(response)
 }
 
 func (s *Service) taskDetailGet(params map[string]any) (map[string]any, error) {

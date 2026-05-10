@@ -31,16 +31,20 @@ type screenAnalysisImpactScope struct {
 	OverwriteOrDeleteRisk bool     `json:"overwrite_or_delete_risk"`
 }
 
-func newScreenAnalysisApprovalState(approvalRequest map[string]any, pendingExecution screenAnalysisPendingExecution, bubble map[string]any) screenAnalysisApprovalState {
-	var approval ApprovalRequestDTO
-	decodeProtocolMap(approvalRequest, &approval)
-	var bubbleMessage BubbleMessageDTO
-	decodeProtocolMap(bubble, &bubbleMessage)
+func newScreenAnalysisApprovalState(approvalRequest map[string]any, pendingExecution screenAnalysisPendingExecution, bubble map[string]any) (screenAnalysisApprovalState, error) {
+	approval, err := approvalRequestDTOFromMap(approvalRequest)
+	if err != nil {
+		return screenAnalysisApprovalState{}, err
+	}
+	bubbleMessage, err := bubbleMessageDTOFromMap(bubble)
+	if err != nil {
+		return screenAnalysisApprovalState{}, err
+	}
 	return screenAnalysisApprovalState{
 		ApprovalRequest:  approval,
 		PendingExecution: pendingExecution,
 		BubbleMessage:    bubbleMessage,
-	}
+	}, nil
 }
 
 func (state screenAnalysisApprovalState) approvalRequestMap() map[string]any {

@@ -51,7 +51,7 @@ func TestStartTaskRequestFromParamsNormalizesUnknownFields(t *testing.T) {
 }
 
 func TestTaskEntryResponseMapNormalizesUnknownFields(t *testing.T) {
-	response := newTaskEntryResponse(map[string]any{
+	response, err := newTaskEntryResponse(map[string]any{
 		"task": map[string]any{
 			"task_id":      "task_123",
 			"session_id":   "sess_123",
@@ -79,6 +79,9 @@ func TestTaskEntryResponseMapNormalizesUnknownFields(t *testing.T) {
 		"delivery_result": nil,
 		"unknown":         "drop-me",
 	})
+	if err != nil {
+		t.Fatalf("build task entry response failed: %v", err)
+	}
 
 	mapped := response.Map()
 	if _, ok := mapped["unknown"]; ok {
@@ -98,7 +101,7 @@ func TestTaskEntryResponseMapNormalizesUnknownFields(t *testing.T) {
 }
 
 func TestTaskDetailGetResponseMapNormalizesUnknownFields(t *testing.T) {
-	response := newTaskDetailGetResponse(map[string]any{
+	response, err := newTaskDetailGetResponse(map[string]any{
 		"task": map[string]any{
 			"task_id":      "task_detail_123",
 			"session_id":   "sess_123",
@@ -136,6 +139,9 @@ func TestTaskDetailGetResponseMapNormalizesUnknownFields(t *testing.T) {
 		"runtime_summary":      map[string]any{"loop_stop_reason": nil, "events_count": 0, "latest_event_type": nil, "active_steering_count": 0, "latest_failure_code": nil, "latest_failure_category": nil, "latest_failure_summary": nil, "observation_signals": []string{}, "unknown": "drop-me"},
 		"unknown":              "drop-me",
 	})
+	if err != nil {
+		t.Fatalf("build task detail response failed: %v", err)
+	}
 
 	mapped := response.Map()
 	if _, ok := mapped["unknown"]; ok {
@@ -160,7 +166,7 @@ func TestTaskDetailGetResponseMapNormalizesUnknownFields(t *testing.T) {
 }
 
 func TestTaskDetailGetResponseMapDropsAuthorizationRecordRunID(t *testing.T) {
-	response := newTaskDetailGetResponse(map[string]any{
+	response, err := newTaskDetailGetResponse(map[string]any{
 		"task": map[string]any{
 			"task_id":      "task_detail_auth",
 			"session_id":   "sess_auth",
@@ -192,6 +198,9 @@ func TestTaskDetailGetResponseMapDropsAuthorizationRecordRunID(t *testing.T) {
 		"security_summary": map[string]any{"pending_authorizations": 0, "latest_restore_point": nil},
 		"runtime_summary":  map[string]any{"events_count": 0, "active_steering_count": 0, "observation_signals": []string{}},
 	})
+	if err != nil {
+		t.Fatalf("build task detail response failed: %v", err)
+	}
 
 	mapped := response.Map()
 	authorizationRecord := mapValue(mapped, "authorization_record")
@@ -200,5 +209,36 @@ func TestTaskDetailGetResponseMapDropsAuthorizationRecordRunID(t *testing.T) {
 	}
 	if stringValue(authorizationRecord, "authorization_record_id", "") != "auth_001" {
 		t.Fatalf("expected typed detail normalization to preserve declared authorization fields, got %+v", authorizationRecord)
+	}
+}
+
+func TestTaskEntryResponseIgnoresUnknownNonJSONFields(t *testing.T) {
+	response, err := newTaskEntryResponse(map[string]any{
+		"task": map[string]any{
+			"task_id":      "task_non_json_unknown",
+			"title":        "Ignore unknown function field",
+			"source_type":  "floating_ball",
+			"status":       "completed",
+			"current_step": "deliver_result",
+			"risk_level":   "green",
+			"started_at":   "2026-05-10T00:00:00Z",
+			"updated_at":   "2026-05-10T00:00:01Z",
+		},
+		"unknown": func() {},
+	})
+	if err != nil {
+		t.Fatalf("expected unknown non-json field to stay outside response dto, got %v", err)
+	}
+
+	task := mapValue(response.Map(), "task")
+	if stringValue(task, "task_id", "") != "task_non_json_unknown" {
+		t.Fatalf("expected direct response mapping to preserve declared fields, got %+v", task)
+	}
+}
+
+func TestTaskDetailGetResponseRejectsMalformedDeclaredObjects(t *testing.T) {
+	_, err := newTaskDetailGetResponse(map[string]any{"task": "not-an-object"})
+	if err == nil {
+		t.Fatal("expected malformed declared task object to fail response dto construction")
 	}
 }
