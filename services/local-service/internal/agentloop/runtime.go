@@ -663,7 +663,7 @@ func buildPlannerInput(inputText string, history []string, toolDefinitions []mod
 	compressedHistory := compactHistory(history, compressChars, keepRecent)
 	english := languagepolicy.PreferredReplyLanguage(inputText) == languagepolicy.ReplyLanguageEnglish
 	sections := plannerInstructionSections(english)
-	if capabilityLines := buildToolCapabilityLines(toolDefinitions); len(capabilityLines) > 0 {
+	if capabilityLines := buildToolCapabilityLines(toolDefinitions, english); len(capabilityLines) > 0 {
 		sections = append(sections, "", plannerCapabilityHeading(english))
 		sections = append(sections, capabilityLines...)
 	}
@@ -827,7 +827,7 @@ func shouldCarryPlannerOutputText(outputText string) bool {
 	return true
 }
 
-func buildToolCapabilityLines(toolDefinitions []model.ToolDefinition) []string {
+func buildToolCapabilityLines(toolDefinitions []model.ToolDefinition, english bool) []string {
 	lines := make([]string, 0, len(toolDefinitions))
 	for _, definition := range toolDefinitions {
 		name := strings.TrimSpace(definition.Name)
@@ -841,10 +841,15 @@ func buildToolCapabilityLines(toolDefinitions []model.ToolDefinition) []string {
 		}
 		if requiredFields := toolRequiredFields(definition.InputSchema); len(requiredFields) > 0 {
 			separator := "。"
+			requiredLabel := "必填参数："
+			if english {
+				separator = ". "
+				requiredLabel = "Required params: "
+			}
 			if strings.HasSuffix(line, ".") || strings.HasSuffix(line, "!") || strings.HasSuffix(line, "?") || strings.HasSuffix(line, "。") || strings.HasSuffix(line, "！") || strings.HasSuffix(line, "？") {
 				separator = " "
 			}
-			line += separator + "必填参数：" + strings.Join(requiredFields, ", ")
+			line += separator + requiredLabel + strings.Join(requiredFields, ", ")
 		}
 		lines = append(lines, line)
 	}
@@ -1335,7 +1340,28 @@ func stripCapabilityRoleLeadIn(normalized string) string {
 func appendCapabilityReminderInput(inputText string, toolDefinitions []model.ToolDefinition) string {
 	// Append the reminder to the original user input so the next planner round
 	// keeps the task context while restating the bounded tool surface.
-	sections := []string{
+	english := languagepolicy.PreferredReplyLanguage(inputText) == languagepolicy.ReplyLanguageEnglish
+	sections := capabilityReminderSections(inputText, english)
+	if capabilityLines := buildToolCapabilityLines(toolDefinitions, english); len(capabilityLines) > 0 {
+		sections = append(sections, plannerCapabilityHeading(english))
+		sections = append(sections, capabilityLines...)
+	}
+	return strings.TrimSpace(strings.Join(sections, "\n"))
+}
+
+func capabilityReminderSections(inputText string, english bool) []string {
+	if english {
+		return []string{
+			strings.TrimSpace(inputText),
+			"",
+			"Capability reminder:",
+			"- The following tool capabilities are available in this round.",
+			"- Before saying you cannot do something or cannot access something, check whether these tools apply.",
+			"- If a tool can help finish the task, call it. Otherwise answer concisely in the user's language; default to Chinese only when the user did not specify another language.",
+		}
+	}
+
+	return []string{
 		strings.TrimSpace(inputText),
 		"",
 		"能力提醒：",
@@ -1343,11 +1369,6 @@ func appendCapabilityReminderInput(inputText string, toolDefinitions []model.Too
 		"- 在回答“做不到”或“无法访问”之前，先判断这些工具是否适用。",
 		"- 如果工具能帮助完成任务，就调用工具；否则按用户要求的语言给出简洁答复；若用户未指定语言，默认中文。",
 	}
-	if capabilityLines := buildToolCapabilityLines(toolDefinitions); len(capabilityLines) > 0 {
-		sections = append(sections, "当前可用能力：")
-		sections = append(sections, capabilityLines...)
-	}
-	return strings.TrimSpace(strings.Join(sections, "\n"))
 }
 
 func appendSteeringInput(inputText string, steeringMessages []string) string {
