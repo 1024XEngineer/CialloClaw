@@ -93,6 +93,7 @@ func TestStableMethodRegistryDispatchMatrix(t *testing.T) {
 		methodAgentTaskConfirm:            decodeParamsRequiringRequestMeta,
 		methodAgentTaskControl:            decodeParamsRequiringRequestMeta,
 		methodAgentTaskDetailGet:          decodeAgentTaskDetailGetParams,
+		methodAgentTaskList:               decodeAgentTaskListParams,
 		methodAgentTaskInspectorConfigGet: decodeParamsRequiringRequestMeta,
 		methodAgentTaskInspectorRun:       decodeParamsRequiringRequestMeta,
 		methodAgentDeliveryOpen:           decodeParamsRequiringRequestMeta,
@@ -319,6 +320,61 @@ func TestDecodeParamsRequiringRequestMetaMatchesStableContract(t *testing.T) {
 	}
 }
 
+func TestAgentTaskListDTORejectsMissingStableFields(t *testing.T) {
+	_, rpcErr := decodeAgentTaskListParams(mustMarshal(t, map[string]any{
+		"request_meta": map[string]any{
+			"trace_id":    "trace_task_list_missing_fields",
+			"client_time": "2026-05-10T00:00:00Z",
+		},
+	}))
+	if rpcErr == nil {
+		t.Fatal("expected missing task-list fields to return invalid params")
+	}
+	if rpcErr.Code != errInvalidParams || rpcErr.Message != "INVALID_PARAMS" {
+		t.Fatalf("expected invalid params error, got %+v", rpcErr)
+	}
+}
+
+func TestAgentTaskListDTORejectsOutOfDomainEnums(t *testing.T) {
+	_, rpcErr := decodeAgentTaskListParams(mustMarshal(t, map[string]any{
+		"request_meta": map[string]any{
+			"trace_id":    "trace_task_list_invalid_enum",
+			"client_time": "2026-05-10T00:00:00Z",
+		},
+		"group":      "all",
+		"limit":      20,
+		"offset":     0,
+		"sort_by":    "created_at",
+		"sort_order": "descending",
+	}))
+	if rpcErr == nil {
+		t.Fatal("expected invalid task-list enums to return invalid params")
+	}
+	if rpcErr.Code != errInvalidParams || rpcErr.Message != "INVALID_PARAMS" {
+		t.Fatalf("expected invalid params error, got %+v", rpcErr)
+	}
+}
+
+func TestAgentTaskListDTOAcceptsStableShape(t *testing.T) {
+	params, rpcErr := decodeAgentTaskListParams(mustMarshal(t, map[string]any{
+		"request_meta": map[string]any{
+			"trace_id":    "trace_task_list_valid",
+			"client_time": "2026-05-10T00:00:00Z",
+		},
+		"group":      "unfinished",
+		"limit":      20,
+		"offset":     0,
+		"sort_by":    "updated_at",
+		"sort_order": "desc",
+	}))
+	if rpcErr != nil {
+		t.Fatalf("expected valid task-list params to pass, got %+v", rpcErr)
+	}
+	if stringValue(params, "group", "") != "unfinished" || intValue(params, "limit", -1) != 20 || intValue(params, "offset", -1) != 0 {
+		t.Fatalf("expected task-list params to survive decoding, got %+v", params)
+	}
+}
+
 func TestAgentTaskStartDTORejectsOutOfDomainPageContextBrowserWithoutContext(t *testing.T) {
 	_, rpcErr := decodeAgentTaskStartParams(mustMarshal(t, map[string]any{
 		"request_meta": map[string]any{
@@ -525,6 +581,73 @@ func TestAgentTaskStartDTOAcceptsContextBackedTypeSpecificPayload(t *testing.T) 
 		t.Run(testCase.name, func(t *testing.T) {
 			if _, rpcErr := decodeAgentTaskStartParams(mustMarshal(t, testCase.params)); rpcErr != nil {
 				t.Fatalf("expected context-backed payload to pass dto validation, got %+v", rpcErr)
+			}
+		})
+	}
+}
+
+func TestAgentTaskStartDTORejectsLegacyAliasesOutsideStableContract(t *testing.T) {
+	testCases := []struct {
+		name   string
+		params map[string]any
+	}{
+		{
+			name: "input.selection_text",
+			params: map[string]any{
+				"request_meta": map[string]any{
+					"trace_id":    "trace_task_start_legacy_selection_text",
+					"client_time": "2026-05-10T00:00:00Z",
+				},
+				"source":  "floating_ball",
+				"trigger": "text_selected_click",
+				"input": map[string]any{
+					"type":           "text_selection",
+					"selection_text": "selected content",
+				},
+			},
+		},
+		{
+			name: "input.file_paths",
+			params: map[string]any{
+				"request_meta": map[string]any{
+					"trace_id":    "trace_task_start_legacy_file_paths",
+					"client_time": "2026-05-10T00:00:00Z",
+				},
+				"source":  "floating_ball",
+				"trigger": "file_drop",
+				"input": map[string]any{
+					"type":       "file",
+					"file_paths": []any{"workspace/report.md"},
+				},
+			},
+		},
+		{
+			name: "context.error_text",
+			params: map[string]any{
+				"request_meta": map[string]any{
+					"trace_id":    "trace_task_start_legacy_error_text",
+					"client_time": "2026-05-10T00:00:00Z",
+				},
+				"source":  "floating_ball",
+				"trigger": "error_detected",
+				"input": map[string]any{
+					"type": "error",
+				},
+				"context": map[string]any{
+					"error_text": "build failed",
+				},
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, rpcErr := decodeAgentTaskStartParams(mustMarshal(t, testCase.params))
+			if rpcErr == nil {
+				t.Fatal("expected legacy-only alias payload to return invalid params")
+			}
+			if rpcErr.Code != errInvalidParams || rpcErr.Message != "INVALID_PARAMS" {
+				t.Fatalf("expected invalid params error, got %+v", rpcErr)
 			}
 		})
 	}

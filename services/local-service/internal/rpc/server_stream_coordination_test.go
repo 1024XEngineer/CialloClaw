@@ -384,6 +384,9 @@ func TestHandleStreamConnTaskListDoesNotStealBufferedNotifications(t *testing.T)
 		Method:  "agent.task.list",
 		Params: mustMarshal(t, map[string]any{
 			"request_meta": rpcRequestMeta("trace_task_list_owned"),
+			"group":        "unfinished",
+			"limit":        20,
+			"offset":       0,
 		}),
 	}); err != nil {
 		t.Fatalf("encode task.list request: %v", err)
