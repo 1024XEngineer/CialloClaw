@@ -4790,11 +4790,11 @@ test("shell-ball input focus helper keeps the caret at the end of the draft", ()
   assert.deepEqual(calls, ["focus", "range:10:10"]);
 });
 
-test("shell-ball bubble roles keep asymmetric straight bottom corners", () => {
+test("shell-ball bubble roles keep asymmetric softened bottom corners", () => {
   const shellBallStyles = readFileSync(resolve(desktopRoot, "src/features/shell-ball/shellBall.css"), "utf8");
 
-  assert.match(shellBallStyles, /\.shell-ball-bubble-message--agent \{[\s\S]*border-bottom-left-radius:\s*0;/);
-  assert.match(shellBallStyles, /\.shell-ball-bubble-message--user \{[\s\S]*border-bottom-right-radius:\s*0;/);
+  assert.match(shellBallStyles, /\.shell-ball-bubble-message--agent \{[\s\S]*border-bottom-left-radius:\s*0\.3rem;/);
+  assert.match(shellBallStyles, /\.shell-ball-bubble-message--user \{[\s\S]*border-bottom-right-radius:\s*0\.3rem;/);
 });
 
 test("shell-ball app drops page-shell copy while preserving the floating shell surface", () => {
@@ -8902,25 +8902,25 @@ test("shell-ball app routes real selection snapshots into the formal selected-te
   );
 });
 
-test("shell-ball resize drag keeps pointer capture and releases resize state on cleanup", () => {
+test("shell-ball input bar no longer relies on resize drag pointer capture", () => {
   const inputBarSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallInputBar.tsx"), "utf8");
 
-  assert.match(inputBarSource, /onResizeStateChange\(true\);/);
-  assert.match(inputBarSource, /handle\.setPointerCapture\(pointerId\);/);
-  assert.match(inputBarSource, /handle\.addEventListener\("lostpointercapture", cleanup\);/);
-  assert.match(inputBarSource, /window\.addEventListener\("blur", cleanup\);/);
-  assert.match(inputBarSource, /onResizeStateChange\(false\);/);
+  assert.doesNotMatch(inputBarSource, /onResizeStateChange\(true\);/);
+  assert.doesNotMatch(inputBarSource, /handle\.setPointerCapture\(pointerId\);/);
+  assert.doesNotMatch(inputBarSource, /handle\.addEventListener\("lostpointercapture", cleanup\);/);
+  assert.doesNotMatch(inputBarSource, /window\.addEventListener\("blur", cleanup\);/);
+  assert.doesNotMatch(inputBarSource, /onResizeStateChange\(false\);/);
 });
 
 test("shell-ball input bar restores textarea focus after attach and send actions", () => {
   const inputBarSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallInputBar.tsx"), "utf8");
 
-  assert.match(inputBarSource, /function restoreTextareaFocus\(\) \{/);
+  assert.match(inputBarSource, /function restoreInputFocus\(\) \{/);
   assert.match(inputBarSource, /field\.focus\(\);/);
   assert.match(inputBarSource, /field\.setSelectionRange\(selectionIndex, selectionIndex\);/);
   assert.match(inputBarSource, /onMouseDown=\{\(event\) => \{\s*event\.preventDefault\(\);/);
-  assert.match(inputBarSource, /onAttachFile\(\);\s*restoreTextareaFocus\(\);/);
-  assert.match(inputBarSource, /onSubmit\(\);\s*restoreTextareaFocus\(\);/);
+  assert.match(inputBarSource, /onAttachFile\(\);\s*restoreInputFocus\(\);/);
+  assert.match(inputBarSource, /onSubmit\(\);\s*restoreInputFocus\(\);/);
 });
 
 test("shell-ball app dashboard-open gate stays blocked for consumed or non-resting double clicks", () => {
