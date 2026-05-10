@@ -110,8 +110,6 @@ type SubmitInputRequest struct {
 	Context     *InputContext       `json:"context,omitempty"`
 	VoiceMeta   *VoiceMeta          `json:"voice_meta,omitempty"`
 	Options     *InputSubmitOptions `json:"options,omitempty"`
-
-	raw map[string]any
 }
 
 // TaskStartInput is the formal input object for agent.task.start.
@@ -147,8 +145,6 @@ type StartTaskRequest struct {
 	Delivery    *DeliveryPreference `json:"delivery,omitempty"`
 	Options     *TaskStartOptions   `json:"options,omitempty"`
 	Intent      map[string]any      `json:"-"`
-
-	raw map[string]any
 }
 
 // TaskDetailGetRequest is the typed orchestrator boundary for
@@ -156,6 +152,4 @@ type StartTaskRequest struct {
 type TaskDetailGetRequest struct {
 	RequestMeta RequestMeta `json:"request_meta"`
 	TaskID      string      `json:"task_id"`
-
-	raw map[string]any
 }

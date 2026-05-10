@@ -1,12 +1,16 @@
 package orchestrator
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"reflect"
+	"strings"
+)
 
 // IntentPayload keeps intent arguments dynamic while making the outer protocol
 // object explicit.
 type IntentPayload struct {
-	Name      string         `json:"name,omitempty"`
-	Arguments map[string]any `json:"arguments,omitempty"`
+	Name      string         `json:"name"`
+	Arguments map[string]any `json:"arguments"`
 }
 
 // TaskDTO is the protocol-facing task object returned through stable RPCs.
@@ -164,8 +168,6 @@ type TaskEntryResponse struct {
 	Task           *TaskDTO           `json:"task"`
 	BubbleMessage  *BubbleMessageDTO  `json:"bubble_message"`
 	DeliveryResult *DeliveryResultDTO `json:"delivery_result"`
-
-	raw map[string]any
 }
 
 // TaskDetailGetResponse is the typed result for agent.task.detail.get.
@@ -181,44 +183,39 @@ type TaskDetailGetResponse struct {
 	AuditRecord         *AuditRecordDTO         `json:"audit_record"`
 	SecuritySummary     SecuritySummaryDTO      `json:"security_summary"`
 	RuntimeSummary      TaskRuntimeSummaryDTO   `json:"runtime_summary"`
-
-	raw map[string]any
 }
 
 // StartTaskRequestFromParams adapts RPC-decoded params to the typed
-// orchestrator request. The map is accepted only at the RPC adapter boundary.
+// orchestrator request. The map is accepted only at the RPC adapter boundary,
+// then normalized back through the typed DTO before orchestration continues.
 func StartTaskRequestFromParams(params map[string]any) StartTaskRequest {
 	var request StartTaskRequest
 	decodeProtocolMap(params, &request)
 	if intent := mapValue(params, "intent"); len(intent) > 0 {
 		request.Intent = cloneMap(intent)
 	}
-	request.raw = cloneMap(params)
 	return request
 }
 
 // SubmitInputRequestFromParams adapts RPC-decoded params to the typed
-// orchestrator request. The map is accepted only at the RPC adapter boundary.
+// orchestrator request. The map is accepted only at the RPC adapter boundary,
+// then normalized back through the typed DTO before orchestration continues.
 func SubmitInputRequestFromParams(params map[string]any) SubmitInputRequest {
 	var request SubmitInputRequest
 	decodeProtocolMap(params, &request)
-	request.raw = cloneMap(params)
 	return request
 }
 
 // TaskDetailGetRequestFromParams adapts RPC-decoded params to the typed
-// orchestrator request. The map is accepted only at the RPC adapter boundary.
+// orchestrator request. The map is accepted only at the RPC adapter boundary,
+// then normalized back through the typed DTO before orchestration continues.
 func TaskDetailGetRequestFromParams(params map[string]any) TaskDetailGetRequest {
 	var request TaskDetailGetRequest
 	decodeProtocolMap(params, &request)
-	request.raw = cloneMap(params)
 	return request
 }
 
 func (r StartTaskRequest) paramsMap() map[string]any {
-	if r.raw != nil {
-		return cloneMap(r.raw)
-	}
 	params := structToProtocolMap(r)
 	if len(r.Intent) > 0 {
 		params["intent"] = cloneMap(r.Intent)
@@ -227,49 +224,35 @@ func (r StartTaskRequest) paramsMap() map[string]any {
 }
 
 func (r SubmitInputRequest) paramsMap() map[string]any {
-	if r.raw != nil {
-		return cloneMap(r.raw)
-	}
 	return structToProtocolMap(r)
 }
 
 func (r TaskDetailGetRequest) paramsMap() map[string]any {
-	if r.raw != nil {
-		return cloneMap(r.raw)
-	}
 	return structToProtocolMap(r)
 }
 
 func newTaskEntryResponse(payload map[string]any) TaskEntryResponse {
 	var response TaskEntryResponse
 	decodeProtocolMap(payload, &response)
-	response.raw = cloneMap(payload)
 	return response
 }
 
 func newTaskDetailGetResponse(payload map[string]any) TaskDetailGetResponse {
 	var response TaskDetailGetResponse
 	decodeProtocolMap(payload, &response)
-	response.raw = cloneMap(payload)
 	return response
 }
 
 // Map returns the protocol payload as a map for package tests that assert
 // individual fields. Production callers should consume the typed DTO directly.
 func (r TaskEntryResponse) Map() map[string]any {
-	if r.raw != nil {
-		return cloneMap(r.raw)
-	}
-	return structToProtocolMap(r)
+	return responseDTOToProtocolMap(r)
 }
 
 // Map returns the protocol payload as a map for package tests that assert
 // individual fields. Production callers should consume the typed DTO directly.
 func (r TaskDetailGetResponse) Map() map[string]any {
-	if r.raw != nil {
-		return cloneMap(r.raw)
-	}
-	return structToProtocolMap(r)
+	return responseDTOToProtocolMap(r)
 }
 
 func decodeProtocolMap(values map[string]any, target any) {
@@ -293,4 +276,141 @@ func structToProtocolMap(value any) map[string]any {
 		return map[string]any{}
 	}
 	return result
+}
+
+func responseDTOToProtocolMap(value any) map[string]any {
+	result, ok := protocolValueFromReflect(reflect.ValueOf(value)).(map[string]any)
+	if !ok || result == nil {
+		return map[string]any{}
+	}
+	return result
+}
+
+func protocolValueFromReflect(value reflect.Value) any {
+	if !value.IsValid() {
+		return nil
+	}
+	for value.Kind() == reflect.Pointer || value.Kind() == reflect.Interface {
+		if value.IsNil() {
+			return nil
+		}
+		value = value.Elem()
+	}
+
+	switch value.Kind() {
+	case reflect.Struct:
+		result := map[string]any{}
+		valueType := value.Type()
+		for index := 0; index < value.NumField(); index++ {
+			field := valueType.Field(index)
+			if !field.IsExported() {
+				continue
+			}
+			name, omitEmpty := jsonFieldName(field)
+			if name == "" {
+				continue
+			}
+			fieldValue := value.Field(index)
+			if omitEmpty && isJSONEmptyValue(fieldValue) {
+				continue
+			}
+			result[name] = protocolValueFromReflect(fieldValue)
+		}
+		return result
+	case reflect.Slice, reflect.Array:
+		return protocolSliceValue(value)
+	case reflect.Map:
+		if value.Type().Key().Kind() != reflect.String {
+			return nil
+		}
+		if value.IsNil() {
+			return map[string]any(nil)
+		}
+		result := make(map[string]any, value.Len())
+		iter := value.MapRange()
+		for iter.Next() {
+			result[iter.Key().String()] = protocolValueFromReflect(iter.Value())
+		}
+		return result
+	default:
+		return value.Interface()
+	}
+}
+
+func protocolSliceValue(value reflect.Value) any {
+	length := value.Len()
+	elemKind := value.Type().Elem().Kind()
+	switch elemKind {
+	case reflect.Struct, reflect.Map:
+		result := make([]map[string]any, 0, length)
+		for index := 0; index < length; index++ {
+			item, ok := protocolValueFromReflect(value.Index(index)).(map[string]any)
+			if !ok {
+				return protocolSliceFallback(value)
+			}
+			result = append(result, item)
+		}
+		return result
+	case reflect.String:
+		result := make([]string, 0, length)
+		for index := 0; index < length; index++ {
+			result = append(result, value.Index(index).String())
+		}
+		return result
+	case reflect.Bool:
+		result := make([]bool, 0, length)
+		for index := 0; index < length; index++ {
+			result = append(result, value.Index(index).Bool())
+		}
+		return result
+	default:
+		return protocolSliceFallback(value)
+	}
+}
+
+func protocolSliceFallback(value reflect.Value) []any {
+	result := make([]any, 0, value.Len())
+	for index := 0; index < value.Len(); index++ {
+		result = append(result, protocolValueFromReflect(value.Index(index)))
+	}
+	return result
+}
+
+func jsonFieldName(field reflect.StructField) (string, bool) {
+	tag := field.Tag.Get("json")
+	if tag == "-" {
+		return "", false
+	}
+	if tag == "" {
+		return field.Name, false
+	}
+	parts := strings.Split(tag, ",")
+	name := parts[0]
+	if name == "" {
+		name = field.Name
+	}
+	for _, option := range parts[1:] {
+		if option == "omitempty" {
+			return name, true
+		}
+	}
+	return name, false
+}
+
+func isJSONEmptyValue(value reflect.Value) bool {
+	switch value.Kind() {
+	case reflect.Array, reflect.Map, reflect.Slice, reflect.String:
+		return value.Len() == 0
+	case reflect.Bool:
+		return !value.Bool()
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return value.Int() == 0
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
+		return value.Uint() == 0
+	case reflect.Float32, reflect.Float64:
+		return value.Float() == 0
+	case reflect.Interface, reflect.Pointer:
+		return value.IsNil()
+	}
+	return false
 }
