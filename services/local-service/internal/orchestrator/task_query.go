@@ -92,10 +92,7 @@ func (s *Service) TaskDetailGet(params map[string]any) (map[string]any, error) {
 	}
 	runtimeSummary := s.buildTaskRuntimeSummary(task)
 	deliveryResultValue := any(nil)
-	deliveryResult := s.latestAttemptDeliveryResultFromStorage(task)
-	if len(deliveryResult) == 0 {
-		deliveryResult = task.DeliveryResult
-	}
+	deliveryResult := s.resolveFormalTaskDeliveryResult(task)
 	normalizedDelivery := normalizeTaskDetailDeliveryResult(task.TaskID, deliveryResult)
 	if len(normalizedDelivery) > 0 {
 		deliveryResultValue = normalizedDelivery

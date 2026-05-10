@@ -637,6 +637,10 @@ CREATE TABLE approval_requests (
 CREATE INDEX idx_approval_requests_task_status ON approval_requests(task_id, status);
 ```
 
+`approval_requests.status` uses `pending / approved / denied / resolved`; `resolved`
+closes a stale pending request that was replaced by a newer authorization cycle
+without implying user approval or denial.
+
 ### 7.13 authorization_records
 
 ```sql

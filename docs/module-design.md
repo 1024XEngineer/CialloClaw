@@ -1884,6 +1884,7 @@ flowchart TB
 ### 子模块说明
 - **风险评估 / 授权承接**：判断动作风险、形成待授权对象，并把用户决策重新并入主链。
 - **正式结果交付协调**：把执行结果装配成 `delivery_result / artifact / citation`，并决定如何进入通知和查询视图。
+- **展示文案渲染**：本轮已把任务标题、确认气泡、授权/排队/续接反馈、交付结果标题与预览，以及执行失败、回退结果、工具气泡等任务侧展示文案收口到 `presentation` 层；编排、意图、交付路径优先只选择语义键与参数，避免继续把中文展示句混入状态机控制流。其余社交回复、感知机会提示、模型校验提示等非本轮主链展示文案仍留在各自模块，后续再独立收口。
 - **记忆与镜像沉淀**：决定哪些运行结果应沉淀为长期记忆或镜像引用，哪些只能保留为运行态痕迹。
 - **结果审查 / Hooks / Trace / Eval**：负责对输出做质量检查、记录命中、沉淀可观测性与评估快照。
 - **Doom Loop / Human-in-the-loop**：在执行异常、重复无进展或高不确定性场景下，负责熔断、重规划和人工升级。
@@ -1896,6 +1897,7 @@ flowchart TB
 | --- | --- | --- | --- |
 | 风险评估与授权承接 | 运行层提交的拟执行动作、目标范围、能力请求 | `risk_level`、`impact_scope`、`approval_request`、`pending_execution` | `approval.pending`、授权结果、阻断或继续执行结论 |
 | 正式结果交付协调 | 执行结果、artifact/citation 候选、交付偏好 | `delivery_result`、artifact 计划、交付说明 | `delivery.ready`、任务详情交付、文件/文档/结果页入口 |
+| 展示文案渲染 | 已迁移主链的意图名、展示语义键、渲染参数 | `presentation.MessageKey`、渲染后的 task/bubble/result 文案 | `bubble_message`、`delivery_result`、任务标题 |
 | 记忆与镜像沉淀 | 已完成阶段结果、检索计划、摘要候选 | `memory_candidate`、`memory_summary`、镜像引用关系 | 后续检索命中、任务详情中的记忆摘要 |
 | 结果审查与 Hooks | 执行结果、工具调用记录、交付对象 | 审查结论、hook 命中、结构化失败原因 | 继续交付、重试、HITL 或阻断 |
 | Trace / Eval | 模型调用、tool_call、输出摘要、资产命中 | `trace_record`、`eval_snapshot`、review result | 调试视图、loop 诊断、评估快照 |
@@ -2681,6 +2683,7 @@ sequenceDiagram
 **关键结果**：在执行前形成 `approval_request` 和 `recovery_point`，在执行后形成 `authorization_record` 和 `audit_record`。  
 **异常分支**：执行失败或用户中断时，必须显式回滚或保留可恢复信息。  
 **实现说明**：此链路是治理链的最小闭环，凡是跨工作区、命令执行、联网下载、删除/覆盖等动作，都必须从这里经过。
+补充边界：`agent_loop` 在运行中若某轮工具命中 `approval_required`，也必须立刻把该次真实工具输入回写为 `approval_request / pending_execution`，并把精确 `tool input` 固化到恢复计划中；把任务切回 `waiting_auth`，并且在获批前不得伪造 `delivery_result`。
 
 设计约束：对于 `exec_command` 这类高风险执行，默认应优先进入 Docker Sandbox，并且支持上下文中断后的容器清理；仅在 Windows shell 命令入口上允许走受控宿主路径，其他失败情形不能静默回退到宿主直接执行。
 
@@ -3106,8 +3109,8 @@ sequenceDiagram
         I-->>U: 打开工作区文档
     else 网页结果或结构化结果
         A->>P: 更新气泡提示=正在打开结果页
-        A->>I: 调用外部能力，打开浏览器或结果页
-        I-->>U: 展示浏览器或结果页
+        A->>I: 调用正式打开链路，优先打开 dashboard 结果页
+        I-->>U: 展示正式结果页；若是外部 URL 再交给浏览器
     else 单个文件产物
         A->>P: 更新气泡提示=已生成文件，正在打开
         A->>I: 打开生成文件

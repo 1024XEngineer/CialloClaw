@@ -21,6 +21,17 @@ export type ShellBallBubbleInlineApprovalState = {
   pendingDecision?: ApprovalDecision;
 };
 
+/**
+ * Intent-confirm metadata is shell-ball-local UI state used to render the
+ * current inferred intent and to disable actions while a confirm/correction
+ * request is in flight.
+ */
+export type ShellBallBubbleIntentConfirmState = {
+  intentName: string;
+  intentLabel: string;
+  status?: "idle" | "submitting";
+};
+
 export type ShellBallBubbleDesktopState = {
   lifecycleState: ShellBallBubbleDesktopLifecycleState;
   freshnessHint?: ShellBallBubbleDesktopFreshnessHint;
@@ -29,6 +40,7 @@ export type ShellBallBubbleDesktopState = {
   turnIndex?: number;
   turnPhase?: number;
   inlineApproval?: ShellBallBubbleInlineApprovalState;
+  intentConfirm?: ShellBallBubbleIntentConfirmState;
 };
 
 export type ShellBallBubbleItem = {
@@ -43,10 +55,17 @@ function cloneShellBallBubbleInlineApprovalState(
   return { ...state };
 }
 
+function cloneShellBallBubbleIntentConfirmState(
+  state: ShellBallBubbleIntentConfirmState,
+): ShellBallBubbleIntentConfirmState {
+  return { ...state };
+}
+
 export function cloneShellBallBubbleDesktopState(state: ShellBallBubbleDesktopState): ShellBallBubbleDesktopState {
   return {
     ...state,
     ...(state.inlineApproval ? { inlineApproval: cloneShellBallBubbleInlineApprovalState(state.inlineApproval) } : {}),
+    ...(state.intentConfirm ? { intentConfirm: cloneShellBallBubbleIntentConfirmState(state.intentConfirm) } : {}),
   };
 }
 

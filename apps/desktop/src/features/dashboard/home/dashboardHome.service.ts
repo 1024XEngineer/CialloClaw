@@ -1,6 +1,7 @@
 import type {
   AgentDashboardModuleGetResult,
   AgentDashboardOverviewGetResult,
+  AgentMirrorOverviewGetResult,
   AgentRecommendationGetResult,
   RecommendationFeedback,
   RecommendationItem,
@@ -11,9 +12,13 @@ import type {
 import {
   getDashboardModule,
   getDashboardOverview,
+  getMirrorOverview,
   getRecommendations,
   submitRecommendationFeedback,
 } from "@/rpc/methods";
+import { describeNotePreview, buildNoteSummary } from "@/features/dashboard/notes/notePage.mapper";
+import { loadNoteBucket } from "@/features/dashboard/notes/notePage.service";
+import type { NoteListItem } from "@/features/dashboard/notes/notePage.types";
 import {
   dashboardHomeStates,
 } from "./dashboardHome.presets";
@@ -21,6 +26,7 @@ import type {
   DashboardHomeContextItem,
   DashboardHomeEventStateKey,
   DashboardHomeInsightItem,
+  DashboardHomeNavigationTarget,
   DashboardHomeModuleKey,
   DashboardHomeNoteItem,
   DashboardHomeSignalItem,
@@ -42,6 +48,13 @@ const dashboardModuleTabs: Record<DashboardHomeModuleKey, string> = {
   notes: "queue",
   safety: "guard",
   tasks: "focus",
+};
+
+const dashboardModuleActionLabels: Record<DashboardHomeModuleKey, string> = {
+  memory: "打开镜子页",
+  notes: "打开便签页",
+  safety: "打开安全页",
+  tasks: "打开任务页",
 };
 
 const dashboardModuleNextSteps: Record<DashboardHomeModuleKey, string> = {
@@ -85,6 +98,16 @@ type DashboardTaskRuntimeSummary = {
   };
 };
 
+type DashboardHomeNoteBuckets = {
+  closed: NoteListItem[];
+  later: NoteListItem[];
+  primaryItem: NoteListItem | null;
+  recurring: NoteListItem[];
+  summary: ReturnType<typeof buildNoteSummary>;
+  upcoming: NoteListItem[];
+  warnings: string[];
+};
+
 const emptyFocusRuntimeSummary: DashboardTaskRuntimeSummary["focusRuntimeSummary"] = {
   active_steering_count: 0,
   events_count: 0,
@@ -108,6 +131,7 @@ function cloneStateData(state: DashboardHomeStateData): DashboardHomeStateData {
     anomaly: state.anomaly ? { ...state.anomaly } : undefined,
     context: state.context.map((item) => ({ ...item })),
     insights: state.insights?.map((item) => ({ ...item })),
+    navigationTarget: state.navigationTarget ? { ...state.navigationTarget } : undefined,
     notes: state.notes?.map((item) => ({ ...item })),
     progressSteps: state.progressSteps?.map((item) => ({ ...item })),
     signals: state.signals?.map((item) => ({ ...item })),
@@ -199,8 +223,231 @@ function getSignalLevel(riskLevel: RiskLevel): DashboardHomeSignalItem["level"] 
   return "normal";
 }
 
+function buildModuleNavigationTarget(
+  module: DashboardHomeModuleKey,
+  label = dashboardModuleActionLabels[module],
+): DashboardHomeNavigationTarget {
+  return {
+    kind: "module",
+    label,
+    module,
+  };
+}
+
+function buildMirrorDetailNavigationTarget(
+  activeDetailKey: "profile" | "memory" | "history",
+  label: string,
+  focusMemoryId?: string,
+): DashboardHomeNavigationTarget {
+  return {
+    activeDetailKey,
+    focusMemoryId,
+    kind: "mirror_detail",
+    label,
+    module: "memory",
+  };
+}
+
+function buildTaskDetailNavigationTarget(taskId: string, label = "打开任务详情"): DashboardHomeNavigationTarget {
+  return {
+    kind: "task_detail",
+    label,
+    module: "tasks",
+    taskId,
+  };
+}
+
+function buildTaskNavigationTarget(
+  focusSummary: NonNullable<AgentDashboardOverviewGetResult["overview"]["focus_summary"]>,
+): DashboardHomeNavigationTarget {
+  if (focusSummary.status === "waiting_auth") {
+    return buildModuleNavigationTarget("safety", "前往授权");
+  }
+
+  if (focusSummary.status === "completed") {
+    return buildTaskDetailNavigationTarget(focusSummary.task_id, "查看交付结果");
+  }
+
+  return buildTaskDetailNavigationTarget(focusSummary.task_id);
+}
+
+function getOverviewSignals(overview: AgentDashboardOverviewGetResult) {
+  return Array.isArray(overview.overview.high_value_signal)
+    ? overview.overview.high_value_signal.filter((signal): signal is string => typeof signal === "string" && signal.trim() !== "")
+    : [];
+}
+
+function getOverviewQuickActions(overview: AgentDashboardOverviewGetResult) {
+  return Array.isArray(overview.overview.quick_actions)
+    ? overview.overview.quick_actions.filter((action): action is string => typeof action === "string" && action.trim() !== "")
+    : [];
+}
+
+function inferModuleFromOverviewSignal(signal: string): DashboardHomeModuleKey {
+  const corpus = signal.toLowerCase();
+
+  if (
+    corpus.includes("memory") ||
+    corpus.includes("mirror") ||
+    corpus.includes("profile") ||
+    corpus.includes("history") ||
+    corpus.includes("summary") ||
+    signal.includes("镜") ||
+    signal.includes("记忆") ||
+    signal.includes("画像") ||
+    signal.includes("历史") ||
+    signal.includes("总结")
+  ) {
+    return "memory";
+  }
+
+  if (
+    corpus.includes("safety") ||
+    corpus.includes("security") ||
+    corpus.includes("approval") ||
+    corpus.includes("authorize") ||
+    corpus.includes("audit") ||
+    corpus.includes("recovery") ||
+    corpus.includes("risk") ||
+    signal.includes("授权") ||
+    signal.includes("安全") ||
+    signal.includes("恢复") ||
+    signal.includes("审计") ||
+    signal.includes("风险")
+  ) {
+    return "safety";
+  }
+
+  if (
+    corpus.includes("todo") ||
+    corpus.includes("note") ||
+    corpus.includes("notes") ||
+    corpus.includes("reminder") ||
+    corpus.includes("schedule") ||
+    corpus.includes("recurring") ||
+    signal.includes("便签") ||
+    signal.includes("提醒") ||
+    signal.includes("日程") ||
+    signal.includes("待办")
+  ) {
+    return "notes";
+  }
+
+  return "tasks";
+}
+
+function matchesNavigationActionLabel(state: DashboardHomeStateData, actionLabel: string) {
+  return state.navigationTarget?.label.trim() === actionLabel.trim();
+}
+
+function getSummonNextStep(state: DashboardHomeStateData, quickActions?: string[]) {
+  if (
+    state.module === "tasks" &&
+    state.navigationTarget?.kind === "task_detail" &&
+    quickActions?.[0] &&
+    matchesNavigationActionLabel(state, quickActions[0])
+  ) {
+    return quickActions[0];
+  }
+
+  return state.navigationTarget?.label ?? dashboardModuleNextSteps[state.module];
+}
+
+function appendDistinctContextItem(
+  items: DashboardHomeContextItem[],
+  candidate: DashboardHomeContextItem | null,
+) {
+  if (!candidate) {
+    return items;
+  }
+
+  const normalizedCandidate = candidate.text.trim();
+  if (normalizedCandidate === "") {
+    return items;
+  }
+
+  if (items.some((item) => item.text.trim() === normalizedCandidate)) {
+    return items;
+  }
+
+  items.push(candidate);
+  return items;
+}
+
+function normalizeDashboardHomeCopy(value: string | null | undefined) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const normalized = value
+    .replace(/\uFFFD/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return normalized === "" ? null : normalized;
+}
+
+function dedupeSummonTemplates(templates: Array<Omit<DashboardHomeSummonEvent, "id">>) {
+  const seen = new Set<string>();
+
+  return templates.filter((template) => {
+    const key = `${template.stateKey}::${template.message}::${template.reason}`;
+    if (seen.has(key)) {
+      return false;
+    }
+
+    seen.add(key);
+    return true;
+  });
+}
+
 function getModuleHighlights(result: AgentDashboardModuleGetResult | null | undefined) {
   return Array.isArray(result?.highlights) ? result.highlights.filter(Boolean) : [];
+}
+
+async function loadDashboardHomeNoteBuckets(): Promise<DashboardHomeNoteBuckets> {
+  const [upcomingResult, laterResult, recurringResult, closedResult] = await Promise.allSettled([
+    loadNoteBucket("upcoming"),
+    loadNoteBucket("later"),
+    loadNoteBucket("recurring_rule"),
+    loadNoteBucket("closed"),
+  ]);
+  const warnings: string[] = [];
+  const upcoming = upcomingResult.status === "fulfilled"
+    ? upcomingResult.value.items
+    : (warnings.push(formatDashboardHomeLoadWarning("便签近期要做", upcomingResult.reason)), []);
+  const later = laterResult.status === "fulfilled"
+    ? laterResult.value.items
+    : (warnings.push(formatDashboardHomeLoadWarning("便签后续安排", laterResult.reason)), []);
+  const recurring = recurringResult.status === "fulfilled"
+    ? recurringResult.value.items
+    : (warnings.push(formatDashboardHomeLoadWarning("便签重复事项", recurringResult.reason)), []);
+  const closed = closedResult.status === "fulfilled"
+    ? closedResult.value.items
+    : (warnings.push(formatDashboardHomeLoadWarning("便签已结束", closedResult.reason)), []);
+  const primaryItem = upcoming[0] ?? later[0] ?? recurring[0] ?? null;
+
+  return {
+    closed,
+    later,
+    primaryItem,
+    recurring,
+    summary: buildNoteSummary({ recurring_rule: recurring, upcoming }),
+    upcoming,
+    warnings,
+  };
+}
+
+function isCrossDomainGovernanceHighlight(text: string) {
+  return /恢复点|审计|授权|回显|风险|generate_text|openai_responses|tool_call|workspace/i.test(text);
+}
+
+function getNotesHighlights(result: AgentDashboardModuleGetResult | null | undefined) {
+  return getModuleHighlights(result).filter((item) => !isCrossDomainGovernanceHighlight(item));
+}
+
+function getMemoryHighlights(result: AgentDashboardModuleGetResult | null | undefined) {
+  return getModuleHighlights(result).filter((item) => !isCrossDomainGovernanceHighlight(item));
 }
 
 function getModuleSummaryNumber(result: AgentDashboardModuleGetResult | null | undefined, key: string) {
@@ -330,6 +577,26 @@ function getNotesStateKey(notesModule: AgentDashboardModuleGetResult, recommenda
   return "notes_scheduled";
 }
 
+function getNotesStateKeyFromBuckets(noteBuckets: DashboardHomeNoteBuckets | null) {
+  if (!noteBuckets) {
+    return null;
+  }
+
+  if (noteBuckets.primaryItem?.item.bucket === "recurring_rule") {
+    return "notes_reminder" as const;
+  }
+
+  if (noteBuckets.primaryItem) {
+    return "notes_processing" as const;
+  }
+
+  if (noteBuckets.recurring.length > 0) {
+    return "notes_reminder" as const;
+  }
+
+  return "notes_scheduled" as const;
+}
+
 function getMemoryStateKey(memoryModule: AgentDashboardModuleGetResult) {
   return getModuleHighlights(memoryModule).length > 1 ? "memory_summary" : "memory_habit";
 }
@@ -417,6 +684,7 @@ function buildTaskState(
   const state = cloneStateData(dashboardHomeStates[stateKey]);
   const focusSummary = overview.overview.focus_summary;
   const runtimeSummary = getTaskModuleRuntimeSummary(taskModule, focusSummary?.task_id).focusRuntimeSummary;
+  state.navigationTarget = buildModuleNavigationTarget("tasks");
 
   if (!focusSummary) {
     const highlights = getModuleHighlights(taskModule);
@@ -440,14 +708,15 @@ function buildTaskState(
   state.tag = formatTaskTag(focusSummary.status);
   state.progressLabel = runtimeSummary.active_steering_count > 0 ? `待消费要求 ${runtimeSummary.active_steering_count} 条` : focusSummary.next_action;
   state.context = buildTaskContext(overview, taskModule);
+  state.navigationTarget = buildTaskNavigationTarget(focusSummary);
 
   if (focusSummary.status === "confirming_intent") {
     state.anomaly = {
-      actionLabel: "确认继续",
-      desc: `当前建议动作是：${focusSummary.next_action}。确认后会继续推进这条任务链。`,
+      actionLabel: "前往处理",
+      desc: `当前建议动作是：${focusSummary.next_action}。这条任务还在等待你确认处理方式。`,
       dismissLabel: "稍后处理",
       severity: "info",
-      title: "当前任务正在等待你确认",
+      title: "当前任务仍在等待确认处理方式",
     };
   } else if (focusSummary.status === "waiting_auth") {
     state.anomaly = {
@@ -472,60 +741,104 @@ function buildTaskState(
   return state;
 }
 
-function buildNotesItems(recommendations: RecommendationItem[]): DashboardHomeNoteItem[] {
-  return recommendations
-    .filter((item) => inferModuleFromRecommendation(item) === "notes")
-    .slice(0, 3)
-    .map((item, index) => ({
-      id: item.recommendation_id,
-      status: index === 0 ? "processing" : "pending",
-      tag: index === 0 ? "Agent 建议" : "待整理",
-      text: item.text,
-      time: index === 0 ? "现在" : "稍后",
-    }));
+function mapHomeNotesFromBuckets(noteBuckets: DashboardHomeNoteBuckets) {
+  return [
+    ...noteBuckets.upcoming,
+    ...noteBuckets.later,
+    ...noteBuckets.recurring,
+    ...noteBuckets.closed,
+  ].slice(0, 3).map((item) => ({
+    id: item.item.item_id,
+    status: item.item.bucket === "closed"
+      ? "done"
+      : item.item.bucket === "recurring_rule"
+        ? "recurring"
+        : item.item.status === "normal"
+          ? "pending"
+          : "processing",
+    tag: item.experience.summaryLabel,
+    text: item.item.title,
+    time: item.experience.timeHint,
+  } satisfies DashboardHomeNoteItem));
+}
+
+function buildNotesHeadline(noteBuckets: DashboardHomeNoteBuckets | null) {
+  if (noteBuckets?.primaryItem) {
+    return noteBuckets.primaryItem.item.title;
+  }
+
+  return "这里还没有可协作的事项";
+}
+
+function buildNotesSubline(noteBuckets: DashboardHomeNoteBuckets | null, exceptions: number) {
+  if (noteBuckets?.primaryItem) {
+    return describeNotePreview(noteBuckets.primaryItem.item, noteBuckets.primaryItem.experience);
+  }
+
+  if (exceptions > 0) {
+    return `当前例外项 ${exceptions} 条，建议优先整理最接近执行窗口的事项。`;
+  }
+
+  return "等你把想记住的事情交给便签协作后，这里会按近期要做、后续安排、重复事项和已结束四组方式整理出来。";
+}
+
+function buildNotesContext(noteItems: DashboardHomeNoteItem[], highlights: string[], noteBuckets: DashboardHomeNoteBuckets | null) {
+  if (noteBuckets?.primaryItem) {
+    return [
+      {
+        iconKey: "note",
+        text: `${noteBuckets.primaryItem.experience.summaryLabel} · ${describeNotePreview(noteBuckets.primaryItem.item, noteBuckets.primaryItem.experience)}`,
+        type: "active" as const,
+      },
+      {
+        iconKey: "calendar",
+        text: `今日待处理 ${noteBuckets.summary.dueToday} 条 · 已逾期 ${noteBuckets.summary.overdue} 条`,
+        type: "normal" as const,
+      },
+      {
+        iconKey: "repeat",
+        text: `今日重复 ${noteBuckets.summary.recurringToday} 条 · 适合转任务 ${noteBuckets.summary.readyForAgent} 条`,
+        type: "hint" as const,
+      },
+    ];
+  }
+
+  return [
+    {
+      iconKey: "note",
+      text: "暂无便签",
+      type: "normal" as const,
+    },
+    {
+      iconKey: "calendar",
+      text: "等你把想记住的事情交给便签协作后，这里会按近期要做、后续安排、重复事项和已结束四组方式整理出来。",
+      type: "hint" as const,
+    },
+  ];
 }
 
 function buildNotesState(
   stateKey: DashboardHomeEventStateKey,
   notesModule: AgentDashboardModuleGetResult,
-  recommendations: RecommendationItem[],
+  noteBuckets: DashboardHomeNoteBuckets | null,
 ) {
   const state = cloneStateData(dashboardHomeStates[stateKey]);
-  const highlights = getModuleHighlights(notesModule);
-  const noteItems = buildNotesItems(recommendations);
-  const completedTasks = getModuleSummaryNumber(notesModule, "completed_tasks");
+  const highlights = getNotesHighlights(notesModule);
+  const noteItems = noteBuckets ? mapHomeNotesFromBuckets(noteBuckets) : [];
   const exceptions = getModuleSummaryNumber(notesModule, "exceptions");
 
-  state.headline = noteItems[0]?.text ?? highlights[0] ?? `便签池里有 ${completedTasks} 条已整理记录`;
-  state.subline =
-    highlights[0] && highlights[1]
-      ? `${highlights[0]} ${highlights[1]}`
-      : highlights[0] ?? `当前例外项 ${exceptions} 条，建议优先整理最接近执行窗口的事项。`;
-  state.context = [
-    {
-      iconKey: "note",
-      text: `推荐事项 ${noteItems.length || 0} 条`,
-      type: noteItems.length > 0 ? "active" : "normal",
-    },
-    {
-      iconKey: "repeat",
-      text: `已完成任务 ${completedTasks} 条`,
-      type: "normal",
-    },
-    {
-      iconKey: "calendar",
-      text: highlights[0] ?? "保持便签整理节奏，准备转正式任务。",
-      type: "hint",
-    },
-  ];
+  state.headline = buildNotesHeadline(noteBuckets);
+  state.subline = buildNotesSubline(noteBuckets, exceptions);
+  state.context = buildNotesContext(noteItems, highlights, noteBuckets);
   state.notes = noteItems.length > 0 ? noteItems : state.notes;
+  state.navigationTarget = buildModuleNavigationTarget("notes");
 
   return state;
 }
 
 function buildMemoryInsights(memoryModule: AgentDashboardModuleGetResult): DashboardHomeInsightItem[] {
   const icons = ["brain", "time", "repeat", "chat"] as const;
-  const highlights = getModuleHighlights(memoryModule);
+  const highlights = getMemoryHighlights(memoryModule);
 
   if (highlights.length === 0) {
     return cloneStateData(dashboardHomeStates.memory_summary).insights ?? [];
@@ -538,18 +851,178 @@ function buildMemoryInsights(memoryModule: AgentDashboardModuleGetResult): Dashb
   }));
 }
 
-function buildMemoryState(stateKey: DashboardHomeEventStateKey, memoryModule: AgentDashboardModuleGetResult) {
-  const state = cloneStateData(dashboardHomeStates[stateKey]);
-  const highlights = getModuleHighlights(memoryModule);
+function createFormalMirrorStateBase(stateKey: DashboardHomeEventStateKey) {
+  return cloneStateData(dashboardHomeStates[stateKey]);
+}
 
-  state.headline = highlights[0] ?? state.headline;
-  state.subline = highlights[1] ?? highlights[0] ?? state.subline;
+function buildReferenceMirrorState(
+  stateKey: DashboardHomeEventStateKey,
+  overview: AgentMirrorOverviewGetResult,
+) {
+  const latestReference = overview.memory_references[0] ?? null;
+  if (!latestReference) {
+    return null;
+  }
+
+  const state = createFormalMirrorStateBase(stateKey);
+  const summary =
+    normalizeDashboardHomeCopy(latestReference.summary)
+    ?? normalizeDashboardHomeCopy(latestReference.reason)
+    ?? "最近有一条长期记忆再次命中当前协作。";
+  const reason = normalizeDashboardHomeCopy(latestReference.reason);
+  state.headline = "近期被调用记忆";
+  state.subline = summary;
+  state.context = [];
+  appendDistinctContextItem(state.context, {
+    iconKey: "link",
+    text: "来源：近期长期记忆命中",
+    type: "hint",
+  });
+  appendDistinctContextItem(
+    state.context,
+    reason && reason !== summary
+      ? {
+          iconKey: "brain",
+          text: reason,
+          type: "active",
+        }
+      : null,
+  );
+  state.insights = undefined;
+  state.navigationTarget = buildMirrorDetailNavigationTarget("memory", "打开镜子页", latestReference.memory_id);
+  return state;
+}
+
+function buildProfileMirrorState(
+  stateKey: DashboardHomeEventStateKey,
+  overview: AgentMirrorOverviewGetResult,
+) {
+  const profile = overview.profile;
+  if (!profile) {
+    return null;
+  }
+
+  const state = createFormalMirrorStateBase(stateKey);
+  state.headline = "用户画像";
+  state.subline = `工作风格：${profile.work_style}`;
+  state.context = [
+    {
+      iconKey: "chat",
+      text: `偏好交付：${profile.preferred_output}`,
+      type: "normal",
+    },
+    {
+      iconKey: "time",
+      text: `活跃时段：${profile.active_hours}`,
+      type: "hint",
+    },
+  ];
+  state.insights = undefined;
+  state.navigationTarget = buildMirrorDetailNavigationTarget("profile", "打开镜子页");
+  return state;
+}
+
+function buildHistoryMirrorState(
+  stateKey: DashboardHomeEventStateKey,
+  overview: AgentMirrorOverviewGetResult,
+) {
+  if (!overview.history_summary[0]) {
+    return null;
+  }
+
+  const state = createFormalMirrorStateBase(stateKey);
+  state.headline = "历史概要";
+  state.subline = overview.history_summary[0];
+  state.context = overview.history_summary.slice(1, 3).map((summary, index) => ({
+    iconKey: index === 0 ? "repeat" : "time",
+    text: summary,
+    type: "hint",
+  }));
+  state.insights = undefined;
+  state.navigationTarget = buildMirrorDetailNavigationTarget("history", "打开镜子页");
+  return state;
+}
+
+function buildMemoryHeadline(highlights: string[]) {
+  if (highlights.length >= 2) {
+    return "本周镜子观察";
+  }
+
+  return "最近协作镜像";
+}
+
+function buildMemorySubline(highlights: string[]) {
+  return highlights[0] ?? "镜子会持续整理近期协作节奏和重复出现的模式。";
+}
+
+function buildPreferredFormalMirrorState(
+  stateKey: DashboardHomeEventStateKey,
+  overview: AgentMirrorOverviewGetResult,
+) {
+  return (
+    buildReferenceMirrorState(stateKey, overview) ??
+    buildProfileMirrorState(stateKey, overview) ??
+    buildHistoryMirrorState(stateKey, overview)
+  );
+}
+
+function buildFormalMirrorSummons(
+  stateKey: DashboardHomeEventStateKey,
+  overview: AgentMirrorOverviewGetResult,
+): Array<Omit<DashboardHomeSummonEvent, "id">> {
+  const templates = [
+    buildReferenceMirrorState(stateKey, overview),
+    buildProfileMirrorState(stateKey, overview),
+    buildHistoryMirrorState(stateKey, overview),
+  ].flatMap((state) => {
+    if (!state) {
+      return [];
+    }
+
+    return [{
+      duration: 5_600,
+      expandedState: state,
+      message: state.headline,
+      module: "memory",
+      nextStep: state.navigationTarget?.label ?? dashboardModuleNextSteps.memory,
+      priority: "low",
+      reason: state.subline,
+      stateKey: state.key,
+    } satisfies Omit<DashboardHomeSummonEvent, "id">];
+  });
+
+  return dedupeSummonTemplates(templates);
+}
+
+function buildMemoryState(
+  stateKey: DashboardHomeEventStateKey,
+  memoryModule: AgentDashboardModuleGetResult,
+  mirrorOverview: AgentMirrorOverviewGetResult | null,
+) {
+  const state = cloneStateData(dashboardHomeStates[stateKey]);
+  if (mirrorOverview) {
+    const formalMirrorState = buildPreferredFormalMirrorState(stateKey, mirrorOverview);
+    if (formalMirrorState) {
+      state.headline = formalMirrorState.headline;
+      state.subline = formalMirrorState.subline;
+      state.insights = formalMirrorState.insights;
+      state.context = formalMirrorState.context;
+      state.navigationTarget = formalMirrorState.navigationTarget;
+      return state;
+    }
+  }
+
+  const highlights = getMemoryHighlights(memoryModule);
+
+  state.headline = buildMemoryHeadline(highlights);
+  state.subline = buildMemorySubline(highlights);
   state.insights = buildMemoryInsights(memoryModule);
   state.context = highlights.slice(0, 3).map((item, index) => ({
     iconKey: index === 0 ? "brain" : index === 1 ? "repeat" : "time",
     text: item,
     type: index === 0 ? "active" : "hint",
   }));
+  state.navigationTarget = buildModuleNavigationTarget("memory");
 
   return state;
 }
@@ -559,6 +1032,10 @@ function buildSafetyState(stateKey: DashboardHomeEventStateKey, overview: AgentD
   const trustSummary = overview.overview.trust_summary;
   const highlights = getModuleHighlights(safetyModule);
   const riskLabel = formatRiskLabel(trustSummary.risk_level);
+  state.navigationTarget = buildModuleNavigationTarget(
+    "safety",
+    trustSummary.pending_authorizations > 0 ? "处理待授权操作" : "查看安全详情",
+  );
 
   state.headline =
     trustSummary.pending_authorizations > 0
@@ -569,23 +1046,6 @@ function buildSafetyState(stateKey: DashboardHomeEventStateKey, overview: AgentD
     (trustSummary.pending_authorizations > 0
       ? "建议先处理待授权操作，再继续推进其它任务。"
       : `工作区位于 ${trustSummary.workspace_path || "当前默认目录"}。`);
-  state.context = [
-    {
-      iconKey: "shield",
-      text: `风险等级：${riskLabel}`,
-      type: trustSummary.risk_level === "green" ? "normal" : "warn",
-    },
-    {
-      iconKey: "lock",
-      text: `待授权：${trustSummary.pending_authorizations} 项`,
-      type: trustSummary.pending_authorizations > 0 ? "warn" : "normal",
-    },
-    {
-      iconKey: "history",
-      text: trustSummary.has_restore_point ? "最近恢复点可用" : "当前还没有恢复点",
-      type: trustSummary.has_restore_point ? "hint" : "warn",
-    },
-  ];
   state.signals = [
     {
       iconKey: "shield",
@@ -609,11 +1069,32 @@ function buildSafetyState(stateKey: DashboardHomeEventStateKey, overview: AgentD
       value: trustSummary.has_restore_point ? "可用" : "暂无",
     },
   ];
+  state.context = [];
+  appendDistinctContextItem(
+    state.context,
+    highlights[0]
+      ? {
+          iconKey: trustSummary.pending_authorizations > 0 ? "lock" : "shield",
+          text: highlights[0],
+          type: trustSummary.pending_authorizations > 0 ? "warn" : "hint",
+        }
+      : null,
+  );
+  appendDistinctContextItem(
+    state.context,
+    trustSummary.workspace_path
+      ? {
+          iconKey: "file",
+          text: `工作区：${trustSummary.workspace_path}`,
+          type: "hint",
+        }
+      : null,
+  );
 
   if (trustSummary.pending_authorizations > 0 || trustSummary.risk_level !== "green") {
     state.anomaly = {
       actionLabel: "查看安全详情",
-      desc: highlights[0] ?? "当前存在需要优先确认的安全事项。",
+      desc: trustSummary.pending_authorizations > 0 ? "先处理待授权操作，再继续推进其它任务。" : "建议先确认当前风险边界。",
       dismissLabel: "稍后再看",
       severity: trustSummary.pending_authorizations > 0 ? "error" : "warn",
       title: trustSummary.pending_authorizations > 0 ? "安全链路有待处理项" : "当前需要留意执行边界",
@@ -658,6 +1139,116 @@ function getSummonPriority(module: DashboardHomeModuleKey, stateKey: DashboardHo
   return "normal";
 }
 
+function buildOverviewSummons(
+  overview: AgentDashboardOverviewGetResult,
+  stateKeys: Record<DashboardHomeModuleKey, DashboardHomeEventStateKey>,
+  stateMap: Record<DashboardHomeEventStateKey, DashboardHomeStateData>,
+): Array<Omit<DashboardHomeSummonEvent, "id">> {
+  const quickActions = getOverviewQuickActions(overview);
+  const highValueSignals = getOverviewSignals(overview);
+  const focusSummary = overview.overview.focus_summary;
+  const trustSummary = overview.overview.trust_summary;
+  const safetyState = stateMap[stateKeys.safety];
+  const taskState = stateMap[stateKeys.tasks];
+  const templates: Array<Omit<DashboardHomeSummonEvent, "id">> = [];
+
+  // Keep the first summon anchored to formal overview fields so the home orb
+  // surfaces live task/security signals before softer recommendation copy.
+  const hasUrgentSafetySignal = trustSummary.pending_authorizations > 0 || trustSummary.risk_level !== "green";
+
+  if (hasUrgentSafetySignal) {
+    templates.push({
+      duration: 6_200,
+      // Safety summons are hard-routed to the safety module. Keep their
+      // headline anchored to safety state so task-oriented overview copy does
+      // not leak into a different navigation target.
+      message: safetyState.headline,
+      module: "safety",
+      nextStep: getSummonNextStep(safetyState),
+      priority: "urgent",
+      reason: safetyState.subline,
+      stateKey: stateKeys.safety,
+    });
+  }
+
+  if (focusSummary) {
+    const overflowSignal = highValueSignals.find((signal) => signal !== templates[0]?.message);
+    templates.push({
+      duration: 6_000,
+      message: focusSummary.title,
+      module: "tasks",
+      nextStep: getSummonNextStep(taskState, quickActions),
+      priority: getSummonPriority("tasks", stateKeys.tasks),
+      reason: [focusSummary.current_step, focusSummary.next_action, overflowSignal].filter(Boolean).join(" · "),
+      stateKey: stateKeys.tasks,
+    });
+  }
+
+  if (!hasUrgentSafetySignal && trustSummary.has_restore_point) {
+    templates.push({
+      duration: 5_600,
+      message: "最近恢复点可用",
+      module: "safety",
+      nextStep: getSummonNextStep(safetyState),
+      priority: "low",
+      reason: safetyState.subline,
+      stateKey: stateKeys.safety,
+    });
+  }
+
+  if (templates.length === 0 && highValueSignals[0]) {
+    const targetState = trustSummary.pending_authorizations > 0 || trustSummary.risk_level !== "green"
+      ? safetyState
+      : stateMap[stateKeys[inferModuleFromOverviewSignal(highValueSignals[0])]];
+
+    templates.push({
+      duration: 5_800,
+      message: highValueSignals[0],
+      module: targetState.module,
+      nextStep: getSummonNextStep(targetState, quickActions),
+      priority: targetState.module === "safety" ? "urgent" : getSummonPriority(targetState.module, targetState.key),
+      reason: targetState.subline,
+      stateKey: targetState.key,
+    });
+  }
+
+  return dedupeSummonTemplates(templates);
+}
+
+function buildModuleSummarySummons(
+  stateKeys: Record<DashboardHomeModuleKey, DashboardHomeEventStateKey>,
+  stateMap: Record<DashboardHomeEventStateKey, DashboardHomeStateData>,
+): Array<Omit<DashboardHomeSummonEvent, "id">> {
+  const modules: DashboardHomeModuleKey[] = ["notes", "memory"];
+
+  return dedupeSummonTemplates(
+    modules.flatMap((module) => {
+      const state = stateMap[stateKeys[module]];
+      if (!state.headline.trim()) {
+        return [];
+      }
+
+      if (module === "notes" && state.headline === "这里还没有可协作的事项") {
+        return [];
+      }
+
+      if (module === "memory" && state.headline === "最近协作镜像" && state.subline === "镜子会持续整理近期协作节奏和重复出现的模式。") {
+        return [];
+      }
+
+      return [{
+        duration: 5_600,
+        message: state.headline,
+        module,
+        nextStep: state.navigationTarget?.label ?? dashboardModuleNextSteps[module],
+        priority: getSummonPriority(module, state.key),
+        reason: state.subline,
+        stateKey: state.key,
+      } satisfies Omit<DashboardHomeSummonEvent, "id">];
+    }),
+  );
+}
+
 function buildRecommendationSummons(
   recommendations: RecommendationItem[],
   stateKeys: Record<DashboardHomeModuleKey, DashboardHomeEventStateKey>,
@@ -670,6 +1261,7 @@ function buildRecommendationSummons(
     return {
       duration: 6_200,
       message: item.text,
+      module,
       nextStep: dashboardModuleNextSteps[module],
       priority: getSummonPriority(module, stateKeys[module]),
       reason: highlights[0] ?? `来自 ${dashboardModuleLabels[module]} 模块的实时建议`,
@@ -678,7 +1270,7 @@ function buildRecommendationSummons(
     } satisfies Omit<DashboardHomeSummonEvent, "id">;
   });
 
-  return templates;
+  return dedupeSummonTemplates(templates);
 }
 
 function buildVoiceSequences(
@@ -711,12 +1303,14 @@ function buildFocusLine(
 ) {
   if (overview.overview.focus_summary) {
     const runtimeSummary = getTaskModuleRuntimeSummary(taskModule, overview.overview.focus_summary.task_id).focusRuntimeSummary;
+    const overviewSignals = getOverviewSignals(overview);
+
     return {
       headline: overview.overview.focus_summary.title,
       reason: [
         overview.overview.focus_summary.current_step,
         overview.overview.focus_summary.next_action,
-        runtimeSummary.latest_event_type ?? runtimeSummary.loop_stop_reason,
+        runtimeSummary.latest_event_type ?? runtimeSummary.loop_stop_reason ?? overviewSignals[0],
       ]
         .filter(Boolean)
         .join(" · "),
@@ -739,18 +1333,29 @@ function buildFocusLine(
 function buildDashboardHomeData(input: {
   loadWarnings: string[];
   moduleResults: Record<DashboardHomeModuleKey, AgentDashboardModuleGetResult>;
+  mirrorOverview: AgentMirrorOverviewGetResult | null;
+  noteBuckets: DashboardHomeNoteBuckets | null;
   overview: AgentDashboardOverviewGetResult;
   recommendations: AgentRecommendationGetResult;
 }): DashboardHomeData {
   const stateMap = createBaseStateMap();
-  const stateKeys = getModuleStateKeyMap(input.overview, input.moduleResults, input.recommendations.items);
+  const noteBucketsStateKey = getNotesStateKeyFromBuckets(input.noteBuckets);
+  const inferredStateKeys = getModuleStateKeyMap(input.overview, input.moduleResults, input.recommendations.items);
+  const stateKeys = {
+    ...inferredStateKeys,
+    notes: noteBucketsStateKey ?? inferredStateKeys.notes,
+  };
 
   stateMap[stateKeys.tasks] = buildTaskState(stateKeys.tasks, input.overview, input.moduleResults.tasks);
-  stateMap[stateKeys.notes] = buildNotesState(stateKeys.notes, input.moduleResults.notes, input.recommendations.items);
-  stateMap[stateKeys.memory] = buildMemoryState(stateKeys.memory, input.moduleResults.memory);
+  stateMap[stateKeys.notes] = buildNotesState(stateKeys.notes, input.moduleResults.notes, input.noteBuckets);
+  stateMap[stateKeys.memory] = buildMemoryState(stateKeys.memory, input.moduleResults.memory, input.mirrorOverview);
   stateMap[stateKeys.safety] = buildSafetyState(stateKeys.safety, input.overview, input.moduleResults.safety);
 
-  const summonTemplates = buildRecommendationSummons(input.recommendations.items, stateKeys, input.moduleResults);
+  const overviewSummons = buildOverviewSummons(input.overview, stateKeys, stateMap);
+  const mirrorSummons = input.mirrorOverview ? buildFormalMirrorSummons(stateKeys.memory, input.mirrorOverview) : [];
+  const moduleSummons = buildModuleSummarySummons(stateKeys, stateMap);
+  const recommendationSummons = buildRecommendationSummons(input.recommendations.items, stateKeys, input.moduleResults);
+  const summonTemplates = dedupeSummonTemplates([...overviewSummons, ...mirrorSummons, ...moduleSummons, ...recommendationSummons]);
 
   return {
     focusLine: buildFocusLine(input.overview, input.moduleResults.tasks, summonTemplates),
@@ -784,7 +1389,7 @@ function formatDashboardHomeLoadWarning(label: string, error: unknown) {
 }
 
 export async function loadDashboardHomeData(): Promise<DashboardHomeData> {
-  const [overviewResult, tasksResult, notesResult, memoryResult, safetyResult, recommendationsResult] = await Promise.allSettled([
+  const [overviewResult, tasksResult, notesResult, memoryResult, safetyResult, recommendationsResult, mirrorOverviewResult, noteBucketsResult] = await Promise.allSettled([
     getDashboardOverview({
       focus_mode: false,
       include: ["focus_summary", "trust_summary", "quick_actions", "high_value_signal"],
@@ -819,6 +1424,11 @@ export async function loadDashboardHomeData(): Promise<DashboardHomeData> {
       scene: "idle",
       source: "dashboard",
     }),
+    getMirrorOverview({
+      include: ["profile", "history_summary", "daily_summary", "memory_references"],
+      request_meta: createRequestMeta("dashboard_home_mirror_overview"),
+    }),
+    loadDashboardHomeNoteBuckets(),
   ]);
 
   if (overviewResult.status === "rejected") {
@@ -841,6 +1451,18 @@ export async function loadDashboardHomeData(): Promise<DashboardHomeData> {
   const recommendations = recommendationsResult.status === "fulfilled"
     ? recommendationsResult.value
     : (loadWarnings.push(formatDashboardHomeLoadWarning("建议流", recommendationsResult.reason)), createEmptyRecommendationResult());
+  const mirrorOverview = mirrorOverviewResult.status === "fulfilled"
+    ? mirrorOverviewResult.value
+    : (loadWarnings.push(formatDashboardHomeLoadWarning("镜子概览", mirrorOverviewResult.reason)), null);
+  const noteBuckets = noteBucketsResult.status === "fulfilled"
+    ? noteBucketsResult.value
+    : null;
+
+  if (noteBuckets) {
+    loadWarnings.push(...noteBuckets.warnings);
+  } else if (noteBucketsResult.status === "rejected") {
+    loadWarnings.push(formatDashboardHomeLoadWarning("便签详情", noteBucketsResult.reason));
+  }
 
   return buildDashboardHomeData({
     loadWarnings,
@@ -850,6 +1472,8 @@ export async function loadDashboardHomeData(): Promise<DashboardHomeData> {
       safety: safetyModule,
       tasks: tasksModule,
     },
+    mirrorOverview,
+    noteBuckets,
     overview: overviewResult.value,
     recommendations,
   });

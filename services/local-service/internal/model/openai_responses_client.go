@@ -1,4 +1,4 @@
-// 该文件负责 OpenAI Responses provider 的最小实现。
+// Package model contains the OpenAI Responses provider implementation.
 package model
 
 import (
@@ -18,34 +18,35 @@ import (
 	"github.com/openai/openai-go/responses"
 )
 
-// OpenAIResponsesProvider 定义当前模块的基础变量。
+// OpenAIResponsesProvider is the provider identifier exposed by model services.
 const OpenAIResponsesProvider = "openai_responses"
 
-// ErrOpenAIAPIKeyRequired 定义当前模块的基础变量。
+// ErrOpenAIAPIKeyRequired reports a missing API key before a client is created.
 var ErrOpenAIAPIKeyRequired = errors.New("openai responses api key is required")
 
-// ErrOpenAIEndpointRequired 定义当前模块的基础变量。
+// ErrOpenAIEndpointRequired reports a missing or empty provider endpoint.
 var ErrOpenAIEndpointRequired = errors.New("openai responses endpoint is required")
 
-// ErrOpenAIModelIDRequired 定义当前模块的基础变量。
+// ErrOpenAIModelIDRequired reports a missing model identifier.
 var ErrOpenAIModelIDRequired = errors.New("openai responses model id is required")
 
-// ErrOpenAIRequestFailed 定义当前模块的基础变量。
+// ErrOpenAIRequestFailed wraps transport or SDK errors that are not classified further.
 var ErrOpenAIRequestFailed = errors.New("openai responses request failed")
 
-// ErrOpenAIRequestTimeout 定义当前模块的基础变量。
+// ErrOpenAIRequestTimeout wraps provider calls that exceeded their deadline.
 var ErrOpenAIRequestTimeout = errors.New("openai responses request timed out")
 
-// ErrOpenAIResponseInvalid 定义当前模块的基础变量。
+// ErrOpenAIResponseInvalid wraps malformed provider response payloads.
 var ErrOpenAIResponseInvalid = errors.New("openai responses response invalid")
 
-// ErrOpenAIHTTPStatus 定义当前模块的基础变量。
+// ErrOpenAIHTTPStatus wraps non-success HTTP statuses returned by the provider.
 var ErrOpenAIHTTPStatus = errors.New("openai responses http status error")
 
-// ErrGenerateTextInputRequired 定义当前模块的基础变量。
+// ErrGenerateTextInputRequired reports an empty generation prompt.
 var ErrGenerateTextInputRequired = errors.New("generate text input is required")
 
-// OpenAIResponsesClientConfig 描述当前模块配置。
+// OpenAIResponsesClientConfig is the complete dependency/configuration input for
+// one OpenAI Responses client.
 type OpenAIResponsesClientConfig struct {
 	APIKey     string
 	Endpoint   string
@@ -54,7 +55,8 @@ type OpenAIResponsesClientConfig struct {
 	HTTPClient *http.Client
 }
 
-// OpenAIResponsesClient 封装 OpenAI 官方 Responses SDK。
+// OpenAIResponsesClient wraps the official OpenAI SDK behind the local Client
+// and ToolCallingClient contracts.
 type OpenAIResponsesClient struct {
 	apiKey     string
 	endpoint   string
@@ -64,7 +66,7 @@ type OpenAIResponsesClient struct {
 	client     openai.Client
 }
 
-// OpenAIHTTPStatusError 归一化 SDK 返回的 HTTP 状态错误。
+// OpenAIHTTPStatusError normalizes provider HTTP status failures.
 type OpenAIHTTPStatusError struct {
 	StatusCode int
 	Message    string
@@ -83,7 +85,7 @@ func (e *OpenAIHTTPStatusError) Unwrap() error {
 
 const defaultOpenAIResponsesTimeout = 30 * time.Second
 
-// NewOpenAIResponsesClient 创建并返回基于官方 SDK 的 client。
+// NewOpenAIResponsesClient validates provider config and returns an SDK-backed client.
 func NewOpenAIResponsesClient(cfg OpenAIResponsesClientConfig) (*OpenAIResponsesClient, error) {
 	if strings.TrimSpace(cfg.APIKey) == "" {
 		return nil, ErrOpenAIAPIKeyRequired
@@ -133,7 +135,7 @@ func NewOpenAIResponsesClient(cfg OpenAIResponsesClientConfig) (*OpenAIResponses
 	}, nil
 }
 
-// GenerateText 通过官方 Responses SDK 执行最小文本生成。
+// GenerateText performs one minimal text generation through the Responses API.
 func (c *OpenAIResponsesClient) GenerateText(ctx context.Context, request GenerateTextRequest) (GenerateTextResponse, error) {
 	startedAt := time.Now()
 	if strings.TrimSpace(request.Input) == "" {
@@ -212,17 +214,17 @@ func (c *OpenAIResponsesClient) GenerateToolCalls(ctx context.Context, request T
 	}, nil
 }
 
-// Provider 返回 provider 名称。
+// Provider returns the stable provider identifier used by model descriptors.
 func (c *OpenAIResponsesClient) Provider() string {
 	return OpenAIResponsesProvider
 }
 
-// ModelID 返回 model id。
+// ModelID returns the configured model identifier.
 func (c *OpenAIResponsesClient) ModelID() string {
 	return c.modelID
 }
 
-// Endpoint 返回配置的原始 endpoint。
+// Endpoint returns the configured raw endpoint before SDK path normalization.
 func (c *OpenAIResponsesClient) Endpoint() string {
 	return c.endpoint
 }
