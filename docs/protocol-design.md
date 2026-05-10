@@ -990,6 +990,10 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `data.task.current_step` | 当前步骤      |
 | `data.bubble_message` | 状态提示气泡     |
 
+补充约束：
+
+- `data.bubble_message.type = intent_confirm` 时，`text` 必须继续复用正式确认气泡文案生成规则；它随当前候选 `intent` 变化，不得写死为单一“已按修正意图处理”类提示。
+
 ### agent.task.confirm 出参示例
 
 ```json
@@ -1013,7 +1017,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
         "bubble_id": "bubble_102",
         "task_id": "task_101",
         "type": "intent_confirm",
-        "text": "我会按修正后的意图处理当前内容，请确认后继续。"
+        "text": "请确认你希望我如何处理当前内容。"
       }
     },
     "meta": {
