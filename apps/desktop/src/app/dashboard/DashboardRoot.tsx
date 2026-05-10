@@ -17,6 +17,11 @@ import {
   type DashboardTaskDetailOpenRequest,
 } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { resolveDashboardModuleRoutePath, resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
+import {
+  dashboardTaskDeliveryNavigationEvent,
+  navigateToDashboardTaskDelivery,
+  type DashboardTaskDeliveryOpenRequest,
+} from "@/features/dashboard/tasks/taskDeliveryNavigation";
 import { TasksPage } from "@/features/dashboard/tasks/TasksPage";
 import { subscribeApprovalPending, subscribeDeliveryReady, subscribeTaskUpdated } from "@/rpc/subscriptions";
 import { rememberConversationSessionFromTaskUpdated } from "@/services/conversationSessionService";
@@ -137,7 +142,8 @@ function DashboardRoutes() {
 
   useEffect(() => {
     let disposed = false;
-    let cleanup: (() => void) | null = null;
+    let clearTaskDetailNavigation: (() => void) | null = null;
+    let clearTaskDeliveryNavigation: (() => void) | null = null;
 
     void getCurrentWindow()
       .listen<DashboardTaskDetailOpenRequest>(dashboardTaskDetailNavigationEvent, ({ payload }) => {
@@ -154,15 +160,37 @@ function DashboardRoutes() {
           return;
         }
 
-        cleanup = unlisten;
+        clearTaskDetailNavigation = unlisten;
       })
       .catch((error) => {
         console.warn("dashboard task-detail navigation listener failed", error);
       });
 
+    void getCurrentWindow()
+      .listen<DashboardTaskDeliveryOpenRequest>(dashboardTaskDeliveryNavigationEvent, ({ payload }) => {
+        if (!rememberHandledTaskDetailRequest(payload.request_id)) {
+          return;
+        }
+
+        setVoiceOpen(false);
+        navigateToDashboardTaskDelivery(navigate, payload.task_id);
+      })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+
+        clearTaskDeliveryNavigation = unlisten;
+      })
+      .catch((error) => {
+        console.warn("dashboard task-delivery navigation listener failed", error);
+      });
+
     return () => {
       disposed = true;
-      cleanup?.();
+      clearTaskDetailNavigation?.();
+      clearTaskDeliveryNavigation?.();
     };
   }, [navigate]);
 

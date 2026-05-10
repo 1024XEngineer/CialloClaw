@@ -406,6 +406,7 @@ export const dashboardSummonTemplates: Omit<DashboardHomeSummonEvent, "id">[] = 
   {
     duration: 6400,
     message: "你有一个任务正在快速接近收尾",
+    module: "tasks",
     nextStep: "点开任务页继续推进",
     priority: "urgent",
     reason: "当前主任务已经进入草稿确认阶段",
@@ -414,6 +415,7 @@ export const dashboardSummonTemplates: Omit<DashboardHomeSummonEvent, "id">[] = 
   {
     duration: 5600,
     message: "昨晚留下的便签里，有 2 条已经变成可执行事项",
+    module: "notes",
     nextStep: "去便签页看我整理出来的顺序",
     priority: "normal",
     reason: "已识别 2 项可直接推进，1 项需确认优先级",
@@ -422,6 +424,7 @@ export const dashboardSummonTemplates: Omit<DashboardHomeSummonEvent, "id">[] = 
   {
     duration: 5400,
     message: "镜子里浮出了一条新的节奏洞察",
+    module: "memory",
     nextStep: "打开镜子页查看这周的模式总结",
     priority: "normal",
     reason: "我记住了你最近新的深度工作时段",
@@ -430,6 +433,7 @@ export const dashboardSummonTemplates: Omit<DashboardHomeSummonEvent, "id">[] = 
   {
     duration: 5200,
     message: "有一条边界提醒值得你先看一眼",
+    module: "safety",
     nextStep: "去安全页确认风险与恢复点摘要",
     priority: "low",
     reason: "当前有一项操作需要你确认是否继续",

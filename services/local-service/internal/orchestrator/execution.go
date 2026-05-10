@@ -275,7 +275,7 @@ func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, sn
 		return updatedTask, resultBubble, deliveryResult, artifacts, nil
 	}
 
-	approvedOperation, approvedTargetObject := approvedExecutionFromTask(processingTask)
+	approvedOperation, approvedTargetObject, approvedToolInput := approvedExecutionFromTask(processingTask)
 	executionCtx := context.Background()
 	if shouldBoundTaskExecution(processingTask, snapshot, taskIntent, deliveryType) {
 		executionTimeout := s.executionTimeout
@@ -303,6 +303,7 @@ func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, sn
 		ApprovalGranted:      processingTask.Authorization != nil,
 		ApprovedOperation:    approvedOperation,
 		ApprovedTargetObject: approvedTargetObject,
+		ApprovedToolInput:    approvedToolInput,
 		BudgetDowngrade: map[string]any{
 			"enabled":         budgetDecision.Enabled,
 			"applied":         budgetDecision.Applied,
@@ -313,10 +314,13 @@ func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, sn
 			"trace":           cloneMap(budgetDecision.Trace),
 		},
 	})
+	if err == nil && executionResult.LoopStopReason != string(agentloop.StopReasonNeedAuthorization) {
+		executionResult = s.normalizeExecutionFormalDeliveryResult(processingTask.TaskID, deliveryType, resultTitle, executionResult)
+	}
 	processingTask = s.recordExecutionToolCalls(processingTask, executionResult.ToolCalls)
 	s.persistExecutionToolCallEvents(processingTask, taskIntent, executionResult.ToolCalls)
 	auditDeliveryResult := executionResult.DeliveryResult
-	if err != nil {
+	if err != nil || executionResult.LoopStopReason == string(agentloop.StopReasonNeedUserInput) {
 		auditDeliveryResult = nil
 	}
 	executionAuditRecords, executionTokenUsage := s.buildExecutionAudit(processingTask, executionResult.ToolCalls, auditDeliveryResult)
@@ -326,10 +330,17 @@ func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, sn
 	executionAuditRecords = append(executionAuditRecords, s.buildBudgetDowngradeAudit(processingTask, budgetDecision))
 	processingTask = s.appendAuditData(processingTask, executionAuditRecords, executionTokenUsage)
 	processingTask = s.recordBudgetDowngradeEvent(processingTask, budgetDecision)
-	traceCapture, traceErr := s.captureExecutionTrace(processingTask, snapshot, taskIntent, executionResult, err)
+	traceResult := executionResult
+	if traceResult.LoopStopReason == string(agentloop.StopReasonNeedUserInput) {
+		traceResult.DeliveryResult = nil
+	}
+	traceCapture, traceErr := s.captureExecutionTrace(processingTask, snapshot, taskIntent, traceResult, err)
 	if traceErr != nil {
 		failedTask, failureBubble := s.failExecutionTask(processingTask, taskIntent, executionResult, traceErr)
 		return failedTask, failureBubble, nil, nil, nil
+	}
+	if waitingTask, waitingBubble, ok, approvalErr := s.maybePauseForRuntimeApproval(processingTask, taskIntent, executionResult); approvalErr != nil || ok {
+		return waitingTask, waitingBubble, nil, nil, approvalErr
 	}
 	if escalatedTask, escalatedBubble, ok := s.maybeEscalateHumanLoop(processingTask, traceCapture, executionResult); ok {
 		return escalatedTask, escalatedBubble, nil, nil, nil
@@ -361,6 +372,26 @@ func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, sn
 	updatedTask = s.attachFormalCitations(processingTask, updatedTask, executionResult.ToolCalls, executionResult.ToolOutput, executionResult.DeliveryResult, executionArtifacts)
 	s.attachPostDeliveryHandoffs(updatedTask.TaskID, updatedTask.RunID, snapshot, taskIntent, executionResult.DeliveryResult, executionArtifacts)
 	return updatedTask, resultBubble, executionResult.DeliveryResult, executionArtifacts, nil
+}
+
+// normalizeExecutionFormalDeliveryResult keeps result-page delivery semantics at
+// the orchestrator boundary even when legacy direct-tool execution helpers still
+// emit bubble-shaped delivery results.
+func (s *Service) normalizeExecutionFormalDeliveryResult(taskID, deliveryType, resultTitle string, result execution.Result) execution.Result {
+	if strings.TrimSpace(deliveryType) != "result_page" {
+		return result
+	}
+	if stringValue(result.DeliveryResult, "type", "") == "result_page" {
+		return result
+	}
+	result.DeliveryResult = s.delivery.BuildDeliveryResultWithTargetPath(
+		taskID,
+		deliveryType,
+		resultTitle,
+		previewTextForDeliveryType(deliveryType),
+		"",
+	)
+	return result
 }
 
 // shouldBoundTaskExecution limits the outer orchestrator timeout to synchronous
@@ -982,11 +1013,11 @@ func (s *Service) activeExecutionStepName(taskIntent map[string]any) string {
 	return "generate_output"
 }
 
-func approvedExecutionFromTask(task runengine.TaskRecord) (string, string) {
+func approvedExecutionFromTask(task runengine.TaskRecord) (string, string, map[string]any) {
 	if len(task.PendingExecution) == 0 {
-		return "", ""
+		return "", "", nil
 	}
-	return stringValue(task.PendingExecution, "operation_name", ""), stringValue(task.PendingExecution, "target_object", "")
+	return stringValue(task.PendingExecution, "operation_name", ""), stringValue(task.PendingExecution, "target_object", ""), cloneMap(mapValue(task.PendingExecution, "approved_tool_input"))
 }
 
 func toolCallErrorCode(toolCall tools.ToolCallRecord) any {

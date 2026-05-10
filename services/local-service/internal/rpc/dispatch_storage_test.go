@@ -10,6 +10,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
@@ -284,6 +285,73 @@ func TestDispatchReturnsDeliveryOpenForTaskResult(t *testing.T) {
 	}
 	if success.Result.Data.(map[string]any)["open_action"] != "task_detail" {
 		t.Fatalf("expected task_detail action, got %+v", success.Result.Data)
+	}
+}
+
+func TestDispatchReturnsDeliveryOpenForResultPage(t *testing.T) {
+	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "delivery-open-result-page.db")))
+	defer func() { _ = storageService.Close() }()
+	server := newTestServerWithStorage(storageService)
+	taskID := "task_delivery_result_page_rpc"
+	err := storageService.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:            taskID,
+		SessionID:         "sess_delivery_result_page_rpc",
+		RunID:             "run_delivery_result_page_rpc_001",
+		PrimaryRunID:      "run_delivery_result_page_rpc_001",
+		Title:             "网页读取结果",
+		SourceType:        "floating_ball",
+		Status:            "completed",
+		IntentName:        "page_read",
+		PreferredDelivery: "result_page",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "deliver_result",
+		CurrentStepStatus: "completed",
+		RiskLevel:         "green",
+		RequestSource:     "floating_ball",
+		RequestTrigger:    "hover_text_input",
+		StartedAt:         "2026-04-14T10:09:00Z",
+		UpdatedAt:         "2026-04-14T10:10:00Z",
+		FinishedAt:        "2026-04-14T10:10:00Z",
+	})
+	if err != nil {
+		t.Fatalf("write task: %v", err)
+	}
+	err = storageService.LoopRuntimeStore().SaveDeliveryResult(context.Background(), storage.DeliveryResultRecord{
+		DeliveryResultID: "delivery_result_page_rpc_001",
+		TaskID:           taskID,
+		RunID:            "run_delivery_result_page_rpc_001",
+		Type:             "result_page",
+		Title:            "网页读取结果",
+		PayloadJSON:      `{"path":null,"task_id":"` + taskID + `","url":"` + delivery.ResolveResultPageURL(taskID) + `"}`,
+		PreviewText:      "结果已生成，正在打开结果页",
+		CreatedAt:        "2026-04-14T10:10:00Z",
+	})
+	if err != nil {
+		t.Fatalf("save delivery result: %v", err)
+	}
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-delivery-open-result-page"`),
+		Method:  methodAgentDeliveryOpen,
+		Params:  mustMarshal(t, map[string]any{"task_id": taskID}),
+	})
+	success, ok := response.(successEnvelope)
+	if !ok {
+		t.Fatalf("expected success response envelope, got %#v", response)
+	}
+	data := success.Result.Data.(map[string]any)
+	if data["open_action"] != "result_page" {
+		t.Fatalf("expected result_page action, got %+v", data)
+	}
+	resolvedPayload, ok := data["resolved_payload"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected resolved payload map, got %+v", data)
+	}
+	if resolvedPayload["path"] != nil {
+		t.Fatalf("expected result_page payload path to stay empty, got %+v", resolvedPayload)
+	}
+	if resolvedPayload["url"] != delivery.ResolveResultPageURL(taskID) {
+		t.Fatalf("expected stable result_page url, got %+v", resolvedPayload)
 	}
 }
 
