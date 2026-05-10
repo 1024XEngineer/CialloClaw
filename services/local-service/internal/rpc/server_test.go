@@ -117,6 +117,13 @@ type stubExecutionCapability struct {
 	err    error
 }
 
+func rpcRequestMeta(traceID string) map[string]any {
+	return map[string]any{
+		"trace_id":    traceID,
+		"client_time": "2026-05-10T00:00:00Z",
+	}
+}
+
 func (s stubExecutionCapability) RunCommand(_ context.Context, _ string, _ []string, _ string) (tools.CommandExecutionResult, error) {
 	if s.err != nil {
 		return tools.CommandExecutionResult{}, s.err
@@ -169,8 +176,9 @@ func TestHandleStreamConnEmitsApprovalNotifications(t *testing.T) {
 		ID:      json.RawMessage(`"req-1"`),
 		Method:  "agent.task.confirm",
 		Params: mustMarshal(t, map[string]any{
-			"task_id":   taskID,
-			"confirmed": false,
+			"request_meta": rpcRequestMeta("trace_task_confirm_approval"),
+			"task_id":      taskID,
+			"confirmed":    false,
 			"corrected_intent": map[string]any{
 				"name": "write_file",
 				"arguments": map[string]any{
@@ -331,8 +339,9 @@ func TestHandleStreamConnStreamsLoopLifecycleNotificationsBeforeResponse(t *test
 		ID:      json.RawMessage(`"req-loop-stream"`),
 		Method:  "agent.task.confirm",
 		Params: mustMarshal(t, map[string]any{
-			"task_id":   taskID,
-			"confirmed": false,
+			"request_meta": rpcRequestMeta("trace_task_confirm_loop_stream"),
+			"task_id":      taskID,
+			"confirmed":    false,
 			"corrected_intent": map[string]any{
 				"name":      "agent_loop",
 				"arguments": map[string]any{},
@@ -626,8 +635,9 @@ func TestHandleStreamConnFiltersRuntimeNotificationsToRequestTask(t *testing.T) 
 		ID:      json.RawMessage(`"req-loop-scope"`),
 		Method:  "agent.task.confirm",
 		Params: mustMarshal(t, map[string]any{
-			"task_id":   taskA,
-			"confirmed": false,
+			"request_meta": rpcRequestMeta("trace_task_confirm_loop_scope"),
+			"task_id":      taskA,
+			"confirmed":    false,
 			"corrected_intent": map[string]any{
 				"name":      "agent_loop",
 				"arguments": map[string]any{},
@@ -1652,7 +1662,9 @@ func TestHandleStreamConnTaskListDoesNotStealBufferedNotifications(t *testing.T)
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-task-list-owned"`),
 		Method:  "agent.task.list",
-		Params:  mustMarshal(t, map[string]any{}),
+		Params: mustMarshal(t, map[string]any{
+			"request_meta": rpcRequestMeta("trace_task_list_owned"),
+		}),
 	}); err != nil {
 		t.Fatalf("encode task.list request: %v", err)
 	}
@@ -1803,8 +1815,9 @@ func TestHandleStreamConnKeepsQueuedReadsResponsiveWhileLoopTaskRuns(t *testing.
 		ID:      json.RawMessage(`"req-loop-blocked"`),
 		Method:  "agent.task.confirm",
 		Params: mustMarshal(t, map[string]any{
-			"task_id":   taskA,
-			"confirmed": false,
+			"request_meta": rpcRequestMeta("trace_task_confirm_loop_blocked"),
+			"task_id":      taskA,
+			"confirmed":    false,
 			"corrected_intent": map[string]any{
 				"name":      "agent_loop",
 				"arguments": map[string]any{},
@@ -1958,8 +1971,9 @@ func TestHandleStreamConnSerializesConcurrentRequestsForSameTask(t *testing.T) {
 		ID:      json.RawMessage(`"req-loop-same-task"`),
 		Method:  "agent.task.confirm",
 		Params: mustMarshal(t, map[string]any{
-			"task_id":   taskID,
-			"confirmed": false,
+			"request_meta": rpcRequestMeta("trace_task_confirm_same_task"),
+			"task_id":      taskID,
+			"confirmed":    false,
 			"corrected_intent": map[string]any{
 				"name":      "agent_loop",
 				"arguments": map[string]any{},
@@ -2348,8 +2362,9 @@ func TestDispatchMapsTaskControlStatusErrors(t *testing.T) {
 		ID:      json.RawMessage(`"req-task-control-invalid"`),
 		Method:  "agent.task.control",
 		Params: mustMarshal(t, map[string]any{
-			"task_id": taskID,
-			"action":  "pause",
+			"request_meta": rpcRequestMeta("trace_task_control_invalid_status"),
+			"task_id":      taskID,
+			"action":       "pause",
 		}),
 	})
 
@@ -2393,8 +2408,9 @@ func TestDispatchMapsTaskControlFinishedErrors(t *testing.T) {
 		ID:      json.RawMessage(`"req-task-control-finished"`),
 		Method:  "agent.task.control",
 		Params: mustMarshal(t, map[string]any{
-			"task_id": taskID,
-			"action":  "cancel",
+			"request_meta": rpcRequestMeta("trace_task_control_finished"),
+			"task_id":      taskID,
+			"action":       "cancel",
 		}),
 	})
 
@@ -2431,9 +2447,10 @@ func TestDispatchReturnsSecurityAuditList(t *testing.T) {
 		ID:      json.RawMessage(`"req-security-audit-list"`),
 		Method:  "agent.security.audit.list",
 		Params: mustMarshal(t, map[string]any{
-			"task_id": "task_001",
-			"limit":   20,
-			"offset":  0,
+			"request_meta": rpcRequestMeta("trace_security_audit_list"),
+			"task_id":      "task_001",
+			"limit":        20,
+			"offset":       0,
 		}),
 	})
 
@@ -2471,9 +2488,10 @@ func TestDispatchReturnsSecurityRestorePointsList(t *testing.T) {
 		ID:      json.RawMessage(`"req-security-restore-points-list"`),
 		Method:  "agent.security.restore_points.list",
 		Params: mustMarshal(t, map[string]any{
-			"task_id": "task_001",
-			"limit":   20,
-			"offset":  0,
+			"request_meta": rpcRequestMeta("trace_security_restore_points"),
+			"task_id":      "task_001",
+			"limit":        20,
+			"offset":       0,
 		}),
 	})
 
@@ -2525,6 +2543,7 @@ func TestDispatchReturnsSecurityRestoreApplyResult(t *testing.T) {
 		ID:      json.RawMessage(`"req-security-restore-apply"`),
 		Method:  "agent.security.restore.apply",
 		Params: mustMarshal(t, map[string]any{
+			"request_meta":      rpcRequestMeta("trace_security_restore_apply"),
 			"task_id":           taskID,
 			"recovery_point_id": "rp_001",
 		}),
@@ -2554,8 +2573,9 @@ func TestDispatchReturnsNotepadUpdateResult(t *testing.T) {
 		ID:      json.RawMessage(`"req-notepad-update"`),
 		Method:  "agent.notepad.update",
 		Params: mustMarshal(t, map[string]any{
-			"item_id": "todo_002",
-			"action":  "move_upcoming",
+			"request_meta": rpcRequestMeta("trace_notepad_update"),
+			"item_id":      "todo_002",
+			"action":       "move_upcoming",
 		}),
 	})
 
@@ -2602,9 +2622,10 @@ func TestDispatchReturnsTaskArtifactList(t *testing.T) {
 		ID:      json.RawMessage(`"req-task-artifact-list"`),
 		Method:  "agent.task.artifact.list",
 		Params: mustMarshal(t, map[string]any{
-			"task_id": "task_rpc_001",
-			"limit":   20,
-			"offset":  0,
+			"request_meta": rpcRequestMeta("trace_task_artifact_list"),
+			"task_id":      "task_rpc_001",
+			"limit":        20,
+			"offset":       0,
 		}),
 	})
 	success, ok := response.(successEnvelope)
@@ -2641,8 +2662,9 @@ func TestDispatchReturnsTaskArtifactOpen(t *testing.T) {
 		ID:      json.RawMessage(`"req-task-artifact-open"`),
 		Method:  "agent.task.artifact.open",
 		Params: mustMarshal(t, map[string]any{
-			"task_id":     "task_rpc_open_001",
-			"artifact_id": "art_rpc_open_001",
+			"request_meta": rpcRequestMeta("trace_task_artifact_open"),
+			"task_id":      "task_rpc_open_001",
+			"artifact_id":  "art_rpc_open_001",
 		}),
 	})
 	success, ok := response.(successEnvelope)
@@ -2692,8 +2714,9 @@ func TestDispatchReturnsDeliveryOpenForArtifact(t *testing.T) {
 		ID:      json.RawMessage(`"req-delivery-open-artifact"`),
 		Method:  "agent.delivery.open",
 		Params: mustMarshal(t, map[string]any{
-			"task_id":     "task_delivery_rpc_001",
-			"artifact_id": "art_delivery_rpc_001",
+			"request_meta": rpcRequestMeta("trace_delivery_open_artifact"),
+			"task_id":      "task_delivery_rpc_001",
+			"artifact_id":  "art_delivery_rpc_001",
 		}),
 	})
 	success, ok := response.(successEnvelope)
@@ -2732,7 +2755,8 @@ func TestDispatchReturnsDeliveryOpenForTaskResult(t *testing.T) {
 		ID:      json.RawMessage(`"req-delivery-open-task"`),
 		Method:  "agent.delivery.open",
 		Params: mustMarshal(t, map[string]any{
-			"task_id": taskID,
+			"request_meta": rpcRequestMeta("trace_delivery_open_task"),
+			"task_id":      taskID,
 		}),
 	})
 	success, ok := response.(successEnvelope)
@@ -2881,6 +2905,7 @@ func TestDispatchReturnsFormalTaskInspectorRunSourceErrors(t *testing.T) {
 				ID:      json.RawMessage(fmt.Sprintf(`"%s"`, test.requestID)),
 				Method:  "agent.task_inspector.run",
 				Params: mustMarshal(t, map[string]any{
+					"request_meta":   rpcRequestMeta("trace_task_inspector_run"),
 					"target_sources": test.targetSources,
 				}),
 			})
@@ -2978,7 +3003,10 @@ func TestDispatchReturnsSettingsGet(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-settings-get"`),
 		Method:  "agent.settings.get",
-		Params:  mustMarshal(t, map[string]any{"scope": "all"}),
+		Params: mustMarshal(t, map[string]any{
+			"request_meta": rpcRequestMeta("trace_settings_get"),
+			"scope":        "all",
+		}),
 	})
 	success, ok := response.(successEnvelope)
 	if !ok {
@@ -3001,6 +3029,7 @@ func TestDispatchReturnsSettingsUpdate(t *testing.T) {
 		ID:      json.RawMessage(`"req-settings-update"`),
 		Method:  "agent.settings.update",
 		Params: mustMarshal(t, map[string]any{
+			"request_meta": rpcRequestMeta("trace_settings_update"),
 			"models": map[string]any{
 				"provider": "openai",
 				"api_key":  "rpc-secret-key",
@@ -3030,6 +3059,7 @@ func TestDispatchReturnsSettingsModelValidate(t *testing.T) {
 		ID:      json.RawMessage(`"req-settings-model-validate"`),
 		Method:  "agent.settings.model.validate",
 		Params: mustMarshal(t, map[string]any{
+			"request_meta": rpcRequestMeta("trace_settings_model_validate"),
 			"models": map[string]any{
 				"provider": "openai",
 				"base_url": "https://api.example.com/v1",
@@ -3157,8 +3187,9 @@ func TestDispatchMapsTaskControlInvalidActionToInvalidParams(t *testing.T) {
 		ID:      json.RawMessage(`"req-task-control-invalid-action"`),
 		Method:  "agent.task.control",
 		Params: mustMarshal(t, map[string]any{
-			"task_id": taskID,
-			"action":  "skip",
+			"request_meta": rpcRequestMeta("trace_task_control_invalid_action"),
+			"task_id":      taskID,
+			"action":       "skip",
 		}),
 	})
 
@@ -3179,7 +3210,8 @@ func TestDispatchMapsTaskControlMissingTaskIDToInvalidParams(t *testing.T) {
 		ID:      json.RawMessage(`"req-task-control-missing-task-id"`),
 		Method:  "agent.task.control",
 		Params: mustMarshal(t, map[string]any{
-			"action": "pause",
+			"request_meta": rpcRequestMeta("trace_task_control_missing_task_id"),
+			"action":       "pause",
 		}),
 	})
 
@@ -3220,7 +3252,8 @@ func TestDispatchMapsTaskControlMissingActionToInvalidParams(t *testing.T) {
 		ID:      json.RawMessage(`"req-task-control-missing-action"`),
 		Method:  "agent.task.control",
 		Params: mustMarshal(t, map[string]any{
-			"task_id": taskID,
+			"request_meta": rpcRequestMeta("trace_task_control_missing_action"),
+			"task_id":      taskID,
 		}),
 	})
 
@@ -3262,11 +3295,12 @@ func TestDispatchTaskListClampsPagingParams(t *testing.T) {
 		ID:      json.RawMessage(`"req-task-list-clamp"`),
 		Method:  "agent.task.list",
 		Params: mustMarshal(t, map[string]any{
-			"group":      "unfinished",
-			"limit":      0,
-			"offset":     -5,
-			"sort_by":    "updated_at",
-			"sort_order": "desc",
+			"request_meta": rpcRequestMeta("trace_task_list_clamp"),
+			"group":        "unfinished",
+			"limit":        0,
+			"offset":       -5,
+			"sort_by":      "updated_at",
+			"sort_order":   "desc",
 		}),
 	})
 
@@ -3317,11 +3351,12 @@ func TestDispatchTaskEventsListReturnsLoopEvents(t *testing.T) {
 		ID:      json.RawMessage(`"req-task-events-list"`),
 		Method:  "agent.task.events.list",
 		Params: mustMarshal(t, map[string]any{
-			"task_id": "task_rpc_loop_001",
-			"run_id":  "run_rpc_loop_001",
-			"type":    "loop.completed",
-			"limit":   20,
-			"offset":  0,
+			"request_meta": rpcRequestMeta("trace_task_events_list"),
+			"task_id":      "task_rpc_loop_001",
+			"run_id":       "run_rpc_loop_001",
+			"type":         "loop.completed",
+			"limit":        20,
+			"offset":       0,
 		}),
 	})
 
@@ -3359,9 +3394,10 @@ func TestDispatchTaskToolCallsListReturnsPersistedToolCalls(t *testing.T) {
 		ID:      json.RawMessage(`"req-task-tool-calls-list"`),
 		Method:  "agent.task.tool_calls.list",
 		Params: mustMarshal(t, map[string]any{
-			"task_id": "task_rpc_tool_001",
-			"limit":   20,
-			"offset":  0,
+			"request_meta": rpcRequestMeta("trace_task_tool_calls_list"),
+			"task_id":      "task_rpc_tool_001",
+			"limit":        20,
+			"offset":       0,
 		}),
 	})
 
@@ -3403,8 +3439,9 @@ func TestDispatchTaskSteerReturnsUpdatedTask(t *testing.T) {
 		ID:      json.RawMessage(`"req-task-steer"`),
 		Method:  "agent.task.steer",
 		Params: mustMarshal(t, map[string]any{
-			"task_id": taskID,
-			"message": "Also include a short summary section.",
+			"request_meta": rpcRequestMeta("trace_task_steer"),
+			"task_id":      taskID,
+			"message":      "Also include a short summary section.",
 		}),
 	})
 

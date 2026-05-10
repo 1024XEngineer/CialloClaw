@@ -206,6 +206,86 @@ func TestStableDTOsRejectIncompleteRequestMeta(t *testing.T) {
 	}
 }
 
+func TestStableDTOsRejectWhitespaceOnlyRequiredStrings(t *testing.T) {
+	testCases := []struct {
+		name   string
+		decode func(json.RawMessage) (map[string]any, *rpcError)
+		params map[string]any
+	}{
+		{
+			name:   "agent.input.submit trace_id",
+			decode: decodeAgentInputSubmitParams,
+			params: map[string]any{
+				"request_meta": map[string]any{
+					"trace_id":    "   ",
+					"client_time": "2026-05-09T12:00:00+08:00",
+				},
+				"source":  "floating_ball",
+				"trigger": "hover_text_input",
+				"input": map[string]any{
+					"type":       "text",
+					"text":       "inspect the page",
+					"input_mode": "text",
+				},
+				"context": map[string]any{},
+			},
+		},
+		{
+			name:   "agent.task.detail.get task_id",
+			decode: decodeAgentTaskDetailGetParams,
+			params: map[string]any{
+				"request_meta": map[string]any{
+					"trace_id":    "trace_task_detail_whitespace",
+					"client_time": "2026-05-09T12:00:00+08:00",
+				},
+				"task_id": "   ",
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, rpcErr := testCase.decode(mustMarshal(t, testCase.params))
+			if rpcErr == nil {
+				t.Fatal("expected whitespace-only required strings to return invalid params")
+			}
+			if rpcErr.Code != errInvalidParams || rpcErr.Message != "INVALID_PARAMS" {
+				t.Fatalf("expected invalid params error, got %+v", rpcErr)
+			}
+		})
+	}
+}
+
+func TestDecodeParamsRequiringRequestMetaMatchesStableContract(t *testing.T) {
+	_, rpcErr := decodeParamsRequiringRequestMeta(mustMarshal(t, map[string]any{
+		"group":  "unfinished",
+		"limit":  20,
+		"offset": 0,
+	}))
+	if rpcErr == nil {
+		t.Fatal("expected stable decode helper to reject missing request_meta")
+	}
+	if rpcErr.Code != errInvalidParams || rpcErr.Message != "INVALID_PARAMS" {
+		t.Fatalf("expected invalid params error, got %+v", rpcErr)
+	}
+
+	params, rpcErr := decodeParamsRequiringRequestMeta(mustMarshal(t, map[string]any{
+		"request_meta": map[string]any{
+			"trace_id":    "trace_task_list_valid_meta",
+			"client_time": "2026-05-09T12:00:00+08:00",
+		},
+		"group":  "unfinished",
+		"limit":  20,
+		"offset": 0,
+	}))
+	if rpcErr != nil {
+		t.Fatalf("expected valid request_meta to pass stable decode helper, got %+v", rpcErr)
+	}
+	if requestTraceID(params) != "trace_task_list_valid_meta" {
+		t.Fatalf("expected decode helper to preserve request_meta, got %+v", params)
+	}
+}
+
 func TestAgentTaskStartDTORejectsOutOfDomainPageContextBrowserWithoutContext(t *testing.T) {
 	_, rpcErr := decodeAgentTaskStartParams(mustMarshal(t, map[string]any{
 		"request_meta": map[string]any{

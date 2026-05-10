@@ -60,7 +60,10 @@ func TestHandleStreamConnServesJSONRPCSuccess(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-stream-success"`),
 		Method:  "agent.settings.get",
-		Params:  mustMarshal(t, map[string]any{"scope": "all"}),
+		Params: mustMarshal(t, map[string]any{
+			"request_meta": rpcRequestMeta("trace_stream_settings_get"),
+			"scope":        "all",
+		}),
 	}
 	if err := json.NewEncoder(right).Encode(request); err != nil {
 		t.Fatalf("encode stream request: %v", err)
@@ -248,7 +251,7 @@ func TestHandleHTTPRPCCoversMethodDecodeAndSuccess(t *testing.T) {
 	}
 
 	successRecorder := httptest.NewRecorder()
-	successRequest := httptest.NewRequest(http.MethodPost, "/rpc", strings.NewReader(`{"jsonrpc":"2.0","id":"req-http-rpc","method":"agent.settings.get","params":{"scope":"all"}}`))
+	successRequest := httptest.NewRequest(http.MethodPost, "/rpc", strings.NewReader(`{"jsonrpc":"2.0","id":"req-http-rpc","method":"agent.settings.get","params":{"request_meta":{"trace_id":"trace_http_settings_get","client_time":"2026-05-10T00:00:00Z"},"scope":"all"}}`))
 	server.handleHTTPRPC(successRecorder, successRequest)
 	if successRecorder.Code != http.StatusOK {
 		t.Fatalf("expected rpc post to return 200, got %d", successRecorder.Code)

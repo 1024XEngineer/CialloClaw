@@ -3,6 +3,7 @@ package rpc
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 )
 
 var (
@@ -235,6 +236,23 @@ func decodeTypedProtocolParams(raw json.RawMessage, target any, validate func(ma
 	return protocolParamsMap(target)
 }
 
+func decodeParamsRequiringRequestMeta(raw json.RawMessage) (map[string]any, *rpcError) {
+	return decodeParamsWithValidation(raw, requireRequestMeta)
+}
+
+func decodeParamsWithValidation(raw json.RawMessage, validate func(map[string]any) *rpcError) (map[string]any, *rpcError) {
+	params, err := decodeParams(raw)
+	if err != nil {
+		return nil, err
+	}
+	if validate != nil {
+		if err := validate(params); err != nil {
+			return nil, err
+		}
+	}
+	return params, nil
+}
+
 func validateAgentInputSubmitParams(params map[string]any) *rpcError {
 	if err := requireRequestMeta(params); err != nil {
 		return err
@@ -368,7 +386,7 @@ func requireNonEmptyString(values map[string]any, key string) *rpcError {
 		return invalidParamsError("missing required string field: " + key)
 	}
 	value, ok := raw.(string)
-	if !ok || value == "" {
+	if !ok || strings.TrimSpace(value) == "" {
 		return invalidParamsError("field must be a non-empty string: " + key)
 	}
 	return nil
