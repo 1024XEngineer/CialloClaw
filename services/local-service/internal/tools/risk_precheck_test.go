@@ -202,8 +202,8 @@ func TestBuildRiskPrecheckInputPageReadUsesURLWithoutWorkspaceBoundary(t *testin
 	if len(webpages) != 1 || webpages[0] != "https://example.com/page" {
 		t.Fatalf("expected webpage impact scope, got %+v", result.ImpactScope)
 	}
-	if result.RiskLevel != RiskLevelYellow || !result.ApprovalRequired {
-		t.Fatalf("expected page_read to require approval, got %+v", result)
+	if result.RiskLevel != RiskLevelGreen || result.ApprovalRequired {
+		t.Fatalf("expected page_read to stay low risk, got %+v", result)
 	}
 }
 
