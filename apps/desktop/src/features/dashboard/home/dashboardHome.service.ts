@@ -283,6 +283,59 @@ function getOverviewQuickActions(overview: AgentDashboardOverviewGetResult) {
     : [];
 }
 
+function inferModuleFromOverviewSignal(signal: string): DashboardHomeModuleKey {
+  const corpus = signal.toLowerCase();
+
+  if (
+    corpus.includes("memory") ||
+    corpus.includes("mirror") ||
+    corpus.includes("profile") ||
+    corpus.includes("history") ||
+    corpus.includes("summary") ||
+    signal.includes("镜") ||
+    signal.includes("记忆") ||
+    signal.includes("画像") ||
+    signal.includes("历史") ||
+    signal.includes("总结")
+  ) {
+    return "memory";
+  }
+
+  if (
+    corpus.includes("safety") ||
+    corpus.includes("security") ||
+    corpus.includes("approval") ||
+    corpus.includes("authorize") ||
+    corpus.includes("audit") ||
+    corpus.includes("recovery") ||
+    corpus.includes("risk") ||
+    signal.includes("授权") ||
+    signal.includes("安全") ||
+    signal.includes("恢复") ||
+    signal.includes("审计") ||
+    signal.includes("风险")
+  ) {
+    return "safety";
+  }
+
+  if (
+    corpus.includes("todo") ||
+    corpus.includes("note") ||
+    corpus.includes("notes") ||
+    corpus.includes("reminder") ||
+    corpus.includes("schedule") ||
+    corpus.includes("recurring") ||
+    signal.includes("便签") ||
+    signal.includes("提醒") ||
+    signal.includes("日程") ||
+    signal.includes("待办")
+  ) {
+    return "notes";
+  }
+
+  return "tasks";
+}
+
 function matchesNavigationActionLabel(state: DashboardHomeStateData, actionLabel: string) {
   return state.navigationTarget?.label.trim() === actionLabel.trim();
 }
@@ -1146,7 +1199,7 @@ function buildOverviewSummons(
   if (templates.length === 0 && highValueSignals[0]) {
     const targetState = trustSummary.pending_authorizations > 0 || trustSummary.risk_level !== "green"
       ? safetyState
-      : taskState;
+      : stateMap[stateKeys[inferModuleFromOverviewSignal(highValueSignals[0])]];
 
     templates.push({
       duration: 5_800,

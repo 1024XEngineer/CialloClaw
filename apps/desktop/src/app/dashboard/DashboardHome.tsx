@@ -84,6 +84,39 @@ function pickNextSummonIndex(
 }
 
 function buildSummonTemplateSignature(templates: Array<Omit<DashboardHomeSummonEvent, "id">>) {
+  const buildNavigationTargetSignature = (
+    target: DashboardHomeSummonEvent["expandedState"]["navigationTarget"] | undefined,
+  ) => {
+    if (!target) {
+      return "";
+    }
+
+    if (target.kind === "task_detail") {
+      return [
+        target.kind,
+        target.module,
+        target.label,
+        target.taskId,
+      ].join("::");
+    }
+
+    if (target.kind === "mirror_detail") {
+      return [
+        target.kind,
+        target.module,
+        target.label,
+        target.activeDetailKey,
+        target.focusMemoryId ?? "",
+      ].join("::");
+    }
+
+    return [
+      target.kind,
+      target.module,
+      target.label,
+    ].join("::");
+  };
+
   return templates
     .map((template) => [
       template.stateKey,
@@ -93,6 +126,9 @@ function buildSummonTemplateSignature(templates: Array<Omit<DashboardHomeSummonE
       template.nextStep ?? "",
       template.priority,
       template.recommendationId ?? "",
+      template.expandedState?.headline ?? "",
+      template.expandedState?.subline ?? "",
+      buildNavigationTargetSignature(template.expandedState?.navigationTarget),
     ].join("::"))
     .join("||");
 }
