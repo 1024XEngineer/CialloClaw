@@ -23,6 +23,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	risksvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
@@ -480,7 +481,7 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 		result.RecoveryPoint = cloneMap(recoveryPoint)
 		result.Content = documentContent
 		result.Artifacts = s.delivery.BuildArtifact(request.TaskID, request.ResultTitle, deliveryResult)
-		result.BubbleText = fmt.Sprintf("结果已写入 %s，可直接查看。", targetPath)
+		result.BubbleText = presentation.Text(presentation.MessageBubbleWriteFileReady, map[string]string{"path": targetPath})
 		assignLatestToolTrace(&result, writeResult.ToolCall)
 		if len(recoveryPoint) > 0 {
 			enrichToolTrace(&result, map[string]any{"recovery_point": cloneMap(recoveryPoint)})
@@ -1133,7 +1134,7 @@ func (s *Service) executeThroughToolExecutor(ctx context.Context, request Reques
 	}
 	if toolName == "write_file" {
 		result.Artifacts = s.delivery.BuildArtifact(request.TaskID, request.ResultTitle, deliveryResult)
-		result.BubbleText = fmt.Sprintf("结果已写入 %s，可直接查看。", deliveryPayloadPath(deliveryResult))
+		result.BubbleText = presentation.Text(presentation.MessageBubbleWriteFileReady, map[string]string{"path": deliveryPayloadPath(deliveryResult)})
 		if content, ok := toolResult.RawOutput["content"].(string); ok && strings.TrimSpace(content) != "" {
 			result.Content = content
 		}
@@ -1611,11 +1612,11 @@ func (s *Service) buildScreenAnalysisResult(ctx context.Context, taskID string, 
 	}
 	ocrSummary := truncateText(normalizeWhitespace(flow.OCRResult.Text), 160)
 	if strings.TrimSpace(ocrSummary) == "" {
-		ocrSummary = "未识别到可用屏幕文本。"
+		ocrSummary = presentation.Text(presentation.MessageBubbleScreenOCRUnavailable, nil)
 	}
 	bubbleText := firstNonEmpty(
-		fmt.Sprintf("已分析屏幕内容：%s", ocrSummary),
-		"已分析屏幕内容。",
+		presentation.Text(presentation.MessageBubbleScreenAnalyzed, map[string]string{"summary": ocrSummary}),
+		presentation.Text(presentation.MessageBubbleScreenAnalyzed, map[string]string{"summary": presentation.Text(presentation.MessageBubbleScreenOCRUnavailable, nil)}),
 	)
 	previewText := truncateText(ocrSummary, deliveryPreviewMaxLength)
 	observationSummary := cloneMap(flow.ObservationSeed)
@@ -1866,7 +1867,7 @@ func workspacePathFromDeliveryResult(deliveryResult map[string]any) string {
 
 func toolBubbleText(toolName string, result *tools.ToolExecutionResult) string {
 	if result == nil {
-		return fmt.Sprintf("%s 执行完成。", toolName)
+		return presentation.Text(presentation.MessageToolBubbleGeneric, map[string]string{"tool_name": toolName})
 	}
 	if preview := stringValue(result.SummaryOutput, "content_preview", ""); preview != "" {
 		return preview
@@ -1876,7 +1877,7 @@ func toolBubbleText(toolName string, result *tools.ToolExecutionResult) string {
 	}
 	if query := stringValue(result.SummaryOutput, "query", ""); query != "" {
 		if count, ok := result.SummaryOutput["match_count"]; ok {
-			return fmt.Sprintf("页面搜索完成，关键词 %q 共匹配 %v 处。", query, count)
+			return presentation.Text(presentation.MessageToolBubbleSearchMatches, map[string]string{"query": query, "count": fmt.Sprintf("%v", count)})
 		}
 	}
 	if toolName == "browser_attach_current" {
@@ -1885,9 +1886,9 @@ func toolBubbleText(toolName string, result *tools.ToolExecutionResult) string {
 			title = stringValue(result.RawOutput, "title", "")
 		}
 		if title != "" {
-			return fmt.Sprintf("已定位浏览器标签页：%s。", title)
+			return presentation.Text(presentation.MessageToolBubbleBrowserAttach, map[string]string{"title": title})
 		}
-		return "已定位当前浏览器标签页。"
+		return presentation.Text(presentation.MessageToolBubbleBrowserAttachHere, nil)
 	}
 	if toolName == "browser_tab_focus" {
 		title := stringValue(result.SummaryOutput, "title", "")
@@ -1895,20 +1896,20 @@ func toolBubbleText(toolName string, result *tools.ToolExecutionResult) string {
 			title = stringValue(result.RawOutput, "title", "")
 		}
 		if title != "" {
-			return fmt.Sprintf("已切换到浏览器标签页：%s。", title)
+			return presentation.Text(presentation.MessageToolBubbleBrowserFocus, map[string]string{"title": title})
 		}
-		return "目标浏览器标签页已经切换完成。"
+		return presentation.Text(presentation.MessageToolBubbleBrowserFocused, nil)
 	}
 	if toolName == "browser_tabs_list" {
 		if count, ok := result.SummaryOutput["tab_count"]; ok {
-			return fmt.Sprintf("当前浏览器共有 %v 个标签页可用。", count)
+			return presentation.Text(presentation.MessageToolBubbleBrowserTabsCount, map[string]string{"count": fmt.Sprintf("%v", count)})
 		}
-		return "当前浏览器标签页列表已经返回。"
+		return presentation.Text(presentation.MessageToolBubbleBrowserTabsReady, nil)
 	}
 	if count, ok := result.SummaryOutput["entry_count"]; ok {
-		return fmt.Sprintf("%s 执行完成，当前目录条目数：%v。", toolName, count)
+		return presentation.Text(presentation.MessageToolBubbleDirectoryEntries, map[string]string{"tool_name": toolName, "count": fmt.Sprintf("%v", count)})
 	}
-	return fmt.Sprintf("%s 执行完成。", toolName)
+	return presentation.Text(presentation.MessageToolBubbleGeneric, map[string]string{"tool_name": toolName})
 }
 
 func (s *Service) buildExecutionInput(snapshot taskcontext.TaskContextSnapshot, memoryReadPlans []map[string]any) string {
@@ -2435,30 +2436,30 @@ func fallbackOutput(request Request, inputText string) string {
 	intentName := effectiveIntentName(request.Intent)
 	normalized := normalizeWhitespace(inputText)
 	if normalized == "" {
-		normalized = "无可用输入"
+		normalized = presentation.Text(presentation.MessageFallbackNoInput, nil)
 	}
 
 	switch intentName {
 	case "":
-		return "我还不确定你希望我怎么处理这段内容，请补充你的目标，例如解释、翻译、改写或总结。"
+		return presentation.Text(presentation.MessageFallbackClarify, nil)
 	case defaultAgentLoopIntentName:
-		return "我还不确定你希望我怎么处理这段内容，请补充你的目标，例如解释、翻译、改写或总结。"
+		return presentation.Text(presentation.MessageFallbackClarify, nil)
 	case "rewrite":
-		return "改写结果：\n" + normalized
+		return presentation.Text(presentation.MessageFallbackRewriteHeader, nil) + "\n" + normalized
 	case "translate":
 		targetLanguage := stringValue(mapValue(request.Intent, "arguments"), "target_language", "中文")
-		return fmt.Sprintf("翻译结果（回退模式，目标语言：%s）：\n%s", targetLanguage, normalized)
+		return presentation.Text(presentation.MessageFallbackTranslate, map[string]string{"target_language": targetLanguage}) + "\n" + normalized
 	case "explain":
-		return "解释结果：\n" + firstNonEmpty(firstSentence(normalized), normalized)
+		return presentation.Text(presentation.MessageFallbackExplainHeader, nil) + "\n" + firstNonEmpty(firstSentence(normalized), normalized)
 	case "write_file":
 		fallthrough
 	case "summarize":
 		highlights := extractHighlights(normalized, 3)
 		if len(highlights) == 0 {
-			return "总结结果：\n- 暂无可总结内容"
+			return presentation.Text(presentation.MessageFallbackSummarizeTitle, nil) + "\n" + presentation.Text(presentation.MessageFallbackSummarizeEmpty, nil)
 		}
 
-		lines := []string{"总结结果："}
+		lines := []string{presentation.Text(presentation.MessageFallbackSummarizeTitle, nil)}
 		for _, highlight := range highlights {
 			lines = append(lines, "- "+highlight)
 		}
@@ -2475,36 +2476,33 @@ func effectiveIntentName(taskIntent map[string]any) string {
 func workspaceDocumentContent(title, outputText string) string {
 	trimmed := strings.TrimSpace(outputText)
 	if trimmed == "" {
-		trimmed = "暂无内容"
+		trimmed = presentation.Text(presentation.MessageDocumentEmpty, nil)
 	}
 	if strings.HasPrefix(trimmed, "#") {
 		return trimmed + "\n"
 	}
-	return fmt.Sprintf("# %s\n\n%s\n", firstNonEmpty(strings.TrimSpace(title), "处理结果"), trimmed)
+	return fmt.Sprintf("# %s\n\n%s\n", firstNonEmpty(strings.TrimSpace(title), presentation.Text(presentation.MessageDocumentDefaultTitle, nil)), trimmed)
 }
 
 func previewTextForOutput(outputText, deliveryType string) string {
 	preview := truncateText(normalizeWhitespace(outputText), deliveryPreviewMaxLength)
 	if preview == "" {
-		preview = "结果已生成"
+		preview = presentation.Text(presentation.MessagePreviewGenerated, nil)
 	}
 	if deliveryType == "workspace_document" {
-		return "已生成正式文档：" + preview
+		return presentation.Text(presentation.MessagePreviewWorkspaceGenerated, map[string]string{"preview": preview})
 	}
 	return preview
 }
 
 func previewTextForDeliveryType(deliveryType string) string {
-	if deliveryType == "workspace_document" {
-		return "已为你写入文档并打开"
-	}
-	return "结果已通过气泡返回"
+	return presentation.DeliveryPreviewText(deliveryType)
 }
 
 func truncateBubbleText(outputText string) string {
 	trimmed := strings.TrimSpace(outputText)
 	if trimmed == "" {
-		return "结果已生成。"
+		return presentation.Text(presentation.MessageBubbleGenerated, nil)
 	}
 	return truncateText(trimmed, 480)
 }
@@ -3168,7 +3166,7 @@ func (s *Service) resolveGovernanceToolExecution(request Request) (string, map[s
 	deliveryResult := s.delivery.BuildDeliveryResultWithTargetPath(
 		request.TaskID,
 		deliveryType,
-		firstNonEmpty(strings.TrimSpace(request.ResultTitle), "处理结果"),
+		firstNonEmpty(strings.TrimSpace(request.ResultTitle), presentation.Text(presentation.MessageResultTitleGeneric, nil)),
 		previewText,
 		targetPathFromIntent(request.Intent),
 	)

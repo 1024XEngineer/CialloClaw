@@ -84,54 +84,54 @@ const (
 	MessagePreviewScreenShot   MessageKey = "result.preview.screen_screenshot"
 	MessagePreviewScreenClip   MessageKey = "result.preview.screen_clip"
 
-	MessageBubbleResultGeneric            MessageKey = "bubble.result.generic"
-	MessageBubbleResultRewrite            MessageKey = "bubble.result.rewrite"
-	MessageBubbleResultTranslate          MessageKey = "bubble.result.translate"
-	MessageBubbleResultExplain            MessageKey = "bubble.result.explain"
-	MessageBubbleResultSummarize          MessageKey = "bubble.result.summarize"
-	MessageBubbleResultPageRead           MessageKey = "bubble.result.page_read"
-	MessageBubbleResultPageSearch         MessageKey = "bubble.result.page_search"
-	MessageBubbleResultBrowserAttach      MessageKey = "bubble.result.browser_attach"
-	MessageBubbleResultBrowserSnapshot    MessageKey = "bubble.result.browser_snapshot"
-	MessageBubbleResultBrowserTabs        MessageKey = "bubble.result.browser_tabs"
-	MessageBubbleResultBrowserNavigate    MessageKey = "bubble.result.browser_navigate"
-	MessageBubbleResultBrowserFocus       MessageKey = "bubble.result.browser_focus"
-	MessageBubbleResultBrowserInteract    MessageKey = "bubble.result.browser_interact"
-	MessageBubbleResultWriteFile          MessageKey = "bubble.result.write_file"
-	MessageBubbleScreenDowngrade          MessageKey = "bubble.screen.downgraded"
-	MessageBubbleScreenApproval           MessageKey = "bubble.screen.approval_required"
-	MessageBubbleScreenReady              MessageKey = "bubble.screen.ready"
-	MessageBubbleInputNeedGoal            MessageKey = "bubble.input.need_goal"
-	MessageBubbleInputConfirmUnknown      MessageKey = "bubble.input.confirm_unknown"
-	MessageBubbleStartConfirmUnknown      MessageKey = "bubble.start.confirm_unknown"
-	MessageBubbleConfirmTranslate         MessageKey = "bubble.confirm.translate"
-	MessageBubbleConfirmRewrite           MessageKey = "bubble.confirm.rewrite"
-	MessageBubbleConfirmExplain           MessageKey = "bubble.confirm.explain"
-	MessageBubbleConfirmSummarize         MessageKey = "bubble.confirm.summarize"
-	MessageBubbleConfirmWriteFile         MessageKey = "bubble.confirm.write_file"
-	MessageBubbleConfirmDefault           MessageKey = "bubble.confirm.default"
-	MessageBubbleConfirmRejected          MessageKey = "bubble.confirm.rejected"
-	MessageBubbleConfirmMissingIntent     MessageKey = "bubble.confirm.missing_intent"
-	MessageBubbleConfirmStarted           MessageKey = "bubble.confirm.started"
-	MessageBubbleGovernancePending        MessageKey = "bubble.governance.pending"
-	MessageBubbleReviewReplan             MessageKey = "bubble.review.replan"
-	MessageBubbleReviewContinue           MessageKey = "bubble.review.continue"
-	MessageBubbleContinuationNeedMore     MessageKey = "bubble.continuation.need_more"
-	MessageBubbleContinuationDefault      MessageKey = "bubble.continuation.default"
-	MessageBubbleContinuationFiles        MessageKey = "bubble.continuation.files"
-	MessageBubbleContinuationSelection    MessageKey = "bubble.continuation.selection"
-	MessageBubbleContinuationError        MessageKey = "bubble.continuation.error"
-	MessageBubbleContinuationText         MessageKey = "bubble.continuation.text"
-	MessageBubbleSteeringRecorded         MessageKey = "bubble.steering.recorded"
-	MessageBubbleTaskPaused               MessageKey = "bubble.task.paused"
-	MessageBubbleTaskResumed              MessageKey = "bubble.task.resumed"
-	MessageBubbleTaskCancelled            MessageKey = "bubble.task.cancelled"
-	MessageBubbleTaskRestarted            MessageKey = "bubble.task.restarted"
-	MessageBubbleTaskUpdated              MessageKey = "bubble.task.updated"
-	MessageBubbleQueueWait                MessageKey = "bubble.queue.wait"
-	MessageBubbleQueueResume              MessageKey = "bubble.queue.resume"
-	MessageBubbleAuthorizationDenied      MessageKey = "bubble.authorization.denied"
-	MessageBubbleAuthorizationAllowed     MessageKey = "bubble.authorization.allowed"
+	MessageBubbleResultGeneric         MessageKey = "bubble.result.generic"
+	MessageBubbleResultRewrite         MessageKey = "bubble.result.rewrite"
+	MessageBubbleResultTranslate       MessageKey = "bubble.result.translate"
+	MessageBubbleResultExplain         MessageKey = "bubble.result.explain"
+	MessageBubbleResultSummarize       MessageKey = "bubble.result.summarize"
+	MessageBubbleResultPageRead        MessageKey = "bubble.result.page_read"
+	MessageBubbleResultPageSearch      MessageKey = "bubble.result.page_search"
+	MessageBubbleResultBrowserAttach   MessageKey = "bubble.result.browser_attach"
+	MessageBubbleResultBrowserSnapshot MessageKey = "bubble.result.browser_snapshot"
+	MessageBubbleResultBrowserTabs     MessageKey = "bubble.result.browser_tabs"
+	MessageBubbleResultBrowserNavigate MessageKey = "bubble.result.browser_navigate"
+	MessageBubbleResultBrowserFocus    MessageKey = "bubble.result.browser_focus"
+	MessageBubbleResultBrowserInteract MessageKey = "bubble.result.browser_interact"
+	MessageBubbleResultWriteFile       MessageKey = "bubble.result.write_file"
+	MessageBubbleScreenDowngrade       MessageKey = "bubble.screen.downgraded"
+	MessageBubbleScreenApproval        MessageKey = "bubble.screen.approval_required"
+	MessageBubbleScreenReady           MessageKey = "bubble.screen.ready"
+	MessageBubbleInputNeedGoal         MessageKey = "bubble.input.need_goal"
+	MessageBubbleInputConfirmUnknown   MessageKey = "bubble.input.confirm_unknown"
+	MessageBubbleStartConfirmUnknown   MessageKey = "bubble.start.confirm_unknown"
+	MessageBubbleConfirmTranslate      MessageKey = "bubble.confirm.translate"
+	MessageBubbleConfirmRewrite        MessageKey = "bubble.confirm.rewrite"
+	MessageBubbleConfirmExplain        MessageKey = "bubble.confirm.explain"
+	MessageBubbleConfirmSummarize      MessageKey = "bubble.confirm.summarize"
+	MessageBubbleConfirmWriteFile      MessageKey = "bubble.confirm.write_file"
+	MessageBubbleConfirmDefault        MessageKey = "bubble.confirm.default"
+	MessageBubbleConfirmRejected       MessageKey = "bubble.confirm.rejected"
+	MessageBubbleConfirmMissingIntent  MessageKey = "bubble.confirm.missing_intent"
+	MessageBubbleConfirmStarted        MessageKey = "bubble.confirm.started"
+	MessageBubbleGovernancePending     MessageKey = "bubble.governance.pending"
+	MessageBubbleReviewReplan          MessageKey = "bubble.review.replan"
+	MessageBubbleReviewContinue        MessageKey = "bubble.review.continue"
+	MessageBubbleContinuationNeedMore  MessageKey = "bubble.continuation.need_more"
+	MessageBubbleContinuationDefault   MessageKey = "bubble.continuation.default"
+	MessageBubbleContinuationFiles     MessageKey = "bubble.continuation.files"
+	MessageBubbleContinuationSelection MessageKey = "bubble.continuation.selection"
+	MessageBubbleContinuationError     MessageKey = "bubble.continuation.error"
+	MessageBubbleContinuationText      MessageKey = "bubble.continuation.text"
+	MessageBubbleSteeringRecorded      MessageKey = "bubble.steering.recorded"
+	MessageBubbleTaskPaused            MessageKey = "bubble.task.paused"
+	MessageBubbleTaskResumed           MessageKey = "bubble.task.resumed"
+	MessageBubbleTaskCancelled         MessageKey = "bubble.task.cancelled"
+	MessageBubbleTaskRestarted         MessageKey = "bubble.task.restarted"
+	MessageBubbleTaskUpdated           MessageKey = "bubble.task.updated"
+	MessageBubbleQueueWait             MessageKey = "bubble.queue.wait"
+	MessageBubbleQueueResume           MessageKey = "bubble.queue.resume"
+	MessageBubbleAuthorizationDenied   MessageKey = "bubble.authorization.denied"
+	MessageBubbleAuthorizationAllowed  MessageKey = "bubble.authorization.allowed"
 
 	MessageTimelineWaiting      MessageKey = "timeline.waiting"
 	MessageTimelineWaitingInput MessageKey = "timeline.waiting_input"
@@ -161,6 +161,34 @@ const (
 	MessageBudgetDowngradeProvider MessageKey = "budget.downgrade.provider_unavailable"
 	MessageBudgetDowngradeFailure  MessageKey = "budget.downgrade.provider_failure"
 	MessageBudgetDowngradePressure MessageKey = "budget.downgrade.resource_pressure"
+
+	MessageFallbackNoInput        MessageKey = "execution.fallback.no_input"
+	MessageFallbackClarify        MessageKey = "execution.fallback.clarify"
+	MessageFallbackRewriteHeader  MessageKey = "execution.fallback.rewrite_header"
+	MessageFallbackTranslate      MessageKey = "execution.fallback.translate"
+	MessageFallbackExplainHeader  MessageKey = "execution.fallback.explain_header"
+	MessageFallbackSummarizeTitle MessageKey = "execution.fallback.summarize_title"
+	MessageFallbackSummarizeEmpty MessageKey = "execution.fallback.summarize_empty"
+
+	MessageDocumentEmpty        MessageKey = "document.empty"
+	MessageDocumentDefaultTitle MessageKey = "document.default_title"
+
+	MessagePreviewGenerated          MessageKey = "preview.generated"
+	MessagePreviewWorkspaceGenerated MessageKey = "preview.workspace_generated"
+	MessageBubbleGenerated           MessageKey = "bubble.result.generated"
+
+	MessageBubbleWriteFileReady        MessageKey = "bubble.write_file.ready"
+	MessageBubbleScreenOCRUnavailable  MessageKey = "bubble.screen.ocr_unavailable"
+	MessageBubbleScreenAnalyzed        MessageKey = "bubble.screen.analyzed"
+	MessageToolBubbleGeneric           MessageKey = "tool.bubble.generic"
+	MessageToolBubbleSearchMatches     MessageKey = "tool.bubble.search_matches"
+	MessageToolBubbleBrowserAttach     MessageKey = "tool.bubble.browser_attach"
+	MessageToolBubbleBrowserAttachHere MessageKey = "tool.bubble.browser_attach_current"
+	MessageToolBubbleBrowserFocus      MessageKey = "tool.bubble.browser_focus"
+	MessageToolBubbleBrowserFocused    MessageKey = "tool.bubble.browser_focused"
+	MessageToolBubbleBrowserTabsCount  MessageKey = "tool.bubble.browser_tabs_count"
+	MessageToolBubbleBrowserTabsReady  MessageKey = "tool.bubble.browser_tabs_ready"
+	MessageToolBubbleDirectoryEntries  MessageKey = "tool.bubble.directory_entries"
 )
 
 var zhCNMessages = map[MessageKey]string{
@@ -281,6 +309,34 @@ var zhCNMessages = map[MessageKey]string{
 	MessageBudgetDowngradeProvider: "预算降级已生效：当前模型提供方不可用，任务改走轻量交付路径。",
 	MessageBudgetDowngradeFailure:  "预算降级已生效：最近出现模型/提供方失败，任务改走轻量保守执行路径。",
 	MessageBudgetDowngradePressure: "预算降级已生效：当前任务命中 token/成本压力，改为轻量交付并压缩上下文。",
+
+	MessageFallbackNoInput:        "无可用输入",
+	MessageFallbackClarify:        "我还不确定你希望我怎么处理这段内容，请补充你的目标，例如解释、翻译、改写或总结。",
+	MessageFallbackRewriteHeader:  "改写结果：",
+	MessageFallbackTranslate:      "翻译结果（回退模式，目标语言：{target_language}）：",
+	MessageFallbackExplainHeader:  "解释结果：",
+	MessageFallbackSummarizeTitle: "总结结果：",
+	MessageFallbackSummarizeEmpty: "- 暂无可总结内容",
+
+	MessageDocumentEmpty:        "暂无内容",
+	MessageDocumentDefaultTitle: "处理结果",
+
+	MessagePreviewGenerated:          "结果已生成",
+	MessagePreviewWorkspaceGenerated: "已生成正式文档：{preview}",
+	MessageBubbleGenerated:           "结果已生成。",
+
+	MessageBubbleWriteFileReady:        "结果已写入 {path}，可直接查看。",
+	MessageBubbleScreenOCRUnavailable:  "未识别到可用屏幕文本。",
+	MessageBubbleScreenAnalyzed:        "已分析屏幕内容：{summary}",
+	MessageToolBubbleGeneric:           "{tool_name} 执行完成。",
+	MessageToolBubbleSearchMatches:     "页面搜索完成，关键词 {query} 共匹配 {count} 处。",
+	MessageToolBubbleBrowserAttach:     "已定位浏览器标签页：{title}。",
+	MessageToolBubbleBrowserAttachHere: "已定位当前浏览器标签页。",
+	MessageToolBubbleBrowserFocus:      "已切换到浏览器标签页：{title}。",
+	MessageToolBubbleBrowserFocused:    "目标浏览器标签页已经切换完成。",
+	MessageToolBubbleBrowserTabsCount:  "当前浏览器共有 {count} 个标签页可用。",
+	MessageToolBubbleBrowserTabsReady:  "当前浏览器标签页列表已经返回。",
+	MessageToolBubbleDirectoryEntries:  "{tool_name} 执行完成，当前目录条目数：{count}。",
 }
 
 // Render returns the locale-specific copy for a semantic message key.

@@ -20,6 +20,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
@@ -2594,7 +2595,7 @@ func TestBuildScreenAnalysisResultSucceeds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildScreenAnalysisResult returned error: %v", err)
 	}
-	if !strings.Contains(analysis.BubbleText, "已分析屏幕内容") || analysis.PreviewText == "" {
+	if !strings.Contains(analysis.BubbleText, presentation.Text(presentation.MessageBubbleScreenAnalyzed, map[string]string{"summary": ""})[:len("已分析屏幕内容：")]) || analysis.PreviewText == "" {
 		t.Fatalf("expected non-empty bubble/preview, got %+v", analysis)
 	}
 	if analysis.Artifact["artifact_type"] != "screen_capture" {
@@ -2648,7 +2649,7 @@ func TestBuildScreenAnalysisResultFallsBackWhenOCRTextEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildScreenAnalysisResult returned error: %v", err)
 	}
-	if !strings.Contains(analysis.BubbleText, "未识别到可用屏幕文本") {
+	if analysis.BubbleText != presentation.Text(presentation.MessageBubbleScreenAnalyzed, map[string]string{"summary": presentation.Text(presentation.MessageBubbleScreenOCRUnavailable, nil)}) {
 		t.Fatalf("expected empty OCR summary fallback, got %+v", analysis)
 	}
 }
@@ -2674,7 +2675,7 @@ func TestExecuteInternalScreenAnalysisReturnsResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("internal screen analysis execute failed: %v", err)
 	}
-	if result.ToolName != internalScreenAnalyzeIntent || !strings.Contains(result.BubbleText, "已分析屏幕内容") {
+	if result.ToolName != internalScreenAnalyzeIntent || !strings.Contains(result.BubbleText, presentation.Text(presentation.MessageBubbleScreenAnalyzed, map[string]string{"summary": ""})[:len("已分析屏幕内容：")]) {
 		t.Fatalf("unexpected internal screen analysis result: %+v", result)
 	}
 	if len(result.ToolCalls) != 1 || result.ToolCalls[0].Status != tools.ToolCallStatusSucceeded {
@@ -3275,10 +3276,10 @@ func TestBuildPromptDoesNotDefaultUnknownIntentToSummarize(t *testing.T) {
 func TestFallbackOutputRequestsClarificationWhenIntentMissing(t *testing.T) {
 	output := fallbackOutput(Request{Intent: map[string]any{}}, "你好")
 
-	if !strings.Contains(output, "请补充你的目标") {
+	if output != presentation.Text(presentation.MessageFallbackClarify, nil) {
 		t.Fatalf("expected unknown intent fallback to request clarification, got %s", output)
 	}
-	if strings.Contains(output, "总结结果") {
+	if strings.Contains(output, presentation.Text(presentation.MessageFallbackSummarizeTitle, nil)) {
 		t.Fatalf("expected unknown intent fallback not to pretend summarize, got %s", output)
 	}
 }
@@ -3286,7 +3287,7 @@ func TestFallbackOutputRequestsClarificationWhenIntentMissing(t *testing.T) {
 func TestFallbackOutputRequestsClarificationForAgentLoopWhenGoalIsUnderspecified(t *testing.T) {
 	output := fallbackOutput(Request{Intent: map[string]any{"name": defaultAgentLoopIntentName}}, "你好")
 
-	if !strings.Contains(output, "请补充你的目标") {
+	if output != presentation.Text(presentation.MessageFallbackClarify, nil) {
 		t.Fatalf("expected agent_loop fallback to request clarification, got %s", output)
 	}
 }
@@ -3893,19 +3894,19 @@ func TestToolBubbleTextAndGovernanceHelpersSupportNewWorkerFlows(t *testing.T) {
 		t.Fatalf("expected content preview bubble text, got %s", bubbleText)
 	}
 	searchBubble := toolBubbleText("page_search", &tools.ToolExecutionResult{SummaryOutput: map[string]any{"query": "demo", "match_count": 3}})
-	if !strings.Contains(searchBubble, "关键词") {
+	if searchBubble != presentation.Text(presentation.MessageToolBubbleSearchMatches, map[string]string{"query": "demo", "count": "3"}) {
 		t.Fatalf("expected search bubble text, got %s", searchBubble)
 	}
 	attachBubble := toolBubbleText("browser_attach_current", &tools.ToolExecutionResult{SummaryOutput: map[string]any{"title": "Docs"}})
-	if !strings.Contains(attachBubble, "Docs") {
+	if attachBubble != presentation.Text(presentation.MessageToolBubbleBrowserAttach, map[string]string{"title": "Docs"}) {
 		t.Fatalf("expected browser attach bubble text, got %s", attachBubble)
 	}
 	focusBubble := toolBubbleText("browser_tab_focus", &tools.ToolExecutionResult{SummaryOutput: map[string]any{"title": "Release Notes"}})
-	if !strings.Contains(focusBubble, "切换") || !strings.Contains(focusBubble, "Release Notes") {
+	if focusBubble != presentation.Text(presentation.MessageToolBubbleBrowserFocus, map[string]string{"title": "Release Notes"}) {
 		t.Fatalf("expected browser tab focus bubble text, got %s", focusBubble)
 	}
 	tabsBubble := toolBubbleText("browser_tabs_list", &tools.ToolExecutionResult{SummaryOutput: map[string]any{"tab_count": 2}})
-	if !strings.Contains(tabsBubble, "2") {
+	if tabsBubble != presentation.Text(presentation.MessageToolBubbleBrowserTabsCount, map[string]string{"count": "2"}) {
 		t.Fatalf("expected browser tabs bubble text, got %s", tabsBubble)
 	}
 	if governanceTargetObject("page_interact", map[string]any{"url": "https://example.com"}, &tools.ToolExecuteContext{WorkspacePath: "/workspace"}) != "https://example.com" {
@@ -4281,7 +4282,11 @@ func TestExecutionHelperBranchesAndConfigurationAccessors(t *testing.T) {
 	if !strings.Contains(buildPrompt(request, "hello"), "翻译成English") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "rewrite"}}, "hello"), "改写") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "explain"}}, "hello"), "解释") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "write_file"}}, "hello"), "保存为文档") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "summarize"}}, "hello"), "摘要") {
 		t.Fatal("expected buildPrompt to cover major intent variants")
 	}
-	if !strings.Contains(fallbackOutput(request, "hello world"), "翻译结果") || workspaceDocumentContent("", "plain text") == "plain text" || previewTextForOutput("", "bubble") == "" || previewTextForDeliveryType("workspace_document") == "" || truncateBubbleText("") == "" {
+	if !strings.Contains(fallbackOutput(request, "hello world"), presentation.Text(presentation.MessageFallbackTranslate, map[string]string{"target_language": "English"})) ||
+		workspaceDocumentContent("", "plain text") == "plain text" ||
+		previewTextForOutput("", "bubble") != presentation.Text(presentation.MessagePreviewGenerated, nil) ||
+		previewTextForDeliveryType("workspace_document") != presentation.Text(presentation.MessagePreviewWorkspaceDoc, nil) ||
+		truncateBubbleText("") != presentation.Text(presentation.MessageBubbleGenerated, nil) {
 		t.Fatal("expected delivery helper functions to provide fallback output text")
 	}
 	if deliveryPayloadPath(map[string]any{"payload": map[string]any{"path": "workspace/result.md"}}) != "workspace/result.md" || targetPathFromIntent(map[string]any{"arguments": map[string]any{"target_path": "workspace/note.md"}}) != "workspace/note.md" || targetPathFromIntent(map[string]any{"arguments": map[string]any{"target_path": "workspace_document"}}) != "" {
