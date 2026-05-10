@@ -95,10 +95,23 @@ func (s *Service) resolveFormalTaskDeliveryResult(task runengine.TaskRecord) map
 	if len(deliveryResult) == 0 {
 		deliveryResult = cloneMap(task.DeliveryResult)
 	}
+	if len(deliveryResult) > 0 && shouldSynthesizeLegacyResultPageDeliveryResult(task, deliveryResult) {
+		deliveryResult = synthesizeSparseResultPageDeliveryResult(task)
+	}
 	if len(deliveryResult) == 0 {
 		deliveryResult = synthesizeSparseResultPageDeliveryResult(task)
 	}
 	return deliveryResult
+}
+
+func shouldSynthesizeLegacyResultPageDeliveryResult(task runengine.TaskRecord, deliveryResult map[string]any) bool {
+	if normalizeDeliveryType(task.PreferredDelivery) != "result_page" {
+		return false
+	}
+	if task.Status != "completed" {
+		return false
+	}
+	return stringValue(deliveryResult, "type", "") != "result_page"
 }
 
 func synthesizeSparseResultPageDeliveryResult(task runengine.TaskRecord) map[string]any {

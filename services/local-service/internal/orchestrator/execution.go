@@ -318,7 +318,7 @@ func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, sn
 	processingTask = s.recordExecutionToolCalls(processingTask, executionResult.ToolCalls)
 	s.persistExecutionToolCallEvents(processingTask, taskIntent, executionResult.ToolCalls)
 	auditDeliveryResult := executionResult.DeliveryResult
-	if err != nil {
+	if err != nil || executionResult.LoopStopReason == string(agentloop.StopReasonNeedUserInput) {
 		auditDeliveryResult = nil
 	}
 	executionAuditRecords, executionTokenUsage := s.buildExecutionAudit(processingTask, executionResult.ToolCalls, auditDeliveryResult)

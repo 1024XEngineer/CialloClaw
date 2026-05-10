@@ -2036,6 +2036,15 @@ func TestExecuteTaskResultPageWaitingInputDoesNotClaimDeliveryInTrace(t *testing
 	if strings.Contains(evals[0].MetricsJSON, `"delivery_type":"result_page"`) {
 		t.Fatalf("expected waiting_input result_page eval metrics not to claim result_page delivery, got %+v", evals[0])
 	}
+	record, ok := service.runEngine.GetTask(task.TaskID)
+	if !ok {
+		t.Fatal("expected waiting_input result_page task to remain in runtime")
+	}
+	for _, auditRecord := range record.AuditRecords {
+		if auditRecord["action"] == "publish_result" {
+			t.Fatalf("expected waiting_input result_page task not to publish delivery audit, got %+v", record.AuditRecords)
+		}
+	}
 }
 
 func TestServiceConfirmTaskKeepsUnknownIntentInConfirmationWhenRejected(t *testing.T) {
@@ -13206,6 +13215,82 @@ func TestServiceResultPageFallbackWithoutFormalDeliveryRowKeepsOpenAndDetailStab
 	resolvedPayload := openResult["resolved_payload"].(map[string]any)
 	if resolvedPayload["path"] != nil || resolvedPayload["url"] != delivery.ResolveResultPageURL(taskID) {
 		t.Fatalf("expected sparse result_page fallback to preserve resolved url payload, got %+v", resolvedPayload)
+	}
+}
+
+func TestServiceLegacyResultPageSnapshotOverridesBubbleCompatShape(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "legacy result_page snapshot")
+	if service.storage == nil || service.storage.TaskStore() == nil {
+		t.Fatal("expected structured task storage to be wired")
+	}
+	runtimeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:         "sess_result_page_legacy_snapshot",
+		Title:             "legacy result page task",
+		SourceType:        "floating_ball",
+		Status:            "completed",
+		Intent:            map[string]any{"name": "page_read", "arguments": map[string]any{"url": "https://example.com/legacy"}},
+		PreferredDelivery: "result_page",
+		FallbackDelivery:  "bubble",
+		CurrentStep:       "deliver_result",
+		RiskLevel:         "green",
+		Timeline:          initialTimeline("completed", "deliver_result"),
+	})
+	taskID := runtimeTask.TaskID
+	if _, ok := service.runEngine.SetPresentation(runtimeTask.TaskID, nil, map[string]any{
+		"type":         "bubble",
+		"title":        "legacy bubble result",
+		"preview_text": "结果已通过气泡返回",
+		"payload":      map[string]any{"task_id": runtimeTask.TaskID},
+	}, nil); !ok {
+		t.Fatal("expected runtime presentation to update")
+	}
+	if err := service.storage.TaskStore().WriteTask(context.Background(), storage.TaskRecord{
+		TaskID:              taskID,
+		SessionID:           runtimeTask.SessionID,
+		RunID:               runtimeTask.RunID,
+		PrimaryRunID:        runtimeTask.RunID,
+		Title:               runtimeTask.Title,
+		SourceType:          runtimeTask.SourceType,
+		Status:              runtimeTask.Status,
+		IntentName:          "page_read",
+		IntentArgumentsJSON: `{"url":"https://example.com/legacy"}`,
+		PreferredDelivery:   "result_page",
+		FallbackDelivery:    "bubble",
+		CurrentStep:         runtimeTask.CurrentStep,
+		CurrentStepStatus:   "completed",
+		RiskLevel:           "green",
+		RequestSource:       "floating_ball",
+		RequestTrigger:      "hover_text_input",
+		StartedAt:           runtimeTask.StartedAt.Format(time.RFC3339Nano),
+		UpdatedAt:           runtimeTask.UpdatedAt.Format(time.RFC3339Nano),
+		FinishedAt:          runtimeTask.UpdatedAt.Format(time.RFC3339Nano),
+	}); err != nil {
+		t.Fatalf("write structured task failed: %v", err)
+	}
+
+	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	detailDeliveryResult, ok := detailResult["delivery_result"].(map[string]any)
+	if !ok || detailDeliveryResult["type"] != "result_page" {
+		t.Fatalf("expected legacy bubble snapshot to normalize to result_page detail, got %+v", detailResult["delivery_result"])
+	}
+	detailPayload := detailDeliveryResult["payload"].(map[string]any)
+	if detailPayload["url"] != delivery.ResolveResultPageURL(taskID) || detailPayload["path"] != nil {
+		t.Fatalf("expected legacy bubble snapshot detail payload to expose stable result_page url, got %+v", detailPayload)
+	}
+
+	openResult, err := service.DeliveryOpen(map[string]any{"task_id": taskID})
+	if err != nil {
+		t.Fatalf("delivery open failed: %v", err)
+	}
+	if openResult["open_action"] != "result_page" {
+		t.Fatalf("expected legacy bubble snapshot open action to normalize to result_page, got %+v", openResult)
+	}
+	resolvedPayload := openResult["resolved_payload"].(map[string]any)
+	if resolvedPayload["url"] != delivery.ResolveResultPageURL(taskID) || resolvedPayload["path"] != nil {
+		t.Fatalf("expected legacy bubble snapshot open payload to expose stable result_page url, got %+v", resolvedPayload)
 	}
 }
 
