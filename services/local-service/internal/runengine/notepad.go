@@ -562,51 +562,58 @@ func deriveNotepadRelatedResources(item map[string]any) []map[string]any {
 		return resources
 	}
 
+	// These fallback resources exist for notepad browsing only. Downstream task
+	// snapshots must still distinguish them from user-supplied execution inputs.
 	resources := make([]map[string]any, 0, 2)
 	title := strings.ToLower(strings.TrimSpace(stringValue(item, "title", "")))
 	switch stringValue(item, "bucket", "") {
 	case notepadBucketRecurringRule:
 		resources = append(resources, map[string]any{
-			"id":          stringValue(item, "item_id", "") + "_rule_source",
-			"label":       "任务源目录",
-			"path":        defaultTaskSourcePath,
-			"type":        "directory",
-			"target_kind": "folder",
+			"id":              stringValue(item, "item_id", "") + "_rule_source",
+			"label":           "任务源目录",
+			"path":            defaultTaskSourcePath,
+			"type":            "directory",
+			"target_kind":     "folder",
+			"resource_origin": "derived_default",
 		})
 	case notepadBucketClosed:
 		resources = append(resources, map[string]any{
-			"id":          stringValue(item, "item_id", "") + "_archive",
-			"label":       "归档目录",
-			"path":        "workspace/archive",
-			"type":        "directory",
-			"target_kind": "folder",
+			"id":              stringValue(item, "item_id", "") + "_archive",
+			"label":           "归档目录",
+			"path":            "workspace/archive",
+			"type":            "directory",
+			"target_kind":     "folder",
+			"resource_origin": "derived_default",
 		})
 	}
 	if strings.Contains(title, "模板") {
 		resources = append(resources, map[string]any{
-			"id":          stringValue(item, "item_id", "") + "_template",
-			"label":       "关联模板",
-			"path":        "workspace/templates",
-			"type":        "directory",
-			"target_kind": "folder",
+			"id":              stringValue(item, "item_id", "") + "_template",
+			"label":           "关联模板",
+			"path":            "workspace/templates",
+			"type":            "directory",
+			"target_kind":     "folder",
+			"resource_origin": "derived_default",
 		})
 	}
 	if strings.Contains(title, "周报") || strings.Contains(title, "报告") || strings.Contains(title, "评审") {
 		resources = append(resources, map[string]any{
-			"id":          stringValue(item, "item_id", "") + "_drafts",
-			"label":       "草稿目录",
-			"path":        "workspace/drafts",
-			"type":        "directory",
-			"target_kind": "folder",
+			"id":              stringValue(item, "item_id", "") + "_drafts",
+			"label":           "草稿目录",
+			"path":            "workspace/drafts",
+			"type":            "directory",
+			"target_kind":     "folder",
+			"resource_origin": "derived_default",
 		})
 	}
 	if len(resources) == 0 {
 		resources = append(resources, map[string]any{
-			"id":          stringValue(item, "item_id", "") + "_workspace",
-			"label":       "默认工作区",
-			"path":        defaultWorkspaceRoot,
-			"type":        "directory",
-			"target_kind": "folder",
+			"id":              stringValue(item, "item_id", "") + "_workspace",
+			"label":           "默认工作区",
+			"path":            defaultWorkspaceRoot,
+			"type":            "directory",
+			"target_kind":     "folder",
+			"resource_origin": "derived_default",
 		})
 	}
 	return resources

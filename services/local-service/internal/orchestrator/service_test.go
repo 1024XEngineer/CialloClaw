@@ -2756,6 +2756,44 @@ func TestServiceNotepadConvertToTaskFallsBackToTitleAndIgnoresNonPathResources(t
 	}
 }
 
+func TestServiceNotepadConvertToTaskSkipsDerivedDefaultResourcePaths(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Converted derived-resource notepad task finished.")
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":   "todo_derived_resources",
+		"title":     "整理明天评审要点",
+		"bucket":    "upcoming",
+		"status":    "normal",
+		"type":      "todo_item",
+		"note_text": "整理明天评审要点。",
+	}})
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_derived_resources",
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected converted task to remain available in runtime")
+	}
+	if len(record.Snapshot.Files) != 0 {
+		t.Fatalf("expected derived default resources to stay out of task snapshot files, got %+v", record.Snapshot.Files)
+	}
+
+	items, total := service.runEngine.NotepadItems("upcoming", 10, 0)
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("expected runtime list to keep the source note, total=%d len=%d", total, len(items))
+	}
+	resources, ok := items[0]["related_resources"].([]map[string]any)
+	if !ok || len(resources) == 0 {
+		t.Fatalf("expected projected notepad item to keep display resources, got %+v", items[0]["related_resources"])
+	}
+}
+
 func TestServiceNotepadConvertToTaskAcceptsLegacyPathResourceShape(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Converted legacy-resource notepad task finished.")
 	service.runEngine.ReplaceNotepadItems([]map[string]any{{
@@ -2788,6 +2826,56 @@ func TestServiceNotepadConvertToTaskAcceptsLegacyPathResourceShape(t *testing.T)
 	}
 	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "workspace/legacy-review" {
 		t.Fatalf("expected legacy path resource shape to enter task snapshot, got %+v", record.Snapshot.Files)
+	}
+}
+
+func TestServiceNotepadConvertToTaskPublishesRequestTraceID(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Converted trace-aware notepad task finished.")
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":   "todo_trace",
+		"title":     "整理 trace 任务",
+		"bucket":    "upcoming",
+		"status":    "normal",
+		"type":      "todo_item",
+		"note_text": "整理 trace 任务。",
+	}})
+
+	starts := make(chan struct {
+		taskID    string
+		sessionID string
+		traceID   string
+	}, 1)
+	unsubscribe := service.SubscribeTaskStarts(func(taskID, sessionID, traceID string) {
+		starts <- struct {
+			taskID    string
+			sessionID string
+			traceID   string
+		}{taskID: taskID, sessionID: sessionID, traceID: traceID}
+	})
+	defer unsubscribe()
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"request_meta": map[string]any{"trace_id": "trace_notepad_convert"},
+		"item_id":      "todo_trace",
+		"confirmed":    true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	select {
+	case start := <-starts:
+		if start.traceID != "trace_notepad_convert" {
+			t.Fatalf("expected notepad conversion to publish request trace id, got %+v", start)
+		}
+		if start.taskID != result["task"].(map[string]any)["task_id"] {
+			t.Fatalf("expected task start to publish the created task id, got %+v result=%+v", start, result["task"])
+		}
+		if start.sessionID == "" {
+			t.Fatalf("expected notepad conversion to publish the created session id, got %+v", start)
+		}
+	default:
+		t.Fatal("expected notepad conversion to publish a task start event")
 	}
 }
 
@@ -2961,7 +3049,7 @@ func TestServiceNotepadConvertToTaskRollsBackLinkWhenFinishFails(t *testing.T) {
 		ResultTitle:        "处理结果",
 		ResultBubbleText:   "结果已经生成，可直接查看。",
 	}
-	task := service.createNotepadTask(snapshot, suggestion)
+	task := service.createNotepadTask(snapshot, suggestion, "")
 
 	if _, handled, claimErr := service.runEngine.ClaimNotepadItemTask("todo_finish_failure"); claimErr != nil || !handled {
 		t.Fatalf("expected note claim to succeed before linking, handled=%v err=%v", handled, claimErr)

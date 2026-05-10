@@ -75,6 +75,12 @@ func notepadResourcePaths(item map[string]any) []string {
 
 	paths := make([]string, 0, len(resources))
 	for _, resource := range resources {
+		// Derived defaults keep notepad cards actionable in the dashboard, but
+		// they must not widen the formal task snapshot as if the user attached
+		// those paths explicitly.
+		if strings.TrimSpace(stringValue(resource, "resource_origin", "")) == "derived_default" {
+			continue
+		}
 		path := strings.TrimSpace(stringValue(resource, "path", ""))
 		if path == "" {
 			continue

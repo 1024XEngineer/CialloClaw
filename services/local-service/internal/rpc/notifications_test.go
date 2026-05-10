@@ -55,6 +55,20 @@ func TestOwnedTaskIDsForReplayClaimsResponseTaskIDsForTaskStart(t *testing.T) {
 	}
 }
 
+func TestOwnedTaskIDsForReplayClaimsResponseTaskIDsForNotepadConvert(t *testing.T) {
+	response := newSuccessEnvelope(json.RawMessage(`"req-notepad-convert"`), map[string]any{
+		"task": map[string]any{
+			"task_id": "task_notepad_started",
+		},
+	}, "2026-04-08T10:00:00Z")
+
+	taskIDs := ownedTaskIDsForReplay("agent.notepad.convert_to_task", nil, response)
+	expected := []string{"task_notepad_started"}
+	if !reflect.DeepEqual(taskIDs, expected) {
+		t.Fatalf("expected notepad.convert_to_task to claim response task ids %v, got %v", expected, taskIDs)
+	}
+}
+
 func TestRequestRoutingHintsExtractsTaskSessionAndTrace(t *testing.T) {
 	request := requestEnvelope{
 		JSONRPC: "2.0",

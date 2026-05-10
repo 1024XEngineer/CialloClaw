@@ -84,7 +84,7 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 
 	snapshot := notepadSnapshot(item)
 	suggestion := s.intent.Suggest(snapshot, nil, false)
-	task := s.createNotepadTask(snapshot, suggestion)
+	task := s.createNotepadTask(snapshot, suggestion, requestTraceID(params))
 	updatedItem, ok := s.runEngine.LinkNotepadItemTask(itemID, task.TaskID)
 	if !ok {
 		linkErr := fmt.Errorf("failed to link notepad item to task: %s", itemID)
@@ -116,7 +116,7 @@ func (s *Service) rollbackLinkedNotepadTask(itemID, taskID string, cause error) 
 	return cause
 }
 
-func (s *Service) createNotepadTask(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) runengine.TaskRecord {
+func (s *Service) createNotepadTask(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, traceID string) runengine.TaskRecord {
 	status := taskStatusForSuggestion(suggestion.RequiresConfirm)
 	currentStep := currentStepForSuggestion(suggestion.RequiresConfirm, suggestion.Intent)
 	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
@@ -132,7 +132,7 @@ func (s *Service) createNotepadTask(snapshot taskcontext.TaskContextSnapshot, su
 		Timeline:          initialTimeline(status, currentStep),
 		Snapshot:          snapshot,
 	})
-	s.publishTaskStart(task.TaskID, task.SessionID, "")
+	s.publishTaskStart(task.TaskID, task.SessionID, traceID)
 	s.attachMemoryReadPlans(task.TaskID, task.RunID, snapshot, suggestion.Intent)
 	return task
 }
