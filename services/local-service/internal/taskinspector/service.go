@@ -16,7 +16,6 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textdecode"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/titlegen"
 )
 
@@ -27,6 +26,7 @@ const (
 	notepadBucketLater         = "later"
 	notepadBucketRecurringRule = "recurring_rule"
 	notepadBucketUpcoming      = "upcoming"
+	defaultGeneratedTitleLimit = 3
 )
 
 // Service builds inspection results from workspace, notepad, and runtime task state.
@@ -132,6 +132,7 @@ func (s *Service) inspectSources(sources []string, allowGeneratedTitles bool) (i
 	parsedFiles := 0
 	identifiedItems := make([]map[string]any, 0)
 	seenFiles := map[string]struct{}{}
+	remainingGeneratedTitles := defaultGeneratedTitleLimit
 
 	for _, source := range sources {
 		root, err := sourceToFSPath(s.fileSystem, source)
@@ -175,7 +176,7 @@ func (s *Service) inspectSources(sources []string, allowGeneratedTitles bool) (i
 				}
 				return fmt.Errorf("decode task source file %s: %w", currentPath, err)
 			}
-			identifiedItems = append(identifiedItems, s.parseNotepadItemsFromMarkdown(sourcePathFromFSPath(currentPath), decoded.Text, s.now(), allowGeneratedTitles)...)
+			identifiedItems = append(identifiedItems, s.parseNotepadItemsFromMarkdown(sourcePathFromFSPath(currentPath), decoded.Text, s.now(), allowGeneratedTitles, &remainingGeneratedTitles)...)
 			return nil
 		}); err != nil {
 			return 0, nil, fmt.Errorf("%w: %s: %v", ErrInspectionSourceUnreadable, strings.TrimSpace(source), err)
@@ -404,7 +405,7 @@ func countChecklistItems(content string) int {
 	return count
 }
 
-func (s *Service) parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time, allowGeneratedTitles bool) []map[string]any {
+func (s *Service) parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time, allowGeneratedTitles bool, remainingGeneratedTitles *int) []map[string]any {
 	lines := strings.Split(content, "\n")
 	items := make([]map[string]any, 0)
 	var current map[string]any
@@ -416,7 +417,7 @@ func (s *Service) parseNotepadItemsFromMarkdown(sourcePath, content string, now 
 		if len(noteLines) > 0 && stringValue(current, "note_text") == "" {
 			current["note_text"] = strings.Join(noteLines, "\n")
 		}
-		items = append(items, s.normalizeParsedNotepadItem(current, sourcePath, now, allowGeneratedTitles))
+		items = append(items, s.normalizeParsedNotepadItem(current, sourcePath, now, allowGeneratedTitles, remainingGeneratedTitles))
 		current = nil
 		noteLines = noteLines[:0]
 	}
@@ -524,7 +525,7 @@ func splitMetadataLine(line string) (string, string, bool) {
 	return key, value, true
 }
 
-func (s *Service) normalizeParsedNotepadItem(item map[string]any, sourcePath string, now time.Time, allowGeneratedTitles bool) map[string]any {
+func (s *Service) normalizeParsedNotepadItem(item map[string]any, sourcePath string, now time.Time, allowGeneratedTitles bool, remainingGeneratedTitles *int) map[string]any {
 	if stringValue(item, "bucket") == notepadBucketRecurringRule {
 		item["type"] = "recurring"
 		if stringValue(item, "repeat_rule_text") == "" {
@@ -549,12 +550,12 @@ func (s *Service) normalizeParsedNotepadItem(item map[string]any, sourcePath str
 	if stringValue(item, "note_text") == "" {
 		item["note_text"] = stringValue(item, "title")
 	}
-	fallbackTitle := textutil.TruncateGraphemes(firstNonEmpty(
+	fallbackTitle := titlegen.CompactNoteFallback(firstNonEmpty(
 		stringValue(item, "note_text"),
 		stringValue(item, "title"),
 		"待办事项",
-	), 24)
-	if allowGeneratedTitles && s != nil && s.titlegen != nil && shouldGenerateNoteTitle(item) {
+	))
+	if allowGeneratedTitles && canGenerateTitleNow(remainingGeneratedTitles) && s != nil && s.titlegen != nil && shouldGenerateNoteTitle(item) {
 		item["title"] = s.titlegen.GenerateNoteTitle(context.Background(), item, fallbackTitle)
 	} else {
 		item["title"] = fallbackTitle
@@ -793,6 +794,14 @@ func shouldGenerateNoteTitle(item map[string]any) bool {
 		return true
 	}
 	return noteText != "" && noteText != title
+}
+
+func canGenerateTitleNow(remaining *int) bool {
+	if remaining == nil || *remaining <= 0 {
+		return false
+	}
+	*remaining--
+	return true
 }
 
 func countOpenNotepadItems(items []map[string]any) int {

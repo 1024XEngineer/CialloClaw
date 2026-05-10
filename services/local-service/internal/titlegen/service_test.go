@@ -62,6 +62,22 @@ func TestGenerateTaskSubjectFallsBackWhenModelFails(t *testing.T) {
 	}
 }
 
+func TestCompactTaskFallbackTrimsConversationLeadIn(t *testing.T) {
+	title := CompactTaskFallback("请帮我整理这次发布复盘\n重点补齐风险项和后续跟进安排")
+
+	if title != "整理这次发布复盘 重点补齐风险项和后续跟进..." {
+		t.Fatalf("expected local fallback compaction to drop the request wrapper, got %q", title)
+	}
+}
+
+func TestCompactNoteFallbackKeepsWholeNoteContextBounded(t *testing.T) {
+	title := CompactNoteFallback("- [ ] Weekly retro\nreview blockers and next steps")
+
+	if title != "Weekly retro review b..." {
+		t.Fatalf("expected note fallback compaction to keep multi-line context bounded, got %q", title)
+	}
+}
+
 func TestGenerateNoteTitleParsesRawTextFallback(t *testing.T) {
 	service := NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
 		output: "每周复盘待补充事项",

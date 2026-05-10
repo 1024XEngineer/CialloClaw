@@ -78,6 +78,18 @@ func (s *Service) GenerateTaskSubject(ctx context.Context, snapshot taskcontext.
 	return title
 }
 
+// CompactTaskFallback keeps the first task-facing title deterministic when the
+// runtime model is slow, unavailable, or intentionally disabled.
+func CompactTaskFallback(raw string) string {
+	return compactFallbackTitle(raw, defaultTitleLengthLimit, true)
+}
+
+// CompactNoteFallback keeps note titles bounded and readable without requiring
+// a model round-trip in the synchronous inspector path.
+func CompactNoteFallback(raw string) string {
+	return compactFallbackTitle(raw, defaultTitleLengthLimit, false)
+}
+
 // GenerateNoteTitle summarizes note body context into one short dashboard
 // label.
 func (s *Service) GenerateNoteTitle(ctx context.Context, item map[string]any, fallback string) string {
@@ -231,6 +243,71 @@ func normalizeTitle(value string, maxLength int) string {
 	value = strings.Trim(value, "\"'`")
 	value = strings.Join(strings.Fields(value), " ")
 	return textutil.TruncateGraphemes(value, maxLength)
+}
+
+func compactFallbackTitle(raw string, maxLength int, trimLeadIn bool) string {
+	segments := titleSegments(raw, trimLeadIn)
+	if len(segments) == 0 {
+		return normalizeTitle(raw, maxLength)
+	}
+	candidate := strings.Join(segments[:minInt(len(segments), 2)], " ")
+	return normalizeTitle(candidate, maxLength)
+}
+
+func titleSegments(raw string, trimLeadIn bool) []string {
+	replacer := strings.NewReplacer("\r\n", "\n", "\r", "\n", "。", "\n", "！", "\n", "？", "\n", "；", "\n", ";", "\n", "\t", " ")
+	parts := strings.Split(replacer.Replace(raw), "\n")
+	segments := make([]string, 0, len(parts))
+	for _, part := range parts {
+		segment := strings.TrimSpace(part)
+		if segment == "" {
+			continue
+		}
+		segment = stripChecklistPrefix(segment)
+		if trimLeadIn {
+			segment = trimTaskLeadIn(segment)
+		}
+		segment = strings.Join(strings.Fields(segment), " ")
+		if segment == "" {
+			continue
+		}
+		if len(segments) > 0 && segments[len(segments)-1] == segment {
+			continue
+		}
+		segments = append(segments, segment)
+	}
+	return segments
+}
+
+func stripChecklistPrefix(value string) string {
+	value = strings.TrimSpace(value)
+	for _, prefix := range []string{"- [ ] ", "- [x] ", "- [X] ", "* [ ] ", "* [x] ", "* [X] ", "- ", "* "} {
+		if strings.HasPrefix(value, prefix) {
+			return strings.TrimSpace(value[len(prefix):])
+		}
+	}
+	return value
+}
+
+func trimTaskLeadIn(value string) string {
+	trimmed := strings.TrimSpace(value)
+	for _, prefix := range []string{
+		"请你帮我", "请帮我", "帮我", "麻烦你", "麻烦", "请你", "请", "我想让你", "我想请你", "我需要你",
+		"please help me", "help me", "can you", "please",
+	} {
+		if strings.HasPrefix(strings.ToLower(trimmed), prefix) {
+			trimmed = strings.TrimSpace(trimmed[len(prefix):])
+			break
+		}
+	}
+	return trimmed
+}
+
+func minInt(left, right int) int {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 func budgetPromptValue(value string, maxLength int) string {

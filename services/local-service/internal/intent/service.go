@@ -9,6 +9,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/titlegen"
 )
 
 const (
@@ -117,9 +118,9 @@ func ComposeTaskTitle(snapshot taskcontext.TaskContextSnapshot, intentName strin
 	}
 	switch intentName {
 	case "screen_analyze":
-		return screenSubjectText(snapshot)
+		return titlegen.CompactTaskFallback(screenSubjectText(snapshot))
 	default:
-		return subject
+		return titlegen.CompactTaskFallback(subject)
 	}
 }
 
