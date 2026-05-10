@@ -3393,7 +3393,7 @@ func newTestServerWithDependencies(client model.Client, storageService *storage.
 		toolExecutor,
 		pluginService,
 	)
-	orch := orchestrator.NewService(orchestrator.Deps{
+	orch, err := orchestrator.NewService(orchestrator.Deps{
 		Context:   contextsvc.NewService(),
 		Intent:    intent.NewService(),
 		RunEngine: runengine.NewEngine(),
@@ -3411,6 +3411,9 @@ func newTestServerWithDependencies(client model.Client, storageService *storage.
 		Storage:   storageService,
 		Inspector: inspectorService,
 	})
+	if err != nil {
+		panic(err)
+	}
 
 	server := NewServer(serviceconfig.RPCConfig{
 		Transport:        "named_pipe",

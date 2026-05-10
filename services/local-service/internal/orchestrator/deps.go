@@ -1,6 +1,8 @@
 package orchestrator
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
@@ -48,6 +50,43 @@ type Deps struct {
 	Storage        *storage.Service
 
 	ExecutionTimeout time.Duration
+}
+
+// Validate enforces the constructor contract so missing required collaborators
+// fail at wiring time instead of surfacing later as unrelated nil dereferences.
+func (d Deps) Validate() error {
+	missing := make([]string, 0, 9)
+	if d.Context == nil {
+		missing = append(missing, "Context")
+	}
+	if d.Intent == nil {
+		missing = append(missing, "Intent")
+	}
+	if d.RunEngine == nil {
+		missing = append(missing, "RunEngine")
+	}
+	if d.Delivery == nil {
+		missing = append(missing, "Delivery")
+	}
+	if d.Memory == nil {
+		missing = append(missing, "Memory")
+	}
+	if d.Risk == nil {
+		missing = append(missing, "Risk")
+	}
+	if d.Model == nil {
+		missing = append(missing, "Model")
+	}
+	if d.Tools == nil {
+		missing = append(missing, "Tools")
+	}
+	if d.Plugin == nil {
+		missing = append(missing, "Plugin")
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("orchestrator: missing required deps: %s", strings.Join(missing, ", "))
 }
 
 func (d Deps) auditService() *audit.Service {

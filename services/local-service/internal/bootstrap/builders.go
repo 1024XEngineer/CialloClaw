@@ -181,7 +181,7 @@ func buildServices(core coreDeps, runtimes runtimeDeps) (serviceDeps, error) {
 		return serviceDeps{}, err
 	}
 
-	orchestratorService := orchestrator.NewService(orchestrator.Deps{
+	orchestratorService, err := orchestrator.NewService(orchestrator.Deps{
 		Context:   contextsvc.NewService(),
 		Intent:    intent.NewService(),
 		RunEngine: runEngine,
@@ -197,6 +197,9 @@ func buildServices(core coreDeps, runtimes runtimeDeps) (serviceDeps, error) {
 		Inspector: inspectorService,
 		Storage:   core.storageService,
 	})
+	if err != nil {
+		return serviceDeps{}, err
+	}
 
 	return serviceDeps{
 		deliveryService:     deliveryService,

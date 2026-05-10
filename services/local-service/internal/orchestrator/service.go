@@ -52,7 +52,10 @@ type Service struct {
 // NewService builds the task-centric orchestrator from one explicit dependency
 // graph. Required collaborators must be present in deps before construction,
 // while nil optional collaborators fall back to bootstrap-safe defaults here.
-func NewService(deps Deps) *Service {
+func NewService(deps Deps) (*Service, error) {
+	if err := deps.Validate(); err != nil {
+		return nil, err
+	}
 	service := &Service{
 		context:          deps.Context,
 		intent:           deps.Intent,
@@ -73,7 +76,7 @@ func NewService(deps Deps) *Service {
 		taskStartTaps:    map[uint64]func(taskID, sessionID, traceID string){},
 	}
 	service.attachExecutor(deps.Executor)
-	return service
+	return service, nil
 }
 
 // attachExecutor wires runtime notifications plus steering polls back into task
