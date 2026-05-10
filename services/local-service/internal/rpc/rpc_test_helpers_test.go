@@ -215,7 +215,7 @@ func rpcRequestMeta(traceID string) map[string]any {
 }
 
 func startTaskForTest(s *orchestrator.Service, params map[string]any) (map[string]any, error) {
-	response, err := s.StartTask(orchestrator.StartTaskRequestFromParams(params))
+	response, err := s.StartTaskFromParams(orchestrator.StartTaskRequestFromParams(params).ProtocolParamsMap())
 	if err != nil {
 		return nil, err
 	}

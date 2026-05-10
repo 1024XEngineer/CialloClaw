@@ -14,7 +14,14 @@ import (
 // inferred intent. Object-only starts stay in confirmation unless the caller
 // supplied enough instruction to enter governance and execution immediately.
 func (s *Service) StartTask(request StartTaskRequest) (TaskEntryResponse, error) {
-	response, err := s.startTask(request.paramsMap())
+	return s.StartTaskFromParams(request.ProtocolParamsMap())
+}
+
+// StartTaskFromParams lets the RPC layer hand the normalized protocol payload
+// directly to the orchestrator so hot task-entry requests do not bounce through
+// an extra typed-request-to-map conversion after boundary validation.
+func (s *Service) StartTaskFromParams(params map[string]any) (TaskEntryResponse, error) {
+	response, err := s.startTask(params)
 	if err != nil {
 		return TaskEntryResponse{}, err
 	}

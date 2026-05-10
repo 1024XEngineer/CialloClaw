@@ -80,25 +80,28 @@ type AgentTaskStartParams = orchestrator.StartTaskRequest
 type AgentTaskDetailGetParams = orchestrator.TaskDetailGetRequest
 
 func decodeAgentInputSubmitParams(raw json.RawMessage) (map[string]any, *rpcError) {
-	var params AgentInputSubmitParams
-	return decodeTypedProtocolParams(raw, &params, validateAgentInputSubmitParams)
+	return decodeTypedProtocolParams(raw, validateAgentInputSubmitParams, func(payload map[string]any) map[string]any {
+		return orchestrator.SubmitInputRequestFromParams(payload).ProtocolParamsMap()
+	})
 }
 
 func decodeAgentTaskStartParams(raw json.RawMessage) (map[string]any, *rpcError) {
-	var params AgentTaskStartParams
-	return decodeTypedProtocolParams(raw, &params, validateAgentTaskStartParams)
+	return decodeTypedProtocolParams(raw, validateAgentTaskStartParams, func(payload map[string]any) map[string]any {
+		return orchestrator.StartTaskRequestFromParams(withoutTopLevelField(payload, "intent")).ProtocolParamsMap()
+	})
 }
 
 func decodeAgentTaskDetailGetParams(raw json.RawMessage) (map[string]any, *rpcError) {
-	var params AgentTaskDetailGetParams
-	return decodeTypedProtocolParams(raw, &params, validateAgentTaskDetailGetParams)
+	return decodeTypedProtocolParams(raw, validateAgentTaskDetailGetParams, func(payload map[string]any) map[string]any {
+		return orchestrator.TaskDetailGetRequestFromParams(payload).ProtocolParamsMap()
+	})
 }
 
 func decodeAgentTaskListParams(raw json.RawMessage) (map[string]any, *rpcError) {
 	return decodeParamsWithValidation(raw, validateAgentTaskListParams)
 }
 
-func decodeTypedProtocolParams(raw json.RawMessage, target any, validate func(map[string]any) *rpcError) (map[string]any, *rpcError) {
+func decodeTypedProtocolParams(raw json.RawMessage, validate func(map[string]any) *rpcError, normalize func(map[string]any) map[string]any) (map[string]any, *rpcError) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 		trimmed = []byte("{}")
@@ -117,18 +120,10 @@ func decodeTypedProtocolParams(raw json.RawMessage, target any, validate func(ma
 			return nil, err
 		}
 	}
-	if err := json.Unmarshal(trimmed, target); err != nil {
-		return nil, &rpcError{
-			Code:    errInvalidParams,
-			Message: "INVALID_PARAMS",
-			Detail:  "params do not match the registered method dto",
-			TraceID: "trace_rpc_params",
-		}
+	if normalize != nil {
+		return normalize(payload), nil
 	}
-	if normalized, ok := target.(interface{ ProtocolParamsMap() map[string]any }); ok {
-		return normalized.ProtocolParamsMap(), nil
-	}
-	return protocolParamsMap(target)
+	return payload, nil
 }
 
 func decodeParamsRequiringRequestMeta(raw json.RawMessage) (map[string]any, *rpcError) {
@@ -146,6 +141,20 @@ func decodeParamsWithValidation(raw json.RawMessage, validate func(map[string]an
 		}
 	}
 	return params, nil
+}
+
+func withoutTopLevelField(values map[string]any, field string) map[string]any {
+	if len(values) == 0 {
+		return map[string]any{}
+	}
+	result := make(map[string]any, len(values))
+	for key, value := range values {
+		if key == field {
+			continue
+		}
+		result[key] = value
+	}
+	return result
 }
 
 func validateAgentInputSubmitParams(params map[string]any) *rpcError {

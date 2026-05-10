@@ -374,7 +374,7 @@ func newTaskDetailGetResponse(payload map[string]any) (TaskDetailGetResponse, er
 	if err != nil {
 		return TaskDetailGetResponse{}, err
 	}
-	securitySummaryPayload, _, err := protocolMapField(payload, "security_summary")
+	securitySummaryPayload, err := requireProtocolMapField(payload, "security_summary")
 	if err != nil {
 		return TaskDetailGetResponse{}, err
 	}
@@ -382,7 +382,7 @@ func newTaskDetailGetResponse(payload map[string]any) (TaskDetailGetResponse, er
 	if err != nil {
 		return TaskDetailGetResponse{}, fmt.Errorf("security_summary: %w", err)
 	}
-	runtimeSummaryPayload, _, err := protocolMapField(payload, "runtime_summary")
+	runtimeSummaryPayload, err := requireProtocolMapField(payload, "runtime_summary")
 	if err != nil {
 		return TaskDetailGetResponse{}, err
 	}
@@ -595,15 +595,15 @@ func deliveryResultDTOPointerFromMap(values map[string]any, key string) (*Delive
 }
 
 func deliveryResultDTOFromMap(values map[string]any) (DeliveryResultDTO, error) {
-	resultType, err := protocolStringField(values, "type")
+	resultType, err := requireProtocolStringField(values, "type")
 	if err != nil {
 		return DeliveryResultDTO{}, err
 	}
-	title, err := protocolStringField(values, "title")
+	title, err := requireProtocolStringField(values, "title")
 	if err != nil {
 		return DeliveryResultDTO{}, err
 	}
-	payloadMap, _, err := protocolMapField(values, "payload")
+	payloadMap, err := requireProtocolMapField(values, "payload")
 	if err != nil {
 		return DeliveryResultDTO{}, err
 	}
@@ -611,7 +611,7 @@ func deliveryResultDTOFromMap(values map[string]any) (DeliveryResultDTO, error) 
 	if err != nil {
 		return DeliveryResultDTO{}, fmt.Errorf("payload: %w", err)
 	}
-	previewText, err := protocolStringField(values, "preview_text")
+	previewText, err := requireProtocolStringField(values, "preview_text")
 	if err != nil {
 		return DeliveryResultDTO{}, err
 	}
@@ -1075,15 +1075,15 @@ func recoveryPointDTOFromMap(values map[string]any) (RecoveryPointDTO, error) {
 }
 
 func securitySummaryDTOFromMap(values map[string]any) (SecuritySummaryDTO, error) {
-	securityStatus, err := protocolStringField(values, "security_status")
+	securityStatus, err := requireProtocolStringField(values, "security_status")
 	if err != nil {
 		return SecuritySummaryDTO{}, err
 	}
-	riskLevel, err := protocolStringField(values, "risk_level")
+	riskLevel, err := requireProtocolStringField(values, "risk_level")
 	if err != nil {
 		return SecuritySummaryDTO{}, err
 	}
-	pendingAuthorizations, err := protocolIntField(values, "pending_authorizations")
+	pendingAuthorizations, err := requireProtocolIntField(values, "pending_authorizations")
 	if err != nil {
 		return SecuritySummaryDTO{}, err
 	}
@@ -1104,7 +1104,7 @@ func runtimeSummaryDTOFromMap(values map[string]any) (TaskRuntimeSummaryDTO, err
 	if err != nil {
 		return TaskRuntimeSummaryDTO{}, err
 	}
-	eventsCount, err := protocolIntField(values, "events_count")
+	eventsCount, err := requireProtocolIntField(values, "events_count")
 	if err != nil {
 		return TaskRuntimeSummaryDTO{}, err
 	}
@@ -1112,7 +1112,7 @@ func runtimeSummaryDTOFromMap(values map[string]any) (TaskRuntimeSummaryDTO, err
 	if err != nil {
 		return TaskRuntimeSummaryDTO{}, err
 	}
-	activeSteeringCount, err := protocolIntField(values, "active_steering_count")
+	activeSteeringCount, err := requireProtocolIntField(values, "active_steering_count")
 	if err != nil {
 		return TaskRuntimeSummaryDTO{}, err
 	}
@@ -1128,7 +1128,7 @@ func runtimeSummaryDTOFromMap(values map[string]any) (TaskRuntimeSummaryDTO, err
 	if err != nil {
 		return TaskRuntimeSummaryDTO{}, err
 	}
-	observationSignals, err := protocolStringSliceField(values, "observation_signals")
+	observationSignals, err := requireProtocolStringSliceField(values, "observation_signals")
 	if err != nil {
 		return TaskRuntimeSummaryDTO{}, err
 	}
@@ -1154,6 +1154,17 @@ func protocolMapField(values map[string]any, key string) (map[string]any, bool, 
 		return nil, false, protocolTypeError(key, "object", rawValue)
 	}
 	return value, true, nil
+}
+
+func requireProtocolMapField(values map[string]any, key string) (map[string]any, error) {
+	value, ok, err := protocolMapField(values, key)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, fmt.Errorf("%s must be object", key)
+	}
+	return value, nil
 }
 
 func protocolMapSliceField(values map[string]any, key string) ([]map[string]any, error) {
@@ -1191,6 +1202,17 @@ func protocolStringField(values map[string]any, key string) (string, error) {
 	value, ok := rawValue.(string)
 	if !ok {
 		return "", protocolTypeError(key, "string", rawValue)
+	}
+	return value, nil
+}
+
+func requireProtocolStringField(values map[string]any, key string) (string, error) {
+	value, err := protocolStringField(values, key)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf("%s must be string", key)
 	}
 	return value, nil
 }
@@ -1240,6 +1262,14 @@ func protocolIntField(values map[string]any, key string) (int, error) {
 	}
 }
 
+func requireProtocolIntField(values map[string]any, key string) (int, error) {
+	rawValue, ok := values[key]
+	if !ok || rawValue == nil {
+		return 0, fmt.Errorf("%s must be number", key)
+	}
+	return protocolIntField(values, key)
+}
+
 func protocolStringSliceField(values map[string]any, key string) ([]string, error) {
 	rawValue, ok := values[key]
 	if !ok || rawValue == nil {
@@ -1261,6 +1291,14 @@ func protocolStringSliceField(values map[string]any, key string) ([]string, erro
 	default:
 		return nil, protocolTypeError(key, "array of strings", rawValue)
 	}
+}
+
+func requireProtocolStringSliceField(values map[string]any, key string) ([]string, error) {
+	rawValue, ok := values[key]
+	if !ok || rawValue == nil {
+		return nil, fmt.Errorf("%s must be array of strings", key)
+	}
+	return protocolStringSliceField(values, key)
 }
 
 func cloneProtocolMap(values map[string]any) map[string]any {

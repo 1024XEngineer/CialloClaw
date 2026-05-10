@@ -1,7 +1,7 @@
 package orchestrator
 
 func startTaskForTest(s *Service, params map[string]any) (map[string]any, error) {
-	response, err := s.StartTask(StartTaskRequestFromParams(params))
+	response, err := s.StartTaskFromParams(StartTaskRequestFromParams(params).ProtocolParamsMap())
 	if err != nil {
 		return nil, err
 	}
@@ -9,7 +9,7 @@ func startTaskForTest(s *Service, params map[string]any) (map[string]any, error)
 }
 
 func submitInputForTest(s *Service, params map[string]any) (map[string]any, error) {
-	response, err := s.SubmitInput(SubmitInputRequestFromParams(params))
+	response, err := s.SubmitInputFromParams(SubmitInputRequestFromParams(params).ProtocolParamsMap())
 	if err != nil {
 		return nil, err
 	}
@@ -17,7 +17,7 @@ func submitInputForTest(s *Service, params map[string]any) (map[string]any, erro
 }
 
 func taskDetailGetForTest(s *Service, params map[string]any) (map[string]any, error) {
-	response, err := s.TaskDetailGet(TaskDetailGetRequestFromParams(params))
+	response, err := s.TaskDetailGetFromParams(TaskDetailGetRequestFromParams(params).ProtocolParamsMap())
 	if err != nil {
 		return nil, err
 	}
