@@ -2666,7 +2666,7 @@ func TestServiceNotepadConvertToTaskUsesRuntimeItemWithoutClosingTodo(t *testing
 
 	task := result["task"].(map[string]any)
 	if task["title"] != "处理：Finish the computer h..." {
-		t.Fatalf("expected converted task title to follow notepad note text, got %v", task["title"])
+		t.Fatalf("expected converted task title to stay anchored on notepad note text, got %v", task["title"])
 	}
 	if task["source_type"] != "todo" {
 		t.Fatalf("expected converted task source_type todo, got %v", task["source_type"])
@@ -2691,8 +2691,8 @@ func TestServiceNotepadConvertToTaskUsesRuntimeItemWithoutClosingTodo(t *testing
 	if record.Snapshot.Text != "Finish the computer homework before tonight and use the materials in workspace/homework." {
 		t.Fatalf("expected notepad note_text to drive task snapshot text, got %+v", record.Snapshot)
 	}
-	if len(record.Snapshot.Files) != 0 {
-		t.Fatalf("expected related resources to stay out of task snapshot files, got %+v", record.Snapshot.Files)
+	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "workspace/homework" {
+		t.Fatalf("expected explicit path resources to enter task snapshot, got %+v", record.Snapshot.Files)
 	}
 	if result["delivery_result"] == nil {
 		t.Fatal("expected confirmed notepad conversion to reuse formal delivery flow")
@@ -2794,7 +2794,7 @@ func TestServiceNotepadConvertToTaskKeepsDerivedDefaultResourcesOutOfSnapshot(t 
 	}
 }
 
-func TestServiceNotepadConvertToTaskKeepsLegacyRelatedResourcesOutOfSnapshotFiles(t *testing.T) {
+func TestServiceNotepadConvertToTaskCarriesLegacyPathResourcesIntoSnapshotFiles(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Converted legacy-resource notepad task finished.")
 	service.runEngine.ReplaceNotepadItems([]map[string]any{{
 		"item_id":   "todo_legacy_resources",
@@ -2824,8 +2824,8 @@ func TestServiceNotepadConvertToTaskKeepsLegacyRelatedResourcesOutOfSnapshotFile
 	if !ok {
 		t.Fatal("expected converted task to remain available in runtime")
 	}
-	if len(record.Snapshot.Files) != 0 {
-		t.Fatalf("expected legacy related resources to stay out of task snapshot files, got %+v", record.Snapshot.Files)
+	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "workspace/legacy-review" {
+		t.Fatalf("expected legacy path resources to enter task snapshot, got %+v", record.Snapshot.Files)
 	}
 }
 

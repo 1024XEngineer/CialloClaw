@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
@@ -63,9 +64,86 @@ func notepadSnapshot(item map[string]any) taskcontext.TaskContextSnapshot {
 		InputType: "text",
 		InputMode: "text",
 		Text:      text,
+		Files:     notepadResourcePaths(item),
 		PageTitle: "notepad",
 		AppName:   "dashboard",
 	}
+}
+
+func notepadTaskTitle(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) string {
+	if strings.TrimSpace(snapshot.Text) == "" {
+		return suggestion.TaskTitle
+	}
+
+	titleSnapshot := snapshot
+	titleSnapshot.Files = nil
+	return intent.NewService().Suggest(titleSnapshot, suggestion.Intent, suggestion.RequiresConfirm).TaskTitle
+}
+
+func notepadResourcePaths(item map[string]any) []string {
+	resources := relatedResourceMaps(item["related_resources"])
+	if len(resources) == 0 {
+		return nil
+	}
+
+	paths := make([]string, 0, len(resources))
+	for _, resource := range resources {
+		// Derived defaults keep notepad cards actionable in the dashboard, but
+		// they must not widen the formal task snapshot as if the user attached
+		// those paths explicitly.
+		if strings.TrimSpace(stringValue(resource, "resource_origin", "")) == "derived_default" {
+			continue
+		}
+		path := strings.TrimSpace(stringValue(resource, "path", ""))
+		if path == "" {
+			continue
+		}
+
+		resourceType := firstNonEmptyString(
+			stringValue(resource, "resource_type", ""),
+			stringValue(resource, "type", ""),
+		)
+		switch resourceType {
+		case "file", "folder", "directory":
+			paths = append(paths, path)
+		case "":
+			switch strings.TrimSpace(stringValue(resource, "target_kind", "")) {
+			case "file", "folder":
+				paths = append(paths, path)
+			}
+		default:
+			if strings.TrimSpace(stringValue(resource, "target_kind", "")) == "folder" {
+				paths = append(paths, path)
+			}
+		}
+	}
+
+	if len(paths) == 0 {
+		return nil
+	}
+	return paths
+}
+
+func relatedResourceMaps(rawValue any) []map[string]any {
+	if resources, ok := rawValue.([]map[string]any); ok {
+		return cloneMapSlice(resources)
+	}
+	anyResources, ok := rawValue.([]any)
+	if !ok {
+		return nil
+	}
+	result := make([]map[string]any, 0, len(anyResources))
+	for _, rawResource := range anyResources {
+		resource, ok := rawResource.(map[string]any)
+		if !ok {
+			continue
+		}
+		result = append(result, cloneMap(resource))
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 func latestOutputPathFromTasks(tasks []runengine.TaskRecord) string {
