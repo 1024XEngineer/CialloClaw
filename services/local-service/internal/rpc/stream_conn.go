@@ -55,6 +55,52 @@ func (s *streamConnState) isClosed() bool {
 	}
 }
 
+type streamConnTaskSet struct {
+	mu      sync.RWMutex
+	taskIDs map[string]bool
+}
+
+// streamConnTaskSet keeps task ownership learned across the lifetime of one
+// desktop named-pipe session so late async updates can still be routed after
+// the request that created or listed the task has already completed.
+func newStreamConnTaskSet() *streamConnTaskSet {
+	return &streamConnTaskSet{taskIDs: map[string]bool{}}
+}
+
+func (s *streamConnTaskSet) add(taskID string) {
+	trimmed := strings.TrimSpace(taskID)
+	if s == nil || trimmed == "" {
+		return
+	}
+	s.mu.Lock()
+	s.taskIDs[trimmed] = true
+	s.mu.Unlock()
+}
+
+func (s *streamConnTaskSet) addAll(taskIDs map[string]bool) {
+	for taskID, tracked := range taskIDs {
+		if tracked {
+			s.add(taskID)
+		}
+	}
+}
+
+func (s *streamConnTaskSet) addSlice(taskIDs []string) {
+	for _, taskID := range taskIDs {
+		s.add(taskID)
+	}
+}
+
+func (s *streamConnTaskSet) has(taskID string) bool {
+	trimmed := strings.TrimSpace(taskID)
+	if s == nil || trimmed == "" {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.taskIDs[trimmed]
+}
+
 type streamEnvelopeWriter struct {
 	encoder      *json.Encoder
 	onWriteError func()
@@ -169,6 +215,18 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 		encoder:      json.NewEncoder(conn),
 		onWriteError: connState.close,
 	}
+	connectionTasks := newStreamConnTaskSet()
+	unsubscribeConnectionRuntime := s.orchestrator.SubscribeRuntimeNotifications(func(taskID string, method string, params map[string]any) {
+		if connState.isClosed() || method != "task.updated" {
+			return
+		}
+		notificationTaskID := runtimeNotificationTaskID(taskID, params)
+		if notificationTaskID == "" || !connectionTasks.has(notificationTaskID) {
+			return
+		}
+		_ = writer.writeEnvelope(newNotificationEnvelope(method, params))
+	})
+	defer unsubscribeConnectionRuntime()
 	taskCoordinator := newStreamTaskCoordinator()
 	pendingState := &streamPendingState{}
 	pendingRequests := make(chan struct{}, maxPendingStreamRequests)
@@ -231,7 +289,7 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 				})
 			}
 			defer releasePending()
-			s.handleStreamRequest(request, writer, connState, pendingState, taskCoordinator, &taskStartRequestMu, releasePending)
+			s.handleStreamRequest(request, writer, connState, connectionTasks, pendingState, taskCoordinator, &taskStartRequestMu, releasePending)
 		}(request)
 	}
 }
@@ -268,6 +326,7 @@ func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnve
 	}
 
 	tracker := newStreamRequestTracker(request)
+	connectionTasks.addAll(tracker.taskIDsSnapshot())
 	initialTaskIDs := tracker.taskIDsSnapshot()
 	shouldProbeBlockedDisconnect := len(initialTaskIDs) > 0 || tracker.shouldSubscribeTaskStart()
 	if tracker.shouldSubscribeTaskStart() {
@@ -329,6 +388,7 @@ func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnve
 					return
 				}
 				tracker.addTaskID(taskID)
+				connectionTasks.add(taskID)
 			})
 		}
 
@@ -358,6 +418,7 @@ func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnve
 			if err := writer.writeEnvelope(response); err != nil {
 				return
 			}
+			connectionTasks.addSlice(taskIDsFromResponse(response))
 
 			for _, taskID := range ownedTaskIDs {
 				notifications, err := s.orchestrator.DrainNotifications(taskID)

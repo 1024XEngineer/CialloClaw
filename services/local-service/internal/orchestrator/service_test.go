@@ -34,6 +34,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/titlegen"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/sidecarclient"
@@ -2178,8 +2179,102 @@ func TestServiceConfirmTaskRewritesPlaceholderTitleAfterCorrection(t *testing.T)
 	}
 
 	task := confirmResult["task"].(map[string]any)
-	if task["title"] != "翻译：你好" {
+	if task["title"] != "你好" {
 		t.Fatalf("expected corrected intent to rewrite placeholder title, got %v", task["title"])
+	}
+}
+
+func TestServiceStartTaskUsesGeneratedTaskTitleFromFullContext(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			if request.TaskID == "task_title_generator" {
+				return model.GenerateTextResponse{OutputText: `{"title":"发布复盘风险跟进"}`}, nil
+			}
+			return model.GenerateTextResponse{OutputText: "unused"}, nil
+		},
+	})
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_generated_title",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"intent":     map[string]any{"name": "translate"},
+		"options":    map[string]any{"confirm_required": true},
+		"input": map[string]any{
+			"type": "text",
+			"text": "请帮我翻译这次发布复盘，并补齐风险项和后续跟进安排",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	task := startResult["task"].(map[string]any)
+	taskID := task["task_id"].(string)
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		record, ok := service.runEngine.GetTask(taskID)
+		if ok && record.Title == "发布复盘风险跟进" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	record, _ := service.runEngine.GetTask(taskID)
+	t.Fatalf("expected async task title refinement, got %+v", record)
+}
+
+func TestServiceStartTaskDoesNotBlockOnTitleGeneration(t *testing.T) {
+	modelClient := &blockingModelClient{
+		started:  make(chan string, 1),
+		released: make(chan struct{}, 1),
+	}
+	service, _ := newTestServiceWithModelClient(t, modelClient)
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+
+	resultCh := make(chan map[string]any, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		startResult, err := service.StartTask(map[string]any{
+			"session_id": "sess_non_blocking_title",
+			"source":     "floating_ball",
+			"trigger":    "hover_text_input",
+			"intent":     map[string]any{"name": "translate"},
+			"options":    map[string]any{"confirm_required": true},
+			"input": map[string]any{
+				"type": "text",
+				"text": "请帮我翻译这次发布复盘，并补齐风险项和后续跟进安排",
+			},
+		})
+		if err != nil {
+			errCh <- err
+			return
+		}
+		resultCh <- startResult
+	}()
+
+	select {
+	case <-modelClient.started:
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("expected async title generation to start")
+	}
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("start task failed: %v", err)
+	case startResult := <-resultCh:
+		task := startResult["task"].(map[string]any)
+		if task["title"] == "发布复盘风险跟进" {
+			t.Fatalf("expected hot path to return fallback title before async refinement, got %+v", task)
+		}
+	case <-time.After(200 * time.Millisecond):
+		t.Fatal("expected task start to return before title generation finishes")
+	}
+
+	select {
+	case <-modelClient.released:
+	case <-time.After(4 * time.Second):
+		t.Fatal("expected background title generation to exit after its timeout")
 	}
 }
 

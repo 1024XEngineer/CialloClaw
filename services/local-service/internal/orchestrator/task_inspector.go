@@ -39,12 +39,13 @@ func (s *Service) TaskInspectorRun(params map[string]any) (map[string]any, error
 	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
 
 	result, err := s.inspector.Run(taskinspector.RunInput{
-		Reason:          stringValue(params, "reason", ""),
-		TargetSources:   targetSources,
-		Config:          config,
-		UnfinishedTasks: unfinishedTasks,
-		FinishedTasks:   finishedTasks,
-		NotepadItems:    notepadItems,
+		Reason:               stringValue(params, "reason", ""),
+		AllowGeneratedTitles: inspectorAllowsGeneratedTitles(stringValue(params, "reason", "")),
+		TargetSources:        targetSources,
+		Config:               config,
+		UnfinishedTasks:      unfinishedTasks,
+		FinishedTasks:        finishedTasks,
+		NotepadItems:         notepadItems,
 	})
 	if err != nil {
 		return nil, err
@@ -60,6 +61,15 @@ func (s *Service) TaskInspectorRun(params map[string]any) (map[string]any, error
 		"summary":       result.Summary,
 		"suggestions":   append([]string(nil), result.Suggestions...),
 	}, nil
+}
+
+func inspectorAllowsGeneratedTitles(reason string) bool {
+	switch strings.TrimSpace(reason) {
+	case "notes_page_manual_run", "control_panel_manual_run":
+		return true
+	default:
+		return false
+	}
 }
 
 func inspectorConfigFromSettings(settings map[string]any) map[string]any {

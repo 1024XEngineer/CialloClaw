@@ -136,7 +136,7 @@ func confirmationTitleFromTask(task runengine.TaskRecord) string {
 	if subject == "" {
 		subject = presentation.Text(presentation.MessageTaskTitleCurrentTask, nil)
 	}
-	return presentation.TaskTitle("", presentation.TaskTitleOptions{Subject: subject})
+	return subject
 }
 
 // mergeSuggestedDeliveryPreference preserves explicit caller preferences and only

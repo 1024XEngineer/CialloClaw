@@ -588,6 +588,31 @@ func (e *Engine) UpdateIntent(taskID, title string, intent map[string]any) (Task
 	return record.clone(), true
 }
 
+// UpdateTitleIfCurrent applies an asynchronously generated title only when the
+// task still presents the expected fallback title. This prevents stale model
+// responses from overwriting newer user-confirmed or continuation-updated
+// titles after the lifecycle has already moved on.
+func (e *Engine) UpdateTitleIfCurrent(taskID, expectedTitle, title string) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+	if strings.TrimSpace(title) == "" || strings.TrimSpace(record.Title) != strings.TrimSpace(expectedTitle) {
+		return TaskRecord{}, false
+	}
+
+	record.Title = title
+	record.UpdatedAt = e.now()
+	record.LatestEvent = e.buildEvent(record, "task.updated")
+	record.queueNotification("task.updated", taskUpdatedNotificationParams(record))
+	e.persistTaskLocked(record)
+
+	return record.clone(), true
+}
+
 // ReopenIntentConfirmation moves a reviewed task back into confirming_intent
 // after human intervention. The reset must clear delivery, approval, memory,
 // and persistence plans so stale post-confirmation state cannot leak into the
