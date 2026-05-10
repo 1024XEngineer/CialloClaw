@@ -809,7 +809,10 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `input.page_context.window_title` | 当前窗口标题 |
 | `input.page_context.visible_text` | 当前页面可见文本摘录 |
 | `context.selection.text`   | 当前选区补充文本，按需传入 |
+| `context.selection_text`   | 当前选区的平铺补充文本，按需传入 |
 | `context.files`            | 补充文件上下文，按需传入 |
+| `context.file_paths`       | 兼容文件路径列表，按需传入 |
+| `context.error.message`    | 当前错误文本，按需传入 |
 | `context.screen.summary`   | 当前屏幕摘要，可用于视觉型任务上下文 |
 | `context.screen.visible_text` | 当前屏幕可见文本摘录 |
 | `context.behavior.last_action` | 最近行为信号，例如 `copy` |
@@ -855,13 +858,15 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
       "text": "这里放用户选中的文本内容",
       "page_context": {
         "app_name": "Chrome",
-        "url": "https://example.com/release",
-        "image_url": "xxx.png"
+        "url": "https://example.com/release"
       }
     },
     "context": {
       "selection": {
         "text": "这里是补充上下文"
+      },
+      "error": {
+        "message": "页面上显示了一段失败日志"
       },
       "files": []
     },
