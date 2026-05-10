@@ -13264,7 +13264,7 @@ func TestServiceResultPageFallbackWithoutFormalDeliveryRowKeepsOpenAndDetailStab
 		t.Fatalf("write structured task failed: %v", err)
 	}
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -13343,7 +13343,7 @@ func TestServiceLegacyResultPageSnapshotOverridesBubbleCompatShape(t *testing.T)
 		t.Fatalf("write structured task failed: %v", err)
 	}
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
@@ -13411,7 +13411,7 @@ func TestServiceResultPagePayloadNormalizationOverridesLegacyBadValues(t *testin
 		t.Fatalf("save delivery result failed: %v", err)
 	}
 
-	detailResult, err := service.TaskDetailGet(map[string]any{"task_id": taskID})
+	detailResult, err := taskDetailGetForTest(service, map[string]any{"task_id": taskID})
 	if err != nil {
 		t.Fatalf("task detail get failed: %v", err)
 	}
