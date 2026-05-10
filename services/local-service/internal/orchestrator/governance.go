@@ -8,6 +8,7 @@ import (
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/execution"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 )
 
@@ -97,7 +98,7 @@ func (s *Service) handleTaskGovernanceDecision(task runengine.TaskRecord, taskIn
 	}
 	pendingExecution := s.applyGovernanceAssessment(s.buildPendingExecution(task, taskIntent), assessment)
 	approvalRequest := buildApprovalRequest(task.TaskID, taskIntent, assessment)
-	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "检测到待授权操作，请先确认。", task.UpdatedAt.Format(dateTimeLayout))
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleGovernancePending, nil), task.UpdatedAt.Format(dateTimeLayout))
 	updatedTask := runengine.TaskRecord{}
 	changed := false
 	if s.isPreparedRestartAttempt(task) {

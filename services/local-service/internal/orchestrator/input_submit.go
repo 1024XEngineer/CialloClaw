@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 )
 
@@ -99,7 +100,7 @@ func (s *Service) maybeCreateWaitingInputTask(flow taskEntryFlow) (map[string]an
 		SessionID:         stringValue(flow.Params, "session_id", ""),
 		RequestSource:     stringValue(flow.Params, "source", ""),
 		RequestTrigger:    stringValue(flow.Params, "trigger", ""),
-		Title:             "等待补充输入",
+		Title:             presentation.Text(presentation.MessageTaskTitleWaitingInput, nil),
 		SourceType:        flow.Suggestion.TaskSourceType,
 		Status:            "waiting_input",
 		Intent:            nil,
@@ -111,7 +112,7 @@ func (s *Service) maybeCreateWaitingInputTask(flow taskEntryFlow) (map[string]an
 		Snapshot:          flow.Snapshot,
 	})
 
-	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "请先告诉我你希望我处理什么内容。", task.StartedAt.Format(dateTimeLayout))
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleInputNeedGoal, nil), task.StartedAt.Format(dateTimeLayout))
 	task = s.persistTaskPresentation(task, bubble)
 	return buildTaskEntryResponse(task, bubble, nil), true, nil
 }

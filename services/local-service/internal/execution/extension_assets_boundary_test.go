@@ -5,9 +5,9 @@ import (
 	"testing"
 
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 func TestExecuteAttachesModelProviderAndPerceptionBoundaryAssets(t *testing.T) {
@@ -22,7 +22,7 @@ func TestExecuteAttachesModelProviderAndPerceptionBoundaryAssets(t *testing.T) {
 		RunID:        "run_boundary_assets",
 		Title:        "Boundary asset test",
 		Intent:       map[string]any{"name": "explain", "arguments": map[string]any{}},
-		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text_selection", SelectionText: "release note warning", WindowTitle: "Browser - Release", VisibleText: "Warning: release notes incomplete.", ClipboardText: "copied release summary"},
+		Snapshot:     taskcontext.TaskContextSnapshot{InputType: "text_selection", SelectionText: "release note warning", WindowTitle: "Browser - Release", VisibleText: "Warning: release notes incomplete.", ClipboardText: "copied release summary"},
 		DeliveryType: "bubble",
 		ResultTitle:  "Boundary asset result",
 	})
@@ -53,7 +53,7 @@ func TestExecuteAttachesModelProviderAndPerceptionBoundaryAssets(t *testing.T) {
 
 func TestSupplementalExecutionBoundaryAssetsSkipsUnusedBoundaries(t *testing.T) {
 	modelService := model.NewService(serviceconfig.ModelConfig{Provider: model.OpenAIResponsesProvider, ModelID: "gpt-5.4", Endpoint: "https://api.openai.com/v1/responses"}, &stubModelClient{output: "unused"})
-	refs := supplementalExecutionBoundaryAssets(Request{Snapshot: contextsvc.TaskContextSnapshot{}}, Result{}, modelService)
+	refs := supplementalExecutionBoundaryAssets(Request{Snapshot: taskcontext.TaskContextSnapshot{}}, Result{}, modelService)
 	if len(refs) != 0 {
 		t.Fatalf("expected no supplemental boundary assets when model and perception boundaries were unused, got %+v", refs)
 	}
@@ -61,13 +61,13 @@ func TestSupplementalExecutionBoundaryAssetsSkipsUnusedBoundaries(t *testing.T) 
 	if len(refs) != 0 {
 		t.Fatalf("expected synthetic fallback provider markers not to resolve provider route assets, got %+v", refs)
 	}
-	if snapshotUsesPerceptionBoundary(contextsvc.TaskContextSnapshot{}) {
+	if snapshotUsesPerceptionBoundary(taskcontext.TaskContextSnapshot{}) {
 		t.Fatal("expected empty snapshot not to require perception package attribution")
 	}
-	if snapshotUsesPerceptionBoundary(contextsvc.TaskContextSnapshot{SelectionText: "selected text only"}) {
+	if snapshotUsesPerceptionBoundary(taskcontext.TaskContextSnapshot{SelectionText: "selected text only"}) {
 		t.Fatal("expected pure selection text not to trigger perception package attribution")
 	}
-	if snapshotUsesPerceptionBoundary(contextsvc.TaskContextSnapshot{ErrorText: "runtime error text only"}) {
+	if snapshotUsesPerceptionBoundary(taskcontext.TaskContextSnapshot{ErrorText: "runtime error text only"}) {
 		t.Fatal("expected pure error text not to trigger perception package attribution")
 	}
 }
@@ -84,7 +84,7 @@ func TestExecuteDoesNotAttachPerceptionPackageForSelectionOnlyInput(t *testing.T
 		RunID:        "run_selection_only_boundary",
 		Title:        "Selection-only boundary test",
 		Intent:       map[string]any{"name": "explain", "arguments": map[string]any{}},
-		Snapshot:     contextsvc.TaskContextSnapshot{InputType: "text_selection", SelectionText: "selected sentence only"},
+		Snapshot:     taskcontext.TaskContextSnapshot{InputType: "text_selection", SelectionText: "selected sentence only"},
 		DeliveryType: "bubble",
 		ResultTitle:  "Selection-only boundary result",
 	})
