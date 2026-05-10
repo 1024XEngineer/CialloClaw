@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 type stubModelClient struct {
@@ -27,7 +27,7 @@ func TestGenerateTaskSubjectUsesModelSummary(t *testing.T) {
 		output: `{"title":"发布复盘风险跟进"}`,
 	}))
 
-	title := service.GenerateTaskSubject(context.Background(), contextsvc.TaskContextSnapshot{
+	title := service.GenerateTaskSubject(context.Background(), taskcontext.TaskContextSnapshot{
 		InputType: "text",
 		Text:      "请帮我整理这次发布复盘，重点补齐风险项和后续跟进安排",
 	}, "agent_loop", "这次发布复盘")
@@ -42,7 +42,7 @@ func TestGenerateTaskSubjectFallsBackWhenModelFails(t *testing.T) {
 		err: errors.New("boom"),
 	}))
 
-	title := service.GenerateTaskSubject(context.Background(), contextsvc.TaskContextSnapshot{
+	title := service.GenerateTaskSubject(context.Background(), taskcontext.TaskContextSnapshot{
 		InputType: "text",
 		Text:      "请帮我整理这次发布复盘，重点补齐风险项和后续跟进安排",
 	}, "agent_loop", "这次发布复盘")

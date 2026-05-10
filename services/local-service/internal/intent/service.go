@@ -6,7 +6,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 )
 
@@ -48,7 +49,7 @@ func (s *Service) Analyze(input string) string {
 	return "confirming_intent"
 }
 
-func (s *Service) AnalyzeSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
+func (s *Service) AnalyzeSnapshot(snapshot taskcontext.TaskContextSnapshot) string {
 	if strings.TrimSpace(snapshot.Text) == "" &&
 		strings.TrimSpace(snapshot.SelectionText) == "" &&
 		strings.TrimSpace(snapshot.ErrorText) == "" &&
@@ -61,7 +62,7 @@ func (s *Service) AnalyzeSnapshot(snapshot contextsvc.TaskContextSnapshot) strin
 
 // Suggest derives a task suggestion from normalized context and an optional
 // explicit intent payload.
-func (s *Service) Suggest(snapshot contextsvc.TaskContextSnapshot, explicitIntent map[string]any, confirmRequired bool) Suggestion {
+func (s *Service) Suggest(snapshot taskcontext.TaskContextSnapshot, explicitIntent map[string]any, confirmRequired bool) Suggestion {
 	intent := explicitIntent
 	if len(intent) == 0 {
 		intent = s.defaultIntent(snapshot)
@@ -84,7 +85,7 @@ func (s *Service) Suggest(snapshot contextsvc.TaskContextSnapshot, explicitInten
 	return Suggestion{
 		Intent:             intent,
 		IntentConfirmed:    intentConfirmed,
-		TaskTitle:          ComposeTaskTitle(snapshot, intentName, subjectText(snapshot)),
+		TaskTitle:          s.buildTaskTitle(snapshot, intentName),
 		TaskSourceType:     sourceType,
 		RequiresConfirm:    requiresConfirm,
 		DirectDeliveryType: directDeliveryType,
@@ -98,7 +99,7 @@ func (s *Service) Suggest(snapshot contextsvc.TaskContextSnapshot, explicitInten
 // an explicit intent payload. Free-form requests always fall back to the
 // generic agent loop path so clarification stays in the main execution flow
 // instead of growing an intent-side phrase router.
-func (s *Service) defaultIntent(snapshot contextsvc.TaskContextSnapshot) map[string]any {
+func (s *Service) defaultIntent(snapshot taskcontext.TaskContextSnapshot) map[string]any {
 	if screenIntent, ok := screenAnalyzeIntent(snapshot); ok {
 		return screenIntent
 	}
@@ -109,64 +110,42 @@ func (s *Service) defaultIntent(snapshot contextsvc.TaskContextSnapshot) map[str
 // ComposeTaskTitle creates the fallback user-facing task title that appears in
 // task lists, dashboard modules, and later memory summaries before model-backed
 // title generation can refine it.
-func ComposeTaskTitle(snapshot contextsvc.TaskContextSnapshot, intentName string, subject string) string {
+func ComposeTaskTitle(snapshot taskcontext.TaskContextSnapshot, intentName string, subject string) string {
 	subject = strings.TrimSpace(subject)
 	if subject == "" {
-		subject = "当前内容"
+		subject = subjectText(snapshot)
 	}
-	switch intentName {
-	case "screen_analyze":
-		return screenSubjectText(snapshot)
-	default:
-		return subject
+	if intentName == "screen_analyze" {
+		subject = screenSubjectText(snapshot)
 	}
+	return presentation.TaskTitle(intentName, presentation.TaskTitleOptions{
+		Subject:  subject,
+		HasError: snapshot.ErrorText != "" || snapshot.InputType == "error",
+		IsFile:   len(snapshot.Files) > 0 || snapshot.InputType == "file",
+	})
+}
+
+// buildTaskTitle creates the user-facing task title that appears in task lists,
+// dashboard modules, and later memory summaries.
+func (s *Service) buildTaskTitle(snapshot taskcontext.TaskContextSnapshot, intentName string) string {
+	return ComposeTaskTitle(snapshot, intentName, subjectText(snapshot))
 }
 
 // buildResultTitle creates the formal delivery title used by delivery_result
 // and artifact views.
 func (s *Service) buildResultTitle(intentName string) string {
-	switch intentName {
-	case "":
-		return "待确认处理方式"
-	case defaultAgentLoopIntent:
-		return "处理结果"
-	case "screen_analyze":
-		return "屏幕分析结果"
-	case "rewrite":
-		return "改写结果"
-	case "translate":
-		return "翻译结果"
-	case "explain":
-		return "解释结果"
-	default:
-		return "处理结果"
-	}
+	return presentation.RenderResultSpec(intentName).Title
 }
 
 // buildResultBubbleText generates the completion bubble text shown after
 // delivery is ready.
 func (s *Service) buildResultBubbleText(intentName string) string {
-	switch intentName {
-	case "":
-		return "请先告诉我希望如何处理这段内容。"
-	case defaultAgentLoopIntent:
-		return "结果已经生成，可直接查看。"
-	case "screen_analyze":
-		return "已准备查看当前屏幕，等待授权后继续分析。"
-	case "rewrite":
-		return "内容已经按要求改写完成，可直接查看。"
-	case "translate":
-		return "翻译结果已经生成，可直接查看。"
-	case "explain":
-		return "这段内容的意思已经整理好了。"
-	default:
-		return "结果已经生成，可直接查看。"
-	}
+	return presentation.RenderResultSpec(intentName).BubbleText
 }
 
 // sourceTypeFromSnapshot maps trigger-level input semantics into the stable
 // task_source_type enum recorded by runengine.
-func sourceTypeFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
+func sourceTypeFromSnapshot(snapshot taskcontext.TaskContextSnapshot) string {
 	switch snapshot.Trigger {
 	case "voice_commit":
 		return "voice"
@@ -194,7 +173,7 @@ func sourceTypeFromSnapshot(snapshot contextsvc.TaskContextSnapshot) string {
 	}
 }
 
-func directDeliveryTypeForSnapshot(snapshot contextsvc.TaskContextSnapshot, intentName string) string {
+func directDeliveryTypeForSnapshot(snapshot taskcontext.TaskContextSnapshot, intentName string) string {
 	switch intentName {
 	case defaultAgentLoopIntent:
 		if len(snapshot.Files) > 0 || isLongContent(snapshot.SelectionText) || isLongContent(snapshot.Text) {
@@ -217,10 +196,7 @@ func directDeliveryTypeForSnapshot(snapshot contextsvc.TaskContextSnapshot, inte
 }
 
 func previewForDeliveryType(deliveryType string) string {
-	if deliveryType == "workspace_document" {
-		return "已为你写入文档并打开"
-	}
-	return "结果已通过气泡返回"
+	return presentation.DeliveryPreviewText(deliveryType)
 }
 
 func intentPayload(name string) map[string]any {
@@ -267,7 +243,7 @@ func intentPayload(name string) map[string]any {
 	}
 }
 
-func subjectText(snapshot contextsvc.TaskContextSnapshot) string {
+func subjectText(snapshot taskcontext.TaskContextSnapshot) string {
 	switch {
 	case len(snapshot.Files) > 0:
 		return filepath.Base(snapshot.Files[0])
@@ -288,7 +264,7 @@ func subjectText(snapshot contextsvc.TaskContextSnapshot) string {
 	}
 }
 
-func screenSubjectText(snapshot contextsvc.TaskContextSnapshot) string {
+func screenSubjectText(snapshot taskcontext.TaskContextSnapshot) string {
 	switch {
 	case strings.TrimSpace(snapshot.PageTitle) != "":
 		return truncateText(snapshot.PageTitle, subjectPreviewMaxLength)
@@ -299,7 +275,7 @@ func screenSubjectText(snapshot contextsvc.TaskContextSnapshot) string {
 	}
 }
 
-func screenAnalyzeIntent(snapshot contextsvc.TaskContextSnapshot) (map[string]any, bool) {
+func screenAnalyzeIntent(snapshot taskcontext.TaskContextSnapshot) (map[string]any, bool) {
 	if !shouldUseScreenAnalyze(snapshot) {
 		return nil, false
 	}
@@ -324,7 +300,7 @@ func screenAnalyzeIntent(snapshot contextsvc.TaskContextSnapshot) (map[string]an
 	return intent, true
 }
 
-func shouldUseScreenAnalyze(snapshot contextsvc.TaskContextSnapshot) bool {
+func shouldUseScreenAnalyze(snapshot taskcontext.TaskContextSnapshot) bool {
 	if snapshot.InputType != "text" {
 		return false
 	}
@@ -341,7 +317,7 @@ func shouldUseScreenAnalyze(snapshot contextsvc.TaskContextSnapshot) bool {
 	return containsAny(text, visualIntentMarkers...) && containsAny(text, analysisMarkers...)
 }
 
-func screenEvidenceRole(snapshot contextsvc.TaskContextSnapshot) string {
+func screenEvidenceRole(snapshot taskcontext.TaskContextSnapshot) string {
 	combined := strings.ToLower(strings.Join([]string{snapshot.Text, snapshot.ErrorText, snapshot.VisibleText, snapshot.ScreenSummary}, " "))
 	if containsAny(combined, "error", "warning", "exception", "报错", "错误", "异常", "warning") {
 		return "error_evidence"

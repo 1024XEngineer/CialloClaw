@@ -10,6 +10,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/execution"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
@@ -283,7 +284,7 @@ func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error)
 	impactScope := s.buildImpactScope(task, pendingExecution)
 	operationName := stringValue(pendingExecution, "operation_name", "")
 	if decision == "deny_once" {
-		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已拒绝本次操作，任务已取消。", task.UpdatedAt.Format(dateTimeLayout))
+		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleAuthorizationDenied, nil), task.UpdatedAt.Format(dateTimeLayout))
 		updatedTask, ok := s.runEngine.DenyAfterApproval(task.TaskID, authorizationRecord, impactScope, bubble)
 		if !ok {
 			return nil, ErrTaskNotFound
@@ -300,7 +301,7 @@ func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error)
 		}, nil
 	}
 
-	resumeBubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已允许本次操作，任务继续执行。", task.UpdatedAt.Format(dateTimeLayout))
+	resumeBubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleAuthorizationAllowed, nil), task.UpdatedAt.Format(dateTimeLayout))
 	processingTask, ok := s.runEngine.ResumeAfterApproval(task.TaskID, authorizationRecord, impactScope, resumeBubble)
 	if !ok {
 		return nil, ErrTaskNotFound

@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 )
 
@@ -62,7 +62,7 @@ func (s *Service) currentModel() *model.Service {
 
 // GenerateTaskSubject summarizes the full task snapshot into a short final task
 // title.
-func (s *Service) GenerateTaskSubject(ctx context.Context, snapshot contextsvc.TaskContextSnapshot, intentName string, fallback string) string {
+func (s *Service) GenerateTaskSubject(ctx context.Context, snapshot taskcontext.TaskContextSnapshot, intentName string, fallback string) string {
 	prompt := buildTaskSubjectPrompt(snapshot, intentName, s.maxTitle)
 	return s.generate(ctx, taskTitleRequestID, prompt, fallback)
 }
@@ -99,7 +99,7 @@ func (s *Service) generate(ctx context.Context, requestID string, prompt string,
 	return fallback
 }
 
-func buildTaskSubjectPrompt(snapshot contextsvc.TaskContextSnapshot, intentName string, maxLength int) string {
+func buildTaskSubjectPrompt(snapshot taskcontext.TaskContextSnapshot, intentName string, maxLength int) string {
 	lines := []string{
 		"You generate one compact task title subject for a desktop agent task.",
 		"Use the full context, not just the first sentence.",
@@ -144,7 +144,7 @@ func buildNoteTitlePrompt(item map[string]any, maxLength int) string {
 	return strings.Join(lines, "\n")
 }
 
-func taskSnapshotSummary(snapshot contextsvc.TaskContextSnapshot) string {
+func taskSnapshotSummary(snapshot taskcontext.TaskContextSnapshot) string {
 	lines := make([]string, 0, 12)
 	appendLine := func(label string, value string) {
 		value = strings.TrimSpace(value)

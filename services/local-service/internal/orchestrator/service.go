@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/execution"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
@@ -17,6 +16,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/titlegen"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
@@ -27,7 +27,7 @@ import (
 // It keeps task/run mapping, delivery assembly, risk governance, memory hooks,
 // and query hydration behind one dependency graph without starting transports.
 type Service struct {
-	context          *contextsvc.Service
+	context          *taskcontext.CaptureService
 	intent           *intent.Service
 	runEngine        *runengine.Engine
 	delivery         *delivery.Service

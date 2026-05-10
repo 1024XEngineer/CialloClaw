@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 )
 
@@ -27,7 +28,7 @@ func (s *Service) TaskSteer(params map[string]any) (map[string]any, error) {
 	if !taskCanAcceptExplicitSteering(task) {
 		return nil, ErrTaskStatusInvalid
 	}
-	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已记录新的补充要求，后续执行会纳入该指令。", time.Now().Format(dateTimeLayout))
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleSteeringRecorded, nil), time.Now().Format(dateTimeLayout))
 	updatedTask, changed := s.runEngine.AppendSteeringMessage(task.TaskID, message, bubble)
 	if !changed {
 		return nil, ErrTaskStatusInvalid
@@ -188,15 +189,15 @@ func (s *Service) advanceRestartedTaskAttempt(previousTask, task runengine.TaskR
 func controlBubbleText(action string) string {
 	switch action {
 	case "pause":
-		return "任务已暂停"
+		return presentation.Text(presentation.MessageBubbleTaskPaused, nil)
 	case "resume":
-		return "任务已继续执行"
+		return presentation.Text(presentation.MessageBubbleTaskResumed, nil)
 	case "cancel":
-		return "任务已取消"
+		return presentation.Text(presentation.MessageBubbleTaskCancelled, nil)
 	case "restart":
-		return "任务已重新开始"
+		return presentation.Text(presentation.MessageBubbleTaskRestarted, nil)
 	default:
-		return "任务状态已更新"
+		return presentation.Text(presentation.MessageBubbleTaskUpdated, nil)
 	}
 }
 

@@ -22,7 +22,6 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/execution"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
@@ -33,6 +32,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
@@ -52,6 +52,19 @@ func TestTruncateTextPreservesUTF8Boundaries(t *testing.T) {
 	}
 	if got := truncateText("完成e\u0301文档整理", 6); got != "完成e\u0301..." {
 		t.Fatalf("expected grapheme-safe combining-mark truncation, got %q", got)
+	}
+}
+
+func TestOriginalTextFromTaskTitleStripsLegacyScreenPrefixes(t *testing.T) {
+	cases := map[string]string{
+		"查看屏幕：Build Dashboard":   "Build Dashboard",
+		"查看当前屏幕：Build Dashboard": "Build Dashboard",
+		"查看屏幕报错：Build Dashboard": "Build Dashboard",
+	}
+	for title, want := range cases {
+		if got := originalTextFromTaskTitle(title); got != want {
+			t.Fatalf("expected %q to unwrap to %q, got %q", title, want, got)
+		}
 	}
 }
 
@@ -815,7 +828,7 @@ func newTestServiceWithModelClient(t *testing.T, client model.Client) (*Service,
 	executor := execution.NewService(fileSystem, platform.LocalExecutionBackend{}, sidecarclient.NewNoopPlaywrightSidecarClient(), sidecarclient.NewNoopOCRWorkerClient(), sidecarclient.NewNoopMediaWorkerClient(), sidecarclient.NewLocalScreenCaptureClient(fileSystem), modelService, auditService, checkpoint.NewService(storageService.RecoveryPointWriter()), deliveryService, toolRegistry, toolExecutor, pluginService).WithArtifactStore(storageService.ArtifactStore()).WithExtensionAssetCatalog(storageService)
 
 	service, err := NewService(Deps{
-		Context:   contextsvc.NewService(),
+		Context:   taskcontext.NewCaptureService(),
 		Intent:    intent.NewService(),
 		RunEngine: mustNewStoredEngine(t, storageService.TaskRunStore()),
 		Delivery:  deliveryService,
@@ -887,7 +900,7 @@ func newTestServiceWithExecutionWorkersAndScreen(t *testing.T, modelOutput strin
 	executor := execution.NewService(fileSystem, executionBackend, playwrightClient, ocrClient, mediaClient, screenClient, modelService, auditService, checkpoint.NewService(checkpointWriter), deliveryService, toolRegistry, toolExecutor, pluginService).WithArtifactStore(storageService.ArtifactStore()).WithExtensionAssetCatalog(storageService)
 
 	service, err := NewService(Deps{
-		Context:   contextsvc.NewService(),
+		Context:   taskcontext.NewCaptureService(),
 		Intent:    intent.NewService(),
 		RunEngine: mustNewStoredEngine(t, storageService.TaskRunStore()),
 		Delivery:  deliveryService,
@@ -976,7 +989,7 @@ func newTestService() *Service {
 		panic(err)
 	}
 	service, err := NewService(Deps{
-		Context:   contextsvc.NewService(),
+		Context:   taskcontext.NewCaptureService(),
 		Intent:    intent.NewService(),
 		RunEngine: runengine.NewEngine(),
 		Delivery:  delivery.NewService(),
@@ -994,7 +1007,7 @@ func newTestService() *Service {
 
 func TestNewServiceRejectsMissingRequiredDeps(t *testing.T) {
 	_, err := NewService(Deps{
-		Context: contextsvc.NewService(),
+		Context: taskcontext.NewCaptureService(),
 		Intent:  intent.NewService(),
 	})
 	if err == nil {
@@ -1100,7 +1113,7 @@ func replaceStrongholdProvider(t *testing.T, service *storage.Service, provider 
 // continues execution and completes delivery.
 func TestServiceStartTaskAndConfirmFlow(t *testing.T) {
 	service, err := NewService(Deps{
-		Context:   contextsvc.NewService(),
+		Context:   taskcontext.NewCaptureService(),
 		Intent:    intent.NewService(),
 		RunEngine: runengine.NewEngine(),
 		Delivery:  delivery.NewService(),
@@ -1458,7 +1471,7 @@ func TestServiceStartTaskFailsAfterExecutionTimeout(t *testing.T) {
 func TestShouldBoundTaskExecutionOnlyForSynchronousBubbleSubmits(t *testing.T) {
 	if !shouldBoundTaskExecution(
 		runengine.TaskRecord{SourceType: "hover_input"},
-		contextsvc.TaskContextSnapshot{Trigger: "hover_text_input"},
+		taskcontext.TaskContextSnapshot{Trigger: "hover_text_input"},
 		map[string]any{"name": "rewrite"},
 		"bubble",
 	) {
@@ -1466,7 +1479,7 @@ func TestShouldBoundTaskExecutionOnlyForSynchronousBubbleSubmits(t *testing.T) {
 	}
 	if shouldBoundTaskExecution(
 		runengine.TaskRecord{SourceType: "hover_input"},
-		contextsvc.TaskContextSnapshot{Trigger: "hover_text_input"},
+		taskcontext.TaskContextSnapshot{Trigger: "hover_text_input"},
 		map[string]any{"name": "screen_analyze_candidate"},
 		"bubble",
 	) {
@@ -1474,7 +1487,7 @@ func TestShouldBoundTaskExecutionOnlyForSynchronousBubbleSubmits(t *testing.T) {
 	}
 	if shouldBoundTaskExecution(
 		runengine.TaskRecord{SourceType: "hover_input"},
-		contextsvc.TaskContextSnapshot{Trigger: "hover_text_input"},
+		taskcontext.TaskContextSnapshot{Trigger: "hover_text_input"},
 		map[string]any{"name": "rewrite"},
 		"workspace_document",
 	) {
@@ -1482,7 +1495,7 @@ func TestShouldBoundTaskExecutionOnlyForSynchronousBubbleSubmits(t *testing.T) {
 	}
 	if shouldBoundTaskExecution(
 		runengine.TaskRecord{SourceType: "file"},
-		contextsvc.TaskContextSnapshot{Trigger: "file_drop"},
+		taskcontext.TaskContextSnapshot{Trigger: "file_drop"},
 		map[string]any{"name": "write_file"},
 		"bubble",
 	) {
@@ -2752,7 +2765,7 @@ func TestServiceNotepadConvertToTaskRollsBackTaskWhenLinkPersistenceFails(t *tes
 	}
 
 	service, err := NewService(Deps{
-		Context:   contextsvc.NewService(),
+		Context:   taskcontext.NewCaptureService(),
 		Intent:    intent.NewService(),
 		RunEngine: engine,
 		Delivery:  delivery.NewService(),
@@ -2943,7 +2956,7 @@ func TestExecuteTaskPersistsTraceAndEvalSnapshots(t *testing.T) {
 		CurrentStep: "generate_output",
 		RiskLevel:   "green",
 	})
-	updated, _, _, _, err := service.executeTask(task, contextsvc.TaskContextSnapshot{InputType: "text", Text: "please summarize this content"}, map[string]any{"name": "summarize", "arguments": map[string]any{}})
+	updated, _, _, _, err := service.executeTask(task, taskcontext.TaskContextSnapshot{InputType: "text", Text: "please summarize this content"}, map[string]any{"name": "summarize", "arguments": map[string]any{}})
 	if err != nil {
 		t.Fatalf("executeTask failed: %v", err)
 	}
@@ -2984,7 +2997,7 @@ func TestMaybeEscalateHumanLoopBlocksTask(t *testing.T) {
 		TaskID:     task.TaskID,
 		RunID:      task.RunID,
 		IntentName: "agent_loop",
-		Snapshot:   contextsvc.TaskContextSnapshot{Text: "keep trying"},
+		Snapshot:   taskcontext.TaskContextSnapshot{Text: "keep trying"},
 		ToolCalls: []tools.ToolCallRecord{
 			{ToolName: "read_file", Output: map[string]any{"loop_round": 3}},
 			{ToolName: "read_file", Output: map[string]any{"loop_round": 3}},
@@ -3017,7 +3030,7 @@ func TestServiceTaskControlResumeExecutesHumanLoopTask(t *testing.T) {
 		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
 		CurrentStep: "generate_output",
 		RiskLevel:   "green",
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			Text:      "Please summarize this after review",
 			InputType: "text",
 			Trigger:   "hover_text_input",
@@ -3130,7 +3143,7 @@ func TestServiceTaskControlResumeConsumesHumanLoopPendingPayload(t *testing.T) {
 		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
 		CurrentStep: "generate_output",
 		RiskLevel:   "green",
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			Text:      "Please summarize this after review",
 			InputType: "text",
 			Trigger:   "hover_text_input",
@@ -3179,7 +3192,7 @@ func TestServiceTaskControlResumeHumanLoopReplanReturnsToIntentConfirmation(t *t
 		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
 		CurrentStep: "generate_output",
 		RiskLevel:   "green",
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			Text:      "Please summarize this after review",
 			InputType: "text",
 			Trigger:   "hover_text_input",
@@ -3255,7 +3268,7 @@ func TestServiceTaskControlResumeHumanLoopReplanClearsAuthorizationBeforeReconfi
 		Intent:      map[string]any{"name": "write_file", "arguments": map[string]any{"target_path": "workspace/original.md"}},
 		CurrentStep: "authorized_execution",
 		RiskLevel:   "yellow",
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			Text:      "Please update the workspace file after review",
 			InputType: "text",
 			Trigger:   "hover_text_input",
@@ -3947,7 +3960,7 @@ func TestMaybeEscalateHumanLoopSkipsSideEffectingExecutionAttempt(t *testing.T) 
 		TaskID:     task.TaskID,
 		RunID:      task.RunID,
 		IntentName: "write_file",
-		Snapshot:   contextsvc.TaskContextSnapshot{Text: "keep rewriting"},
+		Snapshot:   taskcontext.TaskContextSnapshot{Text: "keep rewriting"},
 		ToolCalls: []tools.ToolCallRecord{
 			{ToolName: "write_file", Input: map[string]any{"path": "workspace/out.md"}, Status: tools.ToolCallStatusFailed, ErrorCode: intPtr(1001)},
 			{ToolName: "write_file", Input: map[string]any{"path": "workspace/out.md"}, Status: tools.ToolCallStatusFailed, ErrorCode: intPtr(1001)},
@@ -3987,7 +4000,7 @@ func TestMaybeEscalateHumanLoopAllowsReadOnlyToolLoops(t *testing.T) {
 		TaskID:     task.TaskID,
 		RunID:      task.RunID,
 		IntentName: "agent_loop",
-		Snapshot:   contextsvc.TaskContextSnapshot{Text: "keep reading"},
+		Snapshot:   taskcontext.TaskContextSnapshot{Text: "keep reading"},
 		ToolCalls: []tools.ToolCallRecord{
 			{ToolName: "read_file", Input: map[string]any{"path": "workspace/a.md"}, Status: tools.ToolCallStatusFailed, ErrorCode: intPtr(1001)},
 			{ToolName: "read_file", Input: map[string]any{"path": "workspace/a.md"}, Status: tools.ToolCallStatusFailed, ErrorCode: intPtr(1001)},
@@ -4023,7 +4036,7 @@ func TestCaptureExecutionTraceSurfacesRecordFailure(t *testing.T) {
 		CurrentStep: "generate_output",
 		RiskLevel:   "green",
 	})
-	_, err := service.captureExecutionTrace(task, contextsvc.TaskContextSnapshot{Text: "capture me"}, task.Intent, execution.Result{Content: "done"}, nil)
+	_, err := service.captureExecutionTrace(task, taskcontext.TaskContextSnapshot{Text: "capture me"}, task.Intent, execution.Result{Content: "done"}, nil)
 	if err == nil || !strings.Contains(err.Error(), "eval persistence failed") {
 		t.Fatalf("expected trace persistence failure to surface, got %v", err)
 	}
@@ -4059,7 +4072,7 @@ func TestServiceRecommendationGetUsesPerceptionSignals(t *testing.T) {
 }
 
 func TestMemoryQueryFromSnapshotKeepsExplicitTaskInputAheadOfClipboard(t *testing.T) {
-	snapshot := contextsvc.TaskContextSnapshot{
+	snapshot := taskcontext.TaskContextSnapshot{
 		Text:          "explicit task input",
 		ClipboardText: "stale copied content",
 		VisibleText:   "visible page context",
@@ -4146,7 +4159,7 @@ func TestServiceSubmitInputWithFilesDoesNotWaitForInput(t *testing.T) {
 // submissions enter waiting_input.
 func TestServiceSubmitInputEmptyTextReturnsWaitingInput(t *testing.T) {
 	service, err := NewService(Deps{
-		Context:   contextsvc.NewService(),
+		Context:   taskcontext.NewCaptureService(),
 		Intent:    intent.NewService(),
 		RunEngine: runengine.NewEngine(),
 		Delivery:  delivery.NewService(),
@@ -4211,7 +4224,7 @@ func TestServiceSubmitInputEmptyTextReturnsWaitingInput(t *testing.T) {
 // attach memory and delivery handoffs.
 func TestServiceDirectStartBuildsMemoryAndDeliveryHandoffs(t *testing.T) {
 	service, err := NewService(Deps{
-		Context:   contextsvc.NewService(),
+		Context:   taskcontext.NewCaptureService(),
 		Intent:    intent.NewService(),
 		RunEngine: runengine.NewEngine(),
 		Delivery:  delivery.NewService(),
@@ -4588,7 +4601,7 @@ func TestServiceConfirmTaskRespectsStoredPreferredDelivery(t *testing.T) {
 
 func TestServiceStartTaskWaitingAuthDoesNotSetFinishedAt(t *testing.T) {
 	service, err := NewService(Deps{
-		Context:   contextsvc.NewService(),
+		Context:   taskcontext.NewCaptureService(),
 		Intent:    intent.NewService(),
 		RunEngine: runengine.NewEngine(),
 		Delivery:  delivery.NewService(),
@@ -4644,7 +4657,7 @@ func TestServiceStartTaskWaitingAuthDoesNotSetFinishedAt(t *testing.T) {
 // waiting_auth.
 func TestServiceConfirmCanEnterWaitingAuth(t *testing.T) {
 	service, err := NewService(Deps{
-		Context:   contextsvc.NewService(),
+		Context:   taskcontext.NewCaptureService(),
 		Intent:    intent.NewService(),
 		RunEngine: runengine.NewEngine(),
 		Delivery:  delivery.NewService(),
@@ -4812,7 +4825,7 @@ func TestServiceConfirmTaskReturnsStorageErrorWhenApprovalPersistenceFails(t *te
 // resumes execution and completes delivery.
 func TestServiceSecurityRespondAllowOnceResumesAndCompletes(t *testing.T) {
 	service, err := NewService(Deps{
-		Context:   contextsvc.NewService(),
+		Context:   taskcontext.NewCaptureService(),
 		Intent:    intent.NewService(),
 		RunEngine: runengine.NewEngine(),
 		Delivery:  delivery.NewService(),
@@ -4976,7 +4989,7 @@ func TestServiceSecurityRespondRespectsFallbackDelivery(t *testing.T) {
 
 func TestServiceSecurityRespondDenyOnceCancelsTask(t *testing.T) {
 	service, err := NewService(Deps{
-		Context:   contextsvc.NewService(),
+		Context:   taskcontext.NewCaptureService(),
 		Intent:    intent.NewService(),
 		RunEngine: runengine.NewEngine(),
 		Delivery:  delivery.NewService(),
@@ -6908,7 +6921,7 @@ func TestServiceTaskDetailGetIncludesFailureSummaryForFailedScreenTask(t *testin
 		CurrentStep:       "generate_output",
 		RiskLevel:         "yellow",
 		Timeline:          initialTimeline("processing", "generate_output"),
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			PageTitle:     "Build Dashboard",
 			VisibleText:   "Fatal build error",
 			ScreenSummary: "release validation failed",
@@ -7979,7 +7992,7 @@ func TestServiceStartTaskExplicitScreenAnalyzeKeepsFreshAuthorizationBoundary(t 
 		Status:      "waiting_input",
 		CurrentStep: "collect_input",
 		RiskLevel:   "green",
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			PageURL:     "https://example.com/build/1",
 			AppName:     "Chrome",
 			WindowTitle: "Build 1",
@@ -8049,7 +8062,7 @@ func TestServiceStartTaskExplicitScreenAnalyzeKeepsFreshAuthorizationBoundary(t 
 
 func TestResolveScreenAnalyzeIntentInfersClipModeFromVideoPath(t *testing.T) {
 	service := newTestService()
-	resolvedIntent := service.resolveScreenAnalyzeIntent(contextsvc.TaskContextSnapshot{}, map[string]any{
+	resolvedIntent := service.resolveScreenAnalyzeIntent(taskcontext.TaskContextSnapshot{}, map[string]any{
 		"name": "screen_analyze",
 		"arguments": map[string]any{
 			"path": "clips/demo.webm",
@@ -8986,7 +8999,7 @@ func TestApplyBudgetAutoDowngradeCreatesArgumentsForSkipTools(t *testing.T) {
 		PreferredDelivery: "workspace_document",
 		FallbackDelivery:  "workspace_document",
 	}
-	snapshot := contextsvc.TaskContextSnapshot{
+	snapshot := taskcontext.TaskContextSnapshot{
 		Text:          strings.Repeat("context ", 40),
 		SelectionText: strings.Repeat("selection ", 40),
 	}
@@ -9126,7 +9139,7 @@ func TestServiceFailExecutionTaskAppendsBudgetFailureSignal(t *testing.T) {
 		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
 		CurrentStep: "generate_output",
 		RiskLevel:   "green",
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			Text:      "provider failure should leave budget signal",
 			InputType: "text",
 			Trigger:   "hover_text_input",
@@ -10922,7 +10935,7 @@ func TestServiceTaskDetailGetUsesStructuredSnapshotWithoutReloadingTaskRuns(t *t
 				"url":     nil,
 			},
 		},
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			Source:  "floating_ball",
 			Trigger: "hover_text_input",
 			Text:    "snapshot-backed detail",
@@ -12512,7 +12525,7 @@ func TestServiceTaskDetailGetReloadsTaskRunWhenFormalScreenObjectsMaskInvalidSna
 			"memory_id": "mem_structured_screen_invalid_snapshot_formal",
 		}},
 		SteeringMessages: []string{"keep inspecting the screen evidence"},
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			VisibleText: "legacy visible text",
 		},
 	}); err != nil {
@@ -15104,7 +15117,7 @@ func TestServiceStartTaskDescribedFileStartsNewTaskWithoutPendingEvidence(t *tes
 		Status:      "waiting_input",
 		CurrentStep: "collect_input",
 		RiskLevel:   "green",
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			PageTitle:   "Build Dashboard",
 			PageURL:     "https://example.com/build",
 			AppName:     "Chrome",
@@ -15155,7 +15168,7 @@ func TestServiceStartTaskShellBallAnchorDoesNotContinuePendingFileTask(t *testin
 		Status:      "waiting_input",
 		CurrentStep: "collect_input",
 		RiskLevel:   "green",
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			PageTitle:   "Quick Intake",
 			PageURL:     "local://shell-ball",
 			AppName:     "desktop",
@@ -15204,7 +15217,7 @@ func TestServiceStartTaskShellBallAnchorDoesNotContinuePendingFileTask(t *testin
 
 func TestTaskContinuationEvidenceIgnoresShellBallAnchorMatches(t *testing.T) {
 	evidence := buildTaskContinuationEvidence(
-		contextsvc.TaskContextSnapshot{
+		taskcontext.TaskContextSnapshot{
 			InputType:   "file",
 			Files:       []string{"logs/network.log"},
 			PageTitle:   "Quick Intake",
@@ -15212,7 +15225,7 @@ func TestTaskContinuationEvidenceIgnoresShellBallAnchorMatches(t *testing.T) {
 			AppName:     "desktop",
 			WindowTitle: "Shell Ball",
 		},
-		contextsvc.TaskContextSnapshot{
+		taskcontext.TaskContextSnapshot{
 			PageTitle:   "Quick Intake",
 			PageURL:     "local://shell-ball",
 			AppName:     "desktop",
@@ -15433,7 +15446,7 @@ func TestServiceSubmitInputConfirmRequiredTextContinuesImplicitPendingTask(t *te
 		Status:      "waiting_input",
 		CurrentStep: "collect_input",
 		RiskLevel:   "green",
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			PageTitle:   "Build Dashboard",
 			PageURL:     "https://example.com/build",
 			AppName:     "Chrome",
@@ -15509,7 +15522,7 @@ func TestServiceSubmitInputPlainTextKeepsConfirmingTaskBehindConfirmation(t *tes
 			"name":      "agent_loop",
 			"arguments": map[string]any{},
 		},
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			InputType:   "text",
 			Text:        "Analyze the build failure.",
 			PageTitle:   "Build Dashboard",
@@ -15594,7 +15607,7 @@ func TestServiceStartTaskPlainTextImplicitPendingTaskStartsNewWithoutExplicitCon
 		Status:      "waiting_input",
 		CurrentStep: "collect_input",
 		RiskLevel:   "green",
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			PageTitle:   "Build Dashboard",
 			PageURL:     "https://example.com/build",
 			AppName:     "Chrome",
@@ -15633,7 +15646,7 @@ func TestFresherTaskRecordRestoresRuntimeAnchorsWhenStorageProjectionIsNewer(t *
 		Status:      "confirming_intent",
 		CurrentStep: "intent_confirmation",
 		UpdatedAt:   runtimeUpdatedAt,
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			PageURL:     "https://example.com/build",
 			AppName:     "Chrome",
 			BrowserKind: "chrome",
@@ -15647,7 +15660,7 @@ func TestFresherTaskRecordRestoresRuntimeAnchorsWhenStorageProjectionIsNewer(t *
 		Status:      "processing",
 		CurrentStep: "agent_loop",
 		UpdatedAt:   runtimeUpdatedAt.Add(time.Second),
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			InputType:   "file",
 			Text:        "Continue with the attached log.",
 			Files:       []string{"logs/network.log"},
@@ -15683,7 +15696,7 @@ func TestSnapshotFromTaskPreservesAttachOnlySnapshot(t *testing.T) {
 	attachOnlyTask := runengine.TaskRecord{
 		TaskID: "task_attach_only",
 		Title:  "Resume attached browser task",
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			BrowserKind: "edge",
 			ProcessPath: "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
 			ProcessID:   5150,
@@ -15725,7 +15738,7 @@ func TestServiceStartTaskConfirmRequiredFileContinuesWaitingInputTask(t *testing
 		Status:      "waiting_input",
 		CurrentStep: "collect_input",
 		RiskLevel:   "green",
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			PageTitle:   "Build Dashboard",
 			PageURL:     "https://example.com/build",
 			AppName:     "Chrome",
@@ -15803,7 +15816,7 @@ func TestServiceStartTaskStructuredSupplementContinuesPendingTaskWithoutAutoExec
 		Status:      "waiting_input",
 		CurrentStep: "collect_input",
 		RiskLevel:   "green",
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			PageTitle:   "Build Dashboard",
 			PageURL:     "https://example.com/build",
 			AppName:     "Chrome",
@@ -15864,7 +15877,7 @@ func TestServiceStartTaskStructuredSupplementResumesWaitingTaskWithConfirmedInte
 		CurrentStep: "collect_input",
 		RiskLevel:   "green",
 		Intent:      map[string]any{"name": "agent_loop", "arguments": map[string]any{}},
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			Text:        "Analyze the build failure after the log is attached.",
 			PageTitle:   "Build Dashboard",
 			PageURL:     "https://example.com/build",
@@ -15937,7 +15950,7 @@ func TestServiceStartTaskConfirmRequiredFileContinuesUniquePendingTaskAmongCandi
 		Status:      "waiting_input",
 		CurrentStep: "collect_input",
 		RiskLevel:   "green",
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			PageTitle:   "Build Dashboard",
 			PageURL:     "https://example.com/build",
 			AppName:     "Chrome",
@@ -15951,7 +15964,7 @@ func TestServiceStartTaskConfirmRequiredFileContinuesUniquePendingTaskAmongCandi
 		Status:      "waiting_input",
 		CurrentStep: "collect_input",
 		RiskLevel:   "green",
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			PageTitle:   "Issue Tracker",
 			PageURL:     "https://example.com/issues",
 			AppName:     "Chrome",
@@ -16025,7 +16038,7 @@ func TestServiceStartTaskConfirmRequiredFileStartsNewTaskWithoutPendingEvidence(
 		Status:      "waiting_input",
 		CurrentStep: "collect_input",
 		RiskLevel:   "green",
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			PageTitle:   "Build Dashboard",
 			PageURL:     "https://example.com/build",
 			AppName:     "Chrome",

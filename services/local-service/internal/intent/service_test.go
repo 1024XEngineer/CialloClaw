@@ -4,13 +4,13 @@ import (
 	"strings"
 	"testing"
 
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 func TestSuggestInfersScreenAnalyzeFromVisualErrorRequest(t *testing.T) {
 	service := NewService()
 
-	suggestion := service.Suggest(contextsvc.TaskContextSnapshot{
+	suggestion := service.Suggest(taskcontext.TaskContextSnapshot{
 		InputType:     "text",
 		Text:          "帮我看看这个页面的报错",
 		PageTitle:     "Build Dashboard",
@@ -43,7 +43,7 @@ func TestSuggestInfersScreenAnalyzeFromVisualErrorRequest(t *testing.T) {
 func TestSuggestKeepsAgentLoopForPlainTextWithoutVisualSignals(t *testing.T) {
 	service := NewService()
 
-	suggestion := service.Suggest(contextsvc.TaskContextSnapshot{
+	suggestion := service.Suggest(taskcontext.TaskContextSnapshot{
 		InputType: "text",
 		Text:      "帮我整理今天的会议纪要",
 	}, nil, false)
@@ -59,7 +59,7 @@ func TestSuggestKeepsPlainFreeTextOnAgentLoopBeforeRouting(t *testing.T) {
 	testCases := []string{"解释下", "整理会议纪要", "a.go", "v1.2", `C:\`, `@me`}
 	for _, testCase := range testCases {
 		t.Run(testCase, func(t *testing.T) {
-			suggestion := service.Suggest(contextsvc.TaskContextSnapshot{
+			suggestion := service.Suggest(taskcontext.TaskContextSnapshot{
 				InputType: "text",
 				Text:      testCase,
 			}, nil, false)
@@ -77,7 +77,7 @@ func TestSuggestKeepsPlainFreeTextOnAgentLoopBeforeRouting(t *testing.T) {
 func TestSuggestRespectsExplicitConfirmationRequestForFreeText(t *testing.T) {
 	service := NewService()
 
-	suggestion := service.Suggest(contextsvc.TaskContextSnapshot{
+	suggestion := service.Suggest(taskcontext.TaskContextSnapshot{
 		InputType: "text",
 		Text:      "你好",
 	}, nil, true)
@@ -93,7 +93,7 @@ func TestSuggestRespectsExplicitConfirmationRequestForFreeText(t *testing.T) {
 func TestSuggestKeepsPlainTextSubjectAheadOfPageContextForAgentLoop(t *testing.T) {
 	service := NewService()
 
-	suggestion := service.Suggest(contextsvc.TaskContextSnapshot{
+	suggestion := service.Suggest(taskcontext.TaskContextSnapshot{
 		InputType:   "text",
 		Text:        "帮我整理今天的会议纪要",
 		PageTitle:   "Build Dashboard",
@@ -108,7 +108,7 @@ func TestSuggestKeepsPlainTextSubjectAheadOfPageContextForAgentLoop(t *testing.T
 func TestSuggestCompactsMergedConversationIntoShorterTaskTitle(t *testing.T) {
 	service := NewService()
 
-	suggestion := service.Suggest(contextsvc.TaskContextSnapshot{
+	suggestion := service.Suggest(taskcontext.TaskContextSnapshot{
 		InputType: "text",
 		Text: strings.Join([]string{
 			"请帮我整理这次发布复盘",

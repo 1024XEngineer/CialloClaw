@@ -1,7 +1,11 @@
 // This test file covers delivery and persistence-plan assembly behavior.
 package delivery
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
+)
 
 // TestBuildStorageAndArtifactPlans verifies storage and artifact plans are
 // assembled together.
@@ -142,8 +146,12 @@ func TestBuildApprovalExecutionPlanRoutesByIntent(t *testing.T) {
 		t.Fatalf("expected translate plan to use bubble delivery, got %+v", translatePlan)
 	}
 	writePlan := service.BuildApprovalExecutionPlan("task_001", map[string]any{"name": "write_file"})
-	if writePlan["result_title"] != "文件写入结果" {
+	if writePlan["result_title"] != presentation.Text(presentation.MessageResultTitleWriteFile, nil) {
 		t.Fatalf("expected write_file title override, got %+v", writePlan)
+	}
+	summarizePlan := service.BuildApprovalExecutionPlan("task_001", map[string]any{"name": "summarize"})
+	if summarizePlan["result_title"] != presentation.Text(presentation.MessageResultTitleSummarize, nil) {
+		t.Fatalf("expected summarize approval title override, got %+v", summarizePlan)
 	}
 }
 

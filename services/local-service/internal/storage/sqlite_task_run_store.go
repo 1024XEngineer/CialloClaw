@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	_ "modernc.org/sqlite"
 )
 
@@ -590,7 +590,7 @@ func cloneNotificationSnapshots(values []NotificationSnapshot) []NotificationSna
 	return result
 }
 
-func cloneContextSnapshot(snapshot contextsvc.TaskContextSnapshot) contextsvc.TaskContextSnapshot {
+func cloneContextSnapshot(snapshot taskcontext.TaskContextSnapshot) taskcontext.TaskContextSnapshot {
 	cloned := snapshot
 	if len(snapshot.Files) > 0 {
 		cloned.Files = append([]string(nil), snapshot.Files...)
