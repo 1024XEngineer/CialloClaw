@@ -244,6 +244,68 @@ func TestServiceRunCachesGeneratedNoteTitlesUntilContentChanges(t *testing.T) {
 	}
 }
 
+func TestServiceRunUsesNoteTextAsFallbackWhenGeneratorUnavailable(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	content := strings.Join([]string{
+		"- [ ] Weekly retro",
+		"  note: 补齐风险项、责任人和发布时间",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "weekly.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem)
+	result, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if len(result.NotepadItems) != 1 {
+		t.Fatalf("expected one parsed note, got %+v", result.NotepadItems)
+	}
+	if got := result.NotepadItems[0]["title"]; got != "补齐风险项、责任人和发布时间" {
+		t.Fatalf("expected fallback title to prefer note body context, got %+v", got)
+	}
+}
+
+func TestServiceRunSkipsModelForPlainChecklistTitles(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "simple.md"), []byte("- [ ] review report\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	callCount := &atomic.Int32{}
+	service := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"报告复盘"}`,
+		calls:  callCount,
+	})))
+	result, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if len(result.NotepadItems) != 1 || result.NotepadItems[0]["title"] != "review report" {
+		t.Fatalf("expected plain checklist item to keep direct fallback title, got %+v", result.NotepadItems)
+	}
+	if got := callCount.Load(); got != 0 {
+		t.Fatalf("expected plain checklist item to skip title model call, got %d calls", got)
+	}
+}
+
 func TestServiceRunDecodesLegacyMarkdownSources(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)

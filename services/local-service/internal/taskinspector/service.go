@@ -549,11 +549,11 @@ func (s *Service) normalizeParsedNotepadItem(item map[string]any, sourcePath str
 		item["note_text"] = stringValue(item, "title")
 	}
 	fallbackTitle := textutil.TruncateGraphemes(firstNonEmpty(
-		stringValue(item, "title"),
 		stringValue(item, "note_text"),
+		stringValue(item, "title"),
 		"待办事项",
 	), 24)
-	if s != nil && s.titlegen != nil {
+	if s != nil && s.titlegen != nil && shouldGenerateNoteTitle(item) {
 		item["title"] = s.titlegen.GenerateNoteTitle(context.Background(), item, fallbackTitle)
 	} else {
 		item["title"] = fallbackTitle
@@ -781,6 +781,17 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func shouldGenerateNoteTitle(item map[string]any) bool {
+	title := strings.TrimSpace(stringValue(item, "title"))
+	noteText := strings.TrimSpace(stringValue(item, "note_text"))
+	agentSuggestion := strings.TrimSpace(stringValue(item, "agent_suggestion"))
+	prerequisite := strings.TrimSpace(stringValue(item, "prerequisite"))
+	if agentSuggestion != "" || prerequisite != "" {
+		return true
+	}
+	return noteText != "" && noteText != title
 }
 
 func countOpenNotepadItems(items []map[string]any) int {

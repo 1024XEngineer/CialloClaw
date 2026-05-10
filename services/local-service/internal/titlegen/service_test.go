@@ -3,6 +3,8 @@ package titlegen
 import (
 	"context"
 	"errors"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
@@ -13,9 +15,17 @@ import (
 type stubModelClient struct {
 	output string
 	err    error
+	calls  *atomic.Int32
+	last   *string
 }
 
-func (s stubModelClient) GenerateText(_ context.Context, _ model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+func (s stubModelClient) GenerateText(_ context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	if s.calls != nil {
+		s.calls.Add(1)
+	}
+	if s.last != nil {
+		*s.last = request.Input
+	}
 	if s.err != nil {
 		return model.GenerateTextResponse{}, s.err
 	}
@@ -65,5 +75,48 @@ func TestGenerateNoteTitleParsesRawTextFallback(t *testing.T) {
 
 	if title != "每周复盘待补充事项" {
 		t.Fatalf("expected raw title output to be normalized, got %q", title)
+	}
+}
+
+func TestGenerateNoteTitleDoesNotCacheFallbackAfterModelFailure(t *testing.T) {
+	callCount := &atomic.Int32{}
+	client := &stubModelClient{
+		err:   errors.New("timeout"),
+		calls: callCount,
+	}
+	service := NewService(model.NewService(serviceconfig.ModelConfig{}, client))
+
+	first := service.GenerateNoteTitle(context.Background(), map[string]any{
+		"title":     "Weekly retro",
+		"note_text": "Weekly retro\n补齐风险项和责任人",
+	}, "Weekly retro")
+	second := service.GenerateNoteTitle(context.Background(), map[string]any{
+		"title":     "Weekly retro",
+		"note_text": "Weekly retro\n补齐风险项和责任人",
+	}, "Weekly retro")
+
+	if first != "Weekly retro" || second != "Weekly retro" {
+		t.Fatalf("expected fallback titles when model fails, got %q and %q", first, second)
+	}
+	if got := callCount.Load(); got != 2 {
+		t.Fatalf("expected transient fallback not to be cached, got %d model calls", got)
+	}
+}
+
+func TestGenerateTaskSubjectPromptOmitsClipboardText(t *testing.T) {
+	var prompt string
+	service := NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"发布说明校对"}`,
+		last:   &prompt,
+	}))
+
+	_ = service.GenerateTaskSubject(context.Background(), taskcontext.TaskContextSnapshot{
+		InputType:     "text_selection",
+		SelectionText: "请检查发布说明",
+		ClipboardText: "secret copied token",
+	}, "agent_loop", "发布说明")
+
+	if strings.Contains(prompt, "clipboard_text") || strings.Contains(prompt, "secret copied token") {
+		t.Fatalf("expected clipboard text to stay outside title generation prompt, got %q", prompt)
 	}
 }

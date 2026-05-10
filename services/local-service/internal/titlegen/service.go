@@ -70,7 +70,8 @@ func (s *Service) currentModel() *model.Service {
 // title.
 func (s *Service) GenerateTaskSubject(ctx context.Context, snapshot taskcontext.TaskContextSnapshot, intentName string, fallback string) string {
 	prompt := buildTaskSubjectPrompt(snapshot, intentName, s.maxTitle)
-	return s.generate(ctx, taskTitleRequestID, prompt, fallback)
+	title, _ := s.generate(ctx, taskTitleRequestID, prompt, fallback)
+	return title
 }
 
 // GenerateNoteTitle summarizes note body context into one short dashboard
@@ -81,19 +82,21 @@ func (s *Service) GenerateNoteTitle(ctx context.Context, item map[string]any, fa
 	if title, ok := s.cachedNoteTitle(cacheKey); ok {
 		return title
 	}
-	title := s.generate(ctx, noteTitleRequestID, prompt, fallback)
-	s.storeNoteTitle(cacheKey, title)
+	title, generated := s.generate(ctx, noteTitleRequestID, prompt, fallback)
+	if generated {
+		s.storeNoteTitle(cacheKey, title)
+	}
 	return title
 }
 
-func (s *Service) generate(ctx context.Context, requestID string, prompt string, fallback string) string {
+func (s *Service) generate(ctx context.Context, requestID string, prompt string, fallback string) (string, bool) {
 	fallback = normalizeTitle(fallback, s.maxTitle)
 	if strings.TrimSpace(prompt) == "" {
-		return fallback
+		return fallback, false
 	}
 	modelService := s.currentModel()
 	if modelService == nil {
-		return fallback
+		return fallback, false
 	}
 	generationCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
@@ -103,12 +106,12 @@ func (s *Service) generate(ctx context.Context, requestID string, prompt string,
 		Input:  prompt,
 	})
 	if err != nil {
-		return fallback
+		return fallback, false
 	}
 	if title := parseGeneratedTitle(response.OutputText, s.maxTitle); title != "" {
-		return title
+		return title, true
 	}
-	return fallback
+	return fallback, false
 }
 
 func buildTaskSubjectPrompt(snapshot taskcontext.TaskContextSnapshot, intentName string, maxLength int) string {
@@ -176,7 +179,6 @@ func taskSnapshotSummary(snapshot taskcontext.TaskContextSnapshot) string {
 	appendLine("screen_summary", snapshot.ScreenSummary)
 	appendLine("visible_text", snapshot.VisibleText)
 	appendLine("hover_target", snapshot.HoverTarget)
-	appendLine("clipboard_text", snapshot.ClipboardText)
 	return strings.Join(lines, "\n")
 }
 
