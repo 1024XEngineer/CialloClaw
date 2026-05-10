@@ -2873,8 +2873,8 @@ func TestServiceNotepadConvertToTaskKeepsLegacyPersistedFallbacksOutOfSnapshot(t
 	if !ok {
 		t.Fatal("expected converted task to remain available in runtime")
 	}
-	if record.Snapshot.Text != "周报模板" {
-		t.Fatalf("expected legacy synthetic note_text to collapse back to title, got %+v", record.Snapshot)
+	if record.Snapshot.Text != "周报模板。当前处于便签巡检域，等待进入正式执行。" {
+		t.Fatalf("expected ambiguous legacy note_text to stay preserved after reload, got %+v", record.Snapshot)
 	}
 	if len(record.Snapshot.Files) != 0 {
 		t.Fatalf("expected legacy fallback resources to stay out of task snapshot files, got %+v", record.Snapshot.Files)
@@ -2913,6 +2913,43 @@ func TestServiceNotepadConvertToTaskCarriesLegacyPathResourcesIntoSnapshotFiles(
 	}
 	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "workspace/legacy-review" {
 		t.Fatalf("expected legacy path resources to enter task snapshot, got %+v", record.Snapshot.Files)
+	}
+}
+
+func TestServiceNotepadConvertToTaskKeepsLegacyUserFallbackDirectoryAttachments(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Converted explicit fallback attachment task finished.")
+	todoStore := storage.NewInMemoryTodoStore()
+	if err := todoStore.ReplaceTodoState(context.Background(), []storage.TodoItemRecord{{
+		ItemID:               "todo_explicit_templates",
+		Title:                "模板评审",
+		Bucket:               "upcoming",
+		Status:               "normal",
+		NoteText:             "请直接查看 workspace/templates 里的模板材料。",
+		RelatedResourcesJSON: `[{"id":"user_templates_attachment","label":"关联模板","path":"workspace/templates","type":"directory","target_kind":"folder"}]`,
+		CreatedAt:            "2026-04-20T10:00:00Z",
+		UpdatedAt:            "2026-04-20T10:00:00Z",
+	}}, nil); err != nil {
+		t.Fatalf("seed explicit fallback attachment state failed: %v", err)
+	}
+	if err := service.runEngine.WithTodoStore(todoStore); err != nil {
+		t.Fatalf("attach todo store failed: %v", err)
+	}
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_explicit_templates",
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected converted task to remain available in runtime")
+	}
+	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "workspace/templates" {
+		t.Fatalf("expected explicit fallback-like attachment to stay in task snapshot, got %+v", record.Snapshot.Files)
 	}
 }
 
