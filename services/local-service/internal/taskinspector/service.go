@@ -15,6 +15,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textdecode"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 )
 
 const defaultStaleInterval = 15 * time.Minute
@@ -535,6 +536,11 @@ func normalizeParsedNotepadItem(item map[string]any, sourcePath string, now time
 	if stringValue(item, "note_text") == "" {
 		item["note_text"] = stringValue(item, "title")
 	}
+	item["title"] = textutil.CompactLabel([]string{
+		stringValue(item, "note_text"),
+		stringValue(item, "title"),
+		stringValue(item, "agent_suggestion"),
+	}, stringValue(item, "title"), 24)
 	if stringValue(item, "planned_at") == "" {
 		item["planned_at"] = stringValue(item, "due_at")
 	}

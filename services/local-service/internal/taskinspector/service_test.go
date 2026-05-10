@@ -149,6 +149,9 @@ func TestServiceRunParsesMarkdownIntoRichNotepadFoundation(t *testing.T) {
 	if retro["bucket"] != notepadBucketRecurringRule || retro["type"] != "recurring" {
 		t.Fatalf("expected weekly retro to become recurring rule item, got %+v", retro)
 	}
+	if retro["title"] != "Weekly retro · review..." {
+		t.Fatalf("expected note body to compact notepad title, got %+v", retro)
+	}
 	if retro["repeat_rule_text"] != "every 2 weeks" || retro["prerequisite"] != "collect status updates" {
 		t.Fatalf("expected recurring metadata to be parsed, got %+v", retro)
 	}
