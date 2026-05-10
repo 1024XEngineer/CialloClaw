@@ -158,3 +158,47 @@ func TestTaskDetailGetResponseMapNormalizesUnknownFields(t *testing.T) {
 		t.Fatalf("expected typed detail normalization to drop unknown runtime summary fields, got %+v", runtimeSummary)
 	}
 }
+
+func TestTaskDetailGetResponseMapDropsAuthorizationRecordRunID(t *testing.T) {
+	response := newTaskDetailGetResponse(map[string]any{
+		"task": map[string]any{
+			"task_id":      "task_detail_auth",
+			"session_id":   "sess_auth",
+			"title":        "Inspect approval history",
+			"source_type":  "screen_capture",
+			"status":       "completed",
+			"current_step": "generate_output",
+			"risk_level":   "yellow",
+			"started_at":   "2026-05-10T00:00:00Z",
+			"updated_at":   "2026-05-10T00:00:01Z",
+		},
+		"timeline":          []map[string]any{},
+		"delivery_result":   nil,
+		"artifacts":         []map[string]any{},
+		"citations":         []map[string]any{},
+		"mirror_references": []map[string]any{},
+		"approval_request":  nil,
+		"authorization_record": map[string]any{
+			"authorization_record_id": "auth_001",
+			"task_id":                 "task_detail_auth",
+			"run_id":                  "run_hidden",
+			"approval_id":             "appr_001",
+			"decision":                "allow_once",
+			"remember_rule":           false,
+			"operator":                "user",
+			"created_at":              "2026-05-10T00:00:02Z",
+		},
+		"audit_record":     nil,
+		"security_summary": map[string]any{"pending_authorizations": 0, "latest_restore_point": nil},
+		"runtime_summary":  map[string]any{"events_count": 0, "active_steering_count": 0, "observation_signals": []string{}},
+	})
+
+	mapped := response.Map()
+	authorizationRecord := mapValue(mapped, "authorization_record")
+	if _, ok := authorizationRecord["run_id"]; ok {
+		t.Fatalf("expected authorization_record run_id to stay out of the stable dto, got %+v", authorizationRecord)
+	}
+	if stringValue(authorizationRecord, "authorization_record_id", "") != "auth_001" {
+		t.Fatalf("expected typed detail normalization to preserve declared authorization fields, got %+v", authorizationRecord)
+	}
+}

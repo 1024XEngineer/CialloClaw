@@ -147,6 +147,9 @@ func validateAgentInputSubmitParams(params map[string]any) *rpcError {
 	if err := requireExactString(input, "type", "text"); err != nil {
 		return err
 	}
+	if err := requireNonEmptyString(input, "text"); err != nil {
+		return err
+	}
 	if err := requireEnumValue(input, "input_mode", inputModeSet); err != nil {
 		return err
 	}
@@ -177,6 +180,9 @@ func validateAgentTaskStartParams(params map[string]any) *rpcError {
 	if err := requireEnumValue(input, "type", inputTypeSet); err != nil {
 		return err
 	}
+	if err := validateTaskStartInputPayload(input, mapObject(params, "context")); err != nil {
+		return err
+	}
 	if err := validateContextEnvelope(params); err != nil {
 		return err
 	}
@@ -196,6 +202,42 @@ func validateAgentTaskDetailGetParams(params map[string]any) *rpcError {
 	}
 	if err := requireNonEmptyString(params, "task_id"); err != nil {
 		return err
+	}
+	return nil
+}
+
+// validateTaskStartInputPayload keeps the stable task-start DTO aligned with
+// the context capture fallback rules. Structured starts must still carry the
+// evidence that identifies the selected text, files, or error payload even when
+// the caller provides that evidence via the broader context envelope.
+func validateTaskStartInputPayload(input, context map[string]any) *rpcError {
+	switch stringValue(input, "type", "") {
+	case "text":
+		if !hasNonEmptyString(input, "text") && !hasNonEmptyString(context, "text") {
+			return invalidParamsError("text task input requires text")
+		}
+	case "text_selection":
+		selection := mapObject(context, "selection")
+		if !hasNonEmptyString(input, "text") &&
+			!hasNonEmptyString(selection, "text") &&
+			!hasNonEmptyString(context, "selection_text") &&
+			!hasNonEmptyString(input, "selection_text") {
+			return invalidParamsError("text_selection task input requires selected text")
+		}
+	case "file":
+		if !hasNonEmptyStringSlice(input, "files") &&
+			!hasNonEmptyStringSlice(context, "files") &&
+			!hasNonEmptyStringSlice(input, "file_paths") &&
+			!hasNonEmptyStringSlice(context, "file_paths") {
+			return invalidParamsError("file task input requires at least one file")
+		}
+	case "error":
+		errorContext := mapObject(context, "error")
+		if !hasNonEmptyString(input, "error_message") &&
+			!hasNonEmptyString(errorContext, "message") &&
+			!hasNonEmptyString(context, "error_text") {
+			return invalidParamsError("error task input requires an error message")
+		}
 	}
 	return nil
 }
@@ -264,6 +306,33 @@ func requireNonEmptyString(values map[string]any, key string) *rpcError {
 		return invalidParamsError("field must be a non-empty string: " + key)
 	}
 	return nil
+}
+
+func hasNonEmptyString(values map[string]any, key string) bool {
+	raw, ok := values[key]
+	if !ok {
+		return false
+	}
+	value, ok := raw.(string)
+	return ok && strings.TrimSpace(value) != ""
+}
+
+func hasNonEmptyStringSlice(values map[string]any, key string) bool {
+	raw, ok := values[key]
+	if !ok {
+		return false
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range items {
+		value, ok := item.(string)
+		if ok && strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func requireExactString(values map[string]any, key, expected string) *rpcError {

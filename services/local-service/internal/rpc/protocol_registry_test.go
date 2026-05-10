@@ -343,6 +343,193 @@ func TestAgentTaskStartDTORejectsOutOfDomainPageContextBrowserWithoutContext(t *
 	}
 }
 
+func TestAgentInputSubmitDTORejectsBlankInputText(t *testing.T) {
+	_, rpcErr := decodeAgentInputSubmitParams(mustMarshal(t, map[string]any{
+		"request_meta": map[string]any{
+			"trace_id":    "trace_input_submit_blank_text",
+			"client_time": "2026-05-10T00:00:00Z",
+		},
+		"source":  "floating_ball",
+		"trigger": "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "   ",
+			"input_mode": "text",
+		},
+		"context": map[string]any{},
+	}))
+	if rpcErr == nil {
+		t.Fatal("expected blank submit text to return invalid params")
+	}
+	if rpcErr.Code != errInvalidParams || rpcErr.Message != "INVALID_PARAMS" {
+		t.Fatalf("expected invalid params error, got %+v", rpcErr)
+	}
+}
+
+func TestAgentTaskStartDTORejectsMissingTypeSpecificPayload(t *testing.T) {
+	testCases := []struct {
+		name   string
+		params map[string]any
+	}{
+		{
+			name: "text without text",
+			params: map[string]any{
+				"request_meta": map[string]any{
+					"trace_id":    "trace_task_start_text_missing_text",
+					"client_time": "2026-05-10T00:00:00Z",
+				},
+				"source":  "floating_ball",
+				"trigger": "hover_text_input",
+				"input": map[string]any{
+					"type": "text",
+				},
+			},
+		},
+		{
+			name: "text_selection without selected text",
+			params: map[string]any{
+				"request_meta": map[string]any{
+					"trace_id":    "trace_task_start_selection_missing_text",
+					"client_time": "2026-05-10T00:00:00Z",
+				},
+				"source":  "floating_ball",
+				"trigger": "text_selected_click",
+				"input": map[string]any{
+					"type": "text_selection",
+				},
+			},
+		},
+		{
+			name: "file without files",
+			params: map[string]any{
+				"request_meta": map[string]any{
+					"trace_id":    "trace_task_start_file_missing_files",
+					"client_time": "2026-05-10T00:00:00Z",
+				},
+				"source":  "floating_ball",
+				"trigger": "file_drop",
+				"input": map[string]any{
+					"type": "file",
+				},
+			},
+		},
+		{
+			name: "error without error message",
+			params: map[string]any{
+				"request_meta": map[string]any{
+					"trace_id":    "trace_task_start_error_missing_message",
+					"client_time": "2026-05-10T00:00:00Z",
+				},
+				"source":  "floating_ball",
+				"trigger": "error_detected",
+				"input": map[string]any{
+					"type": "error",
+				},
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, rpcErr := decodeAgentTaskStartParams(mustMarshal(t, testCase.params))
+			if rpcErr == nil {
+				t.Fatal("expected missing type-specific payload to return invalid params")
+			}
+			if rpcErr.Code != errInvalidParams || rpcErr.Message != "INVALID_PARAMS" {
+				t.Fatalf("expected invalid params error, got %+v", rpcErr)
+			}
+		})
+	}
+}
+
+func TestAgentTaskStartDTOAcceptsContextBackedTypeSpecificPayload(t *testing.T) {
+	testCases := []struct {
+		name   string
+		params map[string]any
+	}{
+		{
+			name: "text backed by context.text",
+			params: map[string]any{
+				"request_meta": map[string]any{
+					"trace_id":    "trace_task_start_text_context",
+					"client_time": "2026-05-10T00:00:00Z",
+				},
+				"source":  "floating_ball",
+				"trigger": "hover_text_input",
+				"input": map[string]any{
+					"type": "text",
+				},
+				"context": map[string]any{
+					"text": "summarize this page",
+				},
+			},
+		},
+		{
+			name: "text_selection backed by context.selection",
+			params: map[string]any{
+				"request_meta": map[string]any{
+					"trace_id":    "trace_task_start_selection_context",
+					"client_time": "2026-05-10T00:00:00Z",
+				},
+				"source":  "floating_ball",
+				"trigger": "text_selected_click",
+				"input": map[string]any{
+					"type": "text_selection",
+				},
+				"context": map[string]any{
+					"selection": map[string]any{
+						"text": "selected content",
+					},
+				},
+			},
+		},
+		{
+			name: "file backed by context.files",
+			params: map[string]any{
+				"request_meta": map[string]any{
+					"trace_id":    "trace_task_start_file_context",
+					"client_time": "2026-05-10T00:00:00Z",
+				},
+				"source":  "floating_ball",
+				"trigger": "file_drop",
+				"input": map[string]any{
+					"type": "file",
+				},
+				"context": map[string]any{
+					"files": []any{"workspace/report.md"},
+				},
+			},
+		},
+		{
+			name: "error backed by context.error.message",
+			params: map[string]any{
+				"request_meta": map[string]any{
+					"trace_id":    "trace_task_start_error_context",
+					"client_time": "2026-05-10T00:00:00Z",
+				},
+				"source":  "floating_ball",
+				"trigger": "error_detected",
+				"input": map[string]any{
+					"type": "error",
+				},
+				"context": map[string]any{
+					"error": map[string]any{
+						"message": "build failed",
+					},
+				},
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, rpcErr := decodeAgentTaskStartParams(mustMarshal(t, testCase.params)); rpcErr != nil {
+				t.Fatalf("expected context-backed payload to pass dto validation, got %+v", rpcErr)
+			}
+		})
+	}
+}
+
 func protocolStableMethodBlock(source string) string {
 	start := strings.Index(source, "RPC_METHODS_STABLE")
 	end := strings.Index(source, "RPC_METHODS_PLANNED")
