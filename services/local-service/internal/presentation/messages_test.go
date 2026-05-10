@@ -1,6 +1,9 @@
 package presentation
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestRenderInterpolatesSemanticMessage(t *testing.T) {
 	got := Render("zh-CN", Message{
@@ -21,6 +24,19 @@ func TestRenderInterpolatesOptionalProviderDetail(t *testing.T) {
 	redacted := Text(MessageExecutionFailureAuth, DetailParam(""))
 	if redacted != "执行失败：模型鉴权失败，请检查 API Key 或访问权限。" {
 		t.Fatalf("expected empty provider detail to be omitted, got %q", redacted)
+	}
+}
+
+func TestRenderDoesNotReinterpolatePlaceholderTokensInsideValues(t *testing.T) {
+	got := Text(MessageToolBubbleSearchMatches, map[string]string{
+		"query": "\"first line\\n{count}\"",
+		"count": "3",
+	})
+	if got != "页面搜索完成，关键词 \"first line\\n{count}\" 共匹配 3 处。" {
+		t.Fatalf("expected value placeholders to remain literal, got %q", got)
+	}
+	if strings.Contains(got, "first line\\n3") {
+		t.Fatalf("expected placeholder token inside query to stay untouched, got %q", got)
 	}
 }
 

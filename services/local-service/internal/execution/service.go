@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1877,7 +1878,7 @@ func toolBubbleText(toolName string, result *tools.ToolExecutionResult) string {
 	}
 	if query := stringValue(result.SummaryOutput, "query", ""); query != "" {
 		if count, ok := result.SummaryOutput["match_count"]; ok {
-			return presentation.Text(presentation.MessageToolBubbleSearchMatches, map[string]string{"query": query, "count": fmt.Sprintf("%v", count)})
+			return presentation.Text(presentation.MessageToolBubbleSearchMatches, map[string]string{"query": strconv.Quote(query), "count": fmt.Sprintf("%v", count)})
 		}
 	}
 	if toolName == "browser_attach_current" {
