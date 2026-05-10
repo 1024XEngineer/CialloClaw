@@ -16705,16 +16705,8 @@ func TestServiceStartTaskWithExecutorDeliversPageReadBubble(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start task failed: %v", err)
 	}
-	if result["task"].(map[string]any)["status"] != "waiting_auth" {
-		t.Fatalf("expected page_read task to wait for authorization, got %+v", result)
-	}
-	result, err = service.SecurityRespond(map[string]any{
-		"task_id":     result["task"].(map[string]any)["task_id"],
-		"approval_id": activeApprovalIDForTask(t, service, result["task"].(map[string]any)["task_id"].(string)),
-		"decision":    "allow_once",
-	})
-	if err != nil {
-		t.Fatalf("security respond failed: %v", err)
+	if result["task"].(map[string]any)["status"] != "completed" {
+		t.Fatalf("expected page_read task to complete without authorization, got %+v", result)
 	}
 
 	deliveryResult := result["delivery_result"].(map[string]any)
@@ -16772,16 +16764,8 @@ func TestServiceStartTaskWithExecutorDeliversPageSearchBubble(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start task failed: %v", err)
 	}
-	if result["task"].(map[string]any)["status"] != "waiting_auth" {
-		t.Fatalf("expected page_search task to wait for authorization, got %+v", result)
-	}
-	result, err = service.SecurityRespond(map[string]any{
-		"task_id":     result["task"].(map[string]any)["task_id"],
-		"approval_id": activeApprovalIDForTask(t, service, result["task"].(map[string]any)["task_id"].(string)),
-		"decision":    "allow_once",
-	})
-	if err != nil {
-		t.Fatalf("security respond failed: %v", err)
+	if result["task"].(map[string]any)["status"] != "completed" {
+		t.Fatalf("expected page_search task to complete without authorization, got %+v", result)
 	}
 	deliveryResult := result["delivery_result"].(map[string]any)
 	if deliveryResult["type"] != "bubble" {
@@ -16925,16 +16909,8 @@ func TestServiceStartTaskWithExecutorPageReadFailureUsesUnifiedError(t *testing.
 	if err != nil {
 		t.Fatalf("start task should return task-centric failure result, got %v", err)
 	}
-	if result["task"].(map[string]any)["status"] != "waiting_auth" {
-		t.Fatalf("expected page_read failure task to wait for authorization, got %+v", result)
-	}
-	result, err = service.SecurityRespond(map[string]any{
-		"task_id":     result["task"].(map[string]any)["task_id"],
-		"approval_id": activeApprovalIDForTask(t, service, result["task"].(map[string]any)["task_id"].(string)),
-		"decision":    "allow_once",
-	})
-	if err != nil {
-		t.Fatalf("security respond should surface task-centric failure result, got %v", err)
+	if result["task"].(map[string]any)["status"] != "failed" {
+		t.Fatalf("expected page_read failure task to fail without authorization, got %+v", result)
 	}
 	taskID := result["task"].(map[string]any)["task_id"].(string)
 	record, ok := service.runEngine.GetTask(taskID)
@@ -16984,16 +16960,8 @@ func TestServiceStartTaskWithRealLocalPageReadDelivery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start task failed: %v", err)
 	}
-	if result["task"].(map[string]any)["status"] != "waiting_auth" {
-		t.Fatalf("expected real page_read task to wait for authorization, got %+v", result)
-	}
-	result, err = service.SecurityRespond(map[string]any{
-		"task_id":     result["task"].(map[string]any)["task_id"],
-		"approval_id": activeApprovalIDForTask(t, service, result["task"].(map[string]any)["task_id"].(string)),
-		"decision":    "allow_once",
-	})
-	if err != nil {
-		t.Fatalf("security respond failed: %v", err)
+	if result["task"].(map[string]any)["status"] != "completed" {
+		t.Fatalf("expected real page_read task to complete without authorization, got %+v", result)
 	}
 	deliveryResult := result["delivery_result"].(map[string]any)
 	if deliveryResult["type"] != "bubble" {
