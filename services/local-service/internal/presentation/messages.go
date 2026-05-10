@@ -409,7 +409,11 @@ func TaskTitlePrefixes() []string {
 		MessageTaskTitleScreenError,
 		MessageTaskTitleScreenCurrent,
 	}
-	prefixes := make([]string, 0, len(keys))
+	// Keep the legacy screen prefix alongside the semantic templates because
+	// persisted tasks created before the presentation refactor still round-trip
+	// through originalTextFromTaskTitle during confirm/resume flows.
+	prefixes := make([]string, 0, len(keys)+1)
+	prefixes = append(prefixes, "查看屏幕：")
 	for _, key := range keys {
 		template := messageTemplate(defaultLocale, key)
 		if prefix, _, ok := strings.Cut(template, "{subject}"); ok {

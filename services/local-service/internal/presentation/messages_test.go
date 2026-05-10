@@ -74,7 +74,7 @@ func TestTaskTitleMessageSelectsSemanticKeys(t *testing.T) {
 
 func TestTaskTitlePrefixesIncludeLegacyScreenTitles(t *testing.T) {
 	prefixes := TaskTitlePrefixes()
-	for _, expected := range []string{"查看当前屏幕：", "查看屏幕报错："} {
+	for _, expected := range []string{"查看屏幕：", "查看当前屏幕：", "查看屏幕报错："} {
 		found := false
 		for _, prefix := range prefixes {
 			if prefix == expected {
