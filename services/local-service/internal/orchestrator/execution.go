@@ -313,7 +313,7 @@ func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, sn
 			"trace":           cloneMap(budgetDecision.Trace),
 		},
 	})
-	if err == nil {
+	if err == nil && executionResult.LoopStopReason != string(agentloop.StopReasonNeedAuthorization) {
 		executionResult = s.normalizeExecutionFormalDeliveryResult(processingTask.TaskID, deliveryType, resultTitle, executionResult)
 	}
 	processingTask = s.recordExecutionToolCalls(processingTask, executionResult.ToolCalls)
@@ -337,6 +337,9 @@ func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, sn
 	if traceErr != nil {
 		failedTask, failureBubble := s.failExecutionTask(processingTask, taskIntent, executionResult, traceErr)
 		return failedTask, failureBubble, nil, nil, nil
+	}
+	if waitingTask, waitingBubble, ok, approvalErr := s.maybePauseForRuntimeApproval(processingTask, taskIntent, executionResult); approvalErr != nil || ok {
+		return waitingTask, waitingBubble, nil, nil, approvalErr
 	}
 	if escalatedTask, escalatedBubble, ok := s.maybeEscalateHumanLoop(processingTask, traceCapture, executionResult); ok {
 		return escalatedTask, escalatedBubble, nil, nil, nil

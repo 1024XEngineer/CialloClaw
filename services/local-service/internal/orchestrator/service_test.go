@@ -19,6 +19,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/agentloop"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
@@ -4684,6 +4685,74 @@ func TestServiceStartTaskWaitingAuthDoesNotSetFinishedAt(t *testing.T) {
 	}
 	if record.FinishedAt != nil {
 		t.Fatal("expected runtime waiting_auth task to keep finished_at nil")
+	}
+}
+
+func TestServiceAgentLoopToolApprovalPausesWaitingAuth(t *testing.T) {
+	modelClient := &stubToolCallingModelClient{
+		toolCalls: []model.ToolCallResult{{
+			RequestID: "req_agent_loop_page_read",
+			Provider:  "openai_responses",
+			ModelID:   "gpt-5.4",
+			ToolCalls: []model.ToolInvocation{{
+				Name:      "page_read",
+				Arguments: map[string]any{"url": "https://example.com"},
+			}},
+		}},
+	}
+	service, _ := newTestServiceWithModelClient(t, modelClient)
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_agent_loop_auth",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "去 https://example.com 看一下页面内容",
+		},
+		"intent": map[string]any{
+			"name":      "agent_loop",
+			"arguments": map[string]any{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	startedTask := startResult["task"].(map[string]any)
+	if startedTask["status"] != "waiting_auth" || startedTask["current_step"] != "waiting_authorization" {
+		t.Fatalf("expected runtime approval to enter waiting_auth, got %+v", startedTask)
+	}
+	if startResult["delivery_result"] != nil {
+		t.Fatalf("expected runtime approval pause not to produce delivery_result, got %+v", startResult["delivery_result"])
+	}
+	taskID := startedTask["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected task to remain in runtime")
+	}
+	if record.LoopStopReason != string(agentloop.StopReasonNeedAuthorization) {
+		t.Fatalf("expected loop stop reason need_authorization, got %q", record.LoopStopReason)
+	}
+	if record.ApprovalRequest == nil || stringValue(record.ApprovalRequest, "operation_name", "") != "page_read" {
+		t.Fatalf("expected page_read approval request, got %+v", record.ApprovalRequest)
+	}
+	if stringValue(record.PendingExecution, "operation_name", "") != "page_read" || stringValue(record.PendingExecution, "target_object", "") != "https://example.com" {
+		t.Fatalf("expected pending execution to preserve runtime tool target, got %+v", record.PendingExecution)
+	}
+	notifications, ok := service.runEngine.PendingNotifications(taskID)
+	if !ok {
+		t.Fatal("expected waiting task notifications")
+	}
+	hasApprovalPending := false
+	for _, notification := range notifications {
+		if notification.Method == "approval.pending" {
+			hasApprovalPending = true
+			break
+		}
+	}
+	if !hasApprovalPending {
+		t.Fatalf("expected approval.pending notification, got %+v", notifications)
 	}
 }
 
