@@ -19,6 +19,10 @@ import (
 const (
 	defaultTitleLengthLimit    = 24
 	defaultNoteTitleCacheLimit = 256
+	taskPromptPrimaryLimit     = 320
+	taskPromptSecondaryLimit   = 160
+	notePromptPrimaryLimit     = 320
+	notePromptSecondaryLimit   = 160
 	taskTitleRequestID         = "task_title_generator"
 	noteTitleRequestID         = "note_title_generator"
 )
@@ -161,39 +165,37 @@ func buildNoteTitlePrompt(item map[string]any, maxLength int) string {
 
 func taskSnapshotSummary(snapshot taskcontext.TaskContextSnapshot) string {
 	lines := make([]string, 0, 12)
-	appendLine := func(label string, value string) {
-		value = strings.TrimSpace(value)
-		if value != "" {
+	appendLine := func(label string, value string, maxLength int) {
+		if value = budgetPromptValue(value, maxLength); value != "" {
 			lines = append(lines, label+": "+value)
 		}
 	}
-	appendLine("input_type", snapshot.InputType)
-	appendLine("text", snapshot.Text)
-	appendLine("selection_text", snapshot.SelectionText)
-	appendLine("error_text", snapshot.ErrorText)
+	appendLine("input_type", snapshot.InputType, taskPromptSecondaryLimit)
+	appendLine("text", snapshot.Text, taskPromptPrimaryLimit)
+	appendLine("selection_text", snapshot.SelectionText, taskPromptPrimaryLimit)
+	appendLine("error_text", snapshot.ErrorText, taskPromptPrimaryLimit)
 	if len(snapshot.Files) > 0 {
-		lines = append(lines, "files: "+strings.Join(snapshot.Files, ", "))
+		appendLine("files", strings.Join(snapshot.Files, ", "), taskPromptSecondaryLimit)
 	}
-	appendLine("page_title", snapshot.PageTitle)
-	appendLine("window_title", snapshot.WindowTitle)
-	appendLine("screen_summary", snapshot.ScreenSummary)
-	appendLine("visible_text", snapshot.VisibleText)
-	appendLine("hover_target", snapshot.HoverTarget)
+	appendLine("page_title", snapshot.PageTitle, taskPromptSecondaryLimit)
+	appendLine("window_title", snapshot.WindowTitle, taskPromptSecondaryLimit)
+	appendLine("screen_summary", snapshot.ScreenSummary, taskPromptSecondaryLimit)
+	appendLine("visible_text", snapshot.VisibleText, taskPromptPrimaryLimit)
+	appendLine("hover_target", snapshot.HoverTarget, taskPromptSecondaryLimit)
 	return strings.Join(lines, "\n")
 }
 
 func notepadItemSummary(item map[string]any) string {
 	lines := make([]string, 0, 6)
-	appendLine := func(label string, value string) {
-		value = strings.TrimSpace(value)
-		if value != "" {
+	appendLine := func(label string, value string, maxLength int) {
+		if value = budgetPromptValue(value, maxLength); value != "" {
 			lines = append(lines, label+": "+value)
 		}
 	}
-	appendLine("title", stringValue(item, "title"))
-	appendLine("note_text", stringValue(item, "note_text"))
-	appendLine("agent_suggestion", stringValue(item, "agent_suggestion"))
-	appendLine("prerequisite", stringValue(item, "prerequisite"))
+	appendLine("title", stringValue(item, "title"), notePromptSecondaryLimit)
+	appendLine("note_text", stringValue(item, "note_text"), notePromptPrimaryLimit)
+	appendLine("agent_suggestion", stringValue(item, "agent_suggestion"), notePromptSecondaryLimit)
+	appendLine("prerequisite", stringValue(item, "prerequisite"), notePromptSecondaryLimit)
 	return strings.Join(lines, "\n")
 }
 
@@ -228,6 +230,17 @@ func normalizeTitle(value string, maxLength int) string {
 	value = strings.TrimSpace(value)
 	value = strings.Trim(value, "\"'`")
 	value = strings.Join(strings.Fields(value), " ")
+	return textutil.TruncateGraphemes(value, maxLength)
+}
+
+func budgetPromptValue(value string, maxLength int) string {
+	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	if value == "" {
+		return ""
+	}
+	if maxLength <= 0 {
+		return value
+	}
 	return textutil.TruncateGraphemes(value, maxLength)
 }
 

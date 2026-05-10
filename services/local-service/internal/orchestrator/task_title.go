@@ -38,6 +38,24 @@ func (s *Service) scheduleTaskTitleRefresh(taskID string, snapshot taskcontext.T
 		if generatedTitle == "" || generatedTitle == fallbackTitle {
 			return
 		}
-		s.runEngine.UpdateTitleIfCurrent(taskID, fallbackTitle, generatedTitle)
+		updatedTask, ok := s.runEngine.UpdateTitleIfCurrent(taskID, fallbackTitle, generatedTitle)
+		if !ok {
+			return
+		}
+		// Async title refinement must emit a live task.updated notification because
+		// it happens after the original RPC response has usually already drained.
+		s.publishRuntimeNotification(taskID, "task.updated", map[string]any{
+			"task_id":    updatedTask.TaskID,
+			"session_id": nonEmptySessionID(updatedTask.SessionID),
+			"status":     updatedTask.Status,
+		})
 	}()
+}
+
+func nonEmptySessionID(sessionID string) any {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil
+	}
+	return sessionID
 }

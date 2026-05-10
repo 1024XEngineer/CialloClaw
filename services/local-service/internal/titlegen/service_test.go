@@ -120,3 +120,40 @@ func TestGenerateTaskSubjectPromptOmitsClipboardText(t *testing.T) {
 		t.Fatalf("expected clipboard text to stay outside title generation prompt, got %q", prompt)
 	}
 }
+
+func TestGenerateTaskSubjectPromptBudgetsLargeSnapshotFields(t *testing.T) {
+	var prompt string
+	service := NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"发布说明校对"}`,
+		last:   &prompt,
+	}))
+	longText := strings.Repeat("A", taskPromptPrimaryLimit+40) + "TAIL"
+
+	_ = service.GenerateTaskSubject(context.Background(), taskcontext.TaskContextSnapshot{
+		InputType:     "text_selection",
+		SelectionText: longText,
+		VisibleText:   longText,
+	}, "agent_loop", "发布说明")
+
+	if strings.Contains(prompt, "TAIL") {
+		t.Fatalf("expected prompt budgeting to truncate oversized task context, got %q", prompt)
+	}
+}
+
+func TestGenerateNoteTitlePromptBudgetsLargeNoteFields(t *testing.T) {
+	var prompt string
+	service := NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"每周复盘阻塞项"}`,
+		last:   &prompt,
+	}))
+	longNote := strings.Repeat("B", notePromptPrimaryLimit+40) + "TAIL"
+
+	_ = service.GenerateNoteTitle(context.Background(), map[string]any{
+		"title":     "Weekly retro",
+		"note_text": longNote,
+	}, "Weekly retro")
+
+	if strings.Contains(prompt, "TAIL") {
+		t.Fatalf("expected prompt budgeting to truncate oversized note context, got %q", prompt)
+	}
+}
