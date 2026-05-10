@@ -5109,6 +5109,34 @@ test("shell-ball bare urls keep balanced parentheses inside the linked href", ()
   assert.match(markup, /href="https:\/\/en\.wikipedia\.org\/wiki\/Function_\(mathematics\)"/);
 });
 
+test("shell-ball bare urls trim unbalanced full-width closing parentheses", () => {
+  const markup = renderToStaticMarkup(
+    createElement(ShellBallBubbleZone, {
+      visualState: "processing",
+      bubbleItems: [
+        {
+          bubble: {
+            bubble_id: "msg-agent-fullwidth-paren-link-1",
+            task_id: "task-agent-fullwidth-paren-link-1",
+            type: "result",
+            text: "参考链接：（https://github.com/1024XEngineer/CialloClaw）",
+            pinned: false,
+            hidden: false,
+            created_at: "2026-05-10T12:09:05.000Z",
+          },
+          role: "agent",
+          desktop: {
+            lifecycleState: "visible",
+          },
+        },
+      ] satisfies ShellBallBubbleItem[],
+    }),
+  );
+
+  assert.match(markup, /href="https:\/\/github\.com\/1024XEngineer\/CialloClaw"/);
+  assert.doesNotMatch(markup, /href="https:\/\/github\.com\/1024XEngineer\/CialloClaw）"/);
+});
+
 test("shell-ball markdown links open through the desktop external-url bridge", () => {
   const markdownSource = readFileSync(
     resolve(desktopRoot, "src/features/shell-ball/components/ShellBallMarkdown.tsx"),
