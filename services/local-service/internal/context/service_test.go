@@ -157,6 +157,31 @@ func TestServiceSnapshotAndCaptureInferenceHelpers(t *testing.T) {
 	}
 }
 
+func TestServiceCaptureIgnoresRetiredTaskEntryAliases(t *testing.T) {
+	service := NewService()
+
+	snapshot := service.Capture(map[string]any{
+		"input": map[string]any{
+			"type":           "text_selection",
+			"selection_text": "legacy selected text",
+			"file_paths":     []any{"workspace/legacy.txt"},
+		},
+		"context": map[string]any{
+			"error_text": "legacy build failed",
+		},
+	})
+
+	if snapshot.SelectionText != "" {
+		t.Fatalf("expected retired input.selection_text alias to be ignored, got %q", snapshot.SelectionText)
+	}
+	if len(snapshot.Files) != 0 {
+		t.Fatalf("expected retired input.file_paths alias to be ignored, got %+v", snapshot.Files)
+	}
+	if snapshot.ErrorText != "" {
+		t.Fatalf("expected retired context.error_text alias to be ignored, got %q", snapshot.ErrorText)
+	}
+}
+
 func TestContextPrimitiveHelpersCoverAdditionalBranches(t *testing.T) {
 	if values := stringSliceValue([]string{" demo ", "demo", "notes"}); len(values) != 2 || values[0] != "demo" || values[1] != "notes" {
 		t.Fatalf("expected []string branch to trim and dedupe, got %+v", values)

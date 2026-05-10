@@ -53,9 +53,6 @@ func (s *Service) Capture(params map[string]any) TaskContextSnapshot {
 	input := mapValue(params, "input")
 	contextValue := mapValue(params, "context")
 	selection := mapValue(contextValue, "selection")
-	if len(selection) == 0 {
-		selection = mapValue(input, "selection")
-	}
 	pageContext := mapValue(input, "page_context")
 	pageFallback := mapValue(contextValue, "page")
 	errorValue := mapValue(contextValue, "error")
@@ -66,7 +63,6 @@ func (s *Service) Capture(params map[string]any) TaskContextSnapshot {
 	selectionText := firstNonEmpty(
 		stringValue(selection, "text"),
 		stringValue(contextValue, "selection_text"),
-		stringValue(input, "selection_text"),
 	)
 	text := firstNonEmpty(
 		stringValue(input, "text"),
@@ -75,14 +71,12 @@ func (s *Service) Capture(params map[string]any) TaskContextSnapshot {
 	errorText := firstNonEmpty(
 		stringValue(input, "error_message"),
 		stringValue(errorValue, "message"),
-		stringValue(contextValue, "error_text"),
 	)
 
 	files := dedupeStrings(append(
 		append(stringSliceValue(input["files"]), stringSliceValue(contextValue["files"])...),
-		stringSliceValue(input["file_paths"])...,
+		stringSliceValue(contextValue["file_paths"])...,
 	))
-	files = dedupeStrings(append(files, stringSliceValue(contextValue["file_paths"])...))
 
 	inputType := firstNonEmpty(stringValue(input, "type"), inferInputType(text, selectionText, errorText, files))
 	if inputType == "text_selection" && text == "" {
