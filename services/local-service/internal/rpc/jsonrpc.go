@@ -228,36 +228,53 @@ func boolValue(values map[string]any, key string, fallback bool) bool {
 	return value
 }
 
-// intValue safely reads a JSON-decoded numeric field and coerces it to int.
+// intValue safely reads a numeric field and coerces it to int.
+// Typed DTO normalization can already convert JSON numbers into Go ints before
+// the rest of the RPC package inspects the normalized payload again.
 func intValue(values map[string]any, key string, fallback int) int {
 	rawValue, ok := values[key]
 	if !ok {
 		return fallback
 	}
 
-	value, ok := rawValue.(float64)
-	if !ok {
+	switch value := rawValue.(type) {
+	case float64:
+		return int(value)
+	case float32:
+		return int(value)
+	case int:
+		return value
+	case int32:
+		return int(value)
+	case int64:
+		return int(value)
+	default:
 		return fallback
 	}
-
-	return int(value)
 }
 
-// stringSliceValue converts a JSON-decoded array into a []string while
-// skipping non-string entries and blank values.
+// stringSliceValue converts a decoded array into a []string while skipping
+// non-string entries and blank values.
 func stringSliceValue(rawValue any) []string {
-	values, ok := rawValue.([]any)
-	if !ok {
+	switch values := rawValue.(type) {
+	case []string:
+		result := make([]string, 0, len(values))
+		for _, item := range values {
+			if item != "" {
+				result = append(result, item)
+			}
+		}
+		return result
+	case []any:
+		result := make([]string, 0, len(values))
+		for _, rawItem := range values {
+			item, ok := rawItem.(string)
+			if ok && item != "" {
+				result = append(result, item)
+			}
+		}
+		return result
+	default:
 		return nil
 	}
-
-	result := make([]string, 0, len(values))
-	for _, rawItem := range values {
-		item, ok := rawItem.(string)
-		if ok && item != "" {
-			result = append(result, item)
-		}
-	}
-
-	return result
 }
