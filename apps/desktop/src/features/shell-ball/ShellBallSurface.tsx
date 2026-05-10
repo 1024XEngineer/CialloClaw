@@ -198,6 +198,7 @@ export function ShellBallSurface({
                   ref={mascotRef}
                   className="shell-ball-surface__mascot-shell"
                   data-dock-target={dockTarget ?? "none"}
+                  data-edge-dock-revealed={edgeDockRevealed ? "true" : "false"}
                   data-shell-ball-dragging={isDragging ? "true" : "false"}
                   data-shell-ball-settling={isSettling ? "true" : "false"}
                 >

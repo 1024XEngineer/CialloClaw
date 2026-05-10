@@ -512,6 +512,9 @@ func DeliveryPreviewText(deliveryType string) string {
 	if deliveryType == "bubble" {
 		return Text(MessagePreviewBubble, nil)
 	}
+	if deliveryType == "result_page" {
+		return "结果已生成，正在打开结果页"
+	}
 	return Text(MessagePreviewWorkspaceDoc, nil)
 }
 

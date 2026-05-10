@@ -230,7 +230,7 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 	taskCoordinator := newStreamTaskCoordinator()
 	pendingState := &streamPendingState{}
 	pendingRequests := make(chan struct{}, maxPendingStreamRequests)
-	var taskStartRequestMu sync.Mutex
+	var taskStartRequestMu sync.RWMutex
 
 	for {
 		// Acquire pending capacity before decoding the next request so a
@@ -320,7 +320,7 @@ func streamReaderReachedEOF(reader *bufio.Reader, conn net.Conn) bool {
 	return !errors.As(err, &netErr)
 }
 
-func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnvelopeWriter, connState *streamConnState, connectionTasks *streamConnTaskSet, pendingState *streamPendingState, taskCoordinator *streamTaskCoordinator, taskStartMu *sync.Mutex, releasePending func()) {
+func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnvelopeWriter, connState *streamConnState, pendingState *streamPendingState, taskCoordinator *streamTaskCoordinator, taskStartMu *sync.RWMutex, releasePending func()) {
 	if connState.isClosed() {
 		return
 	}
@@ -336,6 +336,16 @@ func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnve
 		// otherwise cross-wire notifications before that mapping is established.
 		taskStartMu.Lock()
 		defer taskStartMu.Unlock()
+		if connState.isClosed() {
+			return
+		}
+	} else if len(initialTaskIDs) > 0 {
+		// Explicit task-bound follow-ups must wait until any in-flight task.start
+		// request has finished claiming late task ownership and replaying buffered
+		// notifications, otherwise the queued same-task response can overtake the
+		// starter response on the shared stream.
+		taskStartMu.RLock()
+		defer taskStartMu.RUnlock()
 		if connState.isClosed() {
 			return
 		}
