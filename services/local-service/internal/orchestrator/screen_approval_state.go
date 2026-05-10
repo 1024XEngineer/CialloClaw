@@ -48,55 +48,25 @@ func newScreenAnalysisApprovalState(approvalRequest map[string]any, pendingExecu
 }
 
 func (state screenAnalysisApprovalState) approvalRequestMap() map[string]any {
-	return map[string]any{
-		"approval_id":    state.ApprovalRequest.ApprovalID,
-		"task_id":        state.ApprovalRequest.TaskID,
-		"operation_name": state.ApprovalRequest.OperationName,
-		"risk_level":     state.ApprovalRequest.RiskLevel,
-		"target_object":  state.ApprovalRequest.TargetObject,
-		"reason":         state.ApprovalRequest.Reason,
-		"status":         state.ApprovalRequest.Status,
-		"created_at":     state.ApprovalRequest.CreatedAt,
-	}
+	return protocolMapFromDTO(state.ApprovalRequest)
 }
 
 func (state screenAnalysisApprovalState) pendingExecutionMap() map[string]any {
-	return map[string]any{
-		"kind":           state.PendingExecution.Kind,
-		"operation_name": state.PendingExecution.OperationName,
-		"source_path":    state.PendingExecution.SourcePath,
-		"capture_mode":   state.PendingExecution.CaptureMode,
-		"source":         state.PendingExecution.Source,
-		"target_object":  state.PendingExecution.TargetObject,
-		"language":       state.PendingExecution.Language,
-		"evidence_role":  state.PendingExecution.EvidenceRole,
-		"delivery_type":  state.PendingExecution.DeliveryType,
-		"result_title":   state.PendingExecution.ResultTitle,
-		"preview_text":   state.PendingExecution.PreviewText,
-		"impact_scope":   state.PendingExecution.ImpactScope.mapValue(),
-	}
+	return protocolMapFromDTO(state.PendingExecution)
 }
 
 func (state screenAnalysisApprovalState) bubbleMessageMap() map[string]any {
-	return map[string]any{
-		"bubble_id":  state.BubbleMessage.BubbleID,
-		"task_id":    state.BubbleMessage.TaskID,
-		"type":       state.BubbleMessage.Type,
-		"text":       state.BubbleMessage.Text,
-		"pinned":     state.BubbleMessage.Pinned,
-		"hidden":     state.BubbleMessage.Hidden,
-		"created_at": state.BubbleMessage.CreatedAt,
-	}
+	return protocolMapFromDTO(state.BubbleMessage)
 }
 
 func (scope screenAnalysisImpactScope) mapValue() map[string]any {
-	return map[string]any{
-		"files":                    cloneScreenAnalysisStrings(scope.Files),
-		"webpages":                 cloneScreenAnalysisStrings(scope.Webpages),
-		"apps":                     cloneScreenAnalysisStrings(scope.Apps),
-		"out_of_workspace":         scope.OutOfWorkspace,
-		"overwrite_or_delete_risk": scope.OverwriteOrDeleteRisk,
-	}
+	return protocolMapFromDTO(screenAnalysisImpactScope{
+		Files:                 cloneScreenAnalysisStrings(scope.Files),
+		Webpages:              cloneScreenAnalysisStrings(scope.Webpages),
+		Apps:                  cloneScreenAnalysisStrings(scope.Apps),
+		OutOfWorkspace:        scope.OutOfWorkspace,
+		OverwriteOrDeleteRisk: scope.OverwriteOrDeleteRisk,
+	})
 }
 
 func cloneScreenAnalysisStrings(values []string) []string {

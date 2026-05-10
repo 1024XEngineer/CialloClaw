@@ -432,25 +432,3 @@ func invalidParamsError(detail string) *rpcError {
 		TraceID: "trace_rpc_params",
 	}
 }
-
-func protocolParamsMap(value any) (map[string]any, *rpcError) {
-	payload, err := json.Marshal(value)
-	if err != nil {
-		return nil, &rpcError{
-			Code:    errInvalidParams,
-			Message: "INVALID_PARAMS",
-			Detail:  "params could not be normalized",
-			TraceID: "trace_rpc_params",
-		}
-	}
-	var params map[string]any
-	if err := json.Unmarshal(payload, &params); err != nil {
-		return nil, &rpcError{
-			Code:    errInvalidParams,
-			Message: "INVALID_PARAMS",
-			Detail:  "params normalized to an invalid object",
-			TraceID: "trace_rpc_params",
-		}
-	}
-	return params, nil
-}
