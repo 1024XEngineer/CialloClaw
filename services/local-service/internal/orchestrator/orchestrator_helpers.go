@@ -67,8 +67,8 @@ func notepadSnapshot(item map[string]any) contextsvc.TaskContextSnapshot {
 }
 
 func notepadResourcePaths(item map[string]any) []string {
-	resources, ok := item["related_resources"].([]map[string]any)
-	if !ok {
+	resources := relatedResourceMaps(item["related_resources"])
+	if len(resources) == 0 {
 		return nil
 	}
 
@@ -79,9 +79,22 @@ func notepadResourcePaths(item map[string]any) []string {
 			continue
 		}
 
-		switch strings.TrimSpace(stringValue(resource, "resource_type", "")) {
-		case "file", "folder":
+		resourceType := firstNonEmptyString(
+			stringValue(resource, "resource_type", ""),
+			stringValue(resource, "type", ""),
+		)
+		switch resourceType {
+		case "file", "folder", "directory":
 			paths = append(paths, path)
+		case "":
+			switch strings.TrimSpace(stringValue(resource, "target_kind", "")) {
+			case "file", "folder":
+				paths = append(paths, path)
+			}
+		default:
+			if strings.TrimSpace(stringValue(resource, "target_kind", "")) == "folder" {
+				paths = append(paths, path)
+			}
 		}
 	}
 
@@ -89,6 +102,28 @@ func notepadResourcePaths(item map[string]any) []string {
 		return nil
 	}
 	return paths
+}
+
+func relatedResourceMaps(rawValue any) []map[string]any {
+	if resources, ok := rawValue.([]map[string]any); ok {
+		return cloneMapSlice(resources)
+	}
+	anyResources, ok := rawValue.([]any)
+	if !ok {
+		return nil
+	}
+	result := make([]map[string]any, 0, len(anyResources))
+	for _, rawResource := range anyResources {
+		resource, ok := rawResource.(map[string]any)
+		if !ok {
+			continue
+		}
+		result = append(result, cloneMap(resource))
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 func latestOutputPathFromTasks(tasks []runengine.TaskRecord) string {

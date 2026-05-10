@@ -2575,7 +2575,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - **接口调用时机**：用户点击“交给 Agent 处理”时
 - **系统处理**：将事项按原文与相关资料升级为正式任务，并保留来源关系
 - **入参**：事项 ID、确认标记
-- **出参**：新任务对象、更新后的来源事项、建议刷新的事项分组
+- **出参**：主任务入口返回对象、更新后的来源事项、建议刷新的事项分组
 
 ### agent.notepad.convert_to_task 入参说明
 
@@ -2610,6 +2610,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `data.task.title`            | 任务标题                        |
 | `data.task.source_type`      | 来源类型，通常为 `todo`         |
 | `data.task.status`           | 复用主链路后的当前任务状态      |
+| `data.bubble_message`        | 主链路即时反馈气泡              |
+| `data.delivery_result`       | Inline 完成时的正式交付结果     |
 | `data.notepad_item.item_id`  | 来源事项 ID                     |
 | `data.notepad_item.bucket`   | 来源事项仍所在的 bucket         |
 | `data.notepad_item.linked_task_id` | 来源事项关联的新 task ID |
@@ -2628,6 +2630,14 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
         "title": "处理：Q3-review",
         "source_type": "todo",
         "status": "processing"
+      },
+      "bubble_message": {
+        "type": "result",
+        "text": "结果已经生成，可直接查看。"
+      },
+      "delivery_result": {
+        "title": "处理结果",
+        "type": "task_detail"
       },
       "notepad_item": {
         "item_id": "todo_001",

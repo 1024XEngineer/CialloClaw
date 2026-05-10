@@ -85,14 +85,6 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 	snapshot := notepadSnapshot(item)
 	suggestion := s.intent.Suggest(snapshot, nil, false)
 	task := s.createNotepadTask(snapshot, suggestion)
-	response, err := s.finishNotepadTask(snapshot, suggestion, task)
-	if err != nil {
-		if rollbackErr := s.runEngine.DeleteTask(task.TaskID); rollbackErr != nil {
-			return nil, errors.Join(err, fmt.Errorf("rollback task %s: %w", task.TaskID, rollbackErr))
-		}
-		return nil, err
-	}
-
 	updatedItem, ok := s.runEngine.LinkNotepadItemTask(itemID, task.TaskID)
 	if !ok {
 		linkErr := fmt.Errorf("failed to link notepad item to task: %s", itemID)
@@ -102,10 +94,26 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 		return nil, linkErr
 	}
 	claimed = false
+	response, err := s.finishNotepadTask(snapshot, suggestion, task)
+	if err != nil {
+		return nil, s.rollbackLinkedNotepadTask(itemID, task.TaskID, err)
+	}
 
 	response["notepad_item"] = updatedItem
 	response["refresh_groups"] = []string{stringValue(updatedItem, "bucket", "upcoming")}
 	return response, nil
+}
+
+// rollbackLinkedNotepadTask compensates the note->task backlink before deleting
+// the provisional task so failed conversions do not leave stale dashboard links.
+func (s *Service) rollbackLinkedNotepadTask(itemID, taskID string, cause error) error {
+	if _, ok := s.runEngine.UnlinkNotepadItemTask(itemID, taskID); !ok {
+		cause = errors.Join(cause, fmt.Errorf("rollback notepad link %s -> %s", itemID, taskID))
+	}
+	if rollbackErr := s.runEngine.DeleteTask(taskID); rollbackErr != nil {
+		cause = errors.Join(cause, fmt.Errorf("rollback task %s: %w", taskID, rollbackErr))
+	}
+	return cause
 }
 
 func (s *Service) createNotepadTask(snapshot contextsvc.TaskContextSnapshot, suggestion intent.Suggestion) runengine.TaskRecord {

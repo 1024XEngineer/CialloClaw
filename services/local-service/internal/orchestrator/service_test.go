@@ -2678,6 +2678,41 @@ func TestServiceNotepadConvertToTaskFallsBackToTitleAndIgnoresNonPathResources(t
 	}
 }
 
+func TestServiceNotepadConvertToTaskAcceptsLegacyPathResourceShape(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Converted legacy-resource notepad task finished.")
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":   "todo_legacy_resources",
+		"title":     "整理历史评审材料",
+		"bucket":    "upcoming",
+		"status":    "normal",
+		"type":      "todo_item",
+		"note_text": "Use the historical review materials under workspace/legacy-review.",
+		"related_resources": []map[string]any{{
+			"id":          "todo_legacy_resources_dir",
+			"path":        "workspace/legacy-review",
+			"type":        "directory",
+			"target_kind": "folder",
+		}},
+	}})
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_legacy_resources",
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected converted task to remain available in runtime")
+	}
+	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "workspace/legacy-review" {
+		t.Fatalf("expected legacy path resource shape to enter task snapshot, got %+v", record.Snapshot.Files)
+	}
+}
+
 func TestServiceNotepadConvertToTaskRequiresConfirmedFlag(t *testing.T) {
 	service := newTestService()
 	service.runEngine.ReplaceNotepadItems([]map[string]any{{
@@ -2820,6 +2855,70 @@ func TestServiceNotepadConvertToTaskRollsBackTaskWhenLinkPersistenceFails(t *tes
 	}
 	if linkedTaskID := stringValue(item, "linked_task_id", ""); linkedTaskID != "" {
 		t.Fatalf("expected note to remain unlinked after rollback, got %+v", item)
+	}
+}
+
+func TestServiceNotepadConvertToTaskRollsBackLinkWhenFinishFails(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "unused")
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id": "todo_finish_failure",
+		"title":   "convert with finish failure",
+		"bucket":  "upcoming",
+		"status":  "normal",
+		"type":    "todo_item",
+	}})
+
+	snapshot := notepadSnapshot(map[string]any{
+		"title":     "convert with finish failure",
+		"note_text": "convert with finish failure",
+	})
+	suggestion := intent.Suggestion{
+		Intent:             map[string]any{"name": "write_file", "arguments": map[string]any{"require_authorization": true}},
+		IntentConfirmed:    true,
+		TaskTitle:          "处理：finish failure",
+		TaskSourceType:     "todo",
+		RequiresConfirm:    false,
+		DirectDeliveryType: "task_detail",
+		ResultPreview:      "等待授权后继续执行",
+		ResultTitle:        "处理结果",
+		ResultBubbleText:   "结果已经生成，可直接查看。",
+	}
+	task := service.createNotepadTask(snapshot, suggestion)
+
+	if _, handled, claimErr := service.runEngine.ClaimNotepadItemTask("todo_finish_failure"); claimErr != nil || !handled {
+		t.Fatalf("expected note claim to succeed before linking, handled=%v err=%v", handled, claimErr)
+	}
+	linkedItem, ok := service.runEngine.LinkNotepadItemTask("todo_finish_failure", task.TaskID)
+	if !ok {
+		t.Fatal("expected note link to succeed before finish")
+	}
+	if linkedItem["linked_task_id"] != task.TaskID {
+		t.Fatalf("expected test setup to link note to task, got %+v", linkedItem)
+	}
+
+	originalStore := service.storage.ApprovalRequestStore()
+	defer replaceApprovalRequestStore(t, service.storage, originalStore)
+	replaceApprovalRequestStore(t, service.storage, failingApprovalRequestStore{base: originalStore, err: errors.New("approval store unavailable")})
+
+	_, finishErr := service.finishNotepadTask(snapshot, suggestion, task)
+	if finishErr == nil {
+		t.Fatal("expected finishNotepadTask to fail when approval persistence fails")
+	}
+
+	rollbackErr := service.rollbackLinkedNotepadTask("todo_finish_failure", task.TaskID, finishErr)
+	if !strings.Contains(rollbackErr.Error(), "approval store unavailable") {
+		t.Fatalf("expected rollback to preserve original finish error, got %v", rollbackErr)
+	}
+	if _, ok := service.runEngine.GetTask(task.TaskID); ok {
+		t.Fatalf("expected rollback to remove task %s from runtime", task.TaskID)
+	}
+
+	item, found := service.runEngine.NotepadItem("todo_finish_failure")
+	if !found {
+		t.Fatal("expected note to remain available after rollback")
+	}
+	if linkedTaskID := stringValue(item, "linked_task_id", ""); linkedTaskID != "" {
+		t.Fatalf("expected note link rollback to clear linked_task_id, got %+v", item)
 	}
 }
 
