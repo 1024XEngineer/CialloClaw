@@ -730,7 +730,7 @@ func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot taskco
 		// shortcuts that normally skip confirmation for fresh starts.
 		suggestion.RequiresConfirm = true
 	}
-	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForInput(suggestion), time.Now().Format(dateTimeLayout))
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForInput(mergedSnapshot, suggestion, previewClarificationHits(s, task, mergedSnapshot, suggestion)), time.Now().Format(dateTimeLayout))
 	updatedTask, changed := s.runEngine.ContinueTask(task.TaskID, runengine.ContinuationUpdate{
 		Snapshot:      continuationSnapshot,
 		Title:         suggestion.TaskTitle,

@@ -1251,6 +1251,55 @@ func TestServiceSubmitInputRoutesUnanchoredAmbiguousTextToConfirmation(t *testin
 	}
 }
 
+func TestServiceSubmitInputUsesEnglishSocialChatFallbackReply(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		output: `{"route":"social_chat","reply":""}`,
+	})
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_social_english",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "hello there",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["text"] != "I'm here." {
+		t.Fatalf("expected english social chat fallback reply, got %+v", bubble)
+	}
+}
+
+func TestServiceSubmitInputUsesEnglishClarificationForShortEnglishInput(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		output: `{"route":"clarification_needed","reply":""}`,
+	})
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_english_clarify_short",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "hi",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	bubble := result["bubble_message"].(map[string]any)
+	text := stringValue(bubble, "text", "")
+	if !strings.Contains(text, "what would you like me to do next?") {
+		t.Fatalf("expected short english clarification bubble, got %+v", bubble)
+	}
+}
+
 func TestServiceSubmitInputKeepsTaskRequestAfterClassifier(t *testing.T) {
 	callCount := 0
 	service, _ := newTestServiceWithModelClient(t, stubModelClient{
@@ -8938,6 +8987,44 @@ func TestServiceConfirmTaskPersistsRetrievalHitOncePerConfirmation(t *testing.T)
 
 	if querySQLiteInt(t, db, `SELECT write_count FROM retrieval_hit_audit WHERE id = 1`) != 2 {
 		t.Fatalf("expected confirmation to add exactly one retrieval-hit write for task %s", taskID)
+	}
+}
+
+func TestServiceSubmitInputClarificationIncludesRetrievedMemoryContext(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		output: `{"route":"clarification_needed","reply":""}`,
+	})
+
+	if err := service.memory.WriteSummary(context.Background(), memory.MemorySummary{
+		MemorySummaryID: "mem_seed_clarify_001",
+		TaskID:          "task_seed_clarify_001",
+		RunID:           "run_seed_clarify_001",
+		Summary:         "project alpha focuses on rollout notes and concise status updates",
+		CreatedAt:       time.Date(2026, 4, 9, 10, 0, 0, 0, time.UTC).Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("seed memory summary failed: %v", err)
+	}
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_clarify_memory",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "project alpha rollout",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	bubble := result["bubble_message"].(map[string]any)
+	text := stringValue(bubble, "text", "")
+	if !strings.Contains(text, "Based on your earlier context") {
+		t.Fatalf("expected clarification bubble to mention prior memory context, got %+v", bubble)
+	}
+	if !strings.Contains(text, "project alpha focuses on rollout notes") {
+		t.Fatalf("expected clarification bubble to include retrieved summary, got %+v", bubble)
 	}
 }
 

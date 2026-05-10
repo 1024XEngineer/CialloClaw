@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/languagepolicy"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/memory"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
@@ -187,6 +188,96 @@ func (s *Service) attachMemoryReadPlans(taskID, runID string, snapshot taskconte
 		_, _ = s.runEngine.SetMemoryPlans(taskID, buildMemoryReadPlans(s.memory, taskID, runID, snapshot, taskIntent, hits), nil)
 	}
 	s.syncTaskReadMirrorReferences(taskID, references, err)
+}
+
+// previewMemoryContext performs the same storage-backed retrieval as execution
+// planning, but it only returns the matched summaries so clarification bubbles
+// can acknowledge recent context without changing task ownership decisions.
+func (s *Service) previewMemoryContext(taskID, runID string, snapshot taskcontext.TaskContextSnapshot) []memory.RetrievalHit {
+	if s == nil || s.memory == nil {
+		return nil
+	}
+
+	hits, err := s.memory.Search(context.Background(), memory.RetrievalQuery{
+		TaskID: taskID,
+		RunID:  runID,
+		Query:  memoryQueryFromSnapshot(snapshot),
+		Limit:  memory.DefaultSearchLimit,
+	})
+	if err != nil {
+		return nil
+	}
+
+	return hits
+}
+
+func clarificationBubbleText(suggestionIntent map[string]any, snapshot taskcontext.TaskContextSnapshot, hits []memory.RetrievalHit) string {
+	base := clarificationBaseText(suggestionIntent, snapshot)
+	if len(hits) == 0 {
+		return base
+	}
+
+	summary := strings.TrimSpace(hits[0].Summary)
+	if summary == "" {
+		return base
+	}
+
+	trimmedSummary := truncateText(summary, 72)
+	if languagepolicy.PreferredReplyLanguage(memoryQueryFromSnapshot(snapshot)) == languagepolicy.ReplyLanguageEnglish {
+		return fmt.Sprintf("Based on your earlier context (%s), %s", trimmedSummary, clarificationFollowUpPrompt(suggestionIntent, true))
+	}
+
+	return fmt.Sprintf("结合你之前提到的内容（%s），%s", trimmedSummary, clarificationFollowUpPrompt(suggestionIntent, false))
+}
+
+func clarificationBaseText(suggestionIntent map[string]any, snapshot taskcontext.TaskContextSnapshot) string {
+	if languagepolicy.PreferredReplyLanguage(memoryQueryFromSnapshot(snapshot)) == languagepolicy.ReplyLanguageEnglish {
+		return clarificationFollowUpPrompt(suggestionIntent, true)
+	}
+	return clarificationFollowUpPrompt(suggestionIntent, false)
+}
+
+func initialClarificationPrompt(snapshot taskcontext.TaskContextSnapshot, startFlow bool) string {
+	if languagepolicy.PreferredReplyLanguage(memoryQueryFromSnapshot(snapshot)) == languagepolicy.ReplyLanguageEnglish {
+		if startFlow {
+			return "I am not sure how you want me to handle this yet. Please confirm the goal first."
+		}
+		return "I am not sure how you want me to handle this content yet. Please confirm the goal first."
+	}
+	if startFlow {
+		return "我还不确定你想如何处理当前对象，请先确认。"
+	}
+	return "我还不确定你想如何处理这段内容，请确认目标。"
+}
+
+func clarificationFollowUpPrompt(taskIntent map[string]any, english bool) string {
+	switch stringValue(taskIntent, "name", "") {
+	case "translate":
+		if english {
+			return "do you want me to translate it?"
+		}
+		return "你是想让我翻译它吗？"
+	case "rewrite":
+		if english {
+			return "do you want me to rewrite it?"
+		}
+		return "你是想让我改写它吗？"
+	case "explain":
+		if english {
+			return "do you want me to explain it?"
+		}
+		return "你是想让我解释它吗？"
+	case "summarize":
+		if english {
+			return "do you want me to summarize it?"
+		}
+		return "你是想让我总结它吗？"
+	default:
+		if english {
+			return "what would you like me to do next?"
+		}
+		return "你现在希望我具体怎么处理？"
+	}
 }
 
 func buildMemoryReadPlans(memoryService *memory.Service, taskID, runID string, snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any, hits []memory.RetrievalHit) []map[string]any {
