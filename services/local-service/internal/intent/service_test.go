@@ -100,7 +100,7 @@ func TestSuggestKeepsPlainTextSubjectAheadOfPageContextForAgentLoop(t *testing.T
 		WindowTitle: "Browser - Build Dashboard",
 	}, nil, false)
 
-	if suggestion.TaskTitle != "处理：今天的会议纪要" {
+	if suggestion.TaskTitle != "处理：帮我整理今天的会议纪要" {
 		t.Fatalf("expected task title to keep user text subject, got %q", suggestion.TaskTitle)
 	}
 }
@@ -116,7 +116,7 @@ func TestSuggestCompactsMergedConversationIntoShorterTaskTitle(t *testing.T) {
 		}, "\n\n"),
 	}, nil, false)
 
-	if suggestion.TaskTitle != "处理：这次发布复盘 重点补齐风险项和后续跟进安排" {
-		t.Fatalf("expected merged conversation to drive compact title, got %q", suggestion.TaskTitle)
+	if suggestion.TaskTitle != "处理：请帮我整理这次发布复盘 重点补齐风险项和后..." {
+		t.Fatalf("expected fallback task title to remain bounded before model generation, got %q", suggestion.TaskTitle)
 	}
 }

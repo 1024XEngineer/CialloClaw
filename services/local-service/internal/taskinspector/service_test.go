@@ -1,6 +1,7 @@
 package taskinspector
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"os"
@@ -10,11 +11,22 @@ import (
 	"testing"
 	"time"
 
+	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/titlegen"
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/transform"
 )
+
+type stubModelClient struct {
+	output string
+}
+
+func (s stubModelClient) GenerateText(_ context.Context, _ model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	return model.GenerateTextResponse{OutputText: s.output}, nil
+}
 
 type readFileErrorAdapter struct {
 	platform.FileSystemAdapter
@@ -57,7 +69,9 @@ func TestServiceRunAggregatesWorkspaceNotepadAndRuntimeState(t *testing.T) {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 
-	service := NewService(fileSystem)
+	service := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"每周复盘阻塞项"}`,
+	})))
 	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
 
 	result, err := service.Run(RunInput{
@@ -136,7 +150,9 @@ func TestServiceRunParsesMarkdownIntoRichNotepadFoundation(t *testing.T) {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 
-	service := NewService(fileSystem)
+	service := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"每周复盘阻塞项"}`,
+	})))
 	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
 	result, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
 	if err != nil {
@@ -149,8 +165,8 @@ func TestServiceRunParsesMarkdownIntoRichNotepadFoundation(t *testing.T) {
 	if retro["bucket"] != notepadBucketRecurringRule || retro["type"] != "recurring" {
 		t.Fatalf("expected weekly retro to become recurring rule item, got %+v", retro)
 	}
-	if retro["title"] != "Weekly retro · review..." {
-		t.Fatalf("expected note body to compact notepad title, got %+v", retro)
+	if retro["title"] != "每周复盘阻塞项" {
+		t.Fatalf("expected note body to use generated notepad title, got %+v", retro)
 	}
 	if retro["repeat_rule_text"] != "every 2 weeks" || retro["prerequisite"] != "collect status updates" {
 		t.Fatalf("expected recurring metadata to be parsed, got %+v", retro)

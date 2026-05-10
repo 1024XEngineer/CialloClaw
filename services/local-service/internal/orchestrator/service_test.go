@@ -2067,6 +2067,37 @@ func TestServiceConfirmTaskRewritesPlaceholderTitleAfterCorrection(t *testing.T)
 	}
 }
 
+func TestServiceStartTaskUsesGeneratedTaskTitleFromFullContext(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			if request.TaskID == "task_title_generator" {
+				return model.GenerateTextResponse{OutputText: `{"title":"发布复盘风险跟进"}`}, nil
+			}
+			return model.GenerateTextResponse{OutputText: "unused"}, nil
+		},
+	})
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_generated_title",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"intent":     map[string]any{"name": "translate"},
+		"options":    map[string]any{"confirm_required": true},
+		"input": map[string]any{
+			"type": "text",
+			"text": "请帮我翻译这次发布复盘，并补齐风险项和后续跟进安排",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	task := startResult["task"].(map[string]any)
+	if task["title"] != "翻译：发布复盘风险跟进" {
+		t.Fatalf("expected model-backed task title, got %+v", task)
+	}
+}
+
 func TestServiceConfirmTaskIgnoresCorrectedIntentWhenConfirmedTrue(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Explained content.")
 
