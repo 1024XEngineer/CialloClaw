@@ -333,7 +333,7 @@ func TestDispatchReturnsDeliveryOpenForResultPage(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-delivery-open-result-page"`),
 		Method:  methodAgentDeliveryOpen,
-		Params:  mustMarshal(t, map[string]any{"task_id": taskID}),
+		Params:  mustMarshal(t, map[string]any{"request_meta": rpcRequestMeta("trace_delivery_open_result_page"), "task_id": taskID}),
 	})
 	success, ok := response.(successEnvelope)
 	if !ok {
