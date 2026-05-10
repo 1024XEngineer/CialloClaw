@@ -1794,6 +1794,7 @@ test("dashboard home randomizes summons while preferring a different module when
 
   assert.match(dashboardHomeSource, /function pickNextSummonIndex\(/);
   assert.match(dashboardHomeSource, /function buildSummonTemplateSignature\(/);
+  assert.match(dashboardHomeSource, /function buildNavigationTargetSignature/);
   assert.match(dashboardHomeSource, /if \(previousIndex < 0 \|\| previousModule === null\) \{/);
   assert.match(dashboardHomeSource, /return 0;/);
   assert.match(dashboardHomeSource, /candidate\.module !== previousModule/);
@@ -1804,6 +1805,9 @@ test("dashboard home randomizes summons while preferring a different module when
   assert.match(dashboardHomeSource, /const summonTemplateSignature = buildSummonTemplateSignature\(data\.summonTemplates\)/);
   assert.match(dashboardHomeSource, /const templates = summonTemplatesRef\.current/);
   assert.match(dashboardHomeSource, /summonTemplatesRef\.current = data\.summonTemplates/);
+  assert.match(dashboardHomeSource, /target\.taskId/);
+  assert.match(dashboardHomeSource, /target\.focusMemoryId \?\? ""/);
+  assert.match(dashboardHomeSource, /buildNavigationTargetSignature\(template\.expandedState\?\.navigationTarget\)/);
   assert.match(dashboardHomeSource, /\}, \[data\.summonTemplates\.length, scheduleSummon, summonTemplateSignature\]\);/);
   assert.match(dashboardHomeSource, /const closeActiveOverlay = useCallback\(\(\) => \{/);
   assert.match(dashboardHomeSource, /if \(event\.key === "Escape" && \(activeStateKey \|\| activeExpandedState\)\) \{/);
@@ -7219,6 +7223,71 @@ test("dashboard home keeps task-detail CTA copy when the first quick action targ
       getMirrorOverview: async () => ({
         daily_summary: null,
         history_summary: [],
+        memory_references: [],
+        profile: null,
+      }),
+      listNotepad: async () => ({
+        items: [],
+        page: {
+          has_more: false,
+          limit: 12,
+          offset: 0,
+          total: 0,
+        },
+      }),
+    },
+  );
+});
+
+test("dashboard home routes overview fallback signals to the inferred module instead of defaulting to tasks", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<{
+          summonTemplates: Array<{ message: string; module: string; nextStep?: string; stateKey: string }>;
+        }>;
+      };
+
+      const data = await service.loadDashboardHomeData();
+
+      assert.equal(data.summonTemplates[0]?.message, "镜子里新增了一条历史概要");
+      assert.equal(data.summonTemplates[0]?.module, "memory");
+      assert.equal(data.summonTemplates[0]?.stateKey, "memory_summary");
+      assert.equal(data.summonTemplates[0]?.nextStep, "打开镜子页");
+    },
+    {
+      getDashboardModule: async (params: unknown) => {
+        const moduleName = (params as { module?: string }).module ?? "unknown";
+        return {
+          highlights: moduleName === "memory" ? ["本周复盘已经形成初稿"] : [],
+          module: moduleName,
+          summary: {},
+          tab: "overview",
+        };
+      },
+      getDashboardOverview: async () => ({
+        overview: {
+          focus_summary: null,
+          high_value_signal: ["镜子里新增了一条历史概要"],
+          quick_actions: ["打开任务详情"],
+          trust_summary: {
+            has_restore_point: false,
+            pending_authorizations: 0,
+            risk_level: "green",
+            workspace_path: "workspace",
+          },
+        },
+      }),
+      getRecommendations: async () => ({
+        cooldown_hit: false,
+        items: [],
+      }),
+      getMirrorOverview: async () => ({
+        daily_summary: null,
+        history_summary: ["这里是最近一条历史概要。", "第二条历史概要。"],
         memory_references: [],
         profile: null,
       }),
