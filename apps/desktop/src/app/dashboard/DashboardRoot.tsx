@@ -16,6 +16,11 @@ import {
   navigateToDashboardTaskDetail,
   type DashboardTaskDetailOpenRequest,
 } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
+import {
+  DashboardEscapeCoordinatorProvider,
+  useDashboardEscapeCoordinator,
+  useDashboardEscapeHandler,
+} from "@/features/dashboard/shared/dashboardEscapeCoordinator";
 import { resolveDashboardModuleRoutePath, resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import {
   dashboardTaskDeliveryNavigationEvent,
@@ -27,6 +32,7 @@ import { subscribeApprovalPending, subscribeDeliveryReady, subscribeTaskUpdated 
 import { rememberConversationSessionFromTaskUpdated } from "@/services/conversationSessionService";
 import { cn } from "@/utils/cn";
 import { DashboardHome } from "./DashboardHome";
+import { suppressDashboardEscapeClose } from "./dashboardEscapeCloseGuard";
 import { createDashboardOpeningTransitionController } from "./dashboardOpeningTransition";
 import "./dashboard.css";
 
@@ -91,6 +97,7 @@ function DashboardRoutes() {
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const escapeCoordinator = useDashboardEscapeCoordinator();
   const isOpening = useDashboardOpeningTransitionState();
   const [voiceOpen, setVoiceOpen] = useState(false);
   const handledTaskDetailRequestIdsRef = useRef<Map<string, number>>(new Map());
@@ -104,6 +111,7 @@ function DashboardRoutes() {
     retry: false,
   });
   const dashboardHomeData = dashboardHomeQuery.data ?? null;
+  const isHomeRoute = location.pathname === resolveDashboardRoutePath("home");
   const recommendationFeedbackMutation = useMutation({
     mutationFn: ({ feedback, recommendationId }: { feedback: "positive" | "negative"; recommendationId: string }) =>
       submitDashboardHomeRecommendationFeedback(recommendationId, feedback),
@@ -219,15 +227,27 @@ function DashboardRoutes() {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const tag = target?.tagName;
+      if (event.defaultPrevented) {
+        return;
+      }
+
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable) {
         return;
       }
 
       if (event.key === "Escape") {
-        if (voiceOpen) {
+        if (escapeCoordinator.consumeEscape()) {
+          suppressDashboardEscapeClose();
           event.preventDefault();
-          setVoiceOpen(false);
+          return;
         }
+
+        if (!isHomeRoute) {
+          suppressDashboardEscapeClose();
+          event.preventDefault();
+          navigate(resolveDashboardRoutePath("home"));
+        }
+
         return;
       }
 
@@ -267,7 +287,13 @@ function DashboardRoutes() {
 
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [navigate, voiceOpen]);
+  }, [escapeCoordinator, isHomeRoute, navigate]);
+
+  useDashboardEscapeHandler({
+    enabled: voiceOpen,
+    handleEscape: () => setVoiceOpen(false),
+    priority: 300,
+  });
 
   const handleRecommendationFeedback = (recommendationId: string, feedback: "positive" | "negative") => {
     recommendationFeedbackMutation.mutate({ feedback, recommendationId });
@@ -372,7 +398,9 @@ function DashboardHomeStatusShell({ title, message, onRetry }: DashboardHomeStat
 export function DashboardRoot() {
   return (
     <HashRouter>
-      <DashboardRoutes />
+      <DashboardEscapeCoordinatorProvider>
+        <DashboardRoutes />
+      </DashboardEscapeCoordinatorProvider>
     </HashRouter>
   );
 }

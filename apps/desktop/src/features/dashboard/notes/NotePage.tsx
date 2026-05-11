@@ -12,9 +12,17 @@ import { AnimatePresence, motion } from "motion/react";
 import type { NotepadAction, Task, TodoItem } from "@cialloclaw/protocol";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useDashboardEscapeHandler } from "@/features/dashboard/shared/dashboardEscapeCoordinator";
 import { navigateToDashboardTaskDetail } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
+import {
+  openTaskDeliveryForTask,
+  performTaskOpenExecution,
+  resolveTaskOpenExecutionPlan,
+  shouldAutoOpenTaskDeliveryResult,
+} from "@/features/dashboard/tasks/taskOutput.service";
+import { openDesktopExternalUrl } from "@/platform/desktopExternalUrl";
 import { cn } from "@/utils/cn";
 import { buildNoteSummary, describeNotePreview, formatNoteBoardTimeHint, formatNoteDisplayPath, getNoteBucketLabel, getNoteStatusBadgeClass, groupClosedNotes, sortClosedNotes, sortNotesByUrgency } from "./notePage.mapper";
 import { buildDashboardNoteBucketInvalidateKeys, buildDashboardNoteBucketQueryKey, dashboardNoteBucketGroups, getDashboardNoteRefreshPlan } from "./notePage.query";
@@ -28,6 +36,7 @@ import {
   saveNoteSource,
 } from "./noteSource.service";
 import { convertNoteToTask, loadNoteBucket, performNoteResourceOpenExecution, resolveNoteResourceOpenExecutionPlan, updateNote, type NotePageDataMode } from "./notePage.service";
+import { isDashboardTaskDeliveryHref, navigateToDashboardTaskDelivery, readDashboardTaskDeliveryTaskId } from "../tasks/taskDeliveryNavigation";
 import {
   buildSourceNoteEditorDraftFromNote,
   createEmptySourceNoteEditorDraft,
@@ -181,6 +190,21 @@ function getNoteConvertSuccessFeedback(status: Task["status"]) {
   }
 
   return "已按这条便签生成任务，正在打开任务详情。";
+}
+
+async function openNoteConvertDelivery(taskId: string, source: NotePageDataMode, navigate: ReturnType<typeof useNavigate>) {
+  const result = await openTaskDeliveryForTask(taskId, undefined, source);
+  const plan = resolveTaskOpenExecutionPlan(result);
+  return performTaskOpenExecution(plan, {
+    onOpenTaskDelivery: ({ taskId: resolvedTaskId }) => {
+      navigateToDashboardTaskDelivery(navigate, resolvedTaskId);
+      return plan.feedback;
+    },
+    onOpenTaskDetail: ({ taskId: resolvedTaskId }) => {
+      navigateToDashboardTaskDetail(navigate, resolvedTaskId);
+      return plan.feedback;
+    },
+  });
 }
 
 function registerSourceNoteLookupKey(
@@ -788,6 +812,19 @@ export function NotePage() {
     startY: number;
     width: number;
   } | null>(null);
+
+  useDashboardEscapeHandler({
+    enabled: sourceStudioOpen,
+    handleEscape: () => setSourceStudioOpen(false),
+    priority: 240,
+  });
+
+  useDashboardEscapeHandler({
+    enabled: detailOpen,
+    handleEscape: () => setDetailOpen(false),
+    priority: 220,
+  });
+
   const noteRefreshPlan = getDashboardNoteRefreshPlan(dataMode);
   const desktopSourceNotesAvailable = useMemo(() => areDesktopSourceNotesAvailable(), []);
 
@@ -1629,7 +1666,18 @@ export function NotePage() {
     mutationFn: (itemId: string) => convertNoteToTask(itemId, dataMode),
     onSuccess: async (outcome) => {
       await invalidateNoteBuckets(outcome.result.refresh_groups);
-      showFeedback(getNoteConvertSuccessFeedback(outcome.result.task.status));
+      if (shouldAutoOpenTaskDeliveryResult(outcome.result.delivery_result)) {
+        try {
+          showFeedback(await openNoteConvertDelivery(outcome.result.task.task_id, dataMode, navigate));
+          return;
+        } catch (error) {
+          showFeedback(error instanceof Error ? `结果已生成，但打开交付失败：${error.message}` : "结果已生成，但打开交付失败，请稍后再试。");
+          navigateToDashboardTaskDetail(navigate, outcome.result.task.task_id);
+          return;
+        }
+      }
+
+      showFeedback(outcome.result.bubble_message?.text ?? getNoteConvertSuccessFeedback(outcome.result.task.status));
       navigateToDashboardTaskDetail(navigate, outcome.result.task.task_id);
     },
     onError: (error) => {
@@ -1806,6 +1854,20 @@ export function NotePage() {
       onOpenTaskDetail: ({ taskId }) => {
         openLinkedTaskDetail(taskId);
         return plan.feedback;
+      },
+      onOpenResultPage: ({ taskId, url }) => {
+        const deliveryTaskId = taskId ?? readDashboardTaskDeliveryTaskId(url);
+        if (deliveryTaskId && isDashboardTaskDeliveryHref(url)) {
+          navigateToDashboardTaskDelivery(navigate, deliveryTaskId);
+          return plan.feedback;
+        }
+
+        return openDesktopExternalUrl(url)
+          .then(() => plan.feedback)
+          .catch((error: unknown) => {
+            const detail = error instanceof Error ? error.message.trim() : "";
+            return detail ? `无法通过系统浏览器打开便签结果页链接（${detail}）` : "无法通过系统浏览器打开便签结果页链接";
+          });
       },
     }));
   }

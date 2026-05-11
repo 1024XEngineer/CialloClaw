@@ -9,8 +9,10 @@ import type {
   TodoBucket,
   TodoItem,
 } from "@cialloclaw/protocol";
+import { openDesktopExternalUrl } from "@/platform/desktopExternalUrl";
 import { openDesktopLocalPath, revealDesktopLocalPath } from "@/platform/desktopLocalPath";
 import { convertNotepadToTask, listNotepad, updateNotepad } from "@/rpc/methods";
+import { isDashboardTaskDeliveryHref } from "../tasks/taskDeliveryNavigation";
 import type { NoteConvertOutcome, NoteDetailExperience, NoteListItem, NoteResource, NoteUpdateOutcome, SourceNoteDocument } from "./notePage.types";
 import { sanitizeSourceNoteBodyText } from "./sourceNoteEditor";
 
@@ -39,7 +41,7 @@ const NOTE_HIDDEN_METADATA_KEYS = new Set([
 export type NotePageDataMode = "rpc";
 
 export type NoteResourceOpenExecutionPlan = {
-  mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+  mode: "task_detail" | "open_result_page" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
   feedback: string;
   path: string | null;
   taskId: string | null;
@@ -50,6 +52,11 @@ export type NoteResourceOpenExecutionOptions = {
   onOpenTaskDetail?: (input: {
     plan: NoteResourceOpenExecutionPlan;
     taskId: string;
+  }) => Promise<string | void> | string | void;
+  onOpenResultPage?: (input: {
+    plan: NoteResourceOpenExecutionPlan;
+    taskId: string | null;
+    url: string;
   }) => Promise<string | void> | string | void;
 };
 
@@ -195,6 +202,10 @@ export function isAllowedNoteOpenUrl(url: string): boolean {
   }
 }
 
+function isAllowedNoteResultPageUrl(url: string): boolean {
+  return isDashboardTaskDeliveryHref(url) || isAllowedNoteOpenUrl(url);
+}
+
 function resolveResourceOpenPayload(resource: NonNullable<TodoItem["related_resources"]>[number]): DeliveryPayload | null {
   if (!resource?.open_payload) {
     return null;
@@ -320,7 +331,7 @@ function normalizeResourceOpenAction(action: DeliveryType | null, payload: Deliv
   }
 
   if (action === "result_page" && payload?.url) {
-    return "open_url";
+    return "result_page";
   }
 
   if (payload?.url) {
@@ -839,6 +850,16 @@ export function resolveNoteResourceOpenExecutionPlan(resource: NoteResource): No
     };
   }
 
+  if (resource.openAction === "result_page" && resource.url) {
+    return {
+      feedback: `已打开 ${resource.label} 结果页。`,
+      mode: "open_result_page",
+      path: resource.path || null,
+      taskId: resource.taskId ?? null,
+      url: resource.url,
+    };
+  }
+
   if (resource.openAction === "open_url" && resource.url) {
     return {
       feedback: `已打开 ${resource.label}。`,
@@ -904,6 +925,15 @@ function localPathExecutionFailure(message: string, error: unknown) {
   return `${message}（${detail}）`;
 }
 
+function externalUrlExecutionFailure(message: string, error: unknown) {
+  const detail = error instanceof Error ? error.message.trim() : "";
+  if (!detail) {
+    return message;
+  }
+
+  return `${message}（${detail}）`;
+}
+
 /**
  * Executes a note resource open plan while preserving task-detail routing and
  * copy-path fallback inside the same renderer entry.
@@ -927,13 +957,40 @@ export async function performNoteResourceOpenExecution(
       : plan.feedback;
   }
 
+  if (plan.mode === "open_result_page" && plan.url) {
+    if (!isAllowedNoteResultPageUrl(plan.url)) {
+      return "已拦截不受支持的便签结果页链接。";
+    }
+
+    const resultPageFeedback = await options.onOpenResultPage?.({
+      plan,
+      taskId: plan.taskId,
+      url: plan.url,
+    });
+
+    if (typeof resultPageFeedback === "string" && resultPageFeedback.trim() !== "") {
+      return resultPageFeedback;
+    }
+
+    try {
+      await openDesktopExternalUrl(plan.url);
+      return plan.feedback;
+    } catch (error) {
+      return externalUrlExecutionFailure("无法通过系统浏览器打开便签结果页链接", error);
+    }
+  }
+
   if (plan.mode === "open_url" && plan.url) {
     if (!isAllowedNoteOpenUrl(plan.url)) {
       return "已拦截不受支持的便签资源链接。";
     }
 
-    window.open(plan.url, "_blank", "noopener,noreferrer");
-    return plan.feedback;
+    try {
+      await openDesktopExternalUrl(plan.url);
+      return plan.feedback;
+    } catch (error) {
+      return externalUrlExecutionFailure("无法通过系统浏览器打开便签资源链接", error);
+    }
   }
 
   if (plan.mode === "open_local_path" && plan.path) {

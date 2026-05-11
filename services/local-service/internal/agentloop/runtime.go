@@ -490,6 +490,36 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 					StopReason:      StopReasonToolRetryExhausted,
 				}, true, nil
 			}
+			if toolCallNeedsAuthorization(record) {
+				round.Status = "completed"
+				round.CompletedAt = request.Now()
+				round.StopReason = StopReasonNeedAuthorization
+				round.Observation = truncateText(singleLineSummary(observation), 240)
+				round.OutputSummary = truncateText(singleLineSummary(observation), 160)
+				rounds = append(rounds, round)
+				events = appendEvent(events, request, newEventForRound(round, "loop.round.completed", map[string]any{"attempt_index": round.AttemptIndex, "segment_kind": round.SegmentKind, "loop_round": round.LoopRound, "stop_reason": string(StopReasonNeedAuthorization)}))
+				if request.Hook != nil {
+					if err := request.Hook.AfterTool(ctx, round, record, observation); err != nil {
+						return Result{}, true, err
+					}
+					if err := request.Hook.AfterRound(ctx, round); err != nil {
+						return Result{}, true, err
+					}
+				}
+				auditRecord, auditErr := request.BuildAuditRecord(ctx, latestInvocation)
+				if auditErr != nil {
+					return Result{}, true, auditErr
+				}
+				return Result{
+					OutputText:      observation,
+					ToolCalls:       allToolCalls,
+					ModelInvocation: invocationRecordMap(latestInvocation),
+					AuditRecord:     auditRecord,
+					Events:          events,
+					Rounds:          rounds,
+					StopReason:      StopReasonNeedAuthorization,
+				}, true, nil
+			}
 			observations = append(observations, observation)
 			round.Observation = truncateText(singleLineSummary(observation), 240)
 			events = appendEvent(events, request, newEventForRound(round, "tool_call.observed", map[string]any{
@@ -1479,6 +1509,17 @@ func plannerRetryReason(err error) string {
 
 func shouldRetryToolRecord(record tools.ToolCallRecord) bool {
 	return toolRetryReason(record) == "timeout"
+}
+
+func toolCallNeedsAuthorization(record tools.ToolCallRecord) bool {
+	if record.ErrorCode != nil && *record.ErrorCode == tools.ToolErrorCodeApprovalRequired {
+		return true
+	}
+	if record.Status != tools.ToolCallStatusFailed {
+		return false
+	}
+	value, ok := record.Output["approval_required"].(bool)
+	return ok && value
 }
 
 func toolRetryReason(record tools.ToolCallRecord) string {

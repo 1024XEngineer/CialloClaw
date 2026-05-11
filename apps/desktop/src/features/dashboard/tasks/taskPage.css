@@ -20,6 +20,10 @@
   position: relative;
 }
 
+.dashboard-page.task-tower-page {
+  padding: max(env(safe-area-inset-top), 0.65rem) 0 0;
+}
+
 .app-shell.task-tower-page {
   padding: 0;
 }
@@ -368,10 +372,12 @@
   cursor: pointer;
   display: inline-flex;
   font: inherit;
+  flex-shrink: 0;
   gap: 0.48rem;
   justify-content: center;
   min-height: 2.3rem;
   padding: 0.5rem 0.88rem;
+  white-space: nowrap;
   transition:
     border-color 0.18s ease,
     box-shadow 0.18s ease,
@@ -1407,8 +1413,23 @@
   justify-content: space-between;
 }
 
+.task-detail-output-item--bubble {
+  display: grid;
+  gap: 0.5rem;
+  justify-content: stretch;
+}
+
 .task-detail-output-item > div {
   min-width: 0;
+}
+
+.task-detail-output-item__bubble-copy {
+  color: var(--task-copy);
+  font-size: 0.92rem;
+  line-height: 1.68;
+  margin: 0.2rem 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .task-detail-conversation-list {

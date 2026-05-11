@@ -3,13 +3,16 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/agentloop"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/execution"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
 var approvalIDSequence atomic.Uint64
@@ -117,6 +120,148 @@ func (s *Service) handleTaskGovernanceDecision(task runengine.TaskRecord, taskIn
 		"bubble_message":  bubble,
 		"delivery_result": nil,
 	}, true, nil
+}
+
+func (s *Service) maybePauseForRuntimeApproval(task runengine.TaskRecord, taskIntent map[string]any, result execution.Result) (runengine.TaskRecord, map[string]any, bool, error) {
+	if result.LoopStopReason != string(agentloop.StopReasonNeedAuthorization) {
+		return task, nil, false, nil
+	}
+	// Runtime tool approval differs from preflight approval: the model selected
+	// the concrete tool and input during the Agent Loop, so the approval anchor
+	// must be rebuilt from the recorded tool call instead of the broad task
+	// intent. This keeps the paused task resumable without accepting unrelated
+	// follow-up tool choices.
+	assessment, ok, err := s.runtimeApprovalAssessment(task, result)
+	if err != nil {
+		return task, nil, false, err
+	}
+	if !ok {
+		assessment = s.fallbackRuntimeApprovalAssessment(result)
+	}
+	pendingExecution := s.applyGovernanceAssessment(s.buildPendingExecution(task, taskIntent), assessment)
+	if blockedToolCall, found := latestApprovalRequiredToolCall(result.ToolCalls); found {
+		pendingExecution = applyRuntimeApprovedToolInput(pendingExecution, blockedToolCall.Input)
+	}
+	approvalRequest := buildApprovalRequest(task.TaskID, taskIntent, assessment)
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleGovernancePending, nil), task.UpdatedAt.Format(dateTimeLayout))
+	updatedTask, changed := s.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble)
+	if !changed {
+		return task, nil, false, ErrTaskNotFound
+	}
+	if err := s.persistApprovalRequestState(updatedTask.TaskID, approvalRequest, assessment.ImpactScope); err != nil {
+		return task, nil, false, err
+	}
+	return updatedTask, map[string]any{
+		"task":            taskMap(updatedTask),
+		"bubble_message":  bubble,
+		"delivery_result": nil,
+	}, true, nil
+}
+
+// runtimeApprovalAssessment reconstructs the formal approval_request boundary
+// from the tool call that stopped the Agent Loop. The executor is asked to
+// re-assess the exact operation/input pair so approval replay uses the same
+// target matching rules as normal preflight governance.
+func (s *Service) runtimeApprovalAssessment(task runengine.TaskRecord, result execution.Result) (execution.GovernanceAssessment, bool, error) {
+	toolCall, ok := latestApprovalRequiredToolCall(result.ToolCalls)
+	if !ok {
+		return execution.GovernanceAssessment{}, false, nil
+	}
+	runtimeIntent := map[string]any{
+		"name":      toolCall.ToolName,
+		"arguments": cloneMap(toolCall.Input),
+	}
+	if s.executor == nil {
+		return normalizeRuntimeApprovalAssessment(execution.GovernanceAssessment{}, toolCall), true, nil
+	}
+	resultTitle, _, _ := resultSpecFromIntent(runtimeIntent)
+	assessment, ok, err := s.executor.AssessGovernance(context.Background(), execution.Request{
+		TaskID:       task.TaskID,
+		RunID:        task.RunID,
+		SourceType:   task.SourceType,
+		Title:        task.Title,
+		Intent:       runtimeIntent,
+		Snapshot:     snapshotFromTask(task),
+		DeliveryType: deliveryTypeFromIntent(runtimeIntent),
+		ResultTitle:  resultTitle,
+	})
+	if err != nil {
+		return execution.GovernanceAssessment{}, false, err
+	}
+	if !ok {
+		return normalizeRuntimeApprovalAssessment(execution.GovernanceAssessment{}, toolCall), true, nil
+	}
+	return normalizeRuntimeApprovalAssessment(assessment, toolCall), true, nil
+}
+
+func (s *Service) fallbackRuntimeApprovalAssessment(result execution.Result) execution.GovernanceAssessment {
+	toolCall, _ := latestApprovalRequiredToolCall(result.ToolCalls)
+	return normalizeRuntimeApprovalAssessment(execution.GovernanceAssessment{}, toolCall)
+}
+
+func normalizeRuntimeApprovalAssessment(assessment execution.GovernanceAssessment, toolCall tools.ToolCallRecord) execution.GovernanceAssessment {
+	assessment.ApprovalRequired = true
+	if strings.TrimSpace(assessment.OperationName) == "" {
+		assessment.OperationName = firstNonEmptyString(toolCall.ToolName, "agent_loop")
+	}
+	if strings.TrimSpace(assessment.TargetObject) == "" {
+		assessment.TargetObject = runtimeApprovalTargetObject(toolCall)
+	}
+	if strings.TrimSpace(assessment.RiskLevel) == "" || assessment.RiskLevel == tools.RiskLevelGreen {
+		assessment.RiskLevel = firstNonEmptyString(stringValue(toolCall.Output, "risk_level", ""), tools.RiskLevelYellow)
+	}
+	if strings.TrimSpace(assessment.Reason) == "" {
+		assessment.Reason = firstNonEmptyString(stringValue(toolCall.Output, "reason", ""), firstNonEmptyString(stringValue(toolCall.Output, "deny_reason", ""), "policy_requires_authorization"))
+	}
+	if len(assessment.ImpactScope) == 0 {
+		assessment.ImpactScope = cloneMap(mapValue(toolCall.Output, "impact_scope"))
+	}
+	return assessment
+}
+
+func latestApprovalRequiredToolCall(toolCalls []tools.ToolCallRecord) (tools.ToolCallRecord, bool) {
+	for index := len(toolCalls) - 1; index >= 0; index-- {
+		toolCall := toolCalls[index]
+		if toolCallRequiresApproval(toolCall) {
+			return toolCall, true
+		}
+	}
+	return tools.ToolCallRecord{}, false
+}
+
+func toolCallRequiresApproval(toolCall tools.ToolCallRecord) bool {
+	if toolCall.ErrorCode != nil && *toolCall.ErrorCode == tools.ToolErrorCodeApprovalRequired {
+		return true
+	}
+	return toolCall.Status == tools.ToolCallStatusFailed && boolValue(toolCall.Output, "approval_required", false)
+}
+
+func runtimeApprovalTargetObject(toolCall tools.ToolCallRecord) string {
+	impactScope := mapValue(toolCall.Output, "impact_scope")
+	if webpages := stringSliceValue(impactScope["webpages"]); len(webpages) > 0 {
+		return webpages[0]
+	}
+	if apps := stringSliceValue(impactScope["apps"]); len(apps) > 0 {
+		return apps[0]
+	}
+	return impactScopeTarget(impactScope, execution.GovernanceTargetObject(toolCall.ToolName, toolCall.Input, nil))
+}
+
+// applyRuntimeApprovedToolInput persists the exact blocked tool payload onto the
+// waiting-auth resume plan. Resume execution may still replay agent_loop, but
+// governance bypass is then restricted to this concrete input instead of any
+// later tool call that only shares the same target object.
+func applyRuntimeApprovedToolInput(plan map[string]any, toolInput map[string]any) map[string]any {
+	updatedPlan := cloneMap(plan)
+	if updatedPlan == nil {
+		updatedPlan = map[string]any{}
+	}
+	if len(toolInput) == 0 {
+		delete(updatedPlan, "approved_tool_input")
+		return updatedPlan
+	}
+	updatedPlan["approved_tool_input"] = cloneMap(toolInput)
+	return updatedPlan
 }
 
 func (s *Service) fallbackGovernanceAssessment(task runengine.TaskRecord, taskIntent map[string]any) (execution.GovernanceAssessment, bool) {
