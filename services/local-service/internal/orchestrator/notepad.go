@@ -82,7 +82,7 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 		}
 	}()
 
-	snapshot := notepadSnapshot(item)
+	snapshot := notepadSnapshot(item, currentRuntimeWorkspaceRoot(s.executor))
 	suggestion := s.intent.Suggest(snapshot, nil, false)
 	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion, false)
 	suggestion.TaskTitle = notepadTaskTitle(snapshot, suggestion)

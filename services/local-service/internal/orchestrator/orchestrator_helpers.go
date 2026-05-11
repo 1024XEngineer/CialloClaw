@@ -2,10 +2,13 @@ package orchestrator
 
 import (
 	"encoding/json"
+	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
@@ -52,7 +55,7 @@ func cloneTimePointer(value *time.Time) *time.Time {
 // user's goal into a notepad-specific intent bucket first. Title-only notes
 // must stay anchored on the original title instead of the synthetic note_text
 // fallback that the dashboard uses for display-only notepad cards.
-func notepadSnapshot(item map[string]any) taskcontext.TaskContextSnapshot {
+func notepadSnapshot(item map[string]any, workspaceRoot string) taskcontext.TaskContextSnapshot {
 	text := notepadSnapshotText(item)
 
 	return taskcontext.TaskContextSnapshot{
@@ -61,7 +64,7 @@ func notepadSnapshot(item map[string]any) taskcontext.TaskContextSnapshot {
 		InputType: "text",
 		InputMode: "text",
 		Text:      text,
-		Files:     notepadResourcePaths(item),
+		Files:     notepadResourcePaths(item, workspaceRoot),
 		PageTitle: "notepad",
 		AppName:   "dashboard",
 	}
@@ -96,7 +99,7 @@ func notepadTaskTitle(snapshot taskcontext.TaskContextSnapshot, suggestion inten
 	return intent.NewService().Suggest(titleSnapshot, suggestion.Intent, suggestion.RequiresConfirm).TaskTitle
 }
 
-func notepadResourcePaths(item map[string]any) []string {
+func notepadResourcePaths(item map[string]any, workspaceRoot string) []string {
 	resources := relatedResourceMaps(item["related_resources"])
 	if len(resources) == 0 {
 		return nil
@@ -118,6 +121,10 @@ func notepadResourcePaths(item map[string]any) []string {
 
 		switch notepadResourceTargetKind(resource) {
 		case "file", "folder":
+			path, ok := normalizeNotepadSnapshotPath(path, workspaceRoot)
+			if !ok {
+				continue
+			}
 			if _, duplicated := seen[path]; duplicated {
 				continue
 			}
@@ -130,6 +137,44 @@ func notepadResourcePaths(item map[string]any) []string {
 		return nil
 	}
 	return paths
+}
+
+// normalizeNotepadSnapshotPath only promotes explicit note resources that stay
+// inside the current workspace root. Snapshot file inputs must keep the same
+// workspace-formal shape as other desktop task entry points so execution does
+// not accidentally treat arbitrary host paths as model-readable context.
+func normalizeNotepadSnapshotPath(resourcePath, workspaceRoot string) (string, bool) {
+	trimmedPath := strings.TrimSpace(resourcePath)
+	trimmedRoot := strings.TrimSpace(workspaceRoot)
+	if trimmedPath == "" || trimmedRoot == "" {
+		return "", false
+	}
+	if !filepath.IsAbs(trimmedPath) && !hasWindowsDriveLetterPrefix(trimmedPath) {
+		normalized := strings.Trim(strings.ReplaceAll(trimmedPath, "\\", "/"), "/")
+		if normalized == "workspace" {
+			trimmedPath = "."
+		} else if strings.HasPrefix(normalized, "workspace/") {
+			trimmedPath = strings.TrimPrefix(normalized, "workspace/")
+		}
+	}
+
+	pathPolicy, err := platform.NewLocalPathPolicy(trimmedRoot)
+	if err != nil {
+		return "", false
+	}
+	safePath, err := pathPolicy.EnsureWithinWorkspace(trimmedPath)
+	if err != nil {
+		return "", false
+	}
+
+	relative, ok := relativizePathWithinRoot(filepath.Clean(safePath), filepath.Clean(trimmedRoot))
+	if !ok {
+		return "", false
+	}
+	if relative == "" {
+		return "workspace", true
+	}
+	return filepath.ToSlash(path.Join("workspace", filepath.ToSlash(relative))), true
 }
 
 func notepadResourceTargetKind(resource map[string]any) string {

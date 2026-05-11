@@ -3037,6 +3037,74 @@ func TestServiceNotepadConvertToTaskCarriesDashboardLabeledFileResourcesIntoSnap
 	}
 }
 
+func TestServiceNotepadConvertToTaskNormalizesAbsoluteWorkspaceResourcesIntoSnapshotFiles(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "Converted absolute-resource notepad task finished.")
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":   "todo_absolute_resource",
+		"title":     "整理工作区绝对路径资料",
+		"bucket":    "upcoming",
+		"status":    "normal",
+		"type":      "todo_item",
+		"note_text": "请结合同一工作区中的绝对路径资料整理正式任务。",
+		"related_resources": []map[string]any{{
+			"resource_id":   "todo_absolute_resource_source",
+			"path":          filepath.Join(workspaceRoot, "notes", "source.md"),
+			"resource_type": "file",
+		}},
+	}})
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_absolute_resource",
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected converted task to remain available in runtime")
+	}
+	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "workspace/notes/source.md" {
+		t.Fatalf("expected absolute workspace resource to normalize into workspace-formal snapshot path, got %+v", record.Snapshot.Files)
+	}
+}
+
+func TestServiceNotepadConvertToTaskDropsOutOfWorkspaceResourcesFromSnapshotFiles(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Converted out-of-workspace resource notepad task finished.")
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":   "todo_outside_workspace_resource",
+		"title":     "整理越界资料",
+		"bucket":    "upcoming",
+		"status":    "normal",
+		"type":      "todo_item",
+		"note_text": "请整理这些资料，但不应把工作区外路径送进正式任务输入。",
+		"related_resources": []map[string]any{{
+			"resource_id":   "todo_outside_workspace_resource_source",
+			"path":          filepath.Join(t.TempDir(), "outside", "source.md"),
+			"resource_type": "file",
+		}},
+	}})
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_outside_workspace_resource",
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected converted task to remain available in runtime")
+	}
+	if len(record.Snapshot.Files) != 0 {
+		t.Fatalf("expected out-of-workspace resource to stay out of task snapshot files, got %+v", record.Snapshot.Files)
+	}
+}
+
 func TestServiceNotepadConvertToTaskDedupesExplicitSnapshotPaths(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Converted deduped notepad resource task finished.")
 	service.runEngine.ReplaceNotepadItems([]map[string]any{{
