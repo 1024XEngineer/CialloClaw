@@ -61,12 +61,15 @@ func (s *Service) TaskInspectorRun(params map[string]any) (map[string]any, error
 	if err != nil {
 		return nil, err
 	}
+	// Manual title generation can spend model quota before note syncing writes the
+	// derived notepad state. Persist the audit/trace owner first so later sync
+	// failures do not erase already-consumed model usage from governance views.
+	s.recordInspectorTitleGeneration(result.InspectionID, reason, result.TitleGenerationAuditData)
 	if result.SourceSynced {
 		if err := s.runEngine.SyncNotepadItems(result.NotepadItems); err != nil {
 			return nil, err
 		}
 	}
-	s.recordInspectorTitleGeneration(result.InspectionID, reason, result.TitleGenerationAuditData)
 
 	return map[string]any{
 		"inspection_id": result.InspectionID,

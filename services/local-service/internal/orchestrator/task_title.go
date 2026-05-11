@@ -117,14 +117,13 @@ func (s *Service) appendTaskTitleGenerationAudit(task runengine.TaskRecord, inte
 }
 
 func titleGenerationTokenUsage(invocation model.InvocationRecord) map[string]any {
+	// Task-level token totals should include auxiliary title generation, but the
+	// representative request metadata must keep pointing at the primary execution
+	// request instead of whichever refinement goroutine finished last.
 	return map[string]any{
 		"input_tokens":   invocation.Usage.InputTokens,
 		"output_tokens":  invocation.Usage.OutputTokens,
 		"total_tokens":   invocation.Usage.TotalTokens,
 		"estimated_cost": 0.0,
-		"request_id":     invocation.RequestID,
-		"provider":       invocation.Provider,
-		"model_id":       invocation.ModelID,
-		"latency_ms":     invocation.LatencyMS,
 	}
 }

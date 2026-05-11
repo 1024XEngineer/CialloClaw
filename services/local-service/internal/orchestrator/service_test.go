@@ -2352,6 +2352,67 @@ func TestServiceStartTaskUsesGeneratedTaskTitleFromFullContext(t *testing.T) {
 	t.Fatalf("expected async task title refinement, got %+v", record)
 }
 
+func TestServiceStartTaskTitleRefreshDoesNotOverridePrimaryTokenMetadata(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			if isTaskTitleGenerationRequest(request) {
+				return model.GenerateTextResponse{
+					OutputText: `{"title":"发布复盘风险跟进"}`,
+					RequestID:  "req_title",
+					Provider:   "openai",
+					ModelID:    "gpt-title",
+					Usage:      model.TokenUsage{InputTokens: 12, OutputTokens: 4, TotalTokens: 16},
+					LatencyMS:  42,
+				}, nil
+			}
+			return model.GenerateTextResponse{
+				OutputText: "执行结果",
+				RequestID:  "req_main",
+				Provider:   "openai",
+				ModelID:    "gpt-main",
+				Usage:      model.TokenUsage{InputTokens: 30, OutputTokens: 10, TotalTokens: 40},
+				LatencyMS:  180,
+			}, nil
+		},
+	})
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_task_title_token_metadata",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"intent": map[string]any{
+			"name": "summarize",
+		},
+		"input": map[string]any{
+			"type": "text",
+			"text": "请帮我整理这次发布复盘，并补齐风险项和后续跟进安排",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		record, ok := service.runEngine.GetTask(taskID)
+		if ok &&
+			record.Title == "发布复盘风险跟进" &&
+			record.TokenUsage["total_tokens"] == 56 &&
+			hasTaskTitleAuditRecord(record.AuditRecords) &&
+			record.TokenUsage["request_id"] == "req_main" &&
+			record.TokenUsage["provider"] == "openai" &&
+			record.TokenUsage["model_id"] == "gpt-main" &&
+			record.TokenUsage["latency_ms"] == int64(180) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	record, _ := service.runEngine.GetTask(taskID)
+	t.Fatalf("expected title refresh to preserve primary token metadata, got %+v", record)
+}
+
 func hasTaskTitleAuditRecord(records []map[string]any) bool {
 	for _, record := range records {
 		if stringValue(record, "action", "") == "title.generate" {
@@ -3097,6 +3158,61 @@ func TestTaskInspectorRunManualReasonRecordsGeneratedTitleAuditAndTrace(t *testi
 	evals, total, err := service.storage.EvalStore().ListEvalSnapshots(context.Background(), inspectionID, 10, 0)
 	if err != nil || total != 1 || len(evals) != 1 {
 		t.Fatalf("expected one eval snapshot for manual title generation, total=%d len=%d err=%v", total, len(evals), err)
+	}
+}
+
+func TestTaskInspectorRunManualReasonRecordsGeneratedTitleAuditAndTraceWhenSyncFails(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, `{"title":"本周阻塞项复盘"}`)
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+
+	baseTodoStore := storage.NewInMemoryTodoStore()
+	if err := service.runEngine.WithTodoStore(baseTodoStore); err != nil {
+		t.Fatalf("attach base todo store failed: %v", err)
+	}
+	if err := service.runEngine.WithTodoStore(failingTodoStore{
+		base:       baseTodoStore,
+		replaceErr: errors.New("todo replace failed"),
+	}); err != nil {
+		t.Fatalf("swap to failing todo store failed: %v", err)
+	}
+
+	todosRoot := filepath.Join(workspaceRoot, "todos")
+	if err := os.MkdirAll(todosRoot, 0o755); err != nil {
+		t.Fatalf("mkdir todos root: %v", err)
+	}
+	content := strings.Join([]string{
+		"- [ ] 复盘",
+		"note: 继续整理本周阻塞项和行动项",
+		"agent: 输出更紧凑标题",
+		"",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(todosRoot, "manual.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write manual note source: %v", err)
+	}
+
+	result, err := service.TaskInspectorRun(map[string]any{
+		"target_sources": []any{"workspace/todos"},
+		"reason":         "notes_page_manual_run",
+	})
+	if err == nil || !strings.Contains(err.Error(), "todo replace failed") {
+		t.Fatalf("expected todo sync failure after title generation, result=%+v err=%v", result, err)
+	}
+
+	auditRecords, total, auditErr := service.storage.AuditStore().ListAuditRecords(context.Background(), "", "", 10, 0)
+	if auditErr != nil || total != 1 || len(auditRecords) != 1 {
+		t.Fatalf("expected one persisted audit record despite sync failure, total=%d len=%d err=%v", total, len(auditRecords), auditErr)
+	}
+	inspectionID := auditRecords[0].TaskID
+	if inspectionID == "" || auditRecords[0].RunID != inspectionID {
+		t.Fatalf("expected failed sync audit record to stay on inspection owner, got %+v", auditRecords[0])
+	}
+
+	traces, total, traceErr := service.storage.TraceStore().ListTraceRecords(context.Background(), inspectionID, 10, 0)
+	if traceErr != nil || total != 1 || len(traces) != 1 {
+		t.Fatalf("expected one trace record despite sync failure, total=%d len=%d err=%v", total, len(traces), traceErr)
+	}
+	if traces[0].TaskID != inspectionID || traces[0].RunID != inspectionID {
+		t.Fatalf("expected failed sync trace owner attribution to stay on inspection owner, got %+v", traces[0])
 	}
 }
 
