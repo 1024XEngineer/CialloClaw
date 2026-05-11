@@ -3261,6 +3261,9 @@ func TestTaskInspectorRunManualReasonRecordsGeneratedTitleAuditAndTrace(t *testi
 	if auditRecords[0].TaskID != inspectionID || auditRecords[0].RunID != inspectionID {
 		t.Fatalf("expected audit record to stay attributed to inspection owner, got %+v", auditRecords[0])
 	}
+	if auditRecords[0].Result != "success" {
+		t.Fatalf("expected successful generated title audit record, got %+v", auditRecords[0])
+	}
 
 	traces, total, err := service.storage.TraceStore().ListTraceRecords(context.Background(), inspectionID, 10, 0)
 	if err != nil || total != 1 || len(traces) != 1 {
@@ -3272,6 +3275,56 @@ func TestTaskInspectorRunManualReasonRecordsGeneratedTitleAuditAndTrace(t *testi
 	evals, total, err := service.storage.EvalStore().ListEvalSnapshots(context.Background(), inspectionID, 10, 0)
 	if err != nil || total != 1 || len(evals) != 1 {
 		t.Fatalf("expected one eval snapshot for manual title generation, total=%d len=%d err=%v", total, len(evals), err)
+	}
+}
+
+func TestTaskInspectorRunManualReasonRecordsFallbackAuditWhenTitleModelDoesNotGenerate(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, `{}`)
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+
+	todosRoot := filepath.Join(workspaceRoot, "todos")
+	if err := os.MkdirAll(todosRoot, 0o755); err != nil {
+		t.Fatalf("mkdir todos root: %v", err)
+	}
+	content := strings.Join([]string{
+		"- [ ] 复盘",
+		"note: 继续整理本周阻塞项和行动项",
+		"agent: 输出更紧凑标题",
+		"",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(todosRoot, "manual.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write manual note source: %v", err)
+	}
+
+	result, err := service.TaskInspectorRun(map[string]any{
+		"target_sources": []any{"workspace/todos"},
+		"reason":         "notes_page_manual_run",
+	})
+	if err != nil {
+		t.Fatalf("TaskInspectorRun returned error: %v", err)
+	}
+	inspectionID, ok := result["inspection_id"].(string)
+	if !ok || inspectionID == "" {
+		t.Fatalf("expected inspection_id in response, got %+v", result["inspection_id"])
+	}
+
+	auditRecords, total, err := service.storage.AuditStore().ListAuditRecords(context.Background(), inspectionID, inspectionID, 10, 0)
+	if err != nil || total != 1 || len(auditRecords) != 1 {
+		t.Fatalf("expected one persisted audit record for fallback title generation, total=%d len=%d err=%v", total, len(auditRecords), err)
+	}
+	if auditRecords[0].Result != "fallback" {
+		t.Fatalf("expected fallback audit result when model output is unusable, got %+v", auditRecords[0])
+	}
+
+	traces, total, err := service.storage.TraceStore().ListTraceRecords(context.Background(), inspectionID, 10, 0)
+	if err != nil || total != 1 || len(traces) != 1 {
+		t.Fatalf("expected one trace record for fallback title generation, total=%d len=%d err=%v", total, len(traces), err)
+	}
+	if traces[0].TaskID != inspectionID || traces[0].RunID != inspectionID {
+		t.Fatalf("expected fallback trace owner attribution to stay on inspection owner, got %+v", traces[0])
+	}
+	if traces[0].LLMInputSummary != "task_inspector.generate_note_title" {
+		t.Fatalf("expected fallback trace intent summary to be recorded, got %+v", traces[0])
 	}
 }
 

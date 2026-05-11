@@ -112,13 +112,13 @@ func (s *Service) GenerateTaskSubjectResult(ctx context.Context, owner Generatio
 // CompactTaskFallback keeps the first task-facing title deterministic when the
 // runtime model is slow, unavailable, or intentionally disabled.
 func CompactTaskFallback(raw string) string {
-	return compactFallbackTitle(raw, defaultTitleLengthLimit, true)
+	return compactFallbackTitle(raw, defaultTitleLengthLimit)
 }
 
 // CompactNoteFallback keeps note titles bounded and readable without requiring
 // a model round-trip in the synchronous inspector path.
 func CompactNoteFallback(raw string) string {
-	return compactFallbackTitle(raw, defaultTitleLengthLimit, false)
+	return compactFallbackTitle(raw, defaultTitleLengthLimit)
 }
 
 // GenerateNoteTitle summarizes note body context into one short dashboard
@@ -323,8 +323,8 @@ func normalizeTitle(value string, maxLength int) string {
 	return textutil.TruncateGraphemes(value, maxLength)
 }
 
-func compactFallbackTitle(raw string, maxLength int, trimLeadIn bool) string {
-	segments := titleSegments(raw, trimLeadIn)
+func compactFallbackTitle(raw string, maxLength int) string {
+	segments := titleSegments(raw)
 	if len(segments) == 0 {
 		return normalizeTitle(raw, maxLength)
 	}
@@ -332,7 +332,7 @@ func compactFallbackTitle(raw string, maxLength int, trimLeadIn bool) string {
 	return normalizeTitle(candidate, maxLength)
 }
 
-func titleSegments(raw string, trimLeadIn bool) []string {
+func titleSegments(raw string) []string {
 	replacer := strings.NewReplacer("\r\n", "\n", "\r", "\n", "。", "\n", "！", "\n", "？", "\n", "；", "\n", ";", "\n", "\t", " ")
 	parts := strings.Split(replacer.Replace(raw), "\n")
 	segments := make([]string, 0, len(parts))
@@ -342,9 +342,6 @@ func titleSegments(raw string, trimLeadIn bool) []string {
 			continue
 		}
 		segment = stripChecklistPrefix(segment)
-		if trimLeadIn {
-			segment = trimTaskLeadIn(segment)
-		}
 		segment = strings.Join(strings.Fields(segment), " ")
 		if segment == "" {
 			continue
@@ -365,20 +362,6 @@ func stripChecklistPrefix(value string) string {
 		}
 	}
 	return value
-}
-
-func trimTaskLeadIn(value string) string {
-	trimmed := strings.TrimSpace(value)
-	for _, prefix := range []string{
-		"请你帮我", "请帮我", "帮我", "麻烦你", "麻烦", "请你", "请", "我想让你", "我想请你", "我需要你",
-		"please help me", "help me", "can you", "please",
-	} {
-		if strings.HasPrefix(strings.ToLower(trimmed), prefix) {
-			trimmed = strings.TrimSpace(trimmed[len(prefix):])
-			break
-		}
-	}
-	return trimmed
 }
 
 func minInt(left, right int) int {

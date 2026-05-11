@@ -299,8 +299,46 @@ func TestServiceRunReturnsTitleGenerationAuditDataWithInspectionOwner(t *testing
 	if len(result.TitleGenerationAuditData) != 1 {
 		t.Fatalf("expected one title-generation invocation, got %+v", result.TitleGenerationAuditData)
 	}
-	if result.TitleGenerationAuditData[0].TaskID != "insp_manual_titles" || result.TitleGenerationAuditData[0].RunID != "insp_manual_titles" {
+	if result.TitleGenerationAuditData[0].Invocation.TaskID != "insp_manual_titles" || result.TitleGenerationAuditData[0].Invocation.RunID != "insp_manual_titles" {
 		t.Fatalf("expected title generation owner attribution to use inspection owner, got %+v", result.TitleGenerationAuditData[0])
+	}
+	if !result.TitleGenerationAuditData[0].Generated {
+		t.Fatalf("expected successful generation record, got %+v", result.TitleGenerationAuditData[0])
+	}
+}
+
+func TestServiceRunMarksFallbackAuditDataWhenModelOutputIsUnusable(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "weekly.md"), []byte("- [ ] Weekly retro\n  note: review blockers and next steps\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: "{}",
+	})))
+
+	result, err := service.Run(RunInput{
+		InspectionID:         "insp_manual_titles",
+		AllowGeneratedTitles: true,
+		TitleGenerationOwner: titlegen.GenerationOwner{TaskID: "insp_manual_titles", RunID: "insp_manual_titles"},
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if len(result.TitleGenerationAuditData) != 1 {
+		t.Fatalf("expected one title-generation invocation, got %+v", result.TitleGenerationAuditData)
+	}
+	if result.TitleGenerationAuditData[0].Generated {
+		t.Fatalf("expected unusable model output to be marked as fallback, got %+v", result.TitleGenerationAuditData[0])
 	}
 }
 

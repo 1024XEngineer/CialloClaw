@@ -69,11 +69,19 @@ func TestGenerateTaskSubjectFallsBackWhenModelFails(t *testing.T) {
 	}
 }
 
-func TestCompactTaskFallbackTrimsConversationLeadIn(t *testing.T) {
+func TestCompactTaskFallbackKeepsDeterministicMultiLineContext(t *testing.T) {
 	title := CompactTaskFallback("请帮我整理这次发布复盘\n重点补齐风险项和后续跟进安排")
 
-	if title != "整理这次发布复盘 重点补齐风险项和后续跟进..." {
-		t.Fatalf("expected local fallback compaction to drop the request wrapper, got %q", title)
+	if title != "请帮我整理这次发布复盘 重点补齐风险项和后..." {
+		t.Fatalf("expected local fallback compaction to stay deterministic without semantic rewriting, got %q", title)
+	}
+}
+
+func TestCompactTaskFallbackDoesNotRewriteLeadingNoun(t *testing.T) {
+	title := CompactTaskFallback("请假流程说明\n补充审批范围")
+
+	if title != "请假流程说明 补充审批范围" {
+		t.Fatalf("expected local fallback compaction to preserve leading nouns, got %q", title)
 	}
 }
 

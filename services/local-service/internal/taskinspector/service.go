@@ -59,7 +59,14 @@ type RunResult struct {
 	Suggestions              []string
 	NotepadItems             []map[string]any
 	SourceSynced             bool
-	TitleGenerationAuditData []model.InvocationRecord
+	TitleGenerationAuditData []TitleGenerationAuditRecord
+}
+
+// TitleGenerationAuditRecord keeps one manual note-title generation attempt
+// attributable even when the model call falls back to the local title.
+type TitleGenerationAuditRecord struct {
+	Invocation model.InvocationRecord
+	Generated  bool
 }
 
 var (
@@ -106,7 +113,7 @@ func (s *Service) Run(input RunInput) (RunResult, error) {
 	if inspectionID == "" {
 		inspectionID = fmt.Sprintf("insp_%d", s.now().UnixNano())
 	}
-	titleInvocations := make([]model.InvocationRecord, 0)
+	titleInvocations := make([]TitleGenerationAuditRecord, 0)
 	parsedFiles, parsedNotepadItems, err := s.inspectSources(sources, input.AllowGeneratedTitles, input.TitleGenerationOwner, &titleInvocations)
 	if err != nil {
 		return RunResult{}, err
@@ -133,11 +140,11 @@ func (s *Service) Run(input RunInput) (RunResult, error) {
 		Suggestions:              buildSuggestions(resolvedNotepadItems, input.UnfinishedTasks, sources, parsedFiles, dueToday, overdue, staleCount, fileItems),
 		NotepadItems:             cloneMapSlice(resolvedNotepadItems),
 		SourceSynced:             sourceSynced,
-		TitleGenerationAuditData: append([]model.InvocationRecord(nil), titleInvocations...),
+		TitleGenerationAuditData: append([]TitleGenerationAuditRecord(nil), titleInvocations...),
 	}, nil
 }
 
-func (s *Service) inspectSources(sources []string, allowGeneratedTitles bool, owner titlegen.GenerationOwner, titleInvocations *[]model.InvocationRecord) (int, []map[string]any, error) {
+func (s *Service) inspectSources(sources []string, allowGeneratedTitles bool, owner titlegen.GenerationOwner, titleInvocations *[]TitleGenerationAuditRecord) (int, []map[string]any, error) {
 	if s.fileSystem == nil || len(sources) == 0 {
 		return 0, nil, nil
 	}
@@ -418,7 +425,7 @@ func countChecklistItems(content string) int {
 	return count
 }
 
-func (s *Service) parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time, allowGeneratedTitles bool, owner titlegen.GenerationOwner, remainingGeneratedTitles *int, titleInvocations *[]model.InvocationRecord) []map[string]any {
+func (s *Service) parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time, allowGeneratedTitles bool, owner titlegen.GenerationOwner, remainingGeneratedTitles *int, titleInvocations *[]TitleGenerationAuditRecord) []map[string]any {
 	lines := strings.Split(content, "\n")
 	items := make([]map[string]any, 0)
 	var current map[string]any
@@ -538,7 +545,7 @@ func splitMetadataLine(line string) (string, string, bool) {
 	return key, value, true
 }
 
-func (s *Service) normalizeParsedNotepadItem(item map[string]any, sourcePath string, now time.Time, allowGeneratedTitles bool, owner titlegen.GenerationOwner, remainingGeneratedTitles *int, titleInvocations *[]model.InvocationRecord) map[string]any {
+func (s *Service) normalizeParsedNotepadItem(item map[string]any, sourcePath string, now time.Time, allowGeneratedTitles bool, owner titlegen.GenerationOwner, remainingGeneratedTitles *int, titleInvocations *[]TitleGenerationAuditRecord) map[string]any {
 	if stringValue(item, "bucket") == notepadBucketRecurringRule {
 		item["type"] = "recurring"
 		if stringValue(item, "repeat_rule_text") == "" {
@@ -580,7 +587,7 @@ func (s *Service) normalizeParsedNotepadItem(item map[string]any, sourcePath str
 			result := s.titlegen.GenerateNoteTitleResult(generationCtx, owner, item, fallbackTitle)
 			cancel()
 			item["title"] = result.Title
-			appendTitleGenerationInvocation(titleInvocations, result.Invocation)
+			appendTitleGenerationInvocation(titleInvocations, result)
 		} else {
 			item["title"] = fallbackTitle
 		}
@@ -888,11 +895,14 @@ func generatedTitleSourceKey(item map[string]any) string {
 	}, "\x00")
 }
 
-func appendTitleGenerationInvocation(items *[]model.InvocationRecord, invocation *model.InvocationRecord) {
-	if items == nil || invocation == nil {
+func appendTitleGenerationInvocation(items *[]TitleGenerationAuditRecord, result titlegen.NoteTitleResult) {
+	if items == nil || result.Invocation == nil {
 		return
 	}
-	*items = append(*items, *invocation)
+	*items = append(*items, TitleGenerationAuditRecord{
+		Invocation: *result.Invocation,
+		Generated:  result.Generated,
+	})
 }
 
 func countOpenNotepadItems(items []map[string]any) int {

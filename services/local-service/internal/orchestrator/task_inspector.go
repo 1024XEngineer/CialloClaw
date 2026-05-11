@@ -91,21 +91,29 @@ func inspectorAllowsGeneratedTitles(reason string) bool {
 // durable audit and metering owner keyed by inspection_id, because inspector
 // runs do not create formal tasks yet still spend model quota on workspace
 // content.
-func (s *Service) recordInspectorTitleGeneration(inspectionID string, reason string, invocations []model.InvocationRecord) {
+func (s *Service) recordInspectorTitleGeneration(inspectionID string, reason string, invocations []taskinspector.TitleGenerationAuditRecord) {
 	inspectionID = strings.TrimSpace(inspectionID)
 	if s == nil || inspectionID == "" || len(invocations) == 0 {
 		return
 	}
 
 	for _, invocation := range invocations {
+		summary := "generate compact note title during manual inspector run"
+		result := "success"
+		outputText := "manual note title generated"
+		if !invocation.Generated {
+			summary = "note title model call fell back to local manual inspector title"
+			result = "fallback"
+			outputText = "manual note title fallback kept"
+		}
 		_, _ = s.audit.Write(context.Background(), audit.RecordInput{
 			TaskID:  inspectionID,
 			RunID:   inspectionID,
 			Type:    "model",
 			Action:  "note_title.generate",
-			Summary: "generate compact note title during manual inspector run",
+			Summary: summary,
 			Target:  firstNonEmptyString(strings.TrimSpace(reason), "task_inspector.run"),
-			Result:  "success",
+			Result:  result,
 		})
 		if s.traceEval == nil {
 			continue
@@ -114,10 +122,10 @@ func (s *Service) recordInspectorTitleGeneration(inspectionID string, reason str
 			TaskID:          inspectionID,
 			RunID:           inspectionID,
 			IntentName:      "task_inspector.generate_note_title",
-			OutputText:      "manual note title generated",
-			ModelInvocation: invocation.Map(),
-			TokenUsage:      modelInvocationTokenUsage(invocation),
-			DurationMS:      invocation.LatencyMS,
+			OutputText:      outputText,
+			ModelInvocation: invocation.Invocation.Map(),
+			TokenUsage:      modelInvocationTokenUsage(invocation.Invocation),
+			DurationMS:      invocation.Invocation.LatencyMS,
 		})
 		if err == nil {
 			_ = s.traceEval.Record(context.Background(), traceResult)
