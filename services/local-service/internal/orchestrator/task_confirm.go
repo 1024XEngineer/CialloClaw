@@ -21,11 +21,40 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	}
 	confirmed := boolValue(params, "confirmed", false)
 	correctedIntent := mapValue(params, "corrected_intent")
-	intentValue := cloneMap(task.Intent)
-	if !confirmed && len(correctedIntent) > 0 {
-		intentValue = correctedIntent
+	correctionText := strings.TrimSpace(stringValue(params, "correction_text", ""))
+	if err := validateTaskConfirmCorrectionPayload(confirmed, correctedIntent, correctionText); err != nil {
+		return nil, err
 	}
-	if !confirmed && len(correctedIntent) == 0 {
+	snapshot := snapshotFromTask(task)
+	intentValue := cloneMap(task.Intent)
+	updatedTitle := task.Title
+	if !confirmed && correctionText != "" {
+		suggestion := s.reinferTaskIntentFromCorrection(task, snapshot, correctionText)
+		intentValue = suggestion.Intent
+		updatedTitle = suggestion.TaskTitle
+	} else if !confirmed && len(correctedIntent) > 0 {
+		if normalizedIntent, ok := normalizeTaskConfirmIntent(correctedIntent); ok {
+			suggestion := s.normalizedTaskConfirmSuggestion(snapshot, normalizedIntent, false)
+			intentValue = suggestion.Intent
+			updatedTitle = suggestion.TaskTitle
+		} else {
+			updatedTask, err := s.revertTaskToIntentConfirmation(task)
+			if err != nil {
+				return nil, err
+			}
+			bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleConfirmRejected, nil), updatedTask.UpdatedAt.Format(dateTimeLayout))
+			if presentedTask, ok := s.runEngine.SetPresentation(task.TaskID, bubble, nil, nil); ok {
+				updatedTask = presentedTask
+			} else {
+				return nil, ErrTaskNotFound
+			}
+			return map[string]any{
+				"task":            taskMap(updatedTask),
+				"bubble_message":  bubble,
+				"delivery_result": nil,
+			}, nil
+		}
+	} else if !confirmed && len(correctedIntent) == 0 {
 		updatedTask, err := s.revertTaskToIntentConfirmation(task)
 		if err != nil {
 			return nil, err
@@ -53,9 +82,10 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		}
 		return nil, ErrTaskNotFound
 	}
-	snapshot := snapshotFromTask(task)
-	fallbackTitle := s.intent.Suggest(snapshot, intentValue, false).TaskTitle
-	updatedTitle := s.fallbackTaskTitle(snapshot, intentValue, fallbackTitle)
+	if confirmed {
+		updatedTitle = s.intent.Suggest(snapshot, intentValue, false).TaskTitle
+	}
+	updatedTitle = s.fallbackTaskTitle(snapshot, intentValue, updatedTitle)
 
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleConfirmStarted, nil), task.UpdatedAt.Format(dateTimeLayout))
 	updatedTask, ok := s.runEngine.UpdateIntent(task.TaskID, updatedTitle, intentValue)
@@ -85,10 +115,10 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
-	snapshot = snapshotFromTask(updatedTask)
-	s.refreshTitleAfterGovernance(updatedTask, snapshot, intentValue)
+	executionSnapshot := snapshotFromTask(updatedTask)
+	s.refreshTitleAfterGovernance(updatedTask, executionSnapshot, intentValue)
 
-	updatedTask, resultBubble, deliveryResult, _, err := s.executeTask(updatedTask, snapshot, intentValue)
+	updatedTask, resultBubble, deliveryResult, _, err := s.executeTask(updatedTask, executionSnapshot, intentValue)
 	if err != nil {
 		return nil, err
 	}

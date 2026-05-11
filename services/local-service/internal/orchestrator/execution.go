@@ -275,7 +275,7 @@ func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, sn
 		return updatedTask, resultBubble, deliveryResult, artifacts, nil
 	}
 
-	approvedOperation, approvedTargetObject := approvedExecutionFromTask(processingTask)
+	approvedOperation, approvedTargetObject, approvedToolInput := approvedExecutionFromTask(processingTask)
 	executionCtx := context.Background()
 	if shouldBoundTaskExecution(processingTask, snapshot, taskIntent, deliveryType) {
 		executionTimeout := s.executionTimeout
@@ -303,6 +303,7 @@ func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, sn
 		ApprovalGranted:      processingTask.Authorization != nil,
 		ApprovedOperation:    approvedOperation,
 		ApprovedTargetObject: approvedTargetObject,
+		ApprovedToolInput:    approvedToolInput,
 		BudgetDowngrade: map[string]any{
 			"enabled":         budgetDecision.Enabled,
 			"applied":         budgetDecision.Applied,
@@ -313,7 +314,7 @@ func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, sn
 			"trace":           cloneMap(budgetDecision.Trace),
 		},
 	})
-	if err == nil {
+	if err == nil && executionResult.LoopStopReason != string(agentloop.StopReasonNeedAuthorization) {
 		executionResult = s.normalizeExecutionFormalDeliveryResult(processingTask.TaskID, deliveryType, resultTitle, executionResult)
 	}
 	processingTask = s.recordExecutionToolCalls(processingTask, executionResult.ToolCalls)
@@ -337,6 +338,9 @@ func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, sn
 	if traceErr != nil {
 		failedTask, failureBubble := s.failExecutionTask(processingTask, taskIntent, executionResult, traceErr)
 		return failedTask, failureBubble, nil, nil, nil
+	}
+	if waitingTask, waitingBubble, ok, approvalErr := s.maybePauseForRuntimeApproval(processingTask, taskIntent, executionResult); approvalErr != nil || ok {
+		return waitingTask, waitingBubble, nil, nil, approvalErr
 	}
 	if escalatedTask, escalatedBubble, ok := s.maybeEscalateHumanLoop(processingTask, traceCapture, executionResult); ok {
 		return escalatedTask, escalatedBubble, nil, nil, nil
@@ -1012,11 +1016,11 @@ func (s *Service) activeExecutionStepName(taskIntent map[string]any) string {
 	return "generate_output"
 }
 
-func approvedExecutionFromTask(task runengine.TaskRecord) (string, string) {
+func approvedExecutionFromTask(task runengine.TaskRecord) (string, string, map[string]any) {
 	if len(task.PendingExecution) == 0 {
-		return "", ""
+		return "", "", nil
 	}
-	return stringValue(task.PendingExecution, "operation_name", ""), stringValue(task.PendingExecution, "target_object", "")
+	return stringValue(task.PendingExecution, "operation_name", ""), stringValue(task.PendingExecution, "target_object", ""), cloneMap(mapValue(task.PendingExecution, "approved_tool_input"))
 }
 
 func toolCallErrorCode(toolCall tools.ToolCallRecord) any {

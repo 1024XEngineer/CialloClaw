@@ -146,6 +146,7 @@ type Request struct {
 	ApprovalGranted      bool
 	ApprovedOperation    string
 	ApprovedTargetObject string
+	ApprovedToolInput    map[string]any
 	BudgetDowngrade      map[string]any
 }
 
@@ -416,6 +417,20 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 	trace, err := s.generateOutput(ctx, request, inputText)
 	if err != nil {
 		return Result{}, err
+	}
+	if trace.LoopStopReason == string(agentloop.StopReasonNeedAuthorization) {
+		latestCall := latestToolCall(trace.ToolCalls)
+		return Result{
+			Content:         trace.OutputText,
+			DurationMS:      time.Since(startedAt).Milliseconds(),
+			ModelInvocation: cloneMap(trace.ModelInvocation),
+			AuditRecord:     cloneMap(trace.AuditRecord),
+			ToolCalls:       append([]tools.ToolCallRecord(nil), trace.ToolCalls...),
+			LoopStopReason:  trace.LoopStopReason,
+			ToolName:        latestCall.ToolName,
+			ToolInput:       cloneMap(latestCall.Input),
+			ToolOutput:      cloneMap(latestCall.Output),
+		}, nil
 	}
 
 	deliveryType := firstNonEmpty(request.DeliveryType, "workspace_document")
@@ -3279,6 +3294,7 @@ func (s *Service) toolExecutionContext(workspacePath string, request Request) *t
 		ApprovalGranted:      request.ApprovalGranted,
 		ApprovedOperation:    approvedOperation,
 		ApprovedTargetObject: approvedTargetObject,
+		ApprovedToolInput:    cloneMap(request.ApprovedToolInput),
 		Platform:             s.fileSystem,
 		Execution:            s.execution,
 		Playwright:           s.playwright,

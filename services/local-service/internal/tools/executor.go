@@ -3,6 +3,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path"
@@ -342,7 +343,13 @@ func approvalBypassAllowed(execCtx *ToolExecuteContext, toolName string, prechec
 		return false
 	}
 	workspaceRoot := strings.TrimSpace(precheckInput.Workspace.WorkspacePath)
-	return normalizeApprovalTarget(execCtx.ApprovedTargetObject, workspaceRoot) == normalizeApprovalTarget(target, workspaceRoot)
+	if normalizeApprovalTarget(execCtx.ApprovedTargetObject, workspaceRoot) != normalizeApprovalTarget(target, workspaceRoot) {
+		return false
+	}
+	if len(execCtx.ApprovedToolInput) == 0 {
+		return true
+	}
+	return sameApprovedToolInput(execCtx.ApprovedToolInput, precheckInput.Input)
 }
 
 func normalizeApprovalTarget(target, workspaceRoot string) string {
@@ -363,6 +370,18 @@ func normalizeApprovalTarget(target, workspaceRoot string) string {
 		return "."
 	}
 	return strings.Trim(path.Clean(normalized), "/")
+}
+
+// sameApprovedToolInput compares the exact approved payload with the replayed
+// tool input. Runtime agent-loop approvals persist the blocked tool input so a
+// later allow_once decision only bypasses governance for the same payload.
+func sameApprovedToolInput(approved, current map[string]any) bool {
+	approvedJSON, approvedErr := json.Marshal(approved)
+	currentJSON, currentErr := json.Marshal(current)
+	if approvedErr != nil || currentErr != nil {
+		return false
+	}
+	return string(approvedJSON) == string(currentJSON)
 }
 
 func normalizeDuration(duration time.Duration) time.Duration {
