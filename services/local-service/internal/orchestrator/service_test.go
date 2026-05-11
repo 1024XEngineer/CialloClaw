@@ -3532,7 +3532,7 @@ func TestServiceNotepadConvertToTaskUsesRuntimeItemWithoutClosingTodo(t *testing
 	}
 
 	task := result["task"].(map[string]any)
-	if task["title"] != "处理：Finish the computer h..." {
+	if task["title"] != "Finish the computer h..." {
 		t.Fatalf("expected converted task title to stay anchored on notepad note text, got %v", task["title"])
 	}
 	if task["source_type"] != "todo" {
