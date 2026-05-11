@@ -16,7 +16,8 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { JsonRpcClientError } from "@/rpc/client";
-import { getRecommendations, respondSecurityDetailed, steerTask, submitRecommendationFeedback } from "@/rpc/methods";
+import { respondSecurityDetailed, steerTask, submitRecommendationFeedback } from "@/rpc/methods";
+import { getMockRecommendations } from "@/services/mockRecommendationService";
 import { subscribeAllTaskRuntime, subscribeApprovalPending, subscribeDeliveryReady, subscribeTaskUpdated } from "@/rpc/subscriptions";
 import { submitTextInput } from "@/services/agentInputService";
 import { getDesktopClipboardActivitySnapshot } from "@/platform/desktopClipboardActivity";
@@ -1904,7 +1905,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         errorText,
         visualState: input.visualState,
       });
-      const recommendationResult = await getRecommendations({
+      const recommendationResult = await getMockRecommendations({
         context: recommendationRequestContext,
         request_meta: createShellBallRequestMeta(),
         scene: recommendationScene,

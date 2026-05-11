@@ -166,11 +166,6 @@ export function ShellBallBubbleMessage({
             )}
           </button>
         ) : null}
-        {intentConfirm ? (
-          <p className="shell-ball-bubble-message__intent-summary">
-            当前意图：{intentConfirm.intentLabel}
-          </p>
-        ) : null}
         {shouldShowInlineApprovalActions ? (
           <div className="shell-ball-bubble-message__approval-actions">
             <button
