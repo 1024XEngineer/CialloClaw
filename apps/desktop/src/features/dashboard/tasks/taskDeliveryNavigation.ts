@@ -65,6 +65,31 @@ export function isDashboardTaskDeliveryHref(url: string) {
 }
 
 /**
+ * Reads one task identifier back out of a trusted dashboard delivery href so
+ * callers can still route in-app when the original payload omitted task_id.
+ *
+ * @param url Formal URL payload returned by the backend.
+ * @returns The decoded task id or null when the href does not match.
+ */
+export function readDashboardTaskDeliveryTaskId(url: string) {
+  const trimmed = url.trim();
+  if (!trimmed.startsWith(dashboardTaskDeliveryHrefPrefix)) {
+    return null;
+  }
+
+  const encodedTaskId = trimmed.slice(dashboardTaskDeliveryHrefPrefix.length);
+  if (encodedTaskId === "") {
+    return null;
+  }
+
+  try {
+    return decodeURIComponent(encodedTaskId);
+  } catch {
+    return encodedTaskId;
+  }
+}
+
+/**
  * Navigates inside the dashboard to the dedicated delivery route for one task.
  *
  * @param navigate React Router navigate function from the current dashboard view.
