@@ -2183,7 +2183,99 @@ func TestServiceConfirmTaskRewritesPlaceholderTitleAfterCorrection(t *testing.T)
 	}
 }
 
-func TestServiceConfirmTaskIgnoresCorrectedIntentWhenConfirmedTrue(t *testing.T) {
+func TestServiceConfirmTaskConsumesCorrectionTextOnSameTask(t *testing.T) {
+	calls := 0
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			calls++
+			if calls > 1 {
+				return model.GenerateTextResponse{
+					TaskID:     request.TaskID,
+					RunID:      request.RunID,
+					RequestID:  "req_corrected_execution",
+					Provider:   "openai_responses",
+					ModelID:    "gpt-5.4",
+					OutputText: "Explained selected paragraph.",
+				}, nil
+			}
+			if !strings.Contains(request.Input, "Explain this selected paragraph instead.") {
+				t.Fatalf("expected correction text in model prompt, got %q", request.Input)
+			}
+			if !strings.Contains(request.Input, "selected paragraph") || !strings.Contains(request.Input, "Issue 474") {
+				t.Fatalf("expected original task context in correction prompt, got %q", request.Input)
+			}
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_correction",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: `{"intent":{"name":"explain","arguments":{"detail":"brief"}},"reason":"user corrected the target action"}`,
+			}, nil
+		},
+	})
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_confirm_correction_text",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "selected paragraph",
+			"page_context": map[string]any{
+				"title": "Issue 474",
+				"url":   "https://example.test/issues/474",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+
+	confirmResult, err := service.ConfirmTask(map[string]any{
+		"task_id":         taskID,
+		"confirmed":       false,
+		"correction_text": "Explain this selected paragraph instead.",
+	})
+	if err != nil {
+		t.Fatalf("confirm task correction failed: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("expected correction inference plus execution model call, got %d", calls)
+	}
+	task := confirmResult["task"].(map[string]any)
+	if task["task_id"] != taskID {
+		t.Fatalf("expected correction to stay on same task, got %+v", task)
+	}
+	if task["status"] != "completed" {
+		t.Fatalf("expected corrected task to execute on the same task, got %+v", task)
+	}
+	intentValue := task["intent"].(map[string]any)
+	if intentValue["name"] != "explain" {
+		t.Fatalf("expected model-corrected explain intent, got %+v", intentValue)
+	}
+	bubble := confirmResult["bubble_message"].(map[string]any)
+	if bubble["type"] == "intent_confirm" {
+		t.Fatalf("expected corrected task not to return to intent confirmation, got %+v", bubble)
+	}
+	deliveryResult, ok := confirmResult["delivery_result"].(map[string]any)
+	if !ok || deliveryResult["type"] == nil {
+		t.Fatalf("expected correction to produce a delivery result, got %+v", confirmResult["delivery_result"])
+	}
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected corrected task to remain in runtime")
+	}
+	if record.SessionID != "sess_confirm_correction_text" || record.Snapshot.Text != "selected paragraph" || record.Snapshot.PageTitle != "Issue 474" {
+		t.Fatalf("expected correction to preserve original task context, got %+v", record)
+	}
+	if record.TaskID != taskID || record.Status != "completed" {
+		t.Fatalf("expected runtime task to reflect direct correction execution, got %+v", record)
+	}
+}
+
+func TestServiceConfirmTaskRejectsCorrectionPayloadConflicts(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Explained content.")
 
 	startResult, err := service.StartTask(map[string]any{
@@ -2201,7 +2293,7 @@ func TestServiceConfirmTaskIgnoresCorrectedIntentWhenConfirmedTrue(t *testing.T)
 	startTask := startResult["task"].(map[string]any)
 
 	taskID := startTask["task_id"].(string)
-	confirmResult, err := service.ConfirmTask(map[string]any{
+	_, err = service.ConfirmTask(map[string]any{
 		"task_id":   taskID,
 		"confirmed": true,
 		"corrected_intent": map[string]any{
@@ -2211,17 +2303,211 @@ func TestServiceConfirmTaskIgnoresCorrectedIntentWhenConfirmedTrue(t *testing.T)
 			},
 		},
 	})
+	if err == nil || !errors.Is(err, errTaskConfirmCorrectionPayloadInvalid) {
+		t.Fatalf("expected confirmed=true correction payload to be rejected, got %v", err)
+	}
+	_, err = service.ConfirmTask(map[string]any{
+		"task_id":         taskID,
+		"confirmed":       false,
+		"correction_text": "translate this instead",
+		"corrected_intent": map[string]any{
+			"name":      "translate",
+			"arguments": map[string]any{"target_language": "en"},
+		},
+	})
+	if err == nil || !errors.Is(err, errTaskConfirmCorrectionPayloadInvalid) {
+		t.Fatalf("expected correction_text and corrected_intent conflict to be rejected, got %v", err)
+	}
+}
+
+func TestServiceConfirmTaskExecutesCorrectedResultPageIntent(t *testing.T) {
+	service := newTestService()
+
+	startResult, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_invalid_corrected_intent",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "你好",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	confirmResult, err := service.ConfirmTask(map[string]any{
+		"task_id":   taskID,
+		"confirmed": false,
+		"corrected_intent": map[string]any{
+			"name":      "page_read",
+			"arguments": map[string]any{"url": "https://example.test/issues/474"},
+		},
+	})
 	if err != nil {
 		t.Fatalf("confirm task failed: %v", err)
 	}
 
 	task := confirmResult["task"].(map[string]any)
-	intentValue, ok := task["intent"].(map[string]any)
-	if !ok || !reflect.DeepEqual(intentValue, startTask["intent"]) {
-		t.Fatalf("expected confirm=true to keep the original task intent, got %+v", task["intent"])
+	if task["status"] != "completed" {
+		t.Fatalf("expected corrected result-page intent to execute immediately, got %+v", task)
 	}
-	if task["title"] != startTask["title"] {
-		t.Fatalf("expected confirm=true to keep the original title, got %v", task["title"])
+	intentValue, ok := task["intent"].(map[string]any)
+	if !ok || intentValue["name"] != "page_read" {
+		t.Fatalf("expected corrected page_read intent to persist, got %+v", task["intent"])
+	}
+	deliveryResult, ok := confirmResult["delivery_result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected corrected result-page intent to return delivery_result, got %+v", confirmResult["delivery_result"])
+	}
+	if deliveryResult["type"] != "result_page" {
+		t.Fatalf("expected corrected page_read intent to keep result_page delivery, got %+v", deliveryResult)
+	}
+}
+
+func TestServiceConfirmTaskDowngradesUnavailableCorrectionTextIntent(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_screen_correction",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: `{"intent":{"name":"screen_analyze","arguments":{"language":"eng"}},"reason":"user asked to inspect the current page"}`,
+			}, nil
+		},
+	})
+	service.attachExecutor(nil)
+
+	startResult, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_screen_correction_fallback",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "帮我总结这个构建问题",
+		},
+		"context": map[string]any{
+			"page": map[string]any{
+				"title":        "Build Dashboard",
+				"window_title": "Browser - Build Dashboard",
+				"visible_text": "Fatal build error: missing release asset",
+			},
+			"screen_summary": "release validation failed on current screen",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	confirmResult, err := service.ConfirmTask(map[string]any{
+		"task_id":         taskID,
+		"confirmed":       false,
+		"correction_text": "改成查看当前页面的错误",
+	})
+	if err != nil {
+		t.Fatalf("confirm task correction failed: %v", err)
+	}
+
+	task := confirmResult["task"].(map[string]any)
+	if task["status"] == "confirming_intent" || task["current_step"] == "intent_confirmation" {
+		t.Fatalf("expected downgraded correction to continue execution instead of re-confirming, got %+v", task)
+	}
+	intentValue := task["intent"].(map[string]any)
+	if intentValue["name"] != "agent_loop" {
+		t.Fatalf("expected unavailable screen correction to downgrade into agent_loop, got %+v", intentValue)
+	}
+	bubble := confirmResult["bubble_message"].(map[string]any)
+	if bubble["type"] == "intent_confirm" {
+		t.Fatalf("expected downgraded correction not to return to intent confirmation, got %+v", bubble)
+	}
+	if confirmResult["delivery_result"] == nil {
+		t.Fatalf("expected downgraded correction to return the direct execution delivery_result, got %+v", confirmResult["delivery_result"])
+	}
+}
+
+func TestServiceConfirmTaskKeepsNaturalLanguageBrowserCorrectionOnSameTask(t *testing.T) {
+	calls := 0
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			calls++
+			if calls > 1 {
+				return model.GenerateTextResponse{
+					TaskID:     request.TaskID,
+					RunID:      request.RunID,
+					RequestID:  "req_browser_delivery",
+					Provider:   "openai_responses",
+					ModelID:    "gpt-5.4",
+					OutputText: "Captured the browser snapshot.",
+				}, nil
+			}
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_browser_correction",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: `{"intent":{"name":"browser_snapshot","arguments":{"url":"https://example.test/pr/512"}},"reason":"user wants the current page snapshot instead of a summary"}`,
+			}, nil
+		},
+	})
+
+	startResult, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_browser_correction",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "帮我总结这个 PR",
+		},
+		"context": map[string]any{
+			"page": map[string]any{
+				"title": "PR 512",
+				"url":   "https://example.test/pr/512",
+			},
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	confirmResult, err := service.ConfirmTask(map[string]any{
+		"task_id":         taskID,
+		"confirmed":       false,
+		"correction_text": "不要总结，改成抓当前页面快照",
+	})
+	if err != nil {
+		t.Fatalf("confirm task correction failed: %v", err)
+	}
+
+	task := confirmResult["task"].(map[string]any)
+	if task["task_id"] != taskID || task["status"] != "completed" {
+		t.Fatalf("expected browser correction to execute on the same task, got %+v", task)
+	}
+	intentValue := task["intent"].(map[string]any)
+	if intentValue["name"] != "browser_snapshot" {
+		t.Fatalf("expected natural-language correction to preserve browser_snapshot, got %+v", intentValue)
+	}
+	bubble := confirmResult["bubble_message"].(map[string]any)
+	if bubble["type"] == "intent_confirm" {
+		t.Fatalf("expected natural-language browser correction not to return to intent confirmation, got %+v", bubble)
+	}
+	deliveryResult, ok := confirmResult["delivery_result"].(map[string]any)
+	if !ok || deliveryResult["type"] != "result_page" {
+		t.Fatalf("expected browser correction execution to keep result_page delivery, got %+v", confirmResult["delivery_result"])
 	}
 }
 
