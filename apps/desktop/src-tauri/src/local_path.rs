@@ -61,8 +61,8 @@ pub fn open_local_path(raw_path: &str, roots: &LocalPathRoots) -> Result<(), Str
 
 /// Opens an external web url through the operating system's default browser.
 pub fn open_external_url(raw_url: &str) -> Result<(), String> {
-    let url = normalize_external_url(raw_url)?;
-    open_url_with_system_handler(&url)
+    let target = normalize_external_url(raw_url)?;
+    open_url_with_system_handler(&target)
 }
 
 /// Reveals a local file in the system file manager, or opens the directory
@@ -81,13 +81,6 @@ pub fn reveal_local_path(raw_path: &str, roots: &LocalPathRoots) -> Result<(), S
 pub fn open_trusted_directory(target: &Path, trusted_root: &Path) -> Result<(), String> {
     let canonical_target = prepare_trusted_directory_target(target, trusted_root)?;
     open_with_system_handler(&canonical_target)
-}
-
-/// Opens one trusted external http/https URL through the operating system
-/// shell so renderer links leave the embedded desktop WebView.
-pub fn open_external_url(raw_url: &str) -> Result<(), String> {
-    let target = resolve_external_url(raw_url)?;
-    open_url_with_system_handler(&target)
 }
 
 /// Resolves delivery paths against trusted workspace or runtime-open roots and
@@ -146,20 +139,6 @@ fn resolve_path_candidate(raw_path: &str, roots: &LocalPathRoots) -> Result<Path
     }
 
     Err("runtime-relative delivery paths must stay within the trusted temp/ scope".to_string())
-}
-
-fn resolve_external_url(raw_url: &str) -> Result<String, String> {
-    let trimmed = raw_url.trim();
-    if trimmed.is_empty() {
-        return Err("external url is empty".to_string());
-    }
-
-    let lower = trimmed.to_ascii_lowercase();
-    if !lower.starts_with("http://") && !lower.starts_with("https://") {
-        return Err("external url must use http or https".to_string());
-    }
-
-    Ok(trimmed.to_string())
 }
 
 fn prepare_trusted_directory_target(target: &Path, trusted_root: &Path) -> Result<PathBuf, String> {

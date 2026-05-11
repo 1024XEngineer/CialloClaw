@@ -6827,7 +6827,7 @@ test("note page consumes note query helpers instead of inlining note bucket cont
   assert.match(noteServiceSource, /if \(payload\?\.url\) \{/);
   assert.match(noteServiceSource, /mode === "open_url"/);
   assert.match(noteServiceSource, /await openDesktopExternalUrl\(plan\.url\)/);
-  assert.match(noteServiceSource, /copyPreparedUrl\(localPathExecutionFailure\("无法直接打开便签资源链接，已准备复制地址"/);
+  assert.match(noteServiceSource, /externalUrlExecutionFailure\("无法通过系统浏览器打开便签资源链接"/);
   assert.match(externalUrlSource, /desktop_open_external_url/);
 });
 
@@ -7187,8 +7187,8 @@ test("task rpc service builds protocol-only experience instead of reusing mock t
   assert.doesNotMatch(taskServiceSource, /getMockTaskDetail\(/);
   assert.doesNotMatch(taskServiceSource, /runMockTaskControl\(/);
   assert.doesNotMatch(taskOutputSource, /getMockTaskDetail\(/);
-   assert.match(taskOutputSource, /await openDesktopExternalUrl\(plan\.url\)/);
-   assert.match(taskOutputSource, /copyPreparedUrl\(localPathExecutionFailure\("无法直接打开结果链接，已准备复制地址"/);
+  assert.match(taskOutputSource, /await openDesktopExternalUrl\(plan\.url\)/);
+  assert.match(taskOutputSource, /externalUrlExecutionFailure\("无法通过系统浏览器打开结果链接"/);
 });
 
 test("note rpc service keeps transport failures visible instead of switching to mock data", async () => {
