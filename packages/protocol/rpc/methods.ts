@@ -859,7 +859,7 @@ export interface AgentSettingsModelValidateResult {
 
 // AgentPluginRuntimeListParams defines the stable plugin runtime query params.
 export interface AgentPluginRuntimeListParams {
-  request_meta?: RequestMeta;
+  request_meta: RequestMeta;
 }
 
 // AgentPluginRuntimeListResult defines the plugin runtime query result.
@@ -870,7 +870,7 @@ export interface AgentPluginRuntimeListResult {
 }
 
 export interface AgentPluginListParams {
-  request_meta?: RequestMeta;
+  request_meta: RequestMeta;
   page?: {
     limit: number;
     offset: number;
@@ -886,7 +886,7 @@ export interface AgentPluginListResult {
 }
 
 export interface AgentPluginDetailGetParams {
-  request_meta?: RequestMeta;
+  request_meta: RequestMeta;
   plugin_id: string;
   include_runtime?: boolean;
   include_metrics?: boolean;

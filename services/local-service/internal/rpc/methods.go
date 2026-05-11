@@ -87,9 +87,9 @@ func (s *Server) stableMethodRegistry() []registeredMethod {
 		registered(methodAgentSettingsGet, decodeParamsRequiringRequestMeta, s.handleAgentSettingsGet),
 		registered(methodAgentSettingsUpdate, decodeParamsRequiringRequestMeta, s.handleAgentSettingsUpdate),
 		registered(methodAgentSettingsModelValidate, decodeParamsRequiringRequestMeta, s.handleAgentSettingsModelValidate),
-		registered(methodAgentPluginRuntimeList, decodeParams, s.handleAgentPluginRuntimeList),
-		registered(methodAgentPluginList, decodeParams, s.handleAgentPluginList),
-		registered(methodAgentPluginDetailGet, decodeParams, s.handleAgentPluginDetailGet),
+		registered(methodAgentPluginRuntimeList, decodeParamsRequiringRequestMeta, s.handleAgentPluginRuntimeList),
+		registered(methodAgentPluginList, decodeParamsRequiringRequestMeta, s.handleAgentPluginList),
+		registered(methodAgentPluginDetailGet, decodeParamsRequiringRequestMeta, s.handleAgentPluginDetailGet),
 	}
 }
 
