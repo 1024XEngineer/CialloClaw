@@ -3247,7 +3247,7 @@ func TestServiceNotepadConvertToTaskPublishesRequestTraceID(t *testing.T) {
 	}
 }
 
-func TestServiceNotepadConvertToTaskRollsBackLinkedNoteAfterPublishedTaskStartFailure(t *testing.T) {
+func TestServiceNotepadConvertToTaskKeepsPublishedTaskAfterStartFailure(t *testing.T) {
 	service, _ := newTestServiceWithExecutionPrechecker(t, "Converted rollback note finished.", failingRiskPrechecker{
 		err: errors.New("risk precheck unavailable"),
 	})
@@ -3271,12 +3271,12 @@ func TestServiceNotepadConvertToTaskRollsBackLinkedNoteAfterPublishedTaskStartFa
 	})
 	defer unsubscribe()
 
-	_, err := service.NotepadConvertToTask(map[string]any{
+	result, err := service.NotepadConvertToTask(map[string]any{
 		"item_id":   "todo_governance_failure",
 		"confirmed": true,
 	})
-	if err == nil || !strings.Contains(err.Error(), "risk precheck unavailable") {
-		t.Fatalf("expected direct notepad conversion to surface governance precheck failure, got %v", err)
+	if err != nil {
+		t.Fatalf("expected published notepad conversion failure to return task-centric result, got %v", err)
 	}
 
 	var taskID string
@@ -3289,8 +3289,26 @@ func TestServiceNotepadConvertToTaskRollsBackLinkedNoteAfterPublishedTaskStartFa
 		t.Fatal("expected direct notepad conversion to publish task start before failing")
 	}
 
-	if _, ok := service.runEngine.GetTask(taskID); ok {
-		t.Fatalf("expected rollback to delete provisional task %s after failure", taskID)
+	if result["delivery_result"] != nil {
+		t.Fatalf("expected failed convert_to_task response not to expose delivery_result, got %+v", result["delivery_result"])
+	}
+	taskPayload, ok := result["task"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected failed convert_to_task response to include task payload, got %+v", result)
+	}
+	if taskPayload["task_id"] != taskID {
+		t.Fatalf("expected failed convert_to_task response to keep published task id %s, got %+v", taskID, taskPayload)
+	}
+	if taskPayload["status"] != "failed" {
+		t.Fatalf("expected published convert task to remain queryable as failed, got %+v", taskPayload)
+	}
+
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatalf("expected published task %s to remain queryable after start failure", taskID)
+	}
+	if record.Status != "failed" || record.CurrentStep != "task_start_failed" {
+		t.Fatalf("expected published task to be collapsed into task_start_failed, got %+v", record)
 	}
 	item, ok := service.runEngine.NotepadItem("todo_governance_failure")
 	if !ok {

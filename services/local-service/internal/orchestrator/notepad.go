@@ -106,6 +106,9 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 	}
 	response, err := s.finishNotepadTask(snapshot, suggestion, task)
 	if err != nil {
+		if publishedTaskStart {
+			return s.failPublishedNotepadTask(itemID, task, suggestion.Intent, err)
+		}
 		return nil, s.rollbackLinkedNotepadTask(itemID, task.TaskID, err)
 	}
 	if !publishedTaskStart {
@@ -127,6 +130,30 @@ func (s *Service) rollbackLinkedNotepadTask(itemID, taskID string, cause error) 
 		cause = errors.Join(cause, fmt.Errorf("rollback task %s: %w", taskID, rollbackErr))
 	}
 	return cause
+}
+
+// failPublishedNotepadTask keeps externally visible note conversions queryable
+// when late orchestration setup fails after task.start has already been emitted.
+// Once transports can subscribe to the task id, deleting it would leave a
+// dangling runtime object on the stream side and a missing task in storage.
+func (s *Service) failPublishedNotepadTask(itemID string, task runengine.TaskRecord, taskIntent map[string]any, cause error) (map[string]any, error) {
+	updatedItem, _ := s.runEngine.UnlinkNotepadItemTask(itemID, task.TaskID)
+	impactScope := s.buildImpactScope(task, s.buildPendingExecution(task, taskIntent))
+	bubbleText := "任务启动失败，请稍后再试。"
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", bubbleText, task.UpdatedAt.Format(dateTimeLayout))
+	failedTask, ok := s.runEngine.FailTaskExecution(task.TaskID, "task_start_failed", "execution_error", bubbleText, impactScope, bubble)
+	if !ok {
+		return nil, errors.Join(cause, ErrTaskNotFound)
+	}
+	auditRecord := s.writeGovernanceAuditRecord(failedTask.TaskID, failedTask.RunID, "execution", "start_task", bubbleText, impactScopeTarget(impactScope, targetPathFromIntent(taskIntent)), "failed")
+	failedTask = s.appendAuditData(failedTask, compactAuditRecords(auditRecord), nil)
+
+	response := buildTaskEntryResponse(failedTask, bubble, nil)
+	if updatedItem != nil {
+		response["notepad_item"] = s.runEngine.ProtocolNotepadItem(updatedItem)
+		response["refresh_groups"] = []string{stringValue(updatedItem, "bucket", "upcoming")}
+	}
+	return response, nil
 }
 
 func (s *Service) createNotepadTask(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) runengine.TaskRecord {
