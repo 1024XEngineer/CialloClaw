@@ -2952,6 +2952,61 @@ func TestServiceNotepadConvertToTaskCarriesDashboardLabeledFileResourcesIntoSnap
 	}
 }
 
+func TestServiceNotepadConvertToTaskDedupesExplicitSnapshotPaths(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Converted deduped notepad resource task finished.")
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":   "todo_duplicate_resources",
+		"title":     "整理重复资料",
+		"bucket":    "upcoming",
+		"status":    "normal",
+		"type":      "todo_item",
+		"note_text": "请结合同一路径下的资料整理正式任务。",
+		"related_resources": []map[string]any{
+			{
+				"resource_id":   "todo_duplicate_resources_a",
+				"path":          "workspace/notes/source.md",
+				"resource_type": "Markdown 文件",
+				"open_action":   "open_file",
+			},
+			{
+				"id":          "todo_duplicate_resources_b",
+				"path":        "workspace/research",
+				"type":        "directory",
+				"target_kind": "folder",
+			},
+			{
+				"resource_id":   "todo_duplicate_resources_c",
+				"path":          "workspace/notes/source.md",
+				"resource_type": "file",
+			},
+			{
+				"id":          "todo_duplicate_resources_d",
+				"path":        "workspace/research",
+				"type":        "directory",
+				"target_kind": "folder",
+			},
+		},
+	}})
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_duplicate_resources",
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected converted task to remain available in runtime")
+	}
+	expected := []string{"workspace/notes/source.md", "workspace/research"}
+	if !reflect.DeepEqual(record.Snapshot.Files, expected) {
+		t.Fatalf("expected explicit notepad paths to be deduped like other task entries, got %+v", record.Snapshot.Files)
+	}
+}
+
 func TestServiceNotepadConvertToTaskKeepsLegacyUserFallbackDirectoryAttachments(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Converted explicit fallback attachment task finished.")
 	todoStore := storage.NewInMemoryTodoStore()
