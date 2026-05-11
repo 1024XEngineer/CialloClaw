@@ -6,6 +6,7 @@ import react from "@vitejs/plugin-react";
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
+  base: "/CialloClaw/",
   plugins: [react()],
   resolve: {
     alias: {
