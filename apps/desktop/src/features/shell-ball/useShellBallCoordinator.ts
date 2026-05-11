@@ -1790,7 +1790,9 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
 
         return sortShellBallBubbleItemsByTimestamp([
           ...nextItems,
-          createShellBallAgentBubbleItem(result, new Date().toISOString(), {
+          ...createShellBallSubmitFeedbackBubbleItems(result, {
+            createdAt: new Date().toISOString(),
+            taskId: result.task?.task_id,
             turnIndex,
             turnPhase: 1,
           }),
@@ -2169,7 +2171,9 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
         return replaceShellBallPendingBubble(
           nextItems,
           pendingAgentBubbleItem.bubble.bubble_id,
-          createShellBallAgentBubbleItem(result, new Date().toISOString(), {
+          createShellBallSubmitFeedbackBubbleItems(result, {
+            createdAt: new Date().toISOString(),
+            taskId: result.task?.task_id,
             turnIndex,
             turnPhase: 1,
           }),
@@ -2608,7 +2612,9 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           return replaceShellBallPendingBubble(
             nextItems,
             pendingAgentBubbleItem.bubble.bubble_id,
-            createShellBallAgentBubbleItem(result, new Date().toISOString(), {
+            createShellBallSubmitFeedbackBubbleItems(result, {
+              createdAt: new Date().toISOString(),
+              taskId: result.task?.task_id,
               turnIndex,
               turnPhase: 1,
             }),
@@ -3213,7 +3219,9 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
             return replaceShellBallPendingBubble(
               nextItems,
               pendingAgentBubbleItem.bubble.bubble_id,
-              createShellBallAgentBubbleItem(result, new Date().toISOString(), {
+              createShellBallSubmitFeedbackBubbleItems(result, {
+                createdAt: new Date().toISOString(),
+                taskId: result.task?.task_id,
                 turnIndex,
                 turnPhase: 1,
               }),

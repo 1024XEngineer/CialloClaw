@@ -20,7 +20,7 @@ export const manifest = {
   ],
 };
 
-const browserTimeoutMS = 15000;
+const browserTimeoutMS = 30000;
 const defaultCDPEndpointURL = "http://127.0.0.1:9222";
 const supportedCDPBrowserKinds = new Set(["chrome", "edge"]);
 const workerUserAgent = "CialloClawPlaywrightWorker/0.1";
@@ -95,7 +95,9 @@ async function closeResources(context, browser) {
 
 async function navigatePage(page, url) {
   const response = await page.goto(url, {
-    waitUntil: "networkidle",
+    // `load` avoids blocking on pages that keep background network traffic alive
+    // after the primary document is already readable for page_read/page_search.
+    waitUntil: "load",
     timeout: browserTimeoutMS,
   });
   if (!response) {

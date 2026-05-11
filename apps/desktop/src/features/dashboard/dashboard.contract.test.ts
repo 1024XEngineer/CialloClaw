@@ -440,6 +440,7 @@ function loadTaskOutputServiceModule(
       loadTaskArtifactPage: (taskId: string, source: "rpc") => Promise<AgentTaskArtifactListResult>;
       openTaskArtifactForTask: (taskId: string, artifactId: string, source: "rpc") => Promise<AgentTaskArtifactOpenResult>;
       openTaskDeliveryForTask: (taskId: string, artifactId: string | undefined, source: "rpc") => Promise<AgentDeliveryOpenResult>;
+      shouldAutoOpenTaskDeliveryResult: (deliveryResult: DeliveryResult | null | undefined) => boolean;
       canOpenTaskDeliveryResult: (deliveryResult: AgentDeliveryOpenResult["delivery_result"] | null | undefined, fallbackTaskId?: string | null) => boolean;
       resolveTaskOpenExecutionPlan: (result: AgentTaskArtifactOpenResult | AgentDeliveryOpenResult) => {
         mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
@@ -5847,6 +5848,26 @@ test("TaskPage wiring helpers require real detail for safety focus and keep deta
 test("task output helpers normalize open actions from existing rpc contracts", async () => {
   const outputService = loadTaskOutputServiceModule();
 
+  assert.equal(outputService.shouldAutoOpenTaskDeliveryResult(null), false);
+  assert.equal(
+    outputService.shouldAutoOpenTaskDeliveryResult({
+      type: "bubble",
+      title: "Quick reply",
+      preview_text: "Bubble reply",
+      payload: { path: null, task_id: "task_dashboard_001", url: null },
+    }),
+    false,
+  );
+  assert.equal(
+    outputService.shouldAutoOpenTaskDeliveryResult({
+      type: "result_page",
+      title: "Result page",
+      preview_text: "Open result",
+      payload: { path: null, task_id: "task_dashboard_001", url: "https://example.test/result" },
+    }),
+    true,
+  );
+
   assert.deepEqual(
     outputService.resolveTaskOpenExecutionPlan({
       open_action: "task_detail",
@@ -6497,6 +6518,43 @@ test("dashboard task-detail routing deduplicates retry request ids and accepts t
   assert.match(taskPageSource, /if \(selectedTaskId && detailOpen\) \{/);
 });
 
+test("dashboard escape fallback is coordinated at route level before the desktop window closes", () => {
+  const dashboardRootSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/DashboardRoot.tsx"), "utf8");
+  const dashboardMainSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/main.tsx"), "utf8");
+  const dashboardHomeSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/DashboardHome.tsx"), "utf8");
+  const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+  const mirrorAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/MirrorApp.tsx"), "utf8");
+  const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
+  const escapeCoordinatorSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/shared/dashboardEscapeCoordinator.tsx"), "utf8");
+  const escapeGuardSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/dashboardEscapeCloseGuard.ts"), "utf8");
+
+  assert.match(dashboardRootSource, /DashboardEscapeCoordinatorProvider/);
+  assert.match(dashboardRootSource, /const escapeCoordinator = useDashboardEscapeCoordinator\(\)/);
+  assert.match(dashboardRootSource, /if \(escapeCoordinator\.consumeEscape\(\)\) \{/);
+  assert.match(dashboardRootSource, /if \(!isHomeRoute\) \{[\s\S]*navigate\(resolveDashboardRoutePath\("home"\)\);/);
+  assert.match(dashboardRootSource, /useDashboardEscapeHandler\(\{[\s\S]*enabled: voiceOpen,[\s\S]*priority: 300,/);
+  assert.match(dashboardRootSource, /suppressDashboardEscapeClose\(\);/);
+
+  assert.match(dashboardMainSource, /const suppressionVersion = readDashboardEscapeCloseSuppressionVersion\(\);/);
+  assert.match(dashboardMainSource, /wasDashboardEscapeCloseSuppressed\(suppressionVersion\)/);
+  assert.match(dashboardMainSource, /function isDashboardHomeHash\(hashValue: string\)/);
+  assert.match(dashboardMainSource, /!isDashboardHomeHash\(currentHash\)/);
+
+  assert.match(dashboardHomeSource, /useDashboardEscapeHandler\(\{[\s\S]*activeStateKey !== null,[\s\S]*priority: 200,/);
+  assert.match(taskPageSource, /useDashboardEscapeHandler\(\{[\s\S]*enabled: detailOpen,[\s\S]*priority: 220,/);
+  assert.match(notePageSource, /useDashboardEscapeHandler\(\{[\s\S]*enabled: sourceStudioOpen,[\s\S]*priority: 240,/);
+  assert.match(notePageSource, /useDashboardEscapeHandler\(\{[\s\S]*enabled: detailOpen,[\s\S]*priority: 220,/);
+  assert.match(mirrorAppSource, /useDashboardEscapeHandler\(\{[\s\S]*activeDetailKey !== null,[\s\S]*handleEscape: closeDetail,[\s\S]*priority: 220,/);
+  assert.match(securityAppSource, /useDashboardEscapeHandler\(\{[\s\S]*activeDetailKey !== null,[\s\S]*priority: 220,/);
+
+  assert.match(escapeCoordinatorSource, /export function DashboardEscapeCoordinatorProvider/);
+  assert.match(escapeCoordinatorSource, /sort\(\(left, right\) => right\.priority - left\.priority\)/);
+  assert.match(escapeCoordinatorSource, /export function useDashboardEscapeHandler/);
+  assert.match(escapeGuardSource, /export function suppressDashboardEscapeClose\(\)/);
+  assert.match(escapeGuardSource, /export function wasDashboardEscapeCloseSuppressed\(snapshotVersion: number\)/);
+});
+
 test("dashboard opening mask replays after Tauri window focus returns from hidden desktop sessions", () => {
   const dashboardRootSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/DashboardRoot.tsx"), "utf8");
 
@@ -6817,6 +6875,7 @@ test("conversation session reuse expires after the backend freshness window", ()
 test("note page consumes note query helpers instead of inlining note bucket contracts", () => {
   const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
   const noteServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/notePage.service.ts"), "utf8");
+  const externalUrlSource = readFileSync(resolve(desktopRoot, "src/platform/desktopExternalUrl.ts"), "utf8");
 
   assert.match(notePageSource, /buildDashboardNoteBucketQueryKey/);
   assert.match(notePageSource, /buildDashboardNoteBucketInvalidateKeys/);
@@ -6825,6 +6884,9 @@ test("note page consumes note query helpers instead of inlining note bucket cont
   assert.match(noteServiceSource, /isAllowedNoteOpenUrl/);
   assert.match(noteServiceSource, /if \(payload\?\.url\) \{/);
   assert.match(noteServiceSource, /mode === "open_url"/);
+  assert.match(noteServiceSource, /await openDesktopExternalUrl\(plan\.url\)/);
+  assert.match(noteServiceSource, /externalUrlExecutionFailure\("无法通过系统浏览器打开便签资源链接"/);
+  assert.match(externalUrlSource, /desktop_open_external_url/);
 });
 
 test("source-note fallback cards stay local instead of inferring formal todo bucket and due status", () => {
@@ -7183,6 +7245,8 @@ test("task rpc service builds protocol-only experience instead of reusing mock t
   assert.doesNotMatch(taskServiceSource, /getMockTaskDetail\(/);
   assert.doesNotMatch(taskServiceSource, /runMockTaskControl\(/);
   assert.doesNotMatch(taskOutputSource, /getMockTaskDetail\(/);
+  assert.match(taskOutputSource, /await openDesktopExternalUrl\(plan\.url\)/);
+  assert.match(taskOutputSource, /externalUrlExecutionFailure\("无法通过系统浏览器打开结果链接"/);
 });
 
 test("note rpc service keeps transport failures visible instead of switching to mock data", async () => {
@@ -7223,6 +7287,8 @@ test("note conversion and confirming-intent surfaces use direct task handoff wor
   assert.doesNotMatch(noteActionBarSource, /会直接生成任务并跳转到任务页。/);
   assert.match(notePageSource, /function getNoteConvertSuccessFeedback\(status: Task\["status"\]\)/);
   assert.match(notePageSource, /已按这条便签生成任务，正在打开任务详情。/);
+  assert.match(notePageSource, /openTaskDeliveryForTask/);
+  assert.match(notePageSource, /navigateToDashboardTaskDelivery/);
   assert.doesNotMatch(notePageSource, /等待你确认处理方式。/);
   assert.match(notePageSource, /后续还需要处理授权。/);
   assert.match(noteServiceSource, /这条便签会按当前正文直接生成任务；如果还想补充路径、时间或说明，可以继续写在正文里后再转交给 Agent。/);
@@ -9728,6 +9794,13 @@ test("task detail fallback keeps operator controls available from preview tasks 
   assert.match(mapperSource, /export function getTaskPrimaryActions\(task: Task, detail: AgentTaskDetailGetResult \| null\)/);
   assert.match(mapperSource, /const hasAnchor = detail !== null/);
   assert.doesNotMatch(mapperSource, /detail\?\.approval_request !== null \|\| detail\?\.security_summary\.latest_restore_point !== null/);
+});
+
+test("note conversion only auto-opens formal deliveries that have a real open target", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /if \(shouldAutoOpenTaskDeliveryResult\(outcome\.result\.delivery_result\)\) \{/);
+  assert.doesNotMatch(notePageSource, /if \(outcome\.result\.delivery_result\) \{/);
 });
 
 test("TaskDetailPanel folds loop summary signals into the runtime events section", () => {

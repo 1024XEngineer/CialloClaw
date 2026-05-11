@@ -3,8 +3,16 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import ReactDOM from "react-dom/client";
 import { AppProviders } from "@/features/shared/AppProviders";
 import { installHideOnCloseRequest } from "@/platform/hideOnCloseRequest";
+import {
+  readDashboardEscapeCloseSuppressionVersion,
+  wasDashboardEscapeCloseSuppressed,
+} from "./dashboardEscapeCloseGuard";
 import { DashboardRoot } from "./DashboardRoot";
 import { DashboardWindowErrorBoundary } from "./DashboardWindowErrorBoundary";
+
+function isDashboardHomeHash(hashValue: string) {
+  return hashValue === "" || hashValue === "#" || hashValue === "#/";
+}
 
 function installDashboardEscapeClose(windowHandle = getCurrentWindow()) {
   let closing = false;
@@ -14,12 +22,17 @@ function installDashboardEscapeClose(windowHandle = getCurrentWindow()) {
       return;
     }
 
+    const suppressionVersion = readDashboardEscapeCloseSuppressionVersion();
+
     queueMicrotask(() => {
       const target = event.target as HTMLElement | null;
       const tagName = target?.tagName;
+      const currentHash = window.location.hash;
 
       if (
         event.defaultPrevented ||
+        wasDashboardEscapeCloseSuppressed(suppressionVersion) ||
+        !isDashboardHomeHash(currentHash) ||
         closing ||
         target?.isContentEditable ||
         tagName === "INPUT" ||
