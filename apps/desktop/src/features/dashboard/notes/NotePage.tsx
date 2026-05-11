@@ -16,6 +16,7 @@ import { useDashboardEscapeHandler } from "@/features/dashboard/shared/dashboard
 import { navigateToDashboardTaskDetail } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
+import { openDesktopExternalUrl } from "@/platform/desktopExternalUrl";
 import { cn } from "@/utils/cn";
 import { buildNoteSummary, describeNotePreview, formatNoteBoardTimeHint, formatNoteDisplayPath, getNoteBucketLabel, getNoteStatusBadgeClass, groupClosedNotes, sortClosedNotes, sortNotesByUrgency } from "./notePage.mapper";
 import { buildDashboardNoteBucketInvalidateKeys, buildDashboardNoteBucketQueryKey, dashboardNoteBucketGroups, getDashboardNoteRefreshPlan } from "./notePage.query";

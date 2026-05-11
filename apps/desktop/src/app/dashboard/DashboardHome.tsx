@@ -234,11 +234,11 @@ export function DashboardHome({
     };
   }, [data.summonTemplates.length, scheduleSummon, summonTemplateSignature]);
 
- useDashboardEscapeHandler({
-  enabled: activeStateKey !== null || activeExpandedState,
-  handleEscape: closeActiveOverlay,
-  priority: 200,
-});
+  useDashboardEscapeHandler({
+    enabled: activeStateKey !== null || Boolean(activeExpandedState),
+    handleEscape: closeActiveOverlay,
+    priority: 200,
+  });
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
