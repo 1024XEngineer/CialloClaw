@@ -63,11 +63,13 @@ func (s *Service) TaskInspectorRun(params map[string]any) (map[string]any, error
 	}, nil
 }
 
-func inspectorAllowsGeneratedTitles(_ string) bool {
-	// Note synchronization currently has no formal task/run accounting sink, so
-	// inspector refreshes must stay on the deterministic local title path instead
-	// of issuing unaudited model calls from a read-only RPC.
-	return false
+func inspectorAllowsGeneratedTitles(reason string) bool {
+	switch strings.TrimSpace(reason) {
+	case "notes_page_manual_run", "control_panel_manual_run":
+		return true
+	default:
+		return false
+	}
 }
 
 func inspectorConfigFromSettings(settings map[string]any) map[string]any {

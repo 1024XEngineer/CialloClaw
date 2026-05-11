@@ -2916,6 +2916,71 @@ func TestTaskInspectorRunReturnsExplicitErrorForMissingSource(t *testing.T) {
 	}
 }
 
+func taskInspectorTitleGeneratorForTest(service *taskinspector.Service) *titlegen.Service {
+	if service == nil {
+		return nil
+	}
+	serviceValue := reflect.ValueOf(service).Elem()
+	field := serviceValue.FieldByName("titlegen")
+	value := reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem()
+	if value.IsNil() {
+		return nil
+	}
+	generator, _ := value.Interface().(*titlegen.Service)
+	return generator
+}
+
+func TestWithTaskInspectorPreservesExistingTitleGenerator(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, `{"title":"本周阻塞项复盘"}`)
+	generator := titlegen.NewService(service.model)
+	service.WithTitleGenerator(generator)
+
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("new local path policy: %v", err)
+	}
+	replacementInspector := taskinspector.NewService(platform.NewLocalFileSystemAdapter(pathPolicy))
+	service.WithTaskInspector(replacementInspector)
+
+	if taskInspectorTitleGeneratorForTest(service.inspector) != generator {
+		t.Fatal("expected replacement task inspector to inherit the existing title generator")
+	}
+}
+
+func TestTaskInspectorRunManualReasonAllowsGeneratedNoteTitles(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, `{"title":"本周阻塞项复盘"}`)
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+
+	todosRoot := filepath.Join(workspaceRoot, "todos")
+	if err := os.MkdirAll(todosRoot, 0o755); err != nil {
+		t.Fatalf("mkdir todos root: %v", err)
+	}
+	content := strings.Join([]string{
+		"- [ ] 复盘",
+		"note: 继续整理本周阻塞项和行动项",
+		"agent: 输出更紧凑标题",
+		"",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(todosRoot, "manual.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write manual note source: %v", err)
+	}
+
+	if _, err := service.TaskInspectorRun(map[string]any{
+		"target_sources": []any{"workspace/todos"},
+		"reason":         "notes_page_manual_run",
+	}); err != nil {
+		t.Fatalf("TaskInspectorRun returned error: %v", err)
+	}
+
+	notepadItems, _ := service.runEngine.NotepadItems("", 0, 0)
+	if len(notepadItems) != 1 {
+		t.Fatalf("expected one notepad item, got %+v", notepadItems)
+	}
+	if got := stringValue(notepadItems[0], "title", ""); got != "本周阻塞项复盘" {
+		t.Fatalf("expected manual inspector run to persist generated title, got %+v", notepadItems[0])
+	}
+}
+
 func TestTaskInspectorConfigUpdatePropagatesSettingsStoreErrors(t *testing.T) {
 	service := newTestService()
 	if err := service.runEngine.WithSettingsStore(taskInspectorFailingSettingsStore{}); err != nil {

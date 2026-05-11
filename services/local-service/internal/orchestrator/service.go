@@ -105,6 +105,9 @@ func (s *Service) attachExecutor(executorService *execution.Service) {
 // RPCs. A nil value keeps the default no-storage inspector.
 func (s *Service) WithTaskInspector(inspectorService *taskinspector.Service) *Service {
 	if inspectorService != nil {
+		if s.titleGenerator != nil {
+			inspectorService.WithTitleGenerator(s.titleGenerator)
+		}
 		s.inspector = inspectorService
 	}
 	return s
@@ -115,6 +118,9 @@ func (s *Service) WithTaskInspector(inspectorService *taskinspector.Service) *Se
 func (s *Service) WithTitleGenerator(generator *titlegen.Service) *Service {
 	if generator != nil {
 		s.titleGenerator = generator
+		if s.inspector != nil {
+			s.inspector.WithTitleGenerator(generator)
+		}
 	}
 	return s
 }

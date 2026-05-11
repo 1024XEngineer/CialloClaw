@@ -200,6 +200,11 @@ type streamTaskCoordinator struct {
 	locks map[string]*streamTaskLockEntry
 }
 
+type bufferedTaskNotifications struct {
+	taskID        string
+	notifications []map[string]any
+}
+
 func newStreamTaskCoordinator() *streamTaskCoordinator {
 	return &streamTaskCoordinator{locks: map[string]*streamTaskLockEntry{}}
 }
@@ -476,6 +481,17 @@ func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnve
 			if connState.isClosed() {
 				return
 			}
+			bufferedNotifications := make([]bufferedTaskNotifications, 0, len(ownedTaskIDs))
+			for _, taskID := range ownedTaskIDs {
+				notifications, err := s.orchestrator.DrainNotifications(taskID)
+				if err != nil || len(notifications) == 0 {
+					continue
+				}
+				bufferedNotifications = append(bufferedNotifications, bufferedTaskNotifications{
+					taskID:        taskID,
+					notifications: notifications,
+				})
+			}
 			if err := writer.writeEnvelope(response); err != nil {
 				return
 			}
@@ -484,19 +500,14 @@ func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnve
 			}
 			connectionTasks.addSlice(taskIDsFromResponse(response))
 
-			for _, taskID := range ownedTaskIDs {
-				notifications, err := s.orchestrator.DrainNotifications(taskID)
-				if err != nil {
-					continue
-				}
-
-				for _, notification := range notifications {
+			for _, buffered := range bufferedNotifications {
+				for _, notification := range buffered.notifications {
 					method := stringValue(notification, "method", "task.updated")
 					params := mapValue(notification, "params")
-					if connectionNotifications.shouldSkipBuffered(method, taskID, params) {
+					if connectionNotifications.shouldSkipBuffered(method, buffered.taskID, params) {
 						continue
 					}
-					if tracker.shouldSkipBufferedRuntime(method, taskID, params) {
+					if tracker.shouldSkipBufferedRuntime(method, buffered.taskID, params) {
 						continue
 					}
 					if err := writer.writeEnvelope(newNotificationEnvelope(method, params)); err != nil {

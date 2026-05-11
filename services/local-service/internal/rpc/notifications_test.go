@@ -55,6 +55,23 @@ func TestOwnedTaskIDsForReplayClaimsResponseTaskIDsForTaskStart(t *testing.T) {
 	}
 }
 
+func TestOwnedTaskIDsForReplayKeepsTrackedTaskIDsOnErrorResponse(t *testing.T) {
+	response := newErrorEnvelope(json.RawMessage(`"req-task-control"`), &rpcError{
+		Code:    errMethodNotFound,
+		Message: "METHOD_NOT_FOUND",
+		Detail:  "task updated before downstream failure",
+		TraceID: "trace_task_control_failed",
+	})
+
+	taskIDs := ownedTaskIDsForReplay("agent.task.control", map[string]bool{
+		"task_tracked": true,
+	}, response)
+	expected := []string{"task_tracked"}
+	if !reflect.DeepEqual(taskIDs, expected) {
+		t.Fatalf("expected error response to keep tracked task ids %v, got %v", expected, taskIDs)
+	}
+}
+
 func TestRequestRoutingHintsExtractsTaskSessionAndTrace(t *testing.T) {
 	request := requestEnvelope{
 		JSONRPC: "2.0",
