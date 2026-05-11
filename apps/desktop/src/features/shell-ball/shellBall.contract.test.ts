@@ -5105,6 +5105,34 @@ test("shell-ball bare urls keep balanced parentheses inside the linked href", ()
   assert.match(markup, /href="https:\/\/en\.wikipedia\.org\/wiki\/Function_\(mathematics\)"/);
 });
 
+test("shell-ball markdown links keep balanced parentheses inside the linked href", () => {
+  const markup = renderToStaticMarkup(
+    createElement(ShellBallBubbleZone, {
+      visualState: "processing",
+      bubbleItems: [
+        {
+          bubble: {
+            bubble_id: "msg-agent-markdown-paren-link-1",
+            task_id: "task-agent-markdown-paren-link-1",
+            type: "result",
+            text: "[wiki](https://en.wikipedia.org/wiki/Function_(mathematics))",
+            pinned: false,
+            hidden: false,
+            created_at: "2026-05-10T10:12:05.000Z",
+          },
+          role: "agent",
+          desktop: {
+            lifecycleState: "visible",
+          },
+        },
+      ] satisfies ShellBallBubbleItem[],
+    }),
+  );
+
+  assert.match(markup, /href="https:\/\/en\.wikipedia\.org\/wiki\/Function_\(mathematics\)"/);
+  assert.match(markup, />wiki<\/a>/);
+});
+
 test("shell-ball bare urls trim unbalanced full-width closing parentheses", () => {
   const markup = renderToStaticMarkup(
     createElement(ShellBallBubbleZone, {

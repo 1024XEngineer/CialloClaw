@@ -322,20 +322,6 @@ fn open_with_system_handler(target: &Path) -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
-fn open_url_with_system_handler(target: &str) -> Result<(), String> {
-    let status = Command::new("open")
-        .arg(target)
-        .status()
-        .map_err(|error| format!("failed to open external url {target}: {error}"))?;
-
-    if !status.success() {
-        return Err(format!("failed to open external url {target}: exit status {status}"));
-    }
-
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
 fn reveal_with_system_handler(target: &Path) -> Result<(), String> {
     run_platform_command(
         "open",
@@ -356,20 +342,6 @@ fn open_with_system_handler(target: &Path) -> Result<(), String> {
         &[target],
         &format!("open local target {}", target.display()),
     )
-}
-
-#[cfg(all(not(windows), not(target_os = "macos")))]
-fn open_url_with_system_handler(target: &str) -> Result<(), String> {
-    let status = Command::new("xdg-open")
-        .arg(target)
-        .status()
-        .map_err(|error| format!("failed to open external url {target}: {error}"))?;
-
-    if !status.success() {
-        return Err(format!("failed to open external url {target}: exit status {status}"));
-    }
-
-    Ok(())
 }
 
 #[cfg(all(not(windows), not(target_os = "macos")))]
