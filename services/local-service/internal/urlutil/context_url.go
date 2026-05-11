@@ -18,8 +18,33 @@ func SanitizeContextURL(raw string) string {
 		// URLs can still embed credentials or query text that should never persist.
 		return ""
 	}
+	sanitizeParsedURL(parsed)
+	return parsed.String()
+}
+
+// sanitizeParsedURL clears volatile components from a parsed URL and recursively
+// sanitizes nested URLs that live inside opaque wrapper schemes like view-source.
+func sanitizeParsedURL(parsed *url.URL) {
+	if parsed == nil {
+		return
+	}
 	parsed.User = nil
 	parsed.RawQuery = ""
 	parsed.Fragment = ""
-	return parsed.String()
+	if sanitizedOpaque, ok := sanitizeNestedOpaqueURL(parsed.Opaque); ok {
+		parsed.Opaque = sanitizedOpaque
+	}
+}
+
+func sanitizeNestedOpaqueURL(raw string) (string, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || !strings.Contains(trimmed, "://") {
+		return "", false
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Scheme == "" {
+		return "", false
+	}
+	sanitizeParsedURL(parsed)
+	return parsed.String(), true
 }
