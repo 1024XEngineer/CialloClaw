@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"encoding/json"
+	"reflect"
 	"sort"
 	"strings"
 )
@@ -138,25 +139,66 @@ func normalizeNotificationKey(method, taskID string, params map[string]any) map[
 // collectTaskIDs walks arbitrary decoded payloads and gathers every field with
 // a task_id suffix.
 func collectTaskIDs(rawValue any, ids map[string]struct{}) {
-	switch value := rawValue.(type) {
-	case interface{ Map() map[string]any }:
-		collectTaskIDs(value.Map(), ids)
-	case map[string]any:
-		for key, item := range value {
-			if strings.HasSuffix(key, "task_id") {
-				if taskID, ok := item.(string); ok && taskID != "" {
-					ids[taskID] = struct{}{}
-				}
+	collectTaskIDsValue(reflect.ValueOf(rawValue), "", ids)
+}
+
+func collectTaskIDsValue(value reflect.Value, fieldName string, ids map[string]struct{}) {
+	if !value.IsValid() {
+		return
+	}
+	for value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return
+		}
+		value = value.Elem()
+	}
+
+	switch value.Kind() {
+	case reflect.String:
+		if strings.HasSuffix(fieldName, "task_id") {
+			if taskID := strings.TrimSpace(value.String()); taskID != "" {
+				ids[taskID] = struct{}{}
 			}
-			collectTaskIDs(item, ids)
 		}
-	case []map[string]any:
-		for _, item := range value {
-			collectTaskIDs(item, ids)
+	case reflect.Map:
+		if value.Type().Key().Kind() != reflect.String {
+			return
 		}
-	case []any:
-		for _, item := range value {
-			collectTaskIDs(item, ids)
+		iter := value.MapRange()
+		for iter.Next() {
+			collectTaskIDsValue(iter.Value(), iter.Key().String(), ids)
+		}
+	case reflect.Slice, reflect.Array:
+		for index := 0; index < value.Len(); index++ {
+			collectTaskIDsValue(value.Index(index), fieldName, ids)
+		}
+	case reflect.Struct:
+		valueType := value.Type()
+		for index := 0; index < value.NumField(); index++ {
+			field := valueType.Field(index)
+			if !field.IsExported() {
+				continue
+			}
+			jsonName := notificationJSONFieldName(field)
+			if jsonName == "" {
+				continue
+			}
+			collectTaskIDsValue(value.Field(index), jsonName, ids)
 		}
 	}
+}
+
+func notificationJSONFieldName(field reflect.StructField) string {
+	tag := field.Tag.Get("json")
+	if tag == "-" {
+		return ""
+	}
+	if tag == "" {
+		return field.Name
+	}
+	name, _, _ := strings.Cut(tag, ",")
+	if name == "" {
+		return field.Name
+	}
+	return name
 }

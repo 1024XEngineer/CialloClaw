@@ -45,7 +45,7 @@ func TestDispatchReturnsSecurityAuditList(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	items := success.Result.Data.(map[string]any)["items"].([]map[string]any)
+	items := protocolMapSlice(t, protocolMap(t, success.Result.Data)["items"])
 	if len(items) != 1 || items[0]["audit_id"] != "audit_001" {
 		t.Fatalf("expected stored audit_001, got %+v", items)
 	}
@@ -77,7 +77,7 @@ func TestDispatchReturnsSecurityRestorePointsList(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	items := success.Result.Data.(map[string]any)["items"].([]map[string]any)
+	items := protocolMapSlice(t, protocolMap(t, success.Result.Data)["items"])
 	if len(items) != 1 || items[0]["recovery_point_id"] != "rp_001" {
 		t.Fatalf("expected stored rp_001, got %+v", items)
 	}
@@ -122,7 +122,7 @@ func TestDispatchReturnsSecurityRestoreApplyResult(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	data := success.Result.Data.(map[string]any)
+	data := protocolMap(t, success.Result.Data)
 	if _, ok := data["applied"].(bool); !ok || data["task"].(map[string]any)["status"] != "waiting_auth" || data["recovery_point"].(map[string]any)["recovery_point_id"] != "rp_001" {
 		t.Fatalf("unexpected restore apply result %+v", data)
 	}
@@ -140,12 +140,12 @@ func TestDispatchReturnsNotepadUpdateResult(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	data := success.Result.Data.(map[string]any)
+	data := protocolMap(t, success.Result.Data)
 	notepadItem, ok := data["notepad_item"].(map[string]any)
 	if !ok || notepadItem["bucket"] != "upcoming" {
 		t.Fatalf("expected updated notepad item bucket upcoming, got %+v", data)
 	}
-	refreshGroups := data["refresh_groups"].([]string)
+	refreshGroups := stringSliceValue(data["refresh_groups"])
 	if len(refreshGroups) != 2 || refreshGroups[0] != "later" || refreshGroups[1] != "upcoming" {
 		t.Fatalf("expected refresh_groups to include source and target buckets, got %+v", refreshGroups)
 	}
@@ -179,7 +179,7 @@ func TestDispatchReturnsTaskArtifactList(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	items := success.Result.Data.(map[string]any)["items"].([]map[string]any)
+	items := protocolMapSlice(t, protocolMap(t, success.Result.Data)["items"])
 	if len(items) != 1 || items[0]["artifact_id"] != "art_rpc_001" {
 		t.Fatalf("expected artifact list item, got %+v", items)
 	}
@@ -213,7 +213,7 @@ func TestDispatchReturnsTaskArtifactOpen(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	data := success.Result.Data.(map[string]any)
+	data := protocolMap(t, success.Result.Data)
 	if data["open_action"] != "open_file" || data["artifact"].(map[string]any)["artifact_id"] != "art_rpc_open_001" {
 		t.Fatalf("expected opened artifact, got %+v", data)
 	}
@@ -247,8 +247,9 @@ func TestDispatchReturnsDeliveryOpenForArtifact(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	if success.Result.Data.(map[string]any)["open_action"] != "open_file" {
-		t.Fatalf("expected open_file action, got %+v", success.Result.Data)
+	data := protocolMap(t, success.Result.Data)
+	if data["open_action"] != "open_file" {
+		t.Fatalf("expected open_file action, got %+v", data)
 	}
 }
 
@@ -283,8 +284,9 @@ func TestDispatchReturnsDeliveryOpenForTaskResult(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	if success.Result.Data.(map[string]any)["open_action"] != "task_detail" {
-		t.Fatalf("expected task_detail action, got %+v", success.Result.Data)
+	data := protocolMap(t, success.Result.Data)
+	if data["open_action"] != "task_detail" {
+		t.Fatalf("expected task_detail action, got %+v", data)
 	}
 }
 
@@ -339,7 +341,7 @@ func TestDispatchReturnsDeliveryOpenForResultPage(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	data := success.Result.Data.(map[string]any)
+	data := protocolMap(t, success.Result.Data)
 	if data["open_action"] != "result_page" {
 		t.Fatalf("expected result_page action, got %+v", data)
 	}

@@ -231,6 +231,40 @@ func mustMarshal(t *testing.T, value any) json.RawMessage {
 	return encoded
 }
 
+func protocolMap(t *testing.T, value any) map[string]any {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal protocol value: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("decode protocol value: %v", err)
+	}
+	return decoded
+}
+
+func protocolMapSlice(t *testing.T, value any) []map[string]any {
+	t.Helper()
+	switch typed := value.(type) {
+	case []map[string]any:
+		return typed
+	case []any:
+		result := make([]map[string]any, 0, len(typed))
+		for _, item := range typed {
+			mapped, ok := item.(map[string]any)
+			if !ok {
+				t.Fatalf("expected map item, got %#v", item)
+			}
+			result = append(result, mapped)
+		}
+		return result
+	default:
+		t.Fatalf("expected protocol map slice, got %#v", value)
+		return nil
+	}
+}
+
 func numericValue(t *testing.T, value any) int {
 	t.Helper()
 	switch typed := value.(type) {
