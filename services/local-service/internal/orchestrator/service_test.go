@@ -1275,6 +1275,30 @@ func TestServiceSubmitInputUsesEnglishSocialChatFallbackReply(t *testing.T) {
 	}
 }
 
+func TestServiceSubmitInputUsesEnglishSocialChatFallbackReplyForSmartApostrophe(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		output: `{"route":"social_chat","reply":""}`,
+	})
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_social_english_ready",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "I" + "\u2019" + "m ready",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["text"] != "I'm here." {
+		t.Fatalf("expected smart-apostrophe english fallback reply, got %+v", bubble)
+	}
+}
+
 func TestServiceSubmitInputUsesEnglishClarificationForShortEnglishInput(t *testing.T) {
 	service, _ := newTestServiceWithModelClient(t, stubModelClient{
 		output: `{"route":"clarification_needed","reply":""}`,

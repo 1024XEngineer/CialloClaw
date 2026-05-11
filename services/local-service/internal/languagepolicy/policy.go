@@ -65,12 +65,27 @@ var englishSignalWords = map[string]struct{}{
 var englishSignalPhrases = map[string]struct{}{
 	"done":        {},
 	"go ahead":    {},
+	"i am ready":  {},
+	"i m ready":   {},
+	"im ready":    {},
 	"looks good":  {},
+	"no":          {},
 	"ok":          {},
 	"okay":        {},
+	"ready":       {},
 	"sounds good": {},
 	"sure":        {},
+	"yes":         {},
 }
+
+var englishSignalTextNormalizer = strings.NewReplacer(
+	"\u2018", "'",
+	"\u2019", "'",
+	"\u201c", `"`,
+	"\u201d", `"`,
+	"\u2013", "-",
+	"\u2014", "-",
+)
 
 // PreferredReplyLanguage infers the reply language from the current user-facing
 // text only. The heuristic intentionally stays conservative: it upgrades to
@@ -90,7 +105,7 @@ func PreferredReplyLanguage(text string) string {
 // English signal word so arbitrary ASCII-only text does not silently flip the
 // whole reply path to English.
 func IsEnglishOnlyText(text string) bool {
-	trimmed := strings.TrimSpace(text)
+	trimmed := strings.TrimSpace(normalizeEnglishSignalText(text))
 	if trimmed == "" {
 		return false
 	}
@@ -164,4 +179,11 @@ func asciiWordTokens(text string) []string {
 
 func isASCIIAlpha(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
+}
+
+func normalizeEnglishSignalText(text string) string {
+	if text == "" {
+		return ""
+	}
+	return englishSignalTextNormalizer.Replace(text)
 }
