@@ -129,9 +129,11 @@ func checkGoimports(root, baseRef string) error {
 	}
 
 	return fmt.Errorf(
-		"goimports is required for:\n%s\nrun: %s",
+		"goimports is required for:\n%s\nrun: %s -w %s %s",
 		strings.Join(unformattedFiles, "\n"),
-		formatGoimportsCommand(unformattedFiles),
+		goimportsRunCmd,
+		localServicePath,
+		styleToolPath,
 	)
 }
 
@@ -677,19 +679,6 @@ func filterReportedPaths(output string, expected []string) []string {
 		}
 	}
 	return filtered
-}
-
-func formatGoimportsCommand(paths []string) string {
-	if len(paths) == 0 {
-		return goimportsRunCmd + " -w"
-	}
-
-	args := make([]string, 0, len(paths)+3)
-	args = append(args, "go", "run", goimportsTool, "-w")
-	for _, path := range paths {
-		args = append(args, strconv.Quote(path))
-	}
-	return strings.Join(args, " ")
 }
 
 func containsHan(text string) bool {

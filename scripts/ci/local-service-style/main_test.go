@@ -158,17 +158,6 @@ func TestFilterReportedPathsIgnoresDownloadNoise(t *testing.T) {
 	}
 }
 
-func TestFormatGoimportsCommandTargetsReportedFiles(t *testing.T) {
-	command := formatGoimportsCommand([]string{
-		"services/local-service/internal/orchestrator/task_confirm.go",
-		"scripts/ci/local-service-style/main.go",
-	})
-	want := "go run golang.org/x/tools/cmd/goimports -w \"services/local-service/internal/orchestrator/task_confirm.go\" \"scripts/ci/local-service-style/main.go\""
-	if command != want {
-		t.Fatalf("unexpected goimports command: %q", command)
-	}
-}
-
 func TestFindCommentViolationsSeparatesIndexAndWorkingTreeSnapshots(t *testing.T) {
 	const path = "services/local-service/internal/demo/demo.go"
 
