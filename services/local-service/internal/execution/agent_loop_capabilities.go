@@ -87,7 +87,8 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 		UseWhen:   "需要读取某个网页的标题或主要可见文本",
 		AvoidWhen: "用户只需要确认关键词是否出现，而不需要通读页面内容",
 		Constraints: []string{
-			"网页读取可能触发审批",
+			"显式网页目标默认按低风险只读处理",
+			"仅 localhost 风格主机名、单标签主机名、本地域后缀，以及字面量回环/私网/link-local/CGNAT IP 仍可能触发审批",
 			"一次只读取一个绝对 URL",
 			"不会执行页面交互",
 		},
@@ -105,7 +106,8 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 		UseWhen:   "需要确认某个网页里是否出现某个关键词或短语",
 		AvoidWhen: "用户需要完整页面内容，或需要进一步浏览页面结构",
 		Constraints: []string{
-			"网页读取可能触发审批",
+			"显式网页目标默认按低风险只读处理",
+			"仅 localhost 风格主机名、单标签主机名、本地域后缀，以及字面量回环/私网/link-local/CGNAT IP 仍可能触发审批",
 			"一次只搜索一个绝对 URL",
 			"返回受限数量的关键词命中",
 		},
