@@ -17,6 +17,7 @@ var englishSignalWords = map[string]struct{}{
 	"answer":    {},
 	"browser":   {},
 	"can":       {},
+	"checklist": {},
 	"could":     {},
 	"cleanup":   {},
 	"continue":  {},
@@ -34,6 +35,7 @@ var englishSignalWords = map[string]struct{}{
 	"how":       {},
 	"inspect":   {},
 	"issue":     {},
+	"lgtm":      {},
 	"need":      {},
 	"note":      {},
 	"notes":     {},
@@ -43,6 +45,7 @@ var englishSignalWords = map[string]struct{}{
 	"project":   {},
 	"read":      {},
 	"readme":    {},
+	"release":   {},
 	"review":    {},
 	"rewrite":   {},
 	"rollout":   {},
@@ -53,6 +56,7 @@ var englishSignalWords = map[string]struct{}{
 	"thank":     {},
 	"thanks":    {},
 	"the":       {},
+	"thx":       {},
 	"this":      {},
 	"translate": {},
 	"what":      {},
@@ -73,6 +77,7 @@ var englishSignalPhrases = map[string]struct{}{
 	"ok":          {},
 	"okay":        {},
 	"ready":       {},
+	"ship it":     {},
 	"sounds good": {},
 	"sure":        {},
 	"yes":         {},
@@ -122,7 +127,7 @@ func IsEnglishOnlyText(text string) bool {
 			latinLetters++
 		case unicode.IsDigit(r), unicode.IsSpace(r):
 			continue
-		case strings.ContainsRune(`.,!?;:'"()[]{}<>/@#$%^&*_+-=|\\~`, r):
+		case isASCIIEnglishPunctuation(r):
 			continue
 		default:
 			if r > unicode.MaxASCII {
@@ -181,9 +186,31 @@ func isASCIIAlpha(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
 }
 
+func isASCIIEnglishPunctuation(r rune) bool {
+	return r <= unicode.MaxASCII && strings.ContainsRune(`.,!?;:'"()[]{}<>/@#$%^&*_+-=|\\~`, r)
+}
+
 func normalizeEnglishSignalText(text string) string {
 	if text == "" {
 		return ""
 	}
-	return englishSignalTextNormalizer.Replace(text)
+
+	normalized := englishSignalTextNormalizer.Replace(text)
+	var builder strings.Builder
+	builder.Grow(len(normalized))
+	for _, r := range normalized {
+		switch {
+		case unicode.IsLetter(r), unicode.IsDigit(r), unicode.IsSpace(r):
+			builder.WriteRune(r)
+		case isASCIIEnglishPunctuation(r):
+			builder.WriteRune(r)
+		case r > unicode.MaxASCII && !unicode.IsLetter(r) && !unicode.IsDigit(r):
+			// Strip emoji and other non-ASCII symbols so short English signals like
+			// "thanks 👍" still keep their language intent.
+			builder.WriteRune(' ')
+		default:
+			builder.WriteRune(r)
+		}
+	}
+	return builder.String()
 }
