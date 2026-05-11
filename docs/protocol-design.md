@@ -2449,7 +2449,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `data.items[].effective_scope`        | 生效范围                 |
 | `data.items[].ended_at`               | 结束时间                 |
 | `data.items[].linked_task_id`         | 已转正式任务后的 task ID |
-| `data.items[].related_resources`      | 相关资料列表；显式文件资源可在升级任务时进入执行上下文，目录仅保留为展示与打开上下文 |
+| `data.items[].related_resources`      | 相关资料列表；显式文件资源仅在路径位于当前 workspace 内且真实指向文件时进入执行上下文，目录仅保留为展示与打开上下文 |
 | `data.page`                           | 分页信息                 |
 
 ### agent.notepad.list 出参示例
@@ -2661,7 +2661,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
       "delivery_result": {
         "type": "workspace_document",
         "title": "处理结果",
-        "summary": "已生成正式文档，可继续打开查看。",
+        "preview_text": "已生成正式文档，可继续打开查看。",
         "payload": {
           "path": "workspace/tasks/task_401/result.md"
         }
