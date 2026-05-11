@@ -148,12 +148,9 @@ export function TaskDetailPanel({
   const hasEvidenceContent = evidenceItems.length > 0 || evidenceArtifacts.length > 0;
   const hasRuntimeSummarySignals = Boolean(
     runtimeSummary &&
-    (runtimeSummary.loop_stop_reason ||
-      runtimeSummary.latest_event_type ||
-      runtimeSummary.latest_failure_summary ||
-      runtimeSummary.events_count > 0 ||
-      runtimeSummary.active_steering_count > 0 ||
-      runtimeSummary.observation_signals.length > 0),
+    ((runtimeSummary.latest_event_type ?? "").trim().startsWith("loop.") ||
+      (runtimeSummary.loop_stop_reason ?? "").trim() !== "" ||
+      runtimeSummary.active_steering_count > 0),
   );
   const hasRuntimeProcessContent = hasRuntimeSummarySignals || eventItems.length > 0 || eventLoading || eventErrorMessage !== null;
   const hasFormalOutput = formalDeliveryResult !== null && !formalDeliveryDuplicatesArtifact;

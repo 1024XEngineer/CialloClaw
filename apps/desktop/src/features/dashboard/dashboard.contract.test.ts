@@ -9735,6 +9735,8 @@ test("TaskDetailPanel folds loop summary signals into the runtime events section
 
   assert.match(panelSource, /Loop Signals/);
   assert.match(panelSource, /循环事件与停止信号/);
+  assert.match(panelSource, /runtimeSummary\.latest_event_type \?\? ""\)\.trim\(\)\.startsWith\("loop\."\)/);
+  assert.match(panelSource, /runtimeSummary\.active_steering_count > 0/);
   assert.match(panelSource, /if \(!runtimeSummary \|\| !hasRuntimeSummarySignals\) \{/);
   assert.match(panelSource, /<h3 className="task-detail-card__title">执行事件与循环回流<\/h3>[\s\S]*\{renderRuntimeSummarySection\(\)\}/);
   assert.match(panelSource, /runtimeSummary\.loop_stop_reason \?\? "当前未返回停止原因"/);
