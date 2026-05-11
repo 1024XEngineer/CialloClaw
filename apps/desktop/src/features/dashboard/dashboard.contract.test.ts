@@ -6854,6 +6854,7 @@ test("conversation session reuse expires after the backend freshness window", ()
 test("note page consumes note query helpers instead of inlining note bucket contracts", () => {
   const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
   const noteServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/notePage.service.ts"), "utf8");
+  const externalUrlSource = readFileSync(resolve(desktopRoot, "src/platform/desktopExternalUrl.ts"), "utf8");
 
   assert.match(notePageSource, /buildDashboardNoteBucketQueryKey/);
   assert.match(notePageSource, /buildDashboardNoteBucketInvalidateKeys/);
@@ -6862,6 +6863,9 @@ test("note page consumes note query helpers instead of inlining note bucket cont
   assert.match(noteServiceSource, /isAllowedNoteOpenUrl/);
   assert.match(noteServiceSource, /if \(payload\?\.url\) \{/);
   assert.match(noteServiceSource, /mode === "open_url"/);
+  assert.match(noteServiceSource, /await openDesktopExternalUrl\(plan\.url\)/);
+  assert.match(noteServiceSource, /externalUrlExecutionFailure\("无法通过系统浏览器打开便签资源链接"/);
+  assert.match(externalUrlSource, /desktop_open_external_url/);
 });
 
 test("source-note fallback cards stay local instead of inferring formal todo bucket and due status", () => {
@@ -7220,6 +7224,8 @@ test("task rpc service builds protocol-only experience instead of reusing mock t
   assert.doesNotMatch(taskServiceSource, /getMockTaskDetail\(/);
   assert.doesNotMatch(taskServiceSource, /runMockTaskControl\(/);
   assert.doesNotMatch(taskOutputSource, /getMockTaskDetail\(/);
+  assert.match(taskOutputSource, /await openDesktopExternalUrl\(plan\.url\)/);
+  assert.match(taskOutputSource, /externalUrlExecutionFailure\("无法通过系统浏览器打开结果链接"/);
 });
 
 test("note rpc service keeps transport failures visible instead of switching to mock data", async () => {

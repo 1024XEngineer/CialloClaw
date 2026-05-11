@@ -1,4 +1,5 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, type MouseEvent, type ReactNode } from "react";
+import { openDesktopExternalUrl } from "@/platform/desktopExternalUrl";
 
 type ShellBallMarkdownProps = {
   text: string;
@@ -14,6 +15,7 @@ type MarkdownBlock =
 
 type InlineMatch =
   | { kind: "link"; index: number; length: number; label: string; href: string }
+  | { kind: "auto-link"; index: number; length: number; href: string }
   | { kind: "code"; index: number; length: number; text: string }
   | { kind: "strong"; index: number; length: number; text: string }
   | { kind: "emphasis"; index: number; length: number; text: string };
@@ -30,6 +32,14 @@ export function ShellBallMarkdown({ text }: ShellBallMarkdownProps) {
       {blocks.map((block) => renderMarkdownBlock(block, createBlockKey(block)))}
     </div>
   );
+}
+
+function handleShellBallLinkClick(event: MouseEvent<HTMLAnchorElement>, href: string) {
+  event.preventDefault();
+  event.stopPropagation();
+  void openDesktopExternalUrl(href).catch((error) => {
+    console.warn("shell-ball external link open failed", error);
+  });
 }
 
 function renderMarkdownBlock(block: MarkdownBlock, key: string) {
@@ -104,11 +114,31 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
         nodes.push(
           <a
             key={matchKey}
+            data-shell-ball-interactive="true"
             href={match.href}
             target="_blank"
             rel="noreferrer"
+            onClick={(event) => {
+              handleShellBallLinkClick(event, match.href);
+            }}
           >
             {renderInline(match.label, `${matchKey}-label`)}
+          </a>,
+        );
+        break;
+      case "auto-link":
+        nodes.push(
+          <a
+            key={matchKey}
+            data-shell-ball-interactive="true"
+            href={match.href}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(event) => {
+              handleShellBallLinkClick(event, match.href);
+            }}
+          >
+            {match.href}
           </a>,
         );
         break;
@@ -133,6 +163,7 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
 function findFirstInlineMatch(text: string): InlineMatch | null {
   const matches = [
     matchLink(text),
+    matchAutoLink(text),
     matchInlineCode(text),
     matchStrong(text),
     matchEmphasis(text),
@@ -154,18 +185,111 @@ function findFirstInlineMatch(text: string): InlineMatch | null {
 }
 
 function matchLink(text: string): InlineMatch | null {
-  const match = /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/.exec(text);
+  const match = /\[([^\]]+)\]\(/.exec(text);
   if (match === null || match.index === undefined) {
+    return null;
+  }
+
+  const hrefStart = match.index + match[0].length;
+  const href = extractBalancedMarkdownHref(text, hrefStart);
+  if (href === null) {
     return null;
   }
 
   return {
     kind: "link",
     index: match.index,
-    length: match[0].length,
+    length: hrefStart + href.length + 1 - match.index,
     label: match[1],
-    href: match[2],
+    href,
   };
+}
+
+/**
+ * Keeps markdown-link parsing aligned with browser URL handling by allowing
+ * balanced parentheses inside the href while still stopping at the markdown
+ * link's closing `)`.
+ */
+function extractBalancedMarkdownHref(text: string, hrefStart: number) {
+  let nestedParentheses = 0;
+
+  for (let index = hrefStart; index < text.length; index += 1) {
+    const character = text[index];
+    if (character === undefined) {
+      return null;
+    }
+
+    if (/\s/.test(character)) {
+      return null;
+    }
+
+    if (character === "(") {
+      nestedParentheses += 1;
+      continue;
+    }
+
+    if (character !== ")") {
+      continue;
+    }
+
+    if (nestedParentheses > 0) {
+      nestedParentheses -= 1;
+      continue;
+    }
+
+    const href = text.slice(hrefStart, index);
+    return /^https?:\/\//i.test(href) && href !== "" ? href : null;
+  }
+
+  return null;
+}
+
+function matchAutoLink(text: string): InlineMatch | null {
+  const match = new RegExp("https?:\\/\\/[^\\s<>\\[\\]{}\"']+", "i").exec(text);
+  if (match === null || match.index === undefined) {
+    return null;
+  }
+
+  const href = trimTrailingUrlPunctuation(match[0]);
+  if (href === "") {
+    return null;
+  }
+
+  return {
+    kind: "auto-link",
+    index: match.index,
+    length: href.length,
+    href,
+  };
+}
+
+function trimTrailingUrlPunctuation(value: string) {
+  let href = value;
+  while (/[.,!?;:'"，。！？；：】》〉」』、】【>\]）]$/.test(href)) {
+    href = href.slice(0, -1);
+  }
+
+  while (href.endsWith(")") && countUrlCharacters(href, "(") < countUrlCharacters(href, ")")) {
+    href = href.slice(0, -1);
+  }
+
+  // Trim full-width closing parentheses only when they are unbalanced so
+  // Chinese wrapping like （https://example.com） still preserves valid hrefs.
+  while (href.endsWith("）") && countUrlCharacters(href, "（") < countUrlCharacters(href, "）")) {
+    href = href.slice(0, -1);
+  }
+
+  return href;
+}
+
+function countUrlCharacters(value: string, target: string) {
+  let count = 0;
+  for (const rune of value) {
+    if (rune === target) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 function matchInlineCode(text: string): InlineMatch | null {
