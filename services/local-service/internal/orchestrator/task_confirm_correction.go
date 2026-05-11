@@ -36,21 +36,12 @@ func validateTaskConfirmCorrectionPayload(confirmed bool, correctedIntent map[st
 	return nil
 }
 
-// reinferTaskIntentFromCorrection keeps natural-language confirmation edits on
-// the same task. It refreshes the candidate intent and presentation bubble but
-// deliberately leaves execution behind the next explicit confirmation.
-func (s *Service) reinferTaskIntentFromCorrection(task runengine.TaskRecord, correctionText string) (map[string]any, error) {
-	snapshot := snapshotFromTask(task)
+// reinferTaskIntentFromCorrection preserves the same task and original context
+// snapshot while letting a natural-language correction replace the next
+// executing intent directly.
+func (s *Service) reinferTaskIntentFromCorrection(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, correctionText string) intent.Suggestion {
 	intentValue := s.inferTaskIntentFromCorrection(task, snapshot, correctionText)
-	suggestion := s.normalizedTaskConfirmSuggestion(snapshot, intentValue, true)
-	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "intent_confirm", bubbleTextForStart(suggestion), time.Now().Format(dateTimeLayout))
-	updatedTask, ok := s.runEngine.UpdateIntent(task.TaskID, suggestion.TaskTitle, suggestion.Intent)
-	if !ok {
-		return nil, ErrTaskNotFound
-	}
-	s.attachMemoryReadPlans(updatedTask.TaskID, updatedTask.RunID, snapshot, suggestion.Intent)
-	updatedTask = s.persistTaskPresentation(updatedTask, bubble)
-	return buildTaskEntryResponse(updatedTask, bubble, nil), nil
+	return s.normalizedTaskConfirmSuggestion(snapshot, intentValue, false)
 }
 
 func (s *Service) inferTaskIntentFromCorrection(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, correctionText string) map[string]any {
@@ -76,7 +67,7 @@ func buildTaskConfirmCorrectionPrompt(task runengine.TaskRecord, snapshot taskco
 		"You infer a corrected CialloClaw IntentPayload for an existing task confirmation.",
 		"Return JSON only.",
 		`Schema: {"intent":{"name":"<formal intent name>","arguments":{}},"reason":"short reason"}`,
-		"Keep the same task; do not decide whether to execute it.",
+		"Keep the same task and infer the next execution intent from the latest correction.",
 		"Use the correction text as the user's latest instruction while preserving the original task context.",
 		"Pick the most appropriate formal intent for the user's latest goal when the task is specific enough.",
 		"Use agent_loop only when the goal remains open-ended, mixed, or underspecified after considering the full task context.",

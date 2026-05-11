@@ -936,8 +936,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
   - 用户认为系统猜错时，提交修正后的意图
 - **系统处理**：
   - 采纳确认结果
-  - 更新任务意图，或基于自然语言纠偏重新生成待确认意图
-  - 仅在确认通过、或调用方提供完整 `corrected_intent` 时推进到正式执行阶段
+  - 更新任务意图，或基于自然语言纠偏在同一任务上重推并继续执行
+  - 仅在显式确认通过、或调用方提供 `corrected_intent / correction_text` 这类足以落到同一任务执行意图的纠偏信息时推进到正式执行阶段
 - **入参**：任务 ID、是否确认、修正后的正式意图或自然语言纠偏文本
 - **出参**：更新后的任务对象、状态气泡，必要时附带正式交付结果
 
@@ -946,7 +946,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `confirmed = true` 时，表示用户确认系统当前猜测的意图正确，此时不得再传入 `corrected_intent` 或 `correction_text`。
 - `confirmed = false` 时，`corrected_intent` 与 `correction_text` 互斥：前者表示调用方已经持有完整正式意图对象，后者表示用户输入了自然语言纠偏文本。
 - `confirmed = false` 且传入完整 `corrected_intent` 时，后端以该对象覆盖任务当前意图后再推进执行。
-- `confirmed = false` 且传入 `correction_text` 时，后端必须基于原 task 已绑定的正式上下文快照重新推断意图，返回同一 `task_id` 的新 `intent_confirm` 气泡，并继续停留在 `confirming_intent`，不得直接执行或新建 task。
+- `confirmed = false` 且传入 `correction_text` 时，后端必须基于原 task 已绑定的正式上下文快照重新推断意图，并在同一 `task_id` 上直接继续后续执行链；不得新建 task，也不得再额外插入一次新的 intent 确认门。
 - `confirmed = false` 且未传入 `corrected_intent / correction_text` 时，后端不得直接取消任务；应保留任务在确认阶段，并返回要求用户重新说明目标或补充修正意图的状态气泡。
 - 本接口只处理“意图确认 / 纠偏”这一承接阶段，不替代 `agent.task.control` 的暂停、继续、取消、重启控制语义。
 
@@ -992,7 +992,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 补充约束：
 
-- `data.bubble_message.type = intent_confirm` 时，`text` 必须继续复用正式确认气泡文案生成规则；它随当前候选 `intent` 变化，不得写死为单一“已按修正意图处理”类提示。
+- 只有任务仍停留在确认阶段时，`data.bubble_message.type` 才应为 `intent_confirm`；自然语言纠偏若已继续执行，则应返回与执行结果一致的正式状态气泡或授权等待气泡，而不是再次回到确认气泡。
 
 ### agent.task.confirm 出参示例
 
@@ -1004,20 +1004,25 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
     "data": {
       "task": {
         "task_id": "task_101",
-        "status": "confirming_intent",
+        "status": "completed",
         "intent": {
-          "name": "agent_loop",
+          "name": "extract_action_items",
           "arguments": {
             "goal": "提取 action items"
           }
         },
-        "current_step": "intent_confirmation"
+        "current_step": "completed"
       },
       "bubble_message": {
         "bubble_id": "bubble_102",
         "task_id": "task_101",
-        "type": "intent_confirm",
-        "text": "请确认你希望我如何处理当前内容。"
+        "type": "status",
+        "text": "已根据修正后的目标继续执行当前任务。"
+      },
+      "delivery_result": {
+        "type": "task_detail",
+        "title": "Task detail",
+        "preview_text": "可查看提取后的 action items 结果。"
       }
     },
     "meta": {

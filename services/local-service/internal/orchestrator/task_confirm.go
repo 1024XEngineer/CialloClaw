@@ -25,13 +25,14 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	if err := validateTaskConfirmCorrectionPayload(confirmed, correctedIntent, correctionText); err != nil {
 		return nil, err
 	}
-	if !confirmed && correctionText != "" {
-		return s.reinferTaskIntentFromCorrection(task, correctionText)
-	}
 	snapshot := snapshotFromTask(task)
 	intentValue := cloneMap(task.Intent)
 	updatedTitle := task.Title
-	if !confirmed && len(correctedIntent) > 0 {
+	if !confirmed && correctionText != "" {
+		suggestion := s.reinferTaskIntentFromCorrection(task, snapshot, correctionText)
+		intentValue = suggestion.Intent
+		updatedTitle = suggestion.TaskTitle
+	} else if !confirmed && len(correctedIntent) > 0 {
 		if normalizedIntent, ok := normalizeTaskConfirmIntent(correctedIntent); ok {
 			suggestion := s.normalizedTaskConfirmSuggestion(snapshot, normalizedIntent, false)
 			intentValue = suggestion.Intent
@@ -53,8 +54,7 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 				"delivery_result": nil,
 			}, nil
 		}
-	}
-	if !confirmed && len(correctedIntent) == 0 {
+	} else if !confirmed && len(correctedIntent) == 0 {
 		updatedTask, err := s.revertTaskToIntentConfirmation(task)
 		if err != nil {
 			return nil, err

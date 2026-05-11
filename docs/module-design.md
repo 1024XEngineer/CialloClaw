@@ -1420,7 +1420,7 @@ flowchart TB
 
 #### 如何承接规划器产物
 - `CreateTaskInput` 决定初始 `Status / CurrentStep / Timeline / Snapshot / Intent`；
-- `ConfirmTask()` 把确认后的意图和标题写回同一任务；当确认阶段收到 `correction_text` 时，必须复用原 task 的正式上下文重新推断意图并返回新的同任务 `intent_confirm`，不得新建 task 或直接执行；
+- `ConfirmTask()` 把确认后的意图和标题写回同一任务；当确认阶段收到 `correction_text` 时，必须复用原 task 的正式上下文重新推断意图，并让同一任务直接继续后续执行链；不得新建 task，也不得额外再插入一次新的确认门；
 - `BeginExecution()` 把任务真正推进到运行态；
 - `CompleteTask()`、`ReopenWaitingInput()`、`ReopenIntentConfirmation()`、`FailTaskExecution()` 等接口负责后续收敛。
 

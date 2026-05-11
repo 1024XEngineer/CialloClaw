@@ -281,7 +281,8 @@ export interface AgentTaskConfirmParams {
 }
 
 // AgentTaskConfirmResult returns the same task projection after confirmation,
-// natural-language correction, or a retained clarification gate.
+// direct natural-language correction execution, or a clarification gate when
+// the caller still needs to provide a usable correction.
 export interface AgentTaskConfirmResult {
   task: Task;
   bubble_message: BubbleMessage | null;
