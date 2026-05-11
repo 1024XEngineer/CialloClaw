@@ -6354,6 +6354,51 @@ func TestServiceTaskDetailGetDerivesInterceptedStatusFromAuthorizationDecision(t
 	}
 }
 
+func TestServiceTaskDetailGetDerivesInterceptedStatusFromDeniedAuditRecord(t *testing.T) {
+	service := newTestService()
+
+	startResult, err := startTaskForTest(service, StartTaskRequest{SessionID: "sess_detail_intercepted_audit", Source: "floating_ball", Trigger: "hover_text_input", Input: TaskStartInput{Type: "text", Text: "blocked by governance before approval prompt"}, Intent: map[string]any{
+		"name": "write_file",
+		"arguments": map[string]any{
+			"require_authorization": true,
+		},
+	}})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	task, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected runtime task to exist")
+	}
+	mutateRuntimeTask(t, service.runEngine, taskID, func(runtimeRecord *runengine.TaskRecord) {
+		delete(runtimeRecord.SecuritySummary, "security_status")
+		runtimeRecord.Status = "blocked"
+		runtimeRecord.ApprovalRequest = nil
+		runtimeRecord.Authorization = nil
+		runtimeRecord.AuditRecords = []map[string]any{{
+			"audit_id":   "audit_detail_intercepted",
+			"task_id":    taskID,
+			"run_id":     task.RunID,
+			"type":       "risk",
+			"action":     "intercept_operation",
+			"summary":    "high risk operation was intercepted before approval",
+			"target":     "workspace/blocked.md",
+			"result":     "denied",
+			"created_at": task.UpdatedAt.Add(time.Second).Format(time.RFC3339Nano),
+		}}
+	})
+
+	detailResult, err := taskDetailGetForTest(service, TaskDetailGetRequest{TaskID: taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	if detailResult["security_summary"].(map[string]any)["security_status"] != "intercepted" {
+		t.Fatalf("expected intercepted status from denied audit record, got %+v", detailResult["security_summary"])
+	}
+}
+
 func TestServiceTaskDetailGetDerivesRecoverableStatusFromRestorePoint(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "recoverable detail inference")
 	if service.storage == nil {
