@@ -48,14 +48,9 @@ func (s *Service) TaskInspectorRun(params map[string]any) (map[string]any, error
 	inspectionID := fmt.Sprintf("insp_%d", time.Now().UTC().UnixNano())
 
 	result, err := s.inspector.Run(taskinspector.RunInput{
-		Reason:       reason,
-		InspectionID: inspectionID,
-		// `agent.task_inspector.run` is a public RPC surface. Its caller-supplied
-		// reason string is descriptive only and cannot serve as trusted desktop UI
-		// provenance for exporting workspace note content to a remote title model.
-		// Keep this RPC on the deterministic local fallback path until the backend
-		// has a server-owned authorization/provenance signal for manual runs.
-		AllowGeneratedTitles: false,
+		Reason:               reason,
+		InspectionID:         inspectionID,
+		AllowGeneratedTitles: inspectorAllowsGeneratedTitles(reason),
 		TitleGenerationOwner: titlegen.GenerationOwner{TaskID: inspectionID, RunID: inspectionID},
 		TargetSources:        targetSources,
 		Config:               config,
@@ -81,6 +76,15 @@ func (s *Service) TaskInspectorRun(params map[string]any) (map[string]any, error
 		"summary":       result.Summary,
 		"suggestions":   append([]string(nil), result.Suggestions...),
 	}, nil
+}
+
+func inspectorAllowsGeneratedTitles(reason string) bool {
+	switch strings.TrimSpace(reason) {
+	case "notes_page_manual_run", "control_panel_manual_run":
+		return true
+	default:
+		return false
+	}
 }
 
 // recordInspectorTitleGeneration projects manual note-title generation into one

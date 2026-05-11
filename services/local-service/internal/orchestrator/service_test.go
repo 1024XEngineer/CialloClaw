@@ -3060,7 +3060,7 @@ func TestWithTaskInspectorPreservesExistingTitleGenerator(t *testing.T) {
 	}
 }
 
-func TestTaskInspectorRunManualReasonKeepsLocalCompactNoteTitles(t *testing.T) {
+func TestTaskInspectorRunManualReasonAllowsGeneratedNoteTitles(t *testing.T) {
 	service, workspaceRoot := newTestServiceWithExecution(t, `{"title":"本周阻塞项复盘"}`)
 	service.WithTitleGenerator(titlegen.NewService(service.model))
 
@@ -3089,12 +3089,12 @@ func TestTaskInspectorRunManualReasonKeepsLocalCompactNoteTitles(t *testing.T) {
 	if len(notepadItems) != 1 {
 		t.Fatalf("expected one notepad item, got %+v", notepadItems)
 	}
-	if got := stringValue(notepadItems[0], "title", ""); got != "继续整理本周阻塞项和行动项" {
-		t.Fatalf("expected manual inspector run to stay on local compact title fallback, got %+v", notepadItems[0])
+	if got := stringValue(notepadItems[0], "title", ""); got != "本周阻塞项复盘" {
+		t.Fatalf("expected manual inspector run to persist generated title, got %+v", notepadItems[0])
 	}
 }
 
-func TestTaskInspectorRunManualReasonDoesNotRecordTitleGenerationAuditOrTrace(t *testing.T) {
+func TestTaskInspectorRunManualReasonRecordsGeneratedTitleAuditAndTrace(t *testing.T) {
 	service, workspaceRoot := newTestServiceWithExecution(t, `{"title":"本周阻塞项复盘"}`)
 	service.WithTitleGenerator(titlegen.NewService(service.model))
 
@@ -3125,21 +3125,30 @@ func TestTaskInspectorRunManualReasonDoesNotRecordTitleGenerationAuditOrTrace(t 
 	}
 
 	auditRecords, total, err := service.storage.AuditStore().ListAuditRecords(context.Background(), inspectionID, inspectionID, 10, 0)
-	if err != nil || total != 0 || len(auditRecords) != 0 {
-		t.Fatalf("expected manual inspector run to avoid title-generation audit records, total=%d len=%d err=%v records=%+v", total, len(auditRecords), err, auditRecords)
+	if err != nil || total != 1 || len(auditRecords) != 1 {
+		t.Fatalf("expected one persisted audit record for manual title generation, total=%d len=%d err=%v", total, len(auditRecords), err)
+	}
+	if auditRecords[0].TaskID != inspectionID || auditRecords[0].RunID != inspectionID {
+		t.Fatalf("expected audit record to stay attributed to inspection owner, got %+v", auditRecords[0])
+	}
+	if auditRecords[0].Result != "success" {
+		t.Fatalf("expected successful generated title audit record, got %+v", auditRecords[0])
 	}
 
 	traces, total, err := service.storage.TraceStore().ListTraceRecords(context.Background(), inspectionID, 10, 0)
-	if err != nil || total != 0 || len(traces) != 0 {
-		t.Fatalf("expected manual inspector run to avoid title-generation traces, total=%d len=%d err=%v traces=%+v", total, len(traces), err, traces)
+	if err != nil || total != 1 || len(traces) != 1 {
+		t.Fatalf("expected one trace record for manual title generation, total=%d len=%d err=%v", total, len(traces), err)
+	}
+	if traces[0].TaskID != inspectionID || traces[0].RunID != inspectionID {
+		t.Fatalf("expected trace owner attribution to stay on inspection owner, got %+v", traces[0])
 	}
 	evals, total, err := service.storage.EvalStore().ListEvalSnapshots(context.Background(), inspectionID, 10, 0)
-	if err != nil || total != 0 || len(evals) != 0 {
-		t.Fatalf("expected manual inspector run to avoid title-generation eval snapshots, total=%d len=%d err=%v evals=%+v", total, len(evals), err, evals)
+	if err != nil || total != 1 || len(evals) != 1 {
+		t.Fatalf("expected one eval snapshot for manual title generation, total=%d len=%d err=%v", total, len(evals), err)
 	}
 }
 
-func TestTaskInspectorRunManualReasonDoesNotRecordFallbackTitleGenerationAudit(t *testing.T) {
+func TestTaskInspectorRunManualReasonRecordsFallbackAuditWhenTitleModelDoesNotGenerate(t *testing.T) {
 	service, workspaceRoot := newTestServiceWithExecution(t, `{}`)
 	service.WithTitleGenerator(titlegen.NewService(service.model))
 
@@ -3170,17 +3179,26 @@ func TestTaskInspectorRunManualReasonDoesNotRecordFallbackTitleGenerationAudit(t
 	}
 
 	auditRecords, total, err := service.storage.AuditStore().ListAuditRecords(context.Background(), inspectionID, inspectionID, 10, 0)
-	if err != nil || total != 0 || len(auditRecords) != 0 {
-		t.Fatalf("expected manual inspector fallback path to avoid title-generation audit records, total=%d len=%d err=%v records=%+v", total, len(auditRecords), err, auditRecords)
+	if err != nil || total != 1 || len(auditRecords) != 1 {
+		t.Fatalf("expected one persisted audit record for fallback title generation, total=%d len=%d err=%v", total, len(auditRecords), err)
+	}
+	if auditRecords[0].Result != "fallback" {
+		t.Fatalf("expected fallback audit result when model output is unusable, got %+v", auditRecords[0])
 	}
 
 	traces, total, err := service.storage.TraceStore().ListTraceRecords(context.Background(), inspectionID, 10, 0)
-	if err != nil || total != 0 || len(traces) != 0 {
-		t.Fatalf("expected manual inspector fallback path to avoid title-generation traces, total=%d len=%d err=%v traces=%+v", total, len(traces), err, traces)
+	if err != nil || total != 1 || len(traces) != 1 {
+		t.Fatalf("expected one trace record for fallback title generation, total=%d len=%d err=%v", total, len(traces), err)
+	}
+	if traces[0].TaskID != inspectionID || traces[0].RunID != inspectionID {
+		t.Fatalf("expected fallback trace owner attribution to stay on inspection owner, got %+v", traces[0])
+	}
+	if traces[0].LLMInputSummary != "task_inspector.generate_note_title" {
+		t.Fatalf("expected fallback trace intent summary to be recorded, got %+v", traces[0])
 	}
 }
 
-func TestTaskInspectorRunManualReasonDoesNotRecordTitleGenerationAuditWhenSyncFails(t *testing.T) {
+func TestTaskInspectorRunManualReasonRecordsGeneratedTitleAuditAndTraceWhenSyncFails(t *testing.T) {
 	service, workspaceRoot := newTestServiceWithExecution(t, `{"title":"本周阻塞项复盘"}`)
 	service.WithTitleGenerator(titlegen.NewService(service.model))
 
@@ -3218,17 +3236,27 @@ func TestTaskInspectorRunManualReasonDoesNotRecordTitleGenerationAuditWhenSyncFa
 	}
 
 	auditRecords, total, auditErr := service.storage.AuditStore().ListAuditRecords(context.Background(), "", "", 10, 0)
-	if auditErr != nil || total != 0 || len(auditRecords) != 0 {
-		t.Fatalf("expected sync failure without title-generation audit records, total=%d len=%d err=%v records=%+v", total, len(auditRecords), auditErr, auditRecords)
+	if auditErr != nil || total != 1 || len(auditRecords) != 1 {
+		t.Fatalf("expected one persisted audit record despite sync failure, total=%d len=%d err=%v", total, len(auditRecords), auditErr)
+	}
+	inspectionID := auditRecords[0].TaskID
+	if inspectionID == "" || auditRecords[0].RunID != inspectionID {
+		t.Fatalf("expected failed sync audit record to stay on inspection owner, got %+v", auditRecords[0])
+	}
+	if !strings.Contains(err.Error(), inspectionID) {
+		t.Fatalf("expected sync failure to expose inspection_id for audit correlation, inspection_id=%s err=%v", inspectionID, err)
 	}
 
-	traces, total, traceErr := service.storage.TraceStore().ListTraceRecords(context.Background(), "", 10, 0)
-	if traceErr != nil || total != 0 || len(traces) != 0 {
-		t.Fatalf("expected sync failure without title-generation traces, total=%d len=%d err=%v traces=%+v", total, len(traces), traceErr, traces)
+	traces, total, traceErr := service.storage.TraceStore().ListTraceRecords(context.Background(), inspectionID, 10, 0)
+	if traceErr != nil || total != 1 || len(traces) != 1 {
+		t.Fatalf("expected one trace record despite sync failure, total=%d len=%d err=%v", total, len(traces), traceErr)
+	}
+	if traces[0].TaskID != inspectionID || traces[0].RunID != inspectionID {
+		t.Fatalf("expected failed sync trace owner attribution to stay on inspection owner, got %+v", traces[0])
 	}
 }
 
-func TestServiceSecuritySummaryExcludesManualInspectorTitleGenerationUsageFromTodayTotals(t *testing.T) {
+func TestServiceSecuritySummaryIncludesManualInspectorTitleGenerationUsageInTodayTotals(t *testing.T) {
 	service, workspaceRoot := newTestServiceWithModelClient(t, stubModelClient{
 		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
 			return model.GenerateTextResponse{
@@ -3275,8 +3303,8 @@ func TestServiceSecuritySummaryExcludesManualInspectorTitleGenerationUsageFromTo
 	if tokenCostSummary["current_task_tokens"] != 0 {
 		t.Fatalf("expected manual inspector usage to stay out of current_task_tokens, got %+v", tokenCostSummary)
 	}
-	if tokenCostSummary["today_tokens"] != 0 {
-		t.Fatalf("expected manual inspector run to avoid remote title generation usage totals, got %+v", tokenCostSummary)
+	if tokenCostSummary["today_tokens"] != 22 {
+		t.Fatalf("expected manual inspector usage to contribute to today_tokens, got %+v", tokenCostSummary)
 	}
 }
 
