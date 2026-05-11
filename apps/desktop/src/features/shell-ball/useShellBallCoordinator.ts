@@ -1821,11 +1821,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           ...nextItems,
           ...createShellBallSubmitFeedbackBubbleItems(result, {
             createdAt: new Date().toISOString(),
-<<<<<<< HEAD
-            taskId: result.task.task_id,
-=======
-            taskId: task?.task_id,
->>>>>>> upstream/main
+            taskId: result.task?.task_id,
             turnIndex,
           }),
         ]);
@@ -1938,11 +1934,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           pendingAgentBubbleItem.bubble.bubble_id,
           createShellBallSubmitFeedbackBubbleItems(result, {
             createdAt: new Date().toISOString(),
-<<<<<<< HEAD
-            taskId: result.task.task_id,
-=======
-            taskId: task?.task_id,
->>>>>>> upstream/main
+            taskId: result.task?.task_id,
             turnIndex,
           }),
         );
@@ -2424,11 +2416,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
             pendingAgentBubbleItem.bubble.bubble_id,
             createShellBallSubmitFeedbackBubbleItems(result, {
               createdAt: new Date().toISOString(),
-<<<<<<< HEAD
-              taskId: result.task.task_id,
-=======
-              taskId: task?.task_id,
->>>>>>> upstream/main
+              taskId: result.task?.task_id,
               turnIndex,
             }),
           );
@@ -3242,11 +3230,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
               pendingAgentBubbleItem.bubble.bubble_id,
               createShellBallSubmitFeedbackBubbleItems(result, {
                 createdAt: new Date().toISOString(),
-<<<<<<< HEAD
-                taskId: result.task.task_id,
-=======
-                taskId: task?.task_id,
->>>>>>> upstream/main
+                taskId: result.task?.task_id,
                 turnIndex,
               }),
             );
