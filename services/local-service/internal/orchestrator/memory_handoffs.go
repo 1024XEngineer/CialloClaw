@@ -179,8 +179,17 @@ func mirrorReferenceFromSummary(summary memory.MemorySummary) map[string]any {
 // attachMemoryReadPlans registers the retrieval plans attached at task start or
 // confirmation time. Read plans are persisted before execution so later mirror,
 // debug, or storage-backed views can explain what memory lookup the task was
-// supposed to perform even if execution changes or the process restarts.
+// supposed to perform even if execution changes or the process restarts. When
+// clarification already materialized retrieval hits for the same task, reuse the
+// same evidence so the confirmation bubble and execution stay aligned.
 func (s *Service) attachMemoryReadPlans(taskID, runID string, snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any) {
+	if hits := currentTaskReadPlanHits(s.runEngine, taskID); len(hits) > 0 {
+		reusedHits := cloneRetrievalHitsForTask(taskID, runID, hits)
+		_, _ = s.runEngine.SetMemoryPlans(taskID, buildMemoryReadPlans(s.memory, taskID, runID, snapshot, taskIntent, reusedHits), nil)
+		s.syncTaskReadMirrorReferences(taskID, mirrorReferencesFromRetrievalHits(reusedHits), nil)
+		return
+	}
+
 	readPlans := buildMemoryReadPlans(s.memory, taskID, runID, snapshot, taskIntent, nil)
 	_, _ = s.runEngine.SetMemoryPlans(taskID, readPlans, nil)
 	references, hits, err := s.materializeMemoryReadReferences(taskID, runID, snapshot)
@@ -231,6 +240,17 @@ func (s *Service) clarificationPreviewHits(task runengine.TaskRecord, snapshot t
 	}
 
 	return s.previewMemoryContext(currentTask.TaskID, currentTask.RunID, snapshot)
+}
+
+func currentTaskReadPlanHits(engine *runengine.Engine, taskID string) []memory.RetrievalHit {
+	if engine == nil || strings.TrimSpace(taskID) == "" {
+		return nil
+	}
+	task, ok := engine.GetTask(taskID)
+	if !ok {
+		return nil
+	}
+	return taskReadPlanRetrievalHits(task)
 }
 
 func taskReadPlanRetrievalHits(task runengine.TaskRecord) []memory.RetrievalHit {
@@ -288,7 +308,11 @@ func readPlanRetrievalContextItems(plan map[string]any) []map[string]any {
 }
 
 func clarificationBubbleText(suggestionIntent map[string]any, snapshot taskcontext.TaskContextSnapshot, hits []memory.RetrievalHit) string {
-	base := clarificationBaseText(suggestionIntent, snapshot)
+	return clarificationBubbleTextForLanguage(suggestionIntent, hits, clarificationReplyLanguage(snapshot))
+}
+
+func clarificationBubbleTextForLanguage(suggestionIntent map[string]any, hits []memory.RetrievalHit, replyLanguage string) string {
+	base := clarificationBaseTextForLanguage(suggestionIntent, replyLanguage)
 	if len(hits) == 0 {
 		return base
 	}
@@ -299,7 +323,7 @@ func clarificationBubbleText(suggestionIntent map[string]any, snapshot taskconte
 	}
 
 	trimmedSummary := truncateText(summary, 72)
-	if clarificationReplyLanguage(snapshot) == languagepolicy.ReplyLanguageEnglish {
+	if replyLanguage == languagepolicy.ReplyLanguageEnglish {
 		return fmt.Sprintf("Based on your earlier context (%s), %s", trimmedSummary, clarificationFollowUpPrompt(suggestionIntent, true))
 	}
 
@@ -307,7 +331,11 @@ func clarificationBubbleText(suggestionIntent map[string]any, snapshot taskconte
 }
 
 func clarificationBaseText(suggestionIntent map[string]any, snapshot taskcontext.TaskContextSnapshot) string {
-	if clarificationReplyLanguage(snapshot) == languagepolicy.ReplyLanguageEnglish {
+	return clarificationBaseTextForLanguage(suggestionIntent, clarificationReplyLanguage(snapshot))
+}
+
+func clarificationBaseTextForLanguage(suggestionIntent map[string]any, replyLanguage string) string {
+	if replyLanguage == languagepolicy.ReplyLanguageEnglish {
 		return clarificationFollowUpPrompt(suggestionIntent, true)
 	}
 	return clarificationFollowUpPrompt(suggestionIntent, false)

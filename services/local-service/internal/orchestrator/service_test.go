@@ -2561,6 +2561,76 @@ func TestServiceConfirmTaskRejectsCorrectionPayloadConflicts(t *testing.T) {
 	}
 }
 
+func TestServiceConfirmTaskCorrectionTextUsesLatestEnglishReplyLanguage(t *testing.T) {
+	calls := 0
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			calls++
+			switch calls {
+			case 1:
+				if !strings.Contains(request.Input, "Explain this selected paragraph instead.") {
+					t.Fatalf("expected correction text in reinference prompt, got %q", request.Input)
+				}
+				return model.GenerateTextResponse{
+					TaskID:     request.TaskID,
+					RunID:      request.RunID,
+					RequestID:  "req_correction_language",
+					Provider:   "openai_responses",
+					ModelID:    "gpt-5.4",
+					OutputText: `{"intent":{"name":"explain","arguments":{"detail":"brief"}},"reason":"user corrected the target action"}`,
+				}, nil
+			case 2:
+				for _, fragment := range []string{"Explain the following content in concise English", "Input:", "Input text:"} {
+					if !strings.Contains(request.Input, fragment) {
+						t.Fatalf("expected english execution prompt to contain %q, got %q", fragment, request.Input)
+					}
+				}
+				for _, fragment := range []string{"请用简洁中文解释以下内容", "输入内容:", "选中文本"} {
+					if strings.Contains(request.Input, fragment) {
+						t.Fatalf("expected english correction to avoid chinese execution fragment %q, got %q", fragment, request.Input)
+					}
+				}
+				return model.GenerateTextResponse{
+					TaskID:     request.TaskID,
+					RunID:      request.RunID,
+					RequestID:  "req_execution_language",
+					Provider:   "openai_responses",
+					ModelID:    "gpt-5.4",
+					OutputText: "Explanation ready.",
+				}, nil
+			default:
+				t.Fatalf("unexpected GenerateText call %d", calls)
+				return model.GenerateTextResponse{}, nil
+			}
+		},
+	})
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_confirm_correction_language",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "你好世界",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+
+	if _, err := service.ConfirmTask(map[string]any{
+		"task_id":         taskID,
+		"confirmed":       false,
+		"correction_text": "Explain this selected paragraph instead.",
+	}); err != nil {
+		t.Fatalf("confirm task correction failed: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("expected correction reinference plus execution call, got %d", calls)
+	}
+}
+
 func TestServiceConfirmTaskExecutesCorrectedResultPageIntent(t *testing.T) {
 	service := newTestService()
 
@@ -10061,7 +10131,7 @@ func TestServiceStartTaskInjectsRetrievedMemoryIntoExecutionInput(t *testing.T) 
 	}
 }
 
-func TestServiceConfirmTaskPersistsRetrievalHitOncePerConfirmation(t *testing.T) {
+func TestServiceConfirmTaskReusesRetrievalHitsAfterConfirmation(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "确认后的执行结果。")
 	if service.storage == nil {
 		t.Fatal("expected storage service to be wired")
@@ -10121,8 +10191,8 @@ func TestServiceConfirmTaskPersistsRetrievalHitOncePerConfirmation(t *testing.T)
 		t.Fatalf("confirm task failed: %v", err)
 	}
 
-	if querySQLiteInt(t, db, `SELECT write_count FROM retrieval_hit_audit WHERE id = 1`) != 2 {
-		t.Fatalf("expected confirmation to add exactly one retrieval-hit write for task %s", taskID)
+	if querySQLiteInt(t, db, `SELECT write_count FROM retrieval_hit_audit WHERE id = 1`) != 1 {
+		t.Fatalf("expected confirmation to reuse the existing retrieval hits for task %s", taskID)
 	}
 }
 
@@ -10225,6 +10295,82 @@ func TestServiceClarificationReusesMaterializedMemoryHits(t *testing.T) {
 	}
 	if memoryStore.SearchCalls() != 1 {
 		t.Fatalf("expected clarification flow to reuse materialized hits without re-searching, calls=%d", memoryStore.SearchCalls())
+	}
+}
+
+func TestServiceConfirmTaskAcceptedReusesMaterializedMemoryHits(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Confirmed output.")
+	memoryStore := &sequentialMemoryStore{searchResults: [][]memory.RetrievalHit{
+		{{
+			MemoryID: "mem_materialized_accept_001",
+			Source:   "summary",
+			Summary:  "first retrieved summary should stay stable",
+			Score:    0.91,
+		}},
+		{{
+			MemoryID: "mem_drift_accept_002",
+			Source:   "summary",
+			Summary:  "second search result should not replace execution context",
+			Score:    0.99,
+		}},
+	}}
+	service.memory = memory.NewService(memoryStore)
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_confirm_memory_reuse",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "project alpha rollout",
+		},
+		"intent": map[string]any{
+			"name": "agent_loop",
+			"arguments": map[string]any{
+				"goal": "project alpha rollout",
+			},
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	if startResult["task"].(map[string]any)["status"] != "confirming_intent" {
+		t.Fatalf("expected confirmation gate before execution, got %+v", startResult["task"])
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+
+	confirmResult, err := service.ConfirmTask(map[string]any{
+		"task_id":   taskID,
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("confirm task failed: %v", err)
+	}
+	if confirmResult["delivery_result"] == nil {
+		t.Fatalf("expected accepted confirmation to execute task, got %+v", confirmResult)
+	}
+
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected confirmed task to remain in runtime")
+	}
+	hits := taskReadPlanRetrievalHits(record)
+	if len(hits) == 0 {
+		t.Fatalf("expected confirmed task to keep materialized retrieval hits, got %+v", record.MemoryReadPlans)
+	}
+	if hits[0].Summary != "first retrieved summary should stay stable" {
+		t.Fatalf("expected execution to reuse the first materialized hit, got %+v", hits)
+	}
+	for _, hit := range hits {
+		if hit.Summary == "second search result should not replace execution context" {
+			t.Fatalf("expected execution to avoid memory hit drift, got %+v", hits)
+		}
+	}
+	if memoryStore.SearchCalls() != 1 {
+		t.Fatalf("expected accepted confirmation to reuse materialized hits without re-searching, calls=%d", memoryStore.SearchCalls())
 	}
 }
 
