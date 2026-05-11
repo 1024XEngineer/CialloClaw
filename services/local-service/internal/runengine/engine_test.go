@@ -349,8 +349,11 @@ func TestEngineAppendAuditDataMergesTokenUsage(t *testing.T) {
 	if appended.TokenUsage["estimated_cost"] != 0.05 {
 		t.Fatalf("expected estimated_cost to merge, got %+v", appended.TokenUsage)
 	}
-	if appended.TokenUsage["request_id"] != "req_second" || appended.TokenUsage["model_id"] != "gpt-second" {
-		t.Fatalf("expected latest request metadata to win, got %+v", appended.TokenUsage)
+	if appended.TokenUsage["request_id"] != "req_first" || appended.TokenUsage["model_id"] != "gpt-first" {
+		t.Fatalf("expected representative request metadata to stay on the first execution call, got %+v", appended.TokenUsage)
+	}
+	if appended.TokenUsage["latency_ms"] != int64(120) {
+		t.Fatalf("expected representative latency to stay on the first execution call, got %+v", appended.TokenUsage)
 	}
 }
 

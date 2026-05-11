@@ -2242,17 +2242,84 @@ func mergeTaskTokenUsage(current map[string]any, update map[string]any) map[stri
 	}
 	merged["estimated_cost"] = tokenUsageFloat(current["estimated_cost"]) + tokenUsageFloat(update["estimated_cost"])
 	for _, key := range []string{"request_id", "provider", "model_id"} {
+		// Preserve the representative execution request metadata once the task
+		// has one. Auxiliary appends, such as async title refresh accounting,
+		// should only contribute token totals instead of replacing the primary
+		// provider/request identity shown in governance and dashboard views.
+		if strings.TrimSpace(tokenUsageString(current[key])) != "" {
+			continue
+		}
 		if value := strings.TrimSpace(tokenUsageString(update[key])); value != "" {
 			merged[key] = value
 		}
 	}
-	if latency := tokenUsageInt64(update["latency_ms"]); latency > 0 {
-		merged["latency_ms"] = latency
+	if tokenUsageInt64(current["latency_ms"]) <= 0 {
+		if latency := tokenUsageInt64(update["latency_ms"]); latency > 0 {
+			merged["latency_ms"] = latency
+		}
 	}
 	if fallback, ok := update["fallback"].(bool); ok {
 		merged["fallback"] = fallback
 	}
 	return merged
+}
+
+func tokenUsageInt(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int32:
+		return int(typed)
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	case float32:
+		return int(typed)
+	default:
+		return 0
+	}
+}
+
+func tokenUsageInt64(value any) int64 {
+	switch typed := value.(type) {
+	case int:
+		return int64(typed)
+	case int32:
+		return int64(typed)
+	case int64:
+		return typed
+	case float64:
+		return int64(typed)
+	case float32:
+		return int64(typed)
+	default:
+		return 0
+	}
+}
+
+func tokenUsageFloat(value any) float64 {
+	switch typed := value.(type) {
+	case float64:
+		return typed
+	case float32:
+		return float64(typed)
+	case int:
+		return float64(typed)
+	case int32:
+		return float64(typed)
+	case int64:
+		return float64(typed)
+	default:
+		return 0
+	}
+}
+
+func tokenUsageString(value any) string {
+	if typed, ok := value.(string); ok {
+		return typed
+	}
+	return ""
 }
 
 func (e *Engine) reserveTitleRefreshLocked(record *TaskRecord) {
@@ -2285,58 +2352,6 @@ func (e *Engine) finishTitleRefreshLocked(taskID string, expectedToken uint64) {
 		return
 	}
 	delete(e.titleCancels, taskID)
-}
-
-func tokenUsageInt(value any) int {
-	switch typed := value.(type) {
-	case int:
-		return typed
-	case int32:
-		return int(typed)
-	case int64:
-		return int(typed)
-	case float64:
-		return int(typed)
-	default:
-		return 0
-	}
-}
-
-func tokenUsageInt64(value any) int64 {
-	switch typed := value.(type) {
-	case int:
-		return int64(typed)
-	case int32:
-		return int64(typed)
-	case int64:
-		return typed
-	case float64:
-		return int64(typed)
-	default:
-		return 0
-	}
-}
-
-func tokenUsageFloat(value any) float64 {
-	switch typed := value.(type) {
-	case float64:
-		return typed
-	case float32:
-		return float64(typed)
-	case int:
-		return float64(typed)
-	case int64:
-		return float64(typed)
-	default:
-		return 0
-	}
-}
-
-func tokenUsageString(value any) string {
-	if typed, ok := value.(string); ok {
-		return typed
-	}
-	return ""
 }
 
 // UpdateSecuritySummary writes task-facing governance metadata back into the

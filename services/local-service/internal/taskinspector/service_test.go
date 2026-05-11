@@ -636,6 +636,57 @@ func TestServiceRunPreservesGeneratedTitlesAcrossAutomaticSync(t *testing.T) {
 	}
 }
 
+func TestServiceRunReusesPersistedGeneratedTitlesBeforeCallingModel(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "weekly.md"), []byte("- [ ] Weekly retro\n  note: review blockers and next steps\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	initialCalls := &atomic.Int32{}
+	initialService := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"每周复盘阻塞项"}`,
+		calls:  initialCalls,
+	})))
+	manualResult, err := initialService.Run(RunInput{
+		AllowGeneratedTitles: true,
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+	})
+	if err != nil {
+		t.Fatalf("initial Run returned error: %v", err)
+	}
+	if got := initialCalls.Load(); got != 1 {
+		t.Fatalf("expected initial manual run to call the model once, got %d", got)
+	}
+
+	reuseCalls := &atomic.Int32{}
+	reuseService := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"不该再次生成"}`,
+		calls:  reuseCalls,
+	})))
+	reusedResult, err := reuseService.Run(RunInput{
+		AllowGeneratedTitles: true,
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+		NotepadItems:         manualResult.NotepadItems,
+	})
+	if err != nil {
+		t.Fatalf("reuse Run returned error: %v", err)
+	}
+	if len(reusedResult.NotepadItems) != 1 || reusedResult.NotepadItems[0]["title"] != "每周复盘阻塞项" {
+		t.Fatalf("expected persisted generated title to be reused, got %+v", reusedResult.NotepadItems)
+	}
+	if got := reuseCalls.Load(); got != 0 {
+		t.Fatalf("expected persisted generated title to avoid a second model call, got %d", got)
+	}
+}
+
 func TestServiceRunResetsPreservedGeneratedTitlesWhenSourceChanges(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)

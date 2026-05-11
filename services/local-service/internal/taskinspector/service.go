@@ -114,11 +114,11 @@ func (s *Service) Run(input RunInput) (RunResult, error) {
 		inspectionID = fmt.Sprintf("insp_%d", s.now().UnixNano())
 	}
 	titleInvocations := make([]TitleGenerationAuditRecord, 0)
-	parsedFiles, parsedNotepadItems, err := s.inspectSources(sources, input.AllowGeneratedTitles, input.TitleGenerationOwner, &titleInvocations)
+	existingGeneratedTitles := generatedTitlesByItemID(input.NotepadItems)
+	parsedFiles, parsedNotepadItems, err := s.inspectSources(sources, input.AllowGeneratedTitles, input.TitleGenerationOwner, existingGeneratedTitles, &titleInvocations)
 	if err != nil {
 		return RunResult{}, err
 	}
-	parsedNotepadItems = preserveExistingGeneratedTitles(parsedNotepadItems, input.NotepadItems)
 	resolvedNotepadItems := cloneMapSlice(input.NotepadItems)
 	if sourceSynced {
 		resolvedNotepadItems = cloneMapSlice(parsedNotepadItems)
@@ -144,7 +144,7 @@ func (s *Service) Run(input RunInput) (RunResult, error) {
 	}, nil
 }
 
-func (s *Service) inspectSources(sources []string, allowGeneratedTitles bool, owner titlegen.GenerationOwner, titleInvocations *[]TitleGenerationAuditRecord) (int, []map[string]any, error) {
+func (s *Service) inspectSources(sources []string, allowGeneratedTitles bool, owner titlegen.GenerationOwner, existingGeneratedTitles map[string]map[string]any, titleInvocations *[]TitleGenerationAuditRecord) (int, []map[string]any, error) {
 	if s.fileSystem == nil || len(sources) == 0 {
 		return 0, nil, nil
 	}
@@ -196,7 +196,7 @@ func (s *Service) inspectSources(sources []string, allowGeneratedTitles bool, ow
 				}
 				return fmt.Errorf("decode task source file %s: %w", currentPath, err)
 			}
-			identifiedItems = append(identifiedItems, s.parseNotepadItemsFromMarkdown(sourcePathFromFSPath(currentPath), decoded.Text, s.now(), allowGeneratedTitles, owner, &remainingGeneratedTitles, titleInvocations)...)
+			identifiedItems = append(identifiedItems, s.parseNotepadItemsFromMarkdown(sourcePathFromFSPath(currentPath), decoded.Text, s.now(), allowGeneratedTitles, owner, existingGeneratedTitles, &remainingGeneratedTitles, titleInvocations)...)
 			return nil
 		}); err != nil {
 			return 0, nil, fmt.Errorf("%w: %s: %v", ErrInspectionSourceUnreadable, strings.TrimSpace(source), err)
@@ -425,7 +425,7 @@ func countChecklistItems(content string) int {
 	return count
 }
 
-func (s *Service) parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time, allowGeneratedTitles bool, owner titlegen.GenerationOwner, remainingGeneratedTitles *int, titleInvocations *[]TitleGenerationAuditRecord) []map[string]any {
+func (s *Service) parseNotepadItemsFromMarkdown(sourcePath, content string, now time.Time, allowGeneratedTitles bool, owner titlegen.GenerationOwner, existingGeneratedTitles map[string]map[string]any, remainingGeneratedTitles *int, titleInvocations *[]TitleGenerationAuditRecord) []map[string]any {
 	lines := strings.Split(content, "\n")
 	items := make([]map[string]any, 0)
 	var current map[string]any
@@ -437,7 +437,7 @@ func (s *Service) parseNotepadItemsFromMarkdown(sourcePath, content string, now 
 		if len(noteLines) > 0 && stringValue(current, "note_text") == "" {
 			current["note_text"] = strings.Join(noteLines, "\n")
 		}
-		items = append(items, s.normalizeParsedNotepadItem(current, sourcePath, now, allowGeneratedTitles, owner, remainingGeneratedTitles, titleInvocations))
+		items = append(items, s.normalizeParsedNotepadItem(current, sourcePath, now, allowGeneratedTitles, owner, existingGeneratedTitles, remainingGeneratedTitles, titleInvocations))
 		current = nil
 		noteLines = noteLines[:0]
 	}
@@ -545,7 +545,7 @@ func splitMetadataLine(line string) (string, string, bool) {
 	return key, value, true
 }
 
-func (s *Service) normalizeParsedNotepadItem(item map[string]any, sourcePath string, now time.Time, allowGeneratedTitles bool, owner titlegen.GenerationOwner, remainingGeneratedTitles *int, titleInvocations *[]TitleGenerationAuditRecord) map[string]any {
+func (s *Service) normalizeParsedNotepadItem(item map[string]any, sourcePath string, now time.Time, allowGeneratedTitles bool, owner titlegen.GenerationOwner, existingGeneratedTitles map[string]map[string]any, remainingGeneratedTitles *int, titleInvocations *[]TitleGenerationAuditRecord) map[string]any {
 	if stringValue(item, "bucket") == notepadBucketRecurringRule {
 		item["type"] = "recurring"
 		if stringValue(item, "repeat_rule_text") == "" {
@@ -575,26 +575,30 @@ func (s *Service) normalizeParsedNotepadItem(item map[string]any, sourcePath str
 		stringValue(item, "title"),
 		"待办事项",
 	))
-	shouldGenerateTitle := allowGeneratedTitles && s != nil && s.titlegen != nil && shouldGenerateNoteTitle(item)
-	if shouldGenerateTitle {
-		if cachedTitle, ok := s.titlegen.CachedNoteTitle(item, fallbackTitle); ok {
-			item["title"] = cachedTitle
-		} else if canGenerateTitleNow(remainingGeneratedTitles) {
-			// Consume the manual-generation budget only for cache misses that will
-			// actually call the title model, so repeated inspector passes do not let
-			// earlier cached notes starve later uncached notes.
-			generationCtx, cancel := context.WithTimeout(context.Background(), manualGeneratedTitleTimeout)
-			result := s.titlegen.GenerateNoteTitleResult(generationCtx, owner, item, fallbackTitle)
-			cancel()
-			item["title"] = result.Title
-			appendTitleGenerationInvocation(titleInvocations, result)
+	if existingTitle, ok := preservedGeneratedTitle(existingGeneratedTitles, item, fallbackTitle); ok {
+		item["title"] = existingTitle
+	} else {
+		shouldGenerateTitle := allowGeneratedTitles && s != nil && s.titlegen != nil && shouldGenerateNoteTitle(item)
+		if shouldGenerateTitle {
+			if cachedTitle, ok := s.titlegen.CachedNoteTitle(item, fallbackTitle); ok {
+				item["title"] = cachedTitle
+			} else if canGenerateTitleNow(remainingGeneratedTitles) {
+				// Consume the manual-generation budget only for cache misses that will
+				// actually call the title model, so repeated inspector passes do not let
+				// earlier cached notes starve later uncached notes.
+				generationCtx, cancel := context.WithTimeout(context.Background(), manualGeneratedTitleTimeout)
+				result := s.titlegen.GenerateNoteTitleResult(generationCtx, owner, item, fallbackTitle)
+				cancel()
+				item["title"] = result.Title
+				appendTitleGenerationInvocation(titleInvocations, result)
+			} else {
+				item["title"] = fallbackTitle
+			}
 		} else {
+			// Simple checklist items stay on the local fallback path and never spend
+			// the limited synchronous generation budget.
 			item["title"] = fallbackTitle
 		}
-	} else {
-		// Simple checklist items stay on the local fallback path and never spend
-		// the limited synchronous generation budget.
-		item["title"] = fallbackTitle
 	}
 	if stringValue(item, "planned_at") == "" {
 		item["planned_at"] = stringValue(item, "due_at")
@@ -840,11 +844,10 @@ func canGenerateTitleNow(remaining *int) bool {
 	return true
 }
 
-func preserveExistingGeneratedTitles(parsedItems []map[string]any, existingItems []map[string]any) []map[string]any {
-	if len(parsedItems) == 0 || len(existingItems) == 0 {
-		return parsedItems
+func generatedTitlesByItemID(existingItems []map[string]any) map[string]map[string]any {
+	if len(existingItems) == 0 {
+		return nil
 	}
-
 	existingByID := make(map[string]map[string]any, len(existingItems))
 	for _, item := range existingItems {
 		itemID := strings.TrimSpace(stringValue(item, "item_id"))
@@ -853,32 +856,26 @@ func preserveExistingGeneratedTitles(parsedItems []map[string]any, existingItems
 		}
 		existingByID[itemID] = item
 	}
+	return existingByID
+}
 
-	for _, item := range parsedItems {
-		itemID := strings.TrimSpace(stringValue(item, "item_id"))
-		if itemID == "" {
-			continue
-		}
-		existing, ok := existingByID[itemID]
-		if !ok || !sameGeneratedTitleSource(existing, item) {
-			continue
-		}
-		fallbackTitle := titlegen.CompactNoteFallback(firstNonEmpty(
-			stringValue(item, "note_text"),
-			stringValue(item, "title"),
-			"待办事项",
-		))
-		if strings.TrimSpace(stringValue(item, "title")) != fallbackTitle {
-			continue
-		}
-		existingTitle := strings.TrimSpace(stringValue(existing, "title"))
-		if existingTitle == "" || existingTitle == fallbackTitle {
-			continue
-		}
-		item["title"] = existingTitle
+func preservedGeneratedTitle(existingGeneratedTitles map[string]map[string]any, item map[string]any, fallbackTitle string) (string, bool) {
+	if len(existingGeneratedTitles) == 0 {
+		return "", false
 	}
-
-	return parsedItems
+	itemID := strings.TrimSpace(stringValue(item, "item_id"))
+	if itemID == "" {
+		return "", false
+	}
+	existing, ok := existingGeneratedTitles[itemID]
+	if !ok || !sameGeneratedTitleSource(existing, item) {
+		return "", false
+	}
+	existingTitle := strings.TrimSpace(stringValue(existing, "title"))
+	if existingTitle == "" || existingTitle == fallbackTitle {
+		return "", false
+	}
+	return existingTitle, true
 }
 
 func sameGeneratedTitleSource(left map[string]any, right map[string]any) bool {
