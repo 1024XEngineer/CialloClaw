@@ -1,8 +1,9 @@
 {
   "extends": "../../packages/config/tsconfig/base.json",
   "compilerOptions": {
+    "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"],
+      "@/*": ["src/*"],
       "@cialloclaw/protocol": ["../../packages/protocol/index.ts"],
       "@cialloclaw/ui": ["../../packages/ui/src/index.ts"]
     },
