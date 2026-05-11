@@ -101,8 +101,16 @@ type failingExecutionBackend struct {
 	err error
 }
 
+type failingRiskPrechecker struct {
+	err error
+}
+
 func (b failingExecutionBackend) RunCommand(_ context.Context, _ string, _ []string, _ string) (tools.CommandExecutionResult, error) {
 	return tools.CommandExecutionResult{}, b.err
+}
+
+func (p failingRiskPrechecker) Precheck(context.Context, tools.RiskPrecheckInput) (tools.RiskPrecheckResult, error) {
+	return tools.RiskPrecheckResult{}, p.err
 }
 
 type successfulExecutionBackend struct {
@@ -898,6 +906,79 @@ func newTestServiceWithExecutionWorkersAndScreen(t *testing.T, modelOutput strin
 		screenClient = sidecarclient.NewLocalScreenCaptureClient(fileSystem)
 	}
 	executor := execution.NewService(fileSystem, executionBackend, playwrightClient, ocrClient, mediaClient, screenClient, modelService, auditService, checkpoint.NewService(checkpointWriter), deliveryService, toolRegistry, toolExecutor, pluginService).WithArtifactStore(storageService.ArtifactStore()).WithExtensionAssetCatalog(storageService)
+
+	service, err := NewService(Deps{
+		Context:   taskcontext.NewCaptureService(),
+		Intent:    intent.NewService(),
+		RunEngine: mustNewStoredEngine(t, storageService.TaskRunStore()),
+		Delivery:  deliveryService,
+		Memory:    memory.NewServiceFromStorage(storageService.MemoryStore(), storageService.Capabilities().MemoryRetrievalBackend),
+		Risk:      risk.NewService(),
+		Model:     modelService,
+		Tools:     toolRegistry,
+		Plugin:    pluginService,
+		Audit:     auditService,
+		TraceEval: traceeval.NewService(storageService.TraceStore(), storageService.EvalStore()),
+		Executor:  executor,
+		Inspector: taskinspector.NewService(fileSystem),
+		Storage:   storageService,
+	})
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	return service, workspaceRoot
+}
+
+func newTestServiceWithExecutionPrechecker(t *testing.T, modelOutput string, prechecker tools.RiskPrechecker) (*Service, string) {
+	t.Helper()
+
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("new local path policy: %v", err)
+	}
+	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "service.db")))
+	t.Cleanup(func() { _ = storageService.Close() })
+	modelService := model.NewService(modelConfig(), stubModelClient{output: modelOutput})
+	auditService := audit.NewService(storageService.AuditWriter())
+	deliveryService := delivery.NewService()
+	toolRegistry := tools.NewRegistry()
+	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
+		t.Fatalf("register builtin tools: %v", err)
+	}
+	if err := sidecarclient.RegisterPlaywrightTools(toolRegistry); err != nil {
+		t.Fatalf("register playwright tools: %v", err)
+	}
+	if err := sidecarclient.RegisterOCRTools(toolRegistry); err != nil {
+		t.Fatalf("register ocr tools: %v", err)
+	}
+	if err := sidecarclient.RegisterMediaTools(toolRegistry); err != nil {
+		t.Fatalf("register media tools: %v", err)
+	}
+	toolExecutor := tools.NewToolExecutor(
+		toolRegistry,
+		tools.WithToolCallRecorder(tools.NewToolCallRecorder(storageService.ToolCallSink())),
+		tools.WithRiskPrechecker(prechecker),
+	)
+	pluginService := plugin.NewService()
+	seedTestExtensionAssets(t, storageService, pluginService)
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	executor := execution.NewService(
+		fileSystem,
+		platform.LocalExecutionBackend{},
+		sidecarclient.NewNoopPlaywrightSidecarClient(),
+		sidecarclient.NewNoopOCRWorkerClient(),
+		sidecarclient.NewNoopMediaWorkerClient(),
+		sidecarclient.NewLocalScreenCaptureClient(fileSystem),
+		modelService,
+		auditService,
+		checkpoint.NewService(storageService.RecoveryPointWriter()),
+		deliveryService,
+		toolRegistry,
+		toolExecutor,
+		pluginService,
+	).WithArtifactStore(storageService.ArtifactStore()).WithExtensionAssetCatalog(storageService)
 
 	service, err := NewService(Deps{
 		Context:   taskcontext.NewCaptureService(),
@@ -3095,6 +3176,60 @@ func TestServiceNotepadConvertToTaskPublishesRequestTraceID(t *testing.T) {
 		}
 	default:
 		t.Fatal("expected notepad conversion to publish a task start event")
+	}
+}
+
+func TestServiceNotepadConvertToTaskRollsBackLinkedNoteAfterPublishedTaskStartFailure(t *testing.T) {
+	service, _ := newTestServiceWithExecutionPrechecker(t, "Converted rollback note finished.", failingRiskPrechecker{
+		err: errors.New("risk precheck unavailable"),
+	})
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":   "todo_governance_failure",
+		"title":     "整理治理失败回滚",
+		"bucket":    "upcoming",
+		"status":    "normal",
+		"type":      "todo_item",
+		"note_text": "请整理这份很长的会议纪要并输出完整文档到工作区，确保结果足够长以走正式文档交付。",
+		"related_resources": []map[string]any{{
+			"resource_id":   "todo_governance_failure_source",
+			"path":          "workspace/review-notes",
+			"resource_type": "folder",
+		}},
+	}})
+
+	starts := make(chan string, 1)
+	unsubscribe := service.SubscribeTaskStarts(func(taskID, _, _ string) {
+		starts <- taskID
+	})
+	defer unsubscribe()
+
+	_, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_governance_failure",
+		"confirmed": true,
+	})
+	if err == nil || !strings.Contains(err.Error(), "risk precheck unavailable") {
+		t.Fatalf("expected direct notepad conversion to surface governance precheck failure, got %v", err)
+	}
+
+	var taskID string
+	select {
+	case taskID = <-starts:
+		if taskID == "" {
+			t.Fatal("expected direct notepad conversion to publish task start before failing")
+		}
+	default:
+		t.Fatal("expected direct notepad conversion to publish task start before failing")
+	}
+
+	if _, ok := service.runEngine.GetTask(taskID); ok {
+		t.Fatalf("expected rollback to delete provisional task %s after failure", taskID)
+	}
+	item, ok := service.runEngine.NotepadItem("todo_governance_failure")
+	if !ok {
+		t.Fatal("expected notepad item to remain available after rollback")
+	}
+	if linkedTaskID := stringValue(item, "linked_task_id", ""); linkedTaskID != "" {
+		t.Fatalf("expected rollback to clear stale linked_task_id after failure, got %+v", item)
 	}
 }
 

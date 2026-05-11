@@ -106,9 +106,6 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 	}
 	response, err := s.finishNotepadTask(snapshot, suggestion, task)
 	if err != nil {
-		if publishedTaskStart {
-			return nil, err
-		}
 		return nil, s.rollbackLinkedNotepadTask(itemID, task.TaskID, err)
 	}
 	if !publishedTaskStart {
