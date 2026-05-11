@@ -172,10 +172,11 @@ func isLowRiskBrowserObservationOperation(operationName string) bool {
 }
 
 // requiresApprovalForSensitiveWebTarget keeps read-only web tools low risk for
-// explicit web targets while keeping local, private, and host-only destinations
-// on the approval path. The check intentionally stays on the user-provided URL
-// shape instead of resolving DNS during precheck so task startup does not block
-// on network name service.
+// explicit http(s) targets by shape. Approval remains required only for
+// localhost-style hosts, single-label hosts, local-only suffixes, and literal
+// loopback/private/link-local/CGNAT IP targets. The precheck intentionally
+// avoids DNS resolution and broader public-Internet classification so task
+// startup does not block on name service or reinterpret explicit user targets.
 func (s *Service) requiresApprovalForSensitiveWebTarget(operationName, targetObject string) bool {
 	switch strings.TrimSpace(operationName) {
 	case "page_read", "page_search":
