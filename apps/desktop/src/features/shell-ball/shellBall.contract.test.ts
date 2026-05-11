@@ -8763,6 +8763,7 @@ test("shell-ball coordinator subscribes to formal task, approval, and runtime up
   assert.match(coordinatorSource, /const operationName = typeof approvalRequest\.operation_name === "string" \? approvalRequest\.operation_name\.trim\(\) : "";/);
   assert.match(coordinatorSource, /const targetObject = typeof approvalRequest\.target_object === "string" \? approvalRequest\.target_object\.trim\(\) : "";/);
   assert.match(coordinatorSource, /const reason = typeof approvalRequest\.reason === "string" \? approvalRequest\.reason\.trim\(\) : "";/);
+  assert.match(coordinatorSource, /if \(result\.task\?\.status === "waiting_auth"\) \{[\s\S]*仪表盘的安全页完成授权/);
   assert.match(coordinatorSource, /subscribeAllTaskRuntime\(\(payload\) => \{/);
   assert.match(coordinatorSource, /const queuedRuntimeNotificationsRef = useRef\(new Map<string, QueuedRuntimeNotification\[]>\(\)\);/);
   assert.match(coordinatorSource, /queuedRuntimeNotifications\.forEach\(\(notification\) => \{\s*appendRuntimeObservationBubble\(notification\.taskId, notification\.payload\);/);

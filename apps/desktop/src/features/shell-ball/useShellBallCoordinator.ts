@@ -889,6 +889,18 @@ export function createShellBallAgentBubbleItem(
     });
   }
 
+  if (result.task?.status === "waiting_auth") {
+    return createShellBallTextBubbleItem({
+      role: "agent",
+      text: "此任务需要授权，请双击悬浮球后前往仪表盘的安全页完成授权。",
+      bubbleType: "status",
+      createdAt: fallbackCreatedAt,
+      taskId,
+      turnIndex: turnOrder.turnIndex,
+      turnPhase: turnOrder.turnPhase,
+    });
+  }
+
   return createShellBallTextBubbleItem({
     role: "agent",
     text: "已收到，正在处理。",
