@@ -171,7 +171,7 @@ func (s *Service) advanceRestartedTaskAttempt(previousTask, task runengine.TaskR
 		return runengine.TaskRecord{}, nil, governanceErr
 	}
 	if handled {
-		bubble := mapValue(governedResponse, "bubble_message")
+		bubble := mapValue(governedResponse.Map(), "bubble_message")
 		if len(bubble) == 0 {
 			bubble = governedTask.BubbleMessage
 		}

@@ -134,14 +134,10 @@ func extractJSONObject(raw string) string {
 	return trimmed[start : end+1]
 }
 
-func (s *Service) socialChatInputResponse(decision inputRouteDecision) map[string]any {
+func (s *Service) socialChatInputResponse(decision inputRouteDecision) (TaskEntryResponse, error) {
 	createdAt := time.Now().Format(dateTimeLayout)
 	bubble := s.delivery.BuildBubbleMessage("", "result", decision.Reply, createdAt)
-	return map[string]any{
-		"task":            nil,
-		"bubble_message":  bubble,
-		"delivery_result": nil,
-	}
+	return buildTaskEntryResponse(nil, bubble, nil)
 }
 
 func applyInputRouteDecision(suggestion intent.Suggestion, decision inputRouteDecision) intent.Suggestion {

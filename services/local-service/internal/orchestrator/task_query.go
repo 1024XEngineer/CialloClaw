@@ -94,13 +94,6 @@ func (s *Service) taskDetailGet(request TaskDetailGetRequest) (TaskDetailGetResp
 	if approvalRequest != nil {
 		securitySummary["pending_authorizations"] = 1
 	}
-	if strings.TrimSpace(stringValue(securitySummary, "security_status", "")) == "" {
-		if approvalRequest != nil {
-			securitySummary["security_status"] = "pending_confirmation"
-		} else {
-			securitySummary["security_status"] = "normal"
-		}
-	}
 	if strings.TrimSpace(stringValue(securitySummary, "risk_level", "")) == "" {
 		securitySummary["risk_level"] = firstNonEmptyString(
 			stringValue(approvalRequest, "risk_level", ""),
@@ -108,6 +101,9 @@ func (s *Service) taskDetailGet(request TaskDetailGetRequest) (TaskDetailGetResp
 		)
 	}
 	latestRestorePoint := s.normalizeTaskDetailRestorePoint(task.TaskID, securitySummary)
+	if strings.TrimSpace(stringValue(securitySummary, "security_status", "")) == "" {
+		securitySummary["security_status"] = deriveTaskDetailSecurityStatus(task, approvalRequest, authorizationRecord, auditRecord, latestRestorePoint)
+	}
 	if latestRestorePoint == nil {
 		securitySummary["latest_restore_point"] = nil
 	} else {
@@ -171,6 +167,33 @@ func (s *Service) taskDetailGet(request TaskDetailGetRequest) (TaskDetailGetResp
 		SecuritySummary:     securitySummaryDTO,
 		RuntimeSummary:      runtimeSummaryDTO,
 	}, nil
+}
+
+// deriveTaskDetailSecurityStatus rebuilds a missing task-detail status from the
+// closest formal governance and recovery anchors instead of defaulting every
+// incomplete record to the optimistic "normal" state.
+func deriveTaskDetailSecurityStatus(task runengine.TaskRecord, approvalRequest, authorizationRecord, auditRecord, latestRestorePoint map[string]any) string {
+	if approvalRequest != nil || strings.TrimSpace(task.Status) == "waiting_auth" {
+		return "pending_confirmation"
+	}
+	if normalizeTaskDetailAuthorizationDecision(stringValue(authorizationRecord, "decision", "")) == "deny_once" {
+		return "intercepted"
+	}
+	if strings.TrimSpace(stringValue(auditRecord, "action", "")) == "restore_apply" {
+		switch strings.TrimSpace(stringValue(auditRecord, "result", "")) {
+		case "success":
+			return "recovered"
+		case "failed":
+			return "execution_error"
+		}
+	}
+	if strings.TrimSpace(task.Status) == "failed" {
+		return "execution_error"
+	}
+	if latestRestorePoint != nil {
+		return "recoverable"
+	}
+	return "normal"
 }
 
 func taskDTOFromRecord(record runengine.TaskRecord) TaskDTO {

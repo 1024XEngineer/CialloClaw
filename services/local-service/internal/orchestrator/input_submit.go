@@ -18,14 +18,10 @@ func (s *Service) SubmitInput(request SubmitInputRequest) (TaskEntryResponse, er
 // SubmitInputFromParams lets the RPC layer reuse the normalized protocol map it
 // already validated so submit-input requests avoid an extra DTO-to-map bounce.
 func (s *Service) SubmitInputFromParams(params map[string]any) (TaskEntryResponse, error) {
-	response, err := s.submitInput(params)
-	if err != nil {
-		return TaskEntryResponse{}, err
-	}
-	return newTaskEntryResponse(response)
+	return s.submitInput(params)
 }
 
-func (s *Service) submitInput(params map[string]any) (map[string]any, error) {
+func (s *Service) submitInput(params map[string]any) (TaskEntryResponse, error) {
 	flow := s.prepareInputSubmitFlow(params)
 	if response, handled, err := s.maybeContinueInputSubmit(&flow); err != nil || handled {
 		return response, err
@@ -33,8 +29,8 @@ func (s *Service) submitInput(params map[string]any) (map[string]any, error) {
 	if response, handled, err := s.maybeHandleSuggestedInputScreen(flow); err != nil || handled {
 		return response, err
 	}
-	if response, handled := s.maybeRouteUnanchoredInput(&flow); handled {
-		return response, nil
+	if response, handled, err := s.maybeRouteUnanchoredInput(&flow); err != nil || handled {
+		return response, err
 	}
 	flow.PreferredDelivery, flow.FallbackDelivery = inputSubmitDeliveryPreference(flow)
 	if response, handled, err := s.maybeCreateWaitingInputTask(flow); err != nil || handled {
@@ -60,7 +56,7 @@ func (s *Service) prepareInputSubmitFlow(params map[string]any) taskEntryFlow {
 	}
 }
 
-func (s *Service) maybeContinueInputSubmit(flow *taskEntryFlow) (map[string]any, bool, error) {
+func (s *Service) maybeContinueInputSubmit(flow *taskEntryFlow) (TaskEntryResponse, bool, error) {
 	response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(flow.Params, flow.Snapshot, nil, taskContinuationOptions{
 		ConfirmRequired:      flow.ConfirmRequired,
 		ForceConfirmRequired: flow.ForceConfirmRequired,
@@ -71,23 +67,27 @@ func (s *Service) maybeContinueInputSubmit(flow *taskEntryFlow) (map[string]any,
 	if strings.TrimSpace(resolvedSessionID) != "" {
 		flow.Params = withResolvedSessionID(flow.Params, resolvedSessionID)
 	}
-	return nil, false, nil
+	return TaskEntryResponse{}, false, nil
 }
 
-func (s *Service) maybeHandleSuggestedInputScreen(flow taskEntryFlow) (map[string]any, bool, error) {
+func (s *Service) maybeHandleSuggestedInputScreen(flow taskEntryFlow) (TaskEntryResponse, bool, error) {
 	return s.handleScreenAnalyzeSuggestion(flow.Params, flow.Snapshot, flow.Suggestion)
 }
 
-func (s *Service) maybeRouteUnanchoredInput(flow *taskEntryFlow) (map[string]any, bool) {
+func (s *Service) maybeRouteUnanchoredInput(flow *taskEntryFlow) (TaskEntryResponse, bool, error) {
 	decision, ok := s.routeUnanchoredSubmitInput(context.Background(), flow.Snapshot, flow.Suggestion, flow.ConfirmRequired)
 	if !ok {
-		return nil, false
+		return TaskEntryResponse{}, false, nil
 	}
 	if decision.Route == inputRouteSocialChat {
-		return s.socialChatInputResponse(decision), true
+		response, err := s.socialChatInputResponse(decision)
+		if err != nil {
+			return TaskEntryResponse{}, false, err
+		}
+		return response, true, nil
 	}
 	flow.Suggestion = applyInputRouteDecision(flow.Suggestion, decision)
-	return nil, false
+	return TaskEntryResponse{}, false, nil
 }
 
 func inputSubmitDeliveryPreference(flow taskEntryFlow) (string, string) {
@@ -98,9 +98,9 @@ func inputSubmitDeliveryPreference(flow taskEntryFlow) (string, string) {
 	return preferredDelivery, fallbackDelivery
 }
 
-func (s *Service) maybeCreateWaitingInputTask(flow taskEntryFlow) (map[string]any, bool, error) {
+func (s *Service) maybeCreateWaitingInputTask(flow taskEntryFlow) (TaskEntryResponse, bool, error) {
 	if s.intent.AnalyzeSnapshot(flow.Snapshot) != "waiting_input" {
-		return nil, false, nil
+		return TaskEntryResponse{}, false, nil
 	}
 	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
 		SessionID:         stringValue(flow.Params, "session_id", ""),
@@ -120,24 +120,25 @@ func (s *Service) maybeCreateWaitingInputTask(flow taskEntryFlow) (map[string]an
 
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleInputNeedGoal, nil), task.StartedAt.Format(dateTimeLayout))
 	task = s.persistTaskPresentation(task, bubble)
-	return buildTaskEntryResponse(task, bubble, nil), true, nil
+	response, err := buildTaskEntryResponse(&task, bubble, nil)
+	return response, true, err
 }
 
-func (s *Service) finishInputSubmit(flow taskEntryFlow, task runengine.TaskRecord) (map[string]any, error) {
+func (s *Service) finishInputSubmit(flow taskEntryFlow, task runengine.TaskRecord) (TaskEntryResponse, error) {
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(flow.Suggestion.RequiresConfirm), bubbleTextForInput(flow.Suggestion), task.StartedAt.Format(dateTimeLayout))
 	if flow.Suggestion.RequiresConfirm {
 		task = s.persistTaskPresentation(task, bubble)
-		return buildTaskEntryResponse(task, bubble, nil), nil
+		return buildTaskEntryResponse(&task, bubble, nil)
 	}
 	if queuedTask, queueBubble, queued, queueErr := s.queueTaskIfSessionBusy(task); queueErr != nil {
-		return nil, queueErr
+		return TaskEntryResponse{}, queueErr
 	} else if queued {
-		return buildTaskEntryResponse(queuedTask, queueBubble, nil), nil
+		return buildTaskEntryResponse(&queuedTask, queueBubble, nil)
 	}
 
 	governedTask, governedResponse, handled, governanceErr := s.handleTaskGovernanceDecision(task, flow.Suggestion.Intent)
 	if governanceErr != nil {
-		return nil, governanceErr
+		return TaskEntryResponse{}, governanceErr
 	}
 	if handled {
 		return governedResponse, nil
@@ -148,9 +149,9 @@ func (s *Service) finishInputSubmit(flow taskEntryFlow, task runengine.TaskRecor
 	var execErr error
 	task, bubble, deliveryResult, _, execErr = s.executeTask(task, flow.Snapshot, flow.Suggestion.Intent)
 	if execErr != nil {
-		return nil, execErr
+		return TaskEntryResponse{}, execErr
 	}
-	return buildTaskEntryResponse(task, bubble, deliveryResult), nil
+	return buildTaskEntryResponse(&task, bubble, deliveryResult)
 }
 
 // deliveryPreferenceFromSubmit reads delivery preferences from

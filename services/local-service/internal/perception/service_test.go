@@ -11,7 +11,7 @@ func TestCaptureContextSignalsNormalizesNestedSignals(t *testing.T) {
 	snapshot := CaptureContextSignals("floating_ball", "hover", map[string]any{
 		"page": map[string]any{
 			"title":        "Article",
-			"url":          "https://example.com/article",
+			"url":          "https://user:pass@example.com/article?draft=1#summary",
 			"app_name":     "browser",
 			"window_title": "Browser - Example",
 			"visible_text": "Important visible page text",

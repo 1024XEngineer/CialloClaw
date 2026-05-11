@@ -40,18 +40,18 @@ type taskContinuationOptions struct {
 	ForceConfirmRequired bool
 }
 
-func (s *Service) maybeContinueExistingTask(params map[string]any, snapshot taskcontext.TaskContextSnapshot, explicitIntent map[string]any, options taskContinuationOptions) (map[string]any, bool, string, error) {
+func (s *Service) maybeContinueExistingTask(params map[string]any, snapshot taskcontext.TaskContextSnapshot, explicitIntent map[string]any, options taskContinuationOptions) (TaskEntryResponse, bool, string, error) {
 	explicitSessionID := strings.TrimSpace(stringValue(params, "session_id", ""))
 	continuationContext := s.resolveTaskContinuationContext(explicitSessionID)
 	decision := s.classifyTaskContinuation(snapshot, explicitIntent, continuationContext, options)
 	if decision.Decision == "continue" && strings.TrimSpace(decision.TaskID) != "" {
 		task, ok := s.loadTaskForContinuation(decision.TaskID)
 		if !ok {
-			return nil, false, explicitSessionID, nil
+			return TaskEntryResponse{}, false, explicitSessionID, nil
 		}
 		response, err := s.continueTask(task, snapshot, explicitIntent, decision, options)
 		if err != nil {
-			return nil, false, explicitSessionID, err
+			return TaskEntryResponse{}, false, explicitSessionID, err
 		}
 		return response, true, task.SessionID, nil
 	}
@@ -60,9 +60,9 @@ func (s *Service) maybeContinueExistingTask(params map[string]any, snapshot task
 	// decision is "new_task", the backend should open a fresh hidden session so
 	// unrelated work does not get serialized behind the old task queue.
 	if strings.TrimSpace(continuationContext.SessionID) != "" && (strings.TrimSpace(explicitSessionID) != "" || continuationContext.SessionMode == "implicit_idle") {
-		return nil, false, continuationContext.SessionID, nil
+		return TaskEntryResponse{}, false, continuationContext.SessionID, nil
 	}
-	return nil, false, "", nil
+	return TaskEntryResponse{}, false, "", nil
 }
 
 func (s *Service) continuationCandidates(sessionID string) []runengine.TaskRecord {
@@ -677,7 +677,7 @@ func nonEmptyAndDifferent(left, right string) bool {
 	return left != "" && right != "" && left != right
 }
 
-func (s *Service) continueTask(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, explicitIntent map[string]any, decision taskContinuationDecision, options taskContinuationOptions) (map[string]any, error) {
+func (s *Service) continueTask(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, explicitIntent map[string]any, decision taskContinuationDecision, options taskContinuationOptions) (TaskEntryResponse, error) {
 	if task.Status == "waiting_input" || task.Status == "confirming_intent" {
 		return s.continuePendingTask(task, snapshot, explicitIntent, options)
 	}
@@ -690,16 +690,12 @@ func (s *Service) continueTask(task runengine.TaskRecord, snapshot taskcontext.T
 		SteeringMessage: buildTaskContinuationInstruction(continuationSnapshot, explicitIntent),
 	})
 	if !changed {
-		return nil, ErrTaskNotFound
+		return TaskEntryResponse{}, ErrTaskNotFound
 	}
-	return map[string]any{
-		"task":            taskMap(updatedTask),
-		"bubble_message":  bubble,
-		"delivery_result": nil,
-	}, nil
+	return buildTaskEntryResponse(&updatedTask, bubble, nil)
 }
 
-func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, explicitIntent map[string]any, options taskContinuationOptions) (map[string]any, error) {
+func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, explicitIntent map[string]any, options taskContinuationOptions) (TaskEntryResponse, error) {
 	baseSnapshot := snapshotFromTask(task)
 	continuationSnapshot := sanitizeContinuationUpdateSnapshot(baseSnapshot, snapshot)
 	mergedSnapshot := mergeContinuationSnapshots(baseSnapshot, continuationSnapshot)
@@ -712,13 +708,9 @@ func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot taskco
 			BubbleMessage: bubble,
 		})
 		if !changed {
-			return nil, ErrTaskNotFound
+			return TaskEntryResponse{}, ErrTaskNotFound
 		}
-		return map[string]any{
-			"task":            taskMap(updatedTask),
-			"bubble_message":  bubble,
-			"delivery_result": nil,
-		}, nil
+		return buildTaskEntryResponse(&updatedTask, bubble, nil)
 	}
 
 	confirmRequired := pendingContinuationRequiresConfirm(task, continuationSnapshot, options)
@@ -740,32 +732,24 @@ func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot taskco
 		BubbleMessage: bubble,
 	})
 	if !changed {
-		return nil, ErrTaskNotFound
+		return TaskEntryResponse{}, ErrTaskNotFound
 	}
 	if suggestion.RequiresConfirm {
-		return map[string]any{
-			"task":            taskMap(updatedTask),
-			"bubble_message":  bubble,
-			"delivery_result": nil,
-		}, nil
+		return buildTaskEntryResponse(&updatedTask, bubble, nil)
 	}
 
 	governedTask, governedResponse, handled, governanceErr := s.handleTaskGovernanceDecision(updatedTask, suggestion.Intent)
 	if governanceErr != nil {
-		return nil, governanceErr
+		return TaskEntryResponse{}, governanceErr
 	}
 	if handled {
 		return governedResponse, nil
 	}
 	executedTask, resultBubble, deliveryResult, _, execErr := s.executeTask(governedTask, mergedSnapshot, suggestion.Intent)
 	if execErr != nil {
-		return nil, execErr
+		return TaskEntryResponse{}, execErr
 	}
-	return map[string]any{
-		"task":            taskMap(executedTask),
-		"bubble_message":  resultBubble,
-		"delivery_result": deliveryResult,
-	}, nil
+	return buildTaskEntryResponse(&executedTask, resultBubble, deliveryResult)
 }
 
 func pendingContinuationRequiresConfirm(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, options taskContinuationOptions) bool {

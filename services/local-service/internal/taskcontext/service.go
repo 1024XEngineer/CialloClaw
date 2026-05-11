@@ -1,7 +1,11 @@
 // Package taskcontext captures and normalizes task-facing input snapshots.
 package taskcontext
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/urlutil"
+)
 
 // TaskContextSnapshot aggregates the normalized request context that the main
 // task pipeline uses for intent inference and orchestration.
@@ -96,7 +100,7 @@ func (s *CaptureService) Capture(params map[string]any) TaskContextSnapshot {
 		ErrorText:      errorText,
 		Files:          files,
 		PageTitle:      firstNonEmpty(stringValue(pageContext, "title"), stringValue(pageFallback, "title")),
-		PageURL:        firstNonEmpty(stringValue(pageContext, "url"), stringValue(pageFallback, "url")),
+		PageURL:        urlutil.SanitizeContextURL(firstNonEmpty(stringValue(pageContext, "url"), stringValue(pageFallback, "url"))),
 		AppName:        firstNonEmpty(stringValue(pageContext, "app_name"), stringValue(pageFallback, "app_name")),
 		BrowserKind:    firstNonEmpty(stringValue(pageContext, "browser_kind"), stringValue(pageFallback, "browser_kind")),
 		ProcessPath:    firstNonEmpty(stringValue(pageContext, "process_path"), stringValue(pageFallback, "process_path")),
