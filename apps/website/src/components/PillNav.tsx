@@ -1,6 +1,8 @@
 import { Github, Languages, Menu } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
+import { useI18n } from "@/lib/i18n.tsx";
+import { useWebsiteTheme } from "@/lib/theme.tsx";
 import { SearchBar } from "@/components/SearchBar";
 import { SearchOverlay } from "@/components/SearchOverlay";
 import { ThemeSwitch } from "@/components/ThemeSwitch";
@@ -8,8 +10,6 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
@@ -29,22 +29,9 @@ type PillNavProps = {
 
 export function PillNav({ activeHref, className, isHome = false }: PillNavProps) {
   const [open, setOpen] = useState(false);
-  const [isDark, setIsDark] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
-  const [language, setLanguage] = useState<"zh" | "en">("zh");
-
-  useEffect(() => {
-    const storedTheme = window.localStorage.getItem("cialloclaw-website-theme");
-    const nextTheme = storedTheme === "dark" ? "dark" : "light";
-    setIsDark(nextTheme === "dark");
-    document.documentElement.dataset.theme = nextTheme;
-  }, []);
-
-  useEffect(() => {
-    const nextTheme = isDark ? "dark" : "light";
-    document.documentElement.dataset.theme = nextTheme;
-    window.localStorage.setItem("cialloclaw-website-theme", nextTheme);
-  }, [isDark]);
+  const { isDark, toggleTheme } = useWebsiteTheme();
+  const { locale, setLocale, t } = useI18n();
 
   return (
     <header
@@ -62,36 +49,47 @@ export function PillNav({ activeHref, className, isHome = false }: PillNavProps)
               alt="CialloClaw logo"
               className="h-10 w-10 object-cover"
             />
-            <span className="text-[30px] font-medium tracking-[-0.01em] text-[color:var(--cc-ink)] leading-none">CialloClaw</span>
+            <span
+              className="text-[30px] font-medium tracking-[-0.01em] text-[color:var(--cc-ink)] leading-none"
+              style={{ fontFamily: "'Montserrat', sans-serif" }}
+            >
+              CialloClaw
+            </span>
           </Link>
 
           <div className="hidden max-w-[360px] flex-1 lg:block">
-            <SearchBar placeholder="搜索" onFocus={() => setSearchOpen(true)} className="w-full [&_.group]:max-w-none" />
+            <SearchBar placeholder={t("nav.search.placeholder")} onFocus={() => setSearchOpen(true)} className="w-full [&_.group]:max-w-none" />
           </div>
         </div>
 
         <nav className="hidden shrink-0 items-center gap-5 xl:flex">
-          <Link to="/docs/what-is" className={navTriggerClassName(activeHref.startsWith("/docs"))}>
-            <span>文档</span>
+          <Link
+            to="/docs/what-is"
+            className={cn(
+              "text-sm font-bold transition-colors",
+              activeHref.startsWith("/docs")
+                ? "text-[color:var(--cc-ink)]"
+                : "text-[color:var(--cc-ink-muted)] hover:text-[color:var(--cc-ink)]",
+            )}
+          >
+            {t("nav.docs")}
           </Link>
 
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button type="button" className={navIconTriggerClassName()} aria-label="Language selector">
-                <Languages className="h-4 w-4" />
-              </button>
+            <DropdownMenuTrigger className={navIconTriggerClassName()}>
+              <Languages className="h-4 w-4" />
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuCheckboxItem className="font-bold" checked={language === "zh"} onCheckedChange={() => setLanguage("zh")}>
-                中文
+            <DropdownMenuContent data-role="select" className="min-w-[140px]">
+              <DropdownMenuCheckboxItem className="font-bold" checked={locale === "zh"} onCheckedChange={() => setLocale("zh")}>
+                {t("nav.lang.zh")}
               </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem className="font-bold" checked={language === "en"} onCheckedChange={() => setLanguage("en")}>
-                English
+              <DropdownMenuCheckboxItem className="font-bold" checked={locale === "en"} onCheckedChange={() => setLocale("en")}>
+                {t("nav.lang.en")}
               </DropdownMenuCheckboxItem>
             </DropdownMenuContent>
           </DropdownMenu>
 
-          <ThemeSwitch checked={isDark} onChange={(checked) => setIsDark(checked)} />
+          <ThemeSwitch checked={isDark} onChange={toggleTheme} />
 
           <a
             href="https://github.com/1024XEngineer/CialloClaw"
@@ -116,11 +114,11 @@ export function PillNav({ activeHref, className, isHome = false }: PillNavProps)
         <div className="absolute inset-x-0 top-full border-t border-[color:var(--cc-line)] bg-[color:var(--cc-bg)] px-5 py-4 backdrop-blur-xl xl:hidden">
           <div className="mx-auto flex max-w-[1600px] flex-col gap-2">
             <div className="flex h-11 items-center gap-3 rounded-2xl border border-[color:var(--cc-line)] bg-[color:var(--cc-surface)] px-4">
-              <SearchBar placeholder="搜索" onFocus={() => setSearchOpen(true)} className="w-full [&_.group]:max-w-none [&_.input]:shadow-none [&_.input]:bg-transparent [&_.input]:h-9 [&_.input]:pl-10 [&_.search-icon]:left-3" />
+              <SearchBar placeholder={t("nav.search.placeholder")} onFocus={() => setSearchOpen(true)} className="w-full [&_.group]:max-w-none [&_.input]:shadow-none [&_.input]:bg-transparent [&_.input]:h-9 [&_.input]:pl-10 [&_.search-icon]:left-3" />
             </div>
-            <Link to="/docs/what-is" className="rounded-2xl px-4 py-3 text-sm font-bold text-[color:var(--cc-ink-soft)] hover:bg-[color:var(--cc-surface)] hover:text-[color:var(--cc-ink)]" onClick={() => setOpen(false)}>文档</Link>
-            <button type="button" className="rounded-2xl px-4 py-3 text-left text-sm font-medium text-[color:var(--cc-ink-soft)] hover:bg-[color:var(--cc-surface)] hover:text-[color:var(--cc-ink)]" onClick={() => setLanguage(language === "zh" ? "en" : "zh")}>{language === "zh" ? "中文" : "English"}</button>
-            <button type="button" className="rounded-2xl px-4 py-3 text-left text-sm font-medium text-[color:var(--cc-ink-soft)] hover:bg-[color:var(--cc-surface)] hover:text-[color:var(--cc-ink)]" onClick={() => setIsDark((value) => !value)}>{isDark ? "白天" : "黑夜"}</button>
+            <Link to="/docs/what-is" className="rounded-2xl px-4 py-3 text-sm font-bold text-[color:var(--cc-ink-soft)] hover:bg-[color:var(--cc-surface)] hover:text-[color:var(--cc-ink)]" onClick={() => setOpen(false)}>{t("nav.docs")}</Link>
+            <button type="button" className="rounded-2xl px-4 py-3 text-left text-sm font-medium text-[color:var(--cc-ink-soft)] hover:bg-[color:var(--cc-surface)] hover:text-[color:var(--cc-ink)]" onClick={() => setLocale(locale === "zh" ? "en" : "zh")}>{locale === "zh" ? t("nav.lang.zh") : t("nav.lang.en")}</button>
+            <button type="button" className="rounded-2xl px-4 py-3 text-left text-sm font-medium text-[color:var(--cc-ink-soft)] hover:bg-[color:var(--cc-surface)] hover:text-[color:var(--cc-ink)]" onClick={toggleTheme}>{isDark ? t("nav.light") : t("nav.dark")}</button>
             <a href="https://github.com/1024XEngineer/CialloClaw" target="_blank" rel="noreferrer" className="rounded-2xl px-4 py-3 text-sm font-medium text-[color:var(--cc-ink-soft)] hover:bg-[color:var(--cc-surface)] hover:text-[color:var(--cc-ink)]">
               GitHub
             </a>
@@ -132,21 +130,6 @@ export function PillNav({ activeHref, className, isHome = false }: PillNavProps)
     </header>
   );
 }
-
-function navLinkClassName(isActive: boolean) {
-  return cn(
-    "text-sm font-medium transition-colors",
-    isActive ? "text-white" : "text-white/68 hover:text-white",
-  );
-}
-
-function navTriggerClassName(isActive: boolean) {
-  return cn(
-    "inline-flex items-center gap-1.5 text-sm font-bold transition-colors outline-none focus:outline-none focus-visible:outline-none focus-visible:ring-0 active:outline-none",
-    isActive ? "text-[color:var(--cc-ink)]" : "text-[color:var(--cc-ink-soft)] hover:text-[color:var(--cc-ink)]",
-  );
-}
-
 
 function navIconTriggerClassName() {
   return "inline-flex h-10 w-10 items-center justify-center rounded-full border border-[color:var(--cc-line)] bg-[color:var(--cc-surface)] text-[color:var(--cc-ink-soft)] backdrop-blur-md outline-none transition hover:bg-[color:var(--cc-surface-strong)] hover:text-[color:var(--cc-ink)] focus:outline-none focus-visible:outline-none focus-visible:ring-0 active:outline-none";

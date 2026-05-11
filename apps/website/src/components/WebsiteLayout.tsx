@@ -14,12 +14,8 @@ export function WebsiteLayout({ children, fullViewport = false, mainClassName }:
   const isDocs = location.pathname.startsWith("/docs");
   const activeHref =
     location.pathname.startsWith("/docs")
-      ? "/docs/overview"
-      : location.pathname.startsWith("/blog")
-        ? "/blog"
-        : location.pathname.startsWith("/about")
-          ? "/about"
-          : "/";
+      ? "/docs/what-is"
+      : "/";
   const resolvedMainClassName =
     mainClassName ??
     (isHome || fullViewport

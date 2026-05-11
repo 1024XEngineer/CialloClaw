@@ -5,6 +5,12 @@ import scenariosMarkdown from "@/content/docs/scenarios.md?raw";
 import securityMarkdown from "@/content/docs/security.md?raw";
 import whatIsMarkdown from "@/content/docs/what-is.md?raw";
 import workspaceMarkdown from "@/content/docs/workspace.md?raw";
+import enFaqMarkdown from "@/content/docs/en/faq.md?raw";
+import enQuickStartMarkdown from "@/content/docs/en/quick-start.md?raw";
+import enScenariosMarkdown from "@/content/docs/en/scenarios.md?raw";
+import enSecurityMarkdown from "@/content/docs/en/security.md?raw";
+import enWhatIsMarkdown from "@/content/docs/en/what-is.md?raw";
+import enWorkspaceMarkdown from "@/content/docs/en/workspace.md?raw";
 import { parseDocsPage } from "@/lib/docs";
 
 export type SiteNavItem = {
@@ -47,17 +53,15 @@ export type DocsPageEntry = {
 
 export const siteNav: SiteNavItem[] = [
   { label: "文档", href: "/docs/what-is" },
-  { label: "博客 / 开发日志", href: "/blog" },
-  { label: "关于", href: "/about" },
 ];
 
 export const homeActions: HomeAction[] = [
   { label: "网页版", href: "/", primary: true },
-  { label: "下载", href: "/docs/quick-start#%E4%B8%8B%E8%BD%BD%E4%B8%8E%E5%90%AF%E5%8A%A8" },
+  { label: "下载", href: "/docs/quick-start#下载与启动" },
   { label: "使用教程", href: "/docs/quick-start" },
 ];
 
-export const docsPages: DocsPageEntry[] = [
+const zhDocsPages: DocsPageEntry[] = [
   parseDocsPage(whatIsMarkdown),
   parseDocsPage(quickStartMarkdown),
   parseDocsPage(workspaceMarkdown),
@@ -66,14 +70,31 @@ export const docsPages: DocsPageEntry[] = [
   parseDocsPage(faqMarkdown),
 ];
 
-export const docsSidebar: DocsSidebarSection[] = [
-  {
-    title: "文档",
-    icon: Rocket,
-    items: docsPages.map((page) => ({ title: page.title, href: page.path })),
-  },
+const enDocsPages: DocsPageEntry[] = [
+  parseDocsPage(enWhatIsMarkdown),
+  parseDocsPage(enQuickStartMarkdown),
+  parseDocsPage(enWorkspaceMarkdown),
+  parseDocsPage(enScenariosMarkdown),
+  parseDocsPage(enSecurityMarkdown),
+  parseDocsPage(enFaqMarkdown),
 ];
 
-export function getDocsPage(pathname: string) {
-  return docsPages.find((entry) => entry.path === pathname) ?? docsPages[0];
+export function getDocsPages(locale: string): DocsPageEntry[] {
+  return locale === "en" ? enDocsPages : zhDocsPages;
+}
+
+export function getDocsSidebar(locale: string): DocsSidebarSection[] {
+  const pages = getDocsPages(locale);
+  return [
+    {
+      title: locale === "en" ? "Documentation" : "文档",
+      icon: Rocket,
+      items: pages.map((page) => ({ title: page.title, href: page.path })),
+    },
+  ];
+}
+
+export function getDocsPage(pathname: string, locale: string): DocsPageEntry {
+  const pages = getDocsPages(locale);
+  return pages.find((entry) => entry.path === pathname) ?? pages[0];
 }

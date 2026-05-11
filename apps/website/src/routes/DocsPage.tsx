@@ -4,19 +4,23 @@ import { Anchor, Drawer, Menu } from "antd";
 import "antd/dist/reset.css";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { useI18n } from "@/lib/i18n.tsx";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
-import { docsSidebar, getDocsPage } from "@/content/site";
+import { getDocsPage, getDocsSidebar } from "@/content/site";
 import "@/styles/docs-page.css";
 
 export function DocsPage() {
   const location = useLocation();
   const navigate = useNavigate();
-  const entry = getDocsPage(location.pathname);
+  const { t, locale } = useI18n();
+  const entry = getDocsPage(location.pathname, locale);
   const [menuOpen, setMenuOpen] = useState(false);
   const docsScrollRef = useRef<HTMLElement | null>(null);
 
+  const sidebar = useMemo(() => getDocsSidebar(locale), [locale]);
+
   const menuItems = useMemo<MenuProps["items"]>(() => {
-    return docsSidebar.map((section) => ({
+    return sidebar.map((section) => ({
       key: section.title,
       label: section.title,
       type: "group",
@@ -25,7 +29,7 @@ export function DocsPage() {
         label: item.title,
       })),
     }));
-  }, []);
+  }, [sidebar]);
 
   const anchorItems = useMemo<NonNullable<AnchorProps["items"]>>(() => {
     return entry.outline.map((section) => ({
@@ -57,7 +61,7 @@ export function DocsPage() {
       <section ref={docsScrollRef} className="docs-page grid h-full gap-10 lg:grid-cols-[260px_minmax(0,820px)_220px] lg:gap-12 lg:justify-center">
         <aside className="docs-page__sidebar hidden lg:block">
           <div className="docs-page__sticky docs-page__panel docs-page__menu-shell">
-            <p className="docs-page__sidebar-title">文档导航</p>
+            <p className="docs-page__sidebar-title">{t("docs.page-title")}</p>
             <Menu
               mode="inline"
               selectedKeys={[entry.path]}
@@ -72,7 +76,7 @@ export function DocsPage() {
           <header className="docs-page__hero">
             <button type="button" className="docs-page__menu-button lg:hidden" onClick={() => setMenuOpen(true)}>
               <MenuIcon className="h-4 w-4" />
-              <span>文档导航</span>
+              <span>{t("docs.menu-button")}</span>
             </button>
             <p className="docs-page__eyebrow" lang="en">Docs</p>
             <h1 className="docs-page__title">{entry.title}</h1>
@@ -86,7 +90,7 @@ export function DocsPage() {
         {anchorItems.length > 0 ? (
           <aside className="docs-page__outline hidden lg:block">
             <div className="docs-page__sticky docs-page__panel docs-page__anchor-shell">
-              <p className="docs-page__sidebar-title docs-page__outline-title">本页大纲</p>
+              <p className="docs-page__sidebar-title docs-page__outline-title">{t("docs.outline-title")}</p>
               <Anchor
                 items={anchorItems}
                 affix={false}
@@ -106,7 +110,7 @@ export function DocsPage() {
       </section>
 
       <Drawer
-        title="文档导航"
+        title={t("docs.drawer-title")}
         placement="left"
         width={300}
         open={menuOpen}

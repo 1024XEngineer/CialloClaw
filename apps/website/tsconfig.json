@@ -2,6 +2,7 @@
   "extends": "../../packages/config/tsconfig/base.json",
   "compilerOptions": {
     "baseUrl": ".",
+    "allowImportingTsExtensions": true,
     "paths": {
       "@/*": ["./src/*"]
     },

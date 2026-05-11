@@ -1,22 +1,25 @@
 import { motion } from "motion/react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import Antigravity from "@/components/Antigravity";
 import CircularGallery from "@/components/CircularGallery";
 import Galaxy from "@/components/Galaxy";
+import { useI18n } from "@/lib/i18n.tsx";
+import { useWebsiteTheme } from "@/lib/theme.tsx";
 import mascotFallback from "../../../desktop/src/assets/cialloclaw-pet/body.png";
 import { HeroActionButton } from "@/components/HeroActionButton";
 
 export function HomePage() {
+  const { isDark } = useWebsiteTheme();
+  const { t } = useI18n();
   const [heroImage, setHeroImage] = useState("/assets/images/final.png");
-  const [isDarkTheme, setIsDarkTheme] = useState(false);
   const galleryItems = useMemo(
     () => [
-      { image: "/assets/images/floating-ball.png", text: "桌面协作" },
-      { image: "/assets/images/dashboard.png", text: "语音承接" },
-      { image: "/assets/images/dashboard-task.png", text: "文档入口" },
-      { image: "/assets/images/dashboard-note.png", text: "正式交付" },
+      { image: "/assets/images/floating-ball.png", text: t("home.gallery.desktop-collab") },
+      { image: "/assets/images/dashboard.png", text: t("home.gallery.voice-input") },
+      { image: "/assets/images/dashboard-task.png", text: t("home.gallery.doc-entry") },
+      { image: "/assets/images/dashboard-note.png", text: t("home.gallery.formal-delivery") },
     ],
-    [],
+    [t],
   );
   const ambientParticles = useMemo(
     () => [
@@ -30,35 +33,17 @@ export function HomePage() {
   );
   const heroActions = useMemo(
     () => [
-      { label: "下载", href: "/docs/quick-start#下载与启动" },
-      { label: "使用教程", href: "/docs/quick-start#配置模型" },
+      { label: t("home.action.download"), href: "/docs/quick-start" },
+      { label: t("home.action.tutorial"), href: "/docs/quick-start" },
     ],
-    [],
+    [t],
   );
-
-  useEffect(() => {
-    const rootElement = document.documentElement;
-
-    const syncTheme = () => {
-      setIsDarkTheme(rootElement.dataset.theme === "dark");
-    };
-
-    syncTheme();
-
-    const observer = new MutationObserver(syncTheme);
-    observer.observe(rootElement, {
-      attributes: true,
-      attributeFilter: ["data-theme"],
-    });
-
-    return () => observer.disconnect();
-  }, []);
 
   return (
     <>
       <section className="relative isolate flex h-full items-center justify-center overflow-hidden">
         <div className="absolute inset-0">
-          {!isDarkTheme ? (
+          {!isDark ? (
             <div className="absolute inset-0 pointer-events-none">
               <Antigravity
                 count={300}
@@ -80,7 +65,7 @@ export function HomePage() {
             </div>
           ) : null}
 
-          {isDarkTheme ? (
+          {isDark ? (
             <div className="absolute inset-0 pointer-events-auto">
               <Galaxy
                 mouseRepulsion={false}
@@ -107,7 +92,7 @@ export function HomePage() {
                 top: particle.top,
                 width: particle.size,
                 height: particle.size,
-                background: isDarkTheme ? "rgba(255,255,255,0.16)" : "rgba(0,0,0,0.10)",
+                background: isDark ? "rgba(255,255,255,0.16)" : "rgba(0,0,0,0.10)",
               }}
               animate={{ opacity: [0.16, 0.46, 0.16], y: [0, -10, 0] }}
               transition={{ duration: 8 + particle.size / 2, repeat: Number.POSITIVE_INFINITY, ease: "easeInOut" }}
@@ -148,7 +133,7 @@ export function HomePage() {
             transition={{ duration: 0.74, delay: 0.12, ease: [0.22, 1, 0.36, 1] }}
             className="cc-home-hero-subtitle mt-4 max-w-[760px] cursor-default text-[2rem] leading-[1.6] text-[color:var(--cc-ink-soft)]"
           >
-            桌面悬浮球 Agent，你的专属桌宠助理
+            {t("home.subtitle")}
           </motion.p>
           <motion.div
             initial={{ opacity: 0, y: 18 }}

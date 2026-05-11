@@ -9,7 +9,8 @@ import {
   CommandList,
   CommandShortcut,
 } from "@/components/ui/command";
-import { docsPages } from "@/content/site";
+import { useI18n } from "@/lib/i18n.tsx";
+import { getDocsPages } from "@/content/site";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 
 type SearchOverlayProps = {
@@ -66,6 +67,7 @@ function renderHighlightedSnippet(snippet: string, query: string) {
 
 export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
   const navigate = useNavigate();
+  const { locale } = useI18n();
   const [query, setQuery] = useState("");
 
   const normalizedQuery = query.trim().toLowerCase();
@@ -74,7 +76,7 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
       return [];
     }
 
-    return docsPages
+    return getDocsPages(locale)
       .flatMap((page) => {
         return page.searchableSections
           .map((section) => {
@@ -138,7 +140,7 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
           <CommandInput
             value={query}
             onValueChange={setQuery}
-            placeholder="搜索整个文档..."
+            placeholder={locale === "en" ? "Search the documentation..." : "搜索整个文档..."}
             className="text-base"
           />
 

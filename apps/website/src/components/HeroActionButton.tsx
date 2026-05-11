@@ -1,3 +1,4 @@
+import { useNavigate } from "react-router-dom";
 import styled from "styled-components";
 
 type HeroActionButtonProps = {
@@ -6,15 +7,21 @@ type HeroActionButtonProps = {
 };
 
 export function HeroActionButton({ label, href }: HeroActionButtonProps) {
+  const navigate = useNavigate();
+
+  const handleClick = () => {
+    void navigate(href);
+  };
+
   return (
     <ActionButtonShell>
-      <a href={href}>{label}</a>
+      <button type="button" onClick={handleClick}>{label}</button>
     </ActionButtonShell>
   );
 }
 
 const ActionButtonShell = styled.div`
-  a {
+  button {
     --color: rgb(123, 138, 235);
     font-family: inherit;
     display: inline-block;
@@ -41,11 +48,11 @@ const ActionButtonShell = styled.div`
     outline: none;
   }
 
-  html[data-theme="dark"] & a {
-    color: rgb(123, 138, 235);
+  html[data-theme="dark"] & button {
+    color: rgb(89 67 247);
   }
 
-  a::before {
+  button::before {
     content: "";
     position: absolute;
     z-index: -1;
@@ -58,33 +65,33 @@ const ActionButtonShell = styled.div`
     transition: all 0.7s;
   }
 
-  a:hover {
+  button:hover {
     color: var(--cc-ink);
     transform: translateY(-2px);
     background: color-mix(in srgb, var(--color) 28%, transparent);
     box-shadow: 0 18px 36px rgba(65, 86, 173, 0.16);
   }
 
-  html[data-theme="dark"] & a:hover {
+  html[data-theme="dark"] & button:hover {
     color: #ffffff;
   }
 
-  a:hover::before {
+  button:hover::before {
     top: -30px;
     left: -30px;
   }
 
-  a:active::before {
+  button:active::before {
     background: #5577eb;
     transition: background 0s;
   }
 
-  a:active {
+  button:active {
     transform: scale(0.95);
   }
 
-  a:focus,
-  a:focus-visible {
+  button:focus,
+  button:focus-visible {
     outline: none;
     box-shadow: 0 18px 36px rgba(65, 86, 173, 0.16);
   }

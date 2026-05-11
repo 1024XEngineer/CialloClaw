@@ -63,8 +63,6 @@ body {
   margin: 0;
   width: 100%;
   height: 100%;
-  font-family: var(--font-sans);
-  color: var(--cc-ink);
   background: var(--cc-bg);
   overflow: hidden;
 }
@@ -95,11 +93,22 @@ input::-webkit-search-cancel-button {
   overflow: hidden;
 }
 
+/* Main hero title - Fredoka One is the special font that must NOT be changed */
 .cc-home-hero-title {
   font-family: 'Fredoka One', cursive;
 }
 
-:lang(en) {
+/* English text uses Montserrat by default, but NOT the main hero title */
+html[lang="en"] body,
+html[lang="en"] .docs-page,
+html[lang="en"] p:not(.cc-home-hero-title),
+html[lang="en"] span:not(.cc-home-hero-title),
+html[lang="en"] h1:not(.cc-home-hero-title),
+html[lang="en"] h2:not(.cc-home-hero-title),
+html[lang="en"] h3:not(.cc-home-hero-title),
+html[lang="en"] h4:not(.cc-home-hero-title),
+html[lang="en"] li:not(.cc-home-hero-title),
+html[lang="en"] a:not(.cc-home-hero-title) {
   font-family: 'Montserrat', sans-serif;
 }
 

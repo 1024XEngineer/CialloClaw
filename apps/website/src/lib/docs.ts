@@ -20,11 +20,17 @@ export type ParsedDocsPage = {
 
 const DOCS_PATH_MAP: Record<string, string> = {
   "CialloClaw 是什么？": "/docs/what-is",
+  "What is CialloClaw?": "/docs/what-is",
   "快速上手": "/docs/quick-start",
+  "Quick Start": "/docs/quick-start",
   "初认工作台": "/docs/workspace",
+  "Meet the Workspace": "/docs/workspace",
   "使用场景": "/docs/scenarios",
+  "Usage Scenarios": "/docs/scenarios",
   "安全与隐私": "/docs/security",
+  "Security & Privacy": "/docs/security",
   "常见问题": "/docs/faq",
+  "Frequently Asked Questions": "/docs/faq",
 };
 
 export function createHeadingId(title: string) {

@@ -10,6 +10,22 @@
     />
     <link href="https://fonts.font.im/css?family=Fredoka+One" rel="stylesheet" />
     <link href="https://fonts.font.im/css?family=Montserrat" rel="stylesheet" />
+    <script>
+      // Restore the user's theme choice before React mounts so there is never a
+      // flash of the wrong colour scheme across page navigations.
+      (function () {
+        var theme = localStorage.getItem("cialloclaw-website-theme");
+        if (theme === "dark") {
+          document.documentElement.dataset.theme = "dark";
+        } else {
+          document.documentElement.dataset.theme = "light";
+        }
+        var locale = localStorage.getItem("cialloclaw-website-locale");
+        if (locale === "en" || locale === "zh") {
+          document.documentElement.lang = locale === "en" ? "en" : "zh-CN";
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>
