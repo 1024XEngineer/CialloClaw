@@ -607,65 +607,14 @@ func (s *Service) inspectorTitleGenerationUsage(ctx context.Context) tokenCostUs
 		return tokenCostUsageSummary{}
 	}
 
-	traceRecords, _, err := s.storage.TraceStore().ListTraceRecords(ctx, "", 0, 0)
+	usage, err := s.storage.InspectorTitleGenerationUsage(ctx, time.Now().UTC())
 	if err != nil {
 		return tokenCostUsageSummary{}
 	}
-
-	now := time.Now().UTC()
-	relevantTraceIDs := make(map[string]struct{}, len(traceRecords))
-	summary := tokenCostUsageSummary{}
-	for _, record := range traceRecords {
-		if !sameDay(parseRFC3339Time(record.CreatedAt), now) {
-			continue
-		}
-		if !strings.HasPrefix(strings.TrimSpace(record.TaskID), "insp_") {
-			continue
-		}
-		if strings.TrimSpace(record.LLMInputSummary) != "task_inspector.generate_note_title" {
-			continue
-		}
-		relevantTraceIDs[record.TraceID] = struct{}{}
-		summary.TodayCost += record.Cost
+	return tokenCostUsageSummary{
+		TodayTokens: usage.TotalTokens,
+		TodayCost:   usage.TotalCost,
 	}
-	if len(relevantTraceIDs) == 0 {
-		return summary
-	}
-
-	evalSnapshots, _, err := s.storage.EvalStore().ListEvalSnapshots(ctx, "", 0, 0)
-	if err != nil {
-		return summary
-	}
-	for _, snapshot := range evalSnapshots {
-		if !sameDay(parseRFC3339Time(snapshot.CreatedAt), now) {
-			continue
-		}
-		if _, ok := relevantTraceIDs[snapshot.TraceID]; !ok {
-			continue
-		}
-		summary.TodayTokens += totalTokensFromEvalMetrics(snapshot.MetricsJSON)
-	}
-	return summary
-}
-
-func totalTokensFromEvalMetrics(metricsJSON string) int {
-	metricsJSON = strings.TrimSpace(metricsJSON)
-	if metricsJSON == "" {
-		return 0
-	}
-	metrics := map[string]any{}
-	if err := json.Unmarshal([]byte(metricsJSON), &metrics); err != nil {
-		return 0
-	}
-	return intValueFromAny(metrics["total_tokens"])
-}
-
-func parseRFC3339Time(value string) time.Time {
-	parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(value))
-	if err != nil {
-		return time.Time{}
-	}
-	return parsed
 }
 
 func latestTokenUsageTask(unfinishedTasks, finishedTasks []runengine.TaskRecord) (runengine.TaskRecord, bool) {
