@@ -579,7 +579,9 @@ function normalizeShellBallBackendBubbleMessage(
 
   return {
     bubble_id: bubbleId,
-    task_id: typeof bubbleMessage.task_id === "string" ? bubbleMessage.task_id : fallback.taskId,
+    task_id: typeof bubbleMessage.task_id === "string" && bubbleMessage.task_id.trim() !== ""
+      ? bubbleMessage.task_id
+      : fallback.taskId,
     type: bubbleMessage.type,
     text: typeof bubbleMessage.text === "string" ? bubbleMessage.text : "",
     pinned: false,

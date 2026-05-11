@@ -9032,6 +9032,7 @@ test("intent confirm cancel action is wired to formal task cancellation", () => 
   assert.match(bubbleMessageSource, />取消任务</);
   assert.match(bubbleMessageSource, /data-bubble-action="cancel_task"/);
   assert.match(coordinatorSource, /function normalizeShellBallBackendBubbleMessage\(/);
+  assert.match(coordinatorSource, /task_id: typeof bubbleMessage\.task_id === "string" && bubbleMessage\.task_id\.trim\(\) !== ""[\s\S]*\? bubbleMessage\.task_id[\s\S]*: fallback\.taskId,/);
   assert.match(coordinatorSource, /const decisionText = payload\.decision === "confirm" \? "确认" : "取消任务";/);
   assert.match(
     coordinatorSource,
