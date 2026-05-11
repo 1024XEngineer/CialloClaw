@@ -3313,6 +3313,20 @@ func TestServiceNotepadConvertToTaskKeepsPublishedTaskLinkedAfterExecutionFailur
 	if record.CurrentStep == "" {
 		t.Fatalf("expected published failed task to keep a terminal step, got %+v", record)
 	}
+	notepadItem, ok := result["notepad_item"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected failed convert_to_task response to include notepad_item, got %+v", result)
+	}
+	if linkedTaskID := stringValue(notepadItem, "linked_task_id", ""); linkedTaskID != taskID {
+		t.Fatalf("expected failed convert_to_task response to keep source item linked to published task, got %+v", notepadItem)
+	}
+	refreshGroups, ok := result["refresh_groups"].([]string)
+	if !ok {
+		t.Fatalf("expected failed convert_to_task response to include refresh_groups, got %+v", result)
+	}
+	if len(refreshGroups) != 1 || refreshGroups[0] != "upcoming" {
+		t.Fatalf("expected failed convert_to_task response refresh_groups to target the source bucket, got %+v", refreshGroups)
+	}
 	item, ok := service.runEngine.NotepadItem("todo_governance_failure")
 	if !ok {
 		t.Fatal("expected notepad item to remain available after execution failure")

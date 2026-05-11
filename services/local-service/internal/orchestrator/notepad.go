@@ -87,7 +87,7 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion, false)
 	suggestion.TaskTitle = notepadTaskTitle(snapshot, suggestion)
 	task := s.createNotepadTask(snapshot, suggestion)
-	updatedItem, ok := s.runEngine.LinkNotepadItemTask(itemID, task.TaskID)
+	linkedItem, ok := s.runEngine.LinkNotepadItemTask(itemID, task.TaskID)
 	if !ok {
 		linkErr := fmt.Errorf("failed to link notepad item to task: %s", itemID)
 		if rollbackErr := s.runEngine.DeleteTask(task.TaskID); rollbackErr != nil {
@@ -107,7 +107,7 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 	response, err := s.finishNotepadTask(snapshot, suggestion, task)
 	if err != nil {
 		if publishedTaskStart {
-			return s.failPublishedNotepadTask(itemID, task, suggestion.Intent, err)
+			return s.failPublishedNotepadTask(linkedItem, task, suggestion.Intent, err)
 		}
 		return nil, s.rollbackLinkedNotepadTask(itemID, task.TaskID, err)
 	}
@@ -115,8 +115,8 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 		s.publishTaskStart(task.TaskID, task.SessionID, requestTraceID(params))
 	}
 
-	response["notepad_item"] = s.runEngine.ProtocolNotepadItem(updatedItem)
-	response["refresh_groups"] = []string{stringValue(updatedItem, "bucket", "upcoming")}
+	response["notepad_item"] = s.runEngine.ProtocolNotepadItem(linkedItem)
+	response["refresh_groups"] = []string{stringValue(linkedItem, "bucket", "upcoming")}
 	return response, nil
 }
 
@@ -136,8 +136,9 @@ func (s *Service) rollbackLinkedNotepadTask(itemID, taskID string, cause error) 
 // when late orchestration setup fails after task.start has already been emitted.
 // Once transports can subscribe to the task id, deleting it would leave a
 // dangling runtime object on the stream side and a missing task in storage.
-func (s *Service) failPublishedNotepadTask(itemID string, task runengine.TaskRecord, taskIntent map[string]any, cause error) (map[string]any, error) {
-	updatedItem, _ := s.runEngine.UnlinkNotepadItemTask(itemID, task.TaskID)
+// The note stays linked to that failed task so task-centric recovery flows can
+// still navigate back to the originating notepad item without guessing state.
+func (s *Service) failPublishedNotepadTask(linkedItem map[string]any, task runengine.TaskRecord, taskIntent map[string]any, cause error) (map[string]any, error) {
 	impactScope := s.buildImpactScope(task, s.buildPendingExecution(task, taskIntent))
 	bubbleText := "任务启动失败，请稍后再试。"
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", bubbleText, task.UpdatedAt.Format(dateTimeLayout))
@@ -149,10 +150,8 @@ func (s *Service) failPublishedNotepadTask(itemID string, task runengine.TaskRec
 	failedTask = s.appendAuditData(failedTask, compactAuditRecords(auditRecord), nil)
 
 	response := buildTaskEntryResponse(failedTask, bubble, nil)
-	if updatedItem != nil {
-		response["notepad_item"] = s.runEngine.ProtocolNotepadItem(updatedItem)
-		response["refresh_groups"] = []string{stringValue(updatedItem, "bucket", "upcoming")}
-	}
+	response["notepad_item"] = s.runEngine.ProtocolNotepadItem(linkedItem)
+	response["refresh_groups"] = []string{stringValue(linkedItem, "bucket", "upcoming")}
 	return response, nil
 }
 
