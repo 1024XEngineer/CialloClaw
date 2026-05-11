@@ -236,7 +236,7 @@ func previewClarificationHits(s *Service, task runengine.TaskRecord, snapshot ta
 		return nil
 	}
 
-	return s.previewMemoryContext(task.TaskID, task.RunID, snapshot)
+	return s.clarificationPreviewHits(task, snapshot)
 }
 
 // initialTimeline creates the first timeline step for a new task and derives

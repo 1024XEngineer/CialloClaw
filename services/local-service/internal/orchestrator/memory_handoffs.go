@@ -211,6 +211,82 @@ func (s *Service) previewMemoryContext(taskID, runID string, snapshot taskcontex
 	return hits
 }
 
+// clarificationPreviewHits prefers the retrieval_context already materialized on
+// the task so clarification bubbles and later execution reuse the same memory
+// evidence even after storage round-trips or follow-up confirmation RPCs.
+func (s *Service) clarificationPreviewHits(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot) []memory.RetrievalHit {
+	if s == nil {
+		return nil
+	}
+
+	currentTask := task
+	if s.runEngine != nil && strings.TrimSpace(task.TaskID) != "" {
+		if persistedTask, ok := s.runEngine.GetTask(task.TaskID); ok {
+			currentTask = persistedTask
+		}
+	}
+
+	if hits := taskReadPlanRetrievalHits(currentTask); len(hits) > 0 {
+		return hits
+	}
+
+	return s.previewMemoryContext(currentTask.TaskID, currentTask.RunID, snapshot)
+}
+
+func taskReadPlanRetrievalHits(task runengine.TaskRecord) []memory.RetrievalHit {
+	if len(task.MemoryReadPlans) == 0 {
+		return nil
+	}
+
+	hits := make([]memory.RetrievalHit, 0, len(task.MemoryReadPlans))
+	for _, plan := range task.MemoryReadPlans {
+		for _, item := range readPlanRetrievalContextItems(plan) {
+			summary := strings.TrimSpace(stringValue(item, "summary", ""))
+			if summary == "" {
+				continue
+			}
+			hits = append(hits, memory.RetrievalHit{
+				TaskID:   task.TaskID,
+				RunID:    task.RunID,
+				MemoryID: strings.TrimSpace(stringValue(item, "memory_id", "")),
+				Source:   strings.TrimSpace(stringValue(item, "source", "")),
+				Summary:  summary,
+				Score:    floatValueFromAny(item["score"]),
+			})
+		}
+	}
+	if len(hits) == 0 {
+		return nil
+	}
+	return hits
+}
+
+func readPlanRetrievalContextItems(plan map[string]any) []map[string]any {
+	rawValue, ok := plan["retrieval_context"]
+	if !ok {
+		return nil
+	}
+	switch value := rawValue.(type) {
+	case []map[string]any:
+		return cloneMapSlice(value)
+	case []any:
+		items := make([]map[string]any, 0, len(value))
+		for _, entry := range value {
+			item, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			items = append(items, cloneMap(item))
+		}
+		if len(items) == 0 {
+			return nil
+		}
+		return items
+	default:
+		return nil
+	}
+}
+
 func clarificationBubbleText(suggestionIntent map[string]any, snapshot taskcontext.TaskContextSnapshot, hits []memory.RetrievalHit) string {
 	base := clarificationBaseText(suggestionIntent, snapshot)
 	if len(hits) == 0 {

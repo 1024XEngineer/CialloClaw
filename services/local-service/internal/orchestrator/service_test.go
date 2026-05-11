@@ -135,6 +135,48 @@ type stubMediaWorkerClient struct {
 	err             error
 }
 
+type sequentialMemoryStore struct {
+	mu            sync.Mutex
+	searchResults [][]memory.RetrievalHit
+	searchCalls   int
+	savedHits     []memory.RetrievalHit
+}
+
+func (s *sequentialMemoryStore) SaveSummary(context.Context, memory.MemorySummary) error {
+	return nil
+}
+
+func (s *sequentialMemoryStore) SaveRetrievalHits(_ context.Context, hits []memory.RetrievalHit) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.savedHits = append(s.savedHits, append([]memory.RetrievalHit(nil), hits...)...)
+	return nil
+}
+
+func (s *sequentialMemoryStore) Search(context.Context, memory.RetrievalQuery) ([]memory.RetrievalHit, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.searchCalls++
+	if len(s.searchResults) == 0 {
+		return nil, nil
+	}
+	index := s.searchCalls - 1
+	if index >= len(s.searchResults) {
+		index = len(s.searchResults) - 1
+	}
+	return append([]memory.RetrievalHit(nil), s.searchResults[index]...), nil
+}
+
+func (s *sequentialMemoryStore) ListSummaries(context.Context, int) ([]memory.MemorySummary, error) {
+	return nil, nil
+}
+
+func (s *sequentialMemoryStore) SearchCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.searchCalls
+}
+
 type screenSessionAction struct {
 	sessionID string
 	reason    string
@@ -9093,6 +9135,70 @@ func TestServiceSubmitInputClarificationIncludesRetrievedMemoryContext(t *testin
 	}
 	if !strings.Contains(text, "project alpha focuses on rollout notes") {
 		t.Fatalf("expected clarification bubble to include retrieved summary, got %+v", bubble)
+	}
+}
+
+func TestServiceClarificationReusesMaterializedMemoryHits(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		output: `{"route":"clarification_needed","reply":""}`,
+	})
+	memoryStore := &sequentialMemoryStore{searchResults: [][]memory.RetrievalHit{
+		{{
+			MemoryID: "mem_materialized_001",
+			Source:   "summary",
+			Summary:  "first retrieved summary should stay stable",
+			Score:    0.91,
+		}},
+		{{
+			MemoryID: "mem_drift_002",
+			Source:   "summary",
+			Summary:  "second search result should not replace clarification context",
+			Score:    0.99,
+		}},
+	}}
+	service.memory = memory.NewService(memoryStore)
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_clarify_memory_reuse",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "project alpha rollout",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	startBubble := result["bubble_message"].(map[string]any)
+	startText := stringValue(startBubble, "text", "")
+	if !strings.Contains(startText, "first retrieved summary should stay stable") {
+		t.Fatalf("expected start clarification bubble to reuse stored retrieval hit, got %+v", startBubble)
+	}
+	if strings.Contains(startText, "second search result should not replace clarification context") {
+		t.Fatalf("expected start clarification bubble to avoid fresh search drift, got %+v", startBubble)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	confirmResult, err := service.ConfirmTask(map[string]any{
+		"task_id":   taskID,
+		"confirmed": false,
+	})
+	if err != nil {
+		t.Fatalf("confirm task failed: %v", err)
+	}
+
+	confirmBubble := confirmResult["bubble_message"].(map[string]any)
+	confirmText := stringValue(confirmBubble, "text", "")
+	if !strings.Contains(confirmText, "first retrieved summary should stay stable") {
+		t.Fatalf("expected confirm clarification bubble to reuse stored retrieval hit, got %+v", confirmBubble)
+	}
+	if strings.Contains(confirmText, "second search result should not replace clarification context") {
+		t.Fatalf("expected confirm clarification bubble to avoid fresh search drift, got %+v", confirmBubble)
+	}
+	if memoryStore.SearchCalls() != 1 {
+		t.Fatalf("expected clarification flow to reuse materialized hits without re-searching, calls=%d", memoryStore.SearchCalls())
 	}
 }
 

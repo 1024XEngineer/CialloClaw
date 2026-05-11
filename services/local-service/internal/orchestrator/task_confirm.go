@@ -33,7 +33,7 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		}
 		snapshot := snapshotFromTask(updatedTask)
 		clarificationText := rejectedIntentClarificationText(snapshot)
-		if clarificationHits := s.previewMemoryContext(updatedTask.TaskID, updatedTask.RunID, snapshot); len(clarificationHits) > 0 {
+		if clarificationHits := s.clarificationPreviewHits(updatedTask, snapshot); len(clarificationHits) > 0 {
 			clarificationText = clarificationText + " " + clarificationBubbleText(map[string]any{}, snapshot, clarificationHits)
 		}
 		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", clarificationText, updatedTask.UpdatedAt.Format(dateTimeLayout))
@@ -51,7 +51,7 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	if strings.TrimSpace(stringValue(intentValue, "name", "")) == "" {
 		snapshot := snapshotFromTask(task)
 		clarificationText := missingIntentClarificationText(snapshot)
-		if clarificationHits := s.previewMemoryContext(task.TaskID, task.RunID, snapshot); len(clarificationHits) > 0 {
+		if clarificationHits := s.clarificationPreviewHits(task, snapshot); len(clarificationHits) > 0 {
 			clarificationText = clarificationText + " " + clarificationBubbleText(map[string]any{}, snapshot, clarificationHits)
 		}
 		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", clarificationText, task.UpdatedAt.Format(dateTimeLayout))
