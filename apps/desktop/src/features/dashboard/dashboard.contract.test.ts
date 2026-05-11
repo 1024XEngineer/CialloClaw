@@ -440,6 +440,7 @@ function loadTaskOutputServiceModule(
       loadTaskArtifactPage: (taskId: string, source: "rpc") => Promise<AgentTaskArtifactListResult>;
       openTaskArtifactForTask: (taskId: string, artifactId: string, source: "rpc") => Promise<AgentTaskArtifactOpenResult>;
       openTaskDeliveryForTask: (taskId: string, artifactId: string | undefined, source: "rpc") => Promise<AgentDeliveryOpenResult>;
+      shouldAutoOpenTaskDeliveryResult: (deliveryResult: DeliveryResult | null | undefined) => boolean;
       canOpenTaskDeliveryResult: (deliveryResult: AgentDeliveryOpenResult["delivery_result"] | null | undefined, fallbackTaskId?: string | null) => boolean;
       resolveTaskOpenExecutionPlan: (result: AgentTaskArtifactOpenResult | AgentDeliveryOpenResult) => {
         mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
@@ -5847,6 +5848,26 @@ test("TaskPage wiring helpers require real detail for safety focus and keep deta
 test("task output helpers normalize open actions from existing rpc contracts", async () => {
   const outputService = loadTaskOutputServiceModule();
 
+  assert.equal(outputService.shouldAutoOpenTaskDeliveryResult(null), false);
+  assert.equal(
+    outputService.shouldAutoOpenTaskDeliveryResult({
+      type: "bubble",
+      title: "Quick reply",
+      preview_text: "Bubble reply",
+      payload: { path: null, task_id: "task_dashboard_001", url: null },
+    }),
+    false,
+  );
+  assert.equal(
+    outputService.shouldAutoOpenTaskDeliveryResult({
+      type: "result_page",
+      title: "Result page",
+      preview_text: "Open result",
+      payload: { path: null, task_id: "task_dashboard_001", url: "https://example.test/result" },
+    }),
+    true,
+  );
+
   assert.deepEqual(
     outputService.resolveTaskOpenExecutionPlan({
       open_action: "task_detail",
@@ -7266,6 +7287,8 @@ test("note conversion and confirming-intent surfaces use direct task handoff wor
   assert.doesNotMatch(noteActionBarSource, /会直接生成任务并跳转到任务页。/);
   assert.match(notePageSource, /function getNoteConvertSuccessFeedback\(status: Task\["status"\]\)/);
   assert.match(notePageSource, /已按这条便签生成任务，正在打开任务详情。/);
+  assert.match(notePageSource, /openTaskDeliveryForTask/);
+  assert.match(notePageSource, /navigateToDashboardTaskDelivery/);
   assert.doesNotMatch(notePageSource, /等待你确认处理方式。/);
   assert.match(notePageSource, /后续还需要处理授权。/);
   assert.match(noteServiceSource, /这条便签会按当前正文直接生成任务；如果还想补充路径、时间或说明，可以继续写在正文里后再转交给 Agent。/);
@@ -9771,6 +9794,13 @@ test("task detail fallback keeps operator controls available from preview tasks 
   assert.match(mapperSource, /export function getTaskPrimaryActions\(task: Task, detail: AgentTaskDetailGetResult \| null\)/);
   assert.match(mapperSource, /const hasAnchor = detail !== null/);
   assert.doesNotMatch(mapperSource, /detail\?\.approval_request !== null \|\| detail\?\.security_summary\.latest_restore_point !== null/);
+});
+
+test("note conversion only auto-opens formal deliveries that have a real open target", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /if \(shouldAutoOpenTaskDeliveryResult\(outcome\.result\.delivery_result\)\) \{/);
+  assert.doesNotMatch(notePageSource, /if \(outcome\.result\.delivery_result\) \{/);
 });
 
 test("TaskDetailPanel folds loop summary signals into the runtime events section", () => {
