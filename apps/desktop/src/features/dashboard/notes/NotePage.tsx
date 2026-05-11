@@ -12,7 +12,7 @@ import { AnimatePresence, motion } from "motion/react";
 import type { NotepadAction, Task, TodoItem } from "@cialloclaw/protocol";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { openDesktopExternalUrl } from "@/platform/desktopExternalUrl";
+import { useDashboardEscapeHandler } from "@/features/dashboard/shared/dashboardEscapeCoordinator";
 import { navigateToDashboardTaskDetail } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
@@ -22,6 +22,7 @@ import {
   resolveTaskOpenExecutionPlan,
   shouldAutoOpenTaskDeliveryResult,
 } from "@/features/dashboard/tasks/taskOutput.service";
+import { openDesktopExternalUrl } from "@/platform/desktopExternalUrl";
 import { cn } from "@/utils/cn";
 import { buildNoteSummary, describeNotePreview, formatNoteBoardTimeHint, formatNoteDisplayPath, getNoteBucketLabel, getNoteStatusBadgeClass, groupClosedNotes, sortClosedNotes, sortNotesByUrgency } from "./notePage.mapper";
 import { buildDashboardNoteBucketInvalidateKeys, buildDashboardNoteBucketQueryKey, dashboardNoteBucketGroups, getDashboardNoteRefreshPlan } from "./notePage.query";
@@ -811,6 +812,19 @@ export function NotePage() {
     startY: number;
     width: number;
   } | null>(null);
+
+  useDashboardEscapeHandler({
+    enabled: sourceStudioOpen,
+    handleEscape: () => setSourceStudioOpen(false),
+    priority: 240,
+  });
+
+  useDashboardEscapeHandler({
+    enabled: detailOpen,
+    handleEscape: () => setDetailOpen(false),
+    priority: 220,
+  });
+
   const noteRefreshPlan = getDashboardNoteRefreshPlan(dataMode);
   const desktopSourceNotesAvailable = useMemo(() => areDesktopSourceNotesAvailable(), []);
 
