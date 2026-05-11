@@ -59,6 +59,12 @@ pub fn open_local_path(raw_path: &str, roots: &LocalPathRoots) -> Result<(), Str
     open_with_system_handler(&target)
 }
 
+/// Opens an external web url through the operating system's default browser.
+pub fn open_external_url(raw_url: &str) -> Result<(), String> {
+    let target = normalize_external_url(raw_url)?;
+    open_url_with_system_handler(&target)
+}
+
 /// Reveals a local file in the system file manager, or opens the directory
 /// directly when the target already points at a folder.
 pub fn reveal_local_path(raw_path: &str, roots: &LocalPathRoots) -> Result<(), String> {
@@ -75,13 +81,6 @@ pub fn reveal_local_path(raw_path: &str, roots: &LocalPathRoots) -> Result<(), S
 pub fn open_trusted_directory(target: &Path, trusted_root: &Path) -> Result<(), String> {
     let canonical_target = prepare_trusted_directory_target(target, trusted_root)?;
     open_with_system_handler(&canonical_target)
-}
-
-/// Opens one trusted external http/https URL through the operating system
-/// shell so renderer links leave the embedded desktop WebView.
-pub fn open_external_url(raw_url: &str) -> Result<(), String> {
-    let target = resolve_external_url(raw_url)?;
-    open_url_with_system_handler(&target)
 }
 
 /// Resolves delivery paths against trusted workspace or runtime-open roots and
@@ -140,20 +139,6 @@ fn resolve_path_candidate(raw_path: &str, roots: &LocalPathRoots) -> Result<Path
     }
 
     Err("runtime-relative delivery paths must stay within the trusted temp/ scope".to_string())
-}
-
-fn resolve_external_url(raw_url: &str) -> Result<String, String> {
-    let trimmed = raw_url.trim();
-    if trimmed.is_empty() {
-        return Err("external url is empty".to_string());
-    }
-
-    let lower = trimmed.to_ascii_lowercase();
-    if !lower.starts_with("http://") && !lower.starts_with("https://") {
-        return Err("external url must use http or https".to_string());
-    }
-
-    Ok(trimmed.to_string())
 }
 
 fn prepare_trusted_directory_target(target: &Path, trusted_root: &Path) -> Result<PathBuf, String> {
@@ -239,6 +224,31 @@ fn ensure_path_within_allowed_roots(target: &Path, roots: &LocalPathRoots) -> Re
         "local target is outside the allowed workspace and runtime roots: {}",
         target.display()
     ))
+}
+
+fn normalize_external_url(raw_url: &str) -> Result<String, String> {
+    let trimmed = raw_url.trim();
+    if trimmed.is_empty() {
+        return Err("external url is empty".to_string());
+    }
+
+    let Some((scheme, remainder)) = trimmed.split_once(':') else {
+        return Err("external url is missing a scheme".to_string());
+    };
+
+    if !scheme.eq_ignore_ascii_case("https") && !scheme.eq_ignore_ascii_case("http") {
+        return Err("external url must use http or https".to_string());
+    }
+
+    if !remainder.starts_with("//") {
+        return Err("external url must include // after the scheme".to_string());
+    }
+
+    if trimmed.chars().any(char::is_whitespace) {
+        return Err("external url must not contain whitespace".to_string());
+    }
+
+    Ok(trimmed.to_string())
 }
 
 #[cfg(windows)]
@@ -394,8 +404,8 @@ fn run_platform_command(program: &str, args: &[&Path], description: &str) -> Res
 #[cfg(test)]
 mod tests {
     use super::{
-        open_trusted_directory, prepare_trusted_directory_target, resolve_existing_local_path,
-        resolve_path_candidate, LocalPathRoots,
+        normalize_external_url, open_trusted_directory, prepare_trusted_directory_target,
+        resolve_existing_local_path, resolve_path_candidate, LocalPathRoots,
     };
     use std::env;
     use std::fs;
@@ -405,6 +415,22 @@ mod tests {
     #[test]
     fn resolve_path_candidate_rejects_empty_input() {
         assert!(resolve_path_candidate("   ", &LocalPathRoots::new(None, None, None)).is_err());
+    }
+
+    #[test]
+    fn normalize_external_url_accepts_uppercase_http_schemes() {
+        let normalized = normalize_external_url("HTTPS://example.com/path")
+            .expect("uppercase https scheme should pass validation");
+
+        assert_eq!(normalized, "HTTPS://example.com/path");
+    }
+
+    #[test]
+    fn normalize_external_url_rejects_schemes_without_double_slash() {
+        let error = normalize_external_url("https:example.com")
+            .expect_err("scheme without double slash should fail");
+
+        assert!(error.contains("include //"));
     }
 
     #[test]

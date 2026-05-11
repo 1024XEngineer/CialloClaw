@@ -403,12 +403,6 @@ export function DashboardVoiceField({ isOpen, onClose, onRecommendationConfirm, 
   }, [isOpen]);
 
   function handlePanelKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      handleClose();
-      return;
-    }
-
     if (event.key !== "Tab") {
       return;
     }

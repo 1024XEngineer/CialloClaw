@@ -13,6 +13,7 @@ import { DashboardEntranceOrb } from "@/features/dashboard/home/components/Dashb
 import { DashboardEventOrb } from "@/features/dashboard/home/components/DashboardEventOrb";
 import { DashboardEventPanel } from "@/features/dashboard/home/components/DashboardEventPanel";
 import { DashboardOrbitRings } from "@/features/dashboard/home/components/DashboardOrbitRings";
+import { useDashboardEscapeHandler } from "@/features/dashboard/shared/dashboardEscapeCoordinator";
 import { resolveDashboardModuleRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { buildDesktopOnboardingPresentation } from "@/features/onboarding/onboardingGeometry";
 import { setDesktopOnboardingPresentation } from "@/features/onboarding/onboardingService";
@@ -233,6 +234,11 @@ export function DashboardHome({
     };
   }, [data.summonTemplates.length, scheduleSummon, summonTemplateSignature]);
 
+  useDashboardEscapeHandler({
+    enabled: activeStateKey !== null || Boolean(activeExpandedState),
+    handleEscape: closeActiveOverlay,
+    priority: 200,
+  });
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
