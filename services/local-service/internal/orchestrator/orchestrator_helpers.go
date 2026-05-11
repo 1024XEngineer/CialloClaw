@@ -120,7 +120,7 @@ func notepadResourcePaths(item map[string]any, workspaceRoot string) []string {
 		}
 
 		switch notepadResourceTargetKind(resource) {
-		case "file", "folder":
+		case "file":
 			path, ok := normalizeNotepadSnapshotPath(path, workspaceRoot)
 			if !ok {
 				continue

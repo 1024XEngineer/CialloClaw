@@ -2433,7 +2433,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `data.items[].effective_scope`        | 生效范围                 |
 | `data.items[].ended_at`               | 结束时间                 |
 | `data.items[].linked_task_id`         | 已转正式任务后的 task ID |
-| `data.items[].related_resources`      | 相关资料列表；显式路径资源可在升级任务时进入执行上下文 |
+| `data.items[].related_resources`      | 相关资料列表；显式文件资源可在升级任务时进入执行上下文，目录仅保留为展示与打开上下文 |
 | `data.page`                           | 分页信息                 |
 
 ### agent.notepad.list 出参示例
@@ -2577,7 +2577,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户点击“交给 Agent 处理”时
-- **系统处理**：将事项按 `note_text / title` 升级为正式任务，并复用普通 free-text 任务入口的意图与执行语义；对带有 provenance 的当前事项，用户显式填写的 `note_text` 优先进入正式任务文本输入，title-only 事项回退到原始 `title`，不会把展示态补写文案当成正式执行输入；对于缺少 `note_text_origin` 的 legacy 持久化行，只要已存 `note_text` 非空，运行时会保守地继续按用户正文处理，避免在重载后静默丢掉真实输入；用户显式关联且位于当前 workspace 内的路径型 `related_resources` 会进入正式任务文件上下文，并统一投影为 `workspace/...` 形式，系统派生的默认目录和 workspace 外路径都只保留为来源事项的展示与打开上下文；若自由文本推断已足够明确，任务可直接进入执行并返回 `delivery_result`。一旦这条任务已经通过 shared stream 对外发布 `task_id`，后续启动阶段失败会保留该任务并收口为 `failed`，同时解除来源事项的 `linked_task_id`，而不是回滚删除已经可见的任务。
+- **系统处理**：将事项按 `note_text / title` 升级为正式任务，并复用普通 free-text 任务入口的意图与执行语义；对带有 provenance 的当前事项，用户显式填写的 `note_text` 优先进入正式任务文本输入，title-only 事项回退到原始 `title`，不会把展示态补写文案当成正式执行输入；对于缺少 `note_text_origin` 的 legacy 持久化行，只要已存 `note_text` 非空，运行时会保守地继续按用户正文处理，避免在重载后静默丢掉真实输入；用户显式关联且位于当前 workspace 内的文件型 `related_resources` 会进入正式任务文件上下文，并统一投影为 `workspace/...` 形式，目录资源、系统派生的默认目录和 workspace 外路径都只保留为来源事项的展示与打开上下文；若自由文本推断已足够明确，任务可直接进入执行并返回 `delivery_result`。一旦这条任务已经通过 shared stream 对外发布 `task_id`，后续启动阶段失败会保留该任务并收口为 `failed`，同时解除来源事项的 `linked_task_id`，而不是回滚删除已经可见的任务。
 - **入参**：事项 ID、确认标记
 - **出参**：主任务入口返回对象、更新后的来源事项、建议刷新的事项分组
 
