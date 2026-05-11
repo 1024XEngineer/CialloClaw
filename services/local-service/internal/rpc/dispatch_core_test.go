@@ -531,7 +531,7 @@ func TestDispatchReturnsPluginRuntimeList(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-plugin-runtime-list"`),
 		Method:  methodAgentPluginRuntimeList,
-		Params:  mustMarshal(t, map[string]any{}),
+		Params:  mustMarshal(t, map[string]any{"request_meta": rpcRequestMeta("trace_plugin_runtime_list")}),
 	})
 	success, ok := response.(successEnvelope)
 	if !ok {
@@ -558,7 +558,7 @@ func TestDispatchReturnsPluginList(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-plugin-list"`),
 		Method:  methodAgentPluginList,
-		Params:  mustMarshal(t, map[string]any{"query": "ocr", "page": map[string]any{"limit": 10, "offset": 0}}),
+		Params:  mustMarshal(t, map[string]any{"request_meta": rpcRequestMeta("trace_plugin_list"), "query": "ocr", "page": map[string]any{"limit": 10, "offset": 0}}),
 	})
 	success, ok := response.(successEnvelope)
 	if !ok {
@@ -577,7 +577,7 @@ func TestDispatchReturnsPluginDetail(t *testing.T) {
 		JSONRPC: "2.0",
 		ID:      json.RawMessage(`"req-plugin-detail"`),
 		Method:  methodAgentPluginDetailGet,
-		Params:  mustMarshal(t, map[string]any{"plugin_id": "ocr"}),
+		Params:  mustMarshal(t, map[string]any{"request_meta": rpcRequestMeta("trace_plugin_detail_get"), "plugin_id": "ocr"}),
 	})
 	success, ok := response.(successEnvelope)
 	if !ok {
@@ -605,5 +605,49 @@ func TestDispatchReturnsPluginDetail(t *testing.T) {
 		if item["display_name"] != metadata.DisplayName || item["source"] != string(metadata.Source) {
 			t.Fatalf("expected plugin detail payload to mirror registry metadata for %q, got %+v", toolName, item)
 		}
+	}
+}
+
+func TestDispatchRejectsPluginQueriesMissingRequestMeta(t *testing.T) {
+	server := newTestServer()
+	testCases := []struct {
+		name   string
+		method string
+		params map[string]any
+	}{
+		{
+			name:   "plugin runtime list",
+			method: methodAgentPluginRuntimeList,
+			params: map[string]any{},
+		},
+		{
+			name:   "plugin list",
+			method: methodAgentPluginList,
+			params: map[string]any{"query": "ocr"},
+		},
+		{
+			name:   "plugin detail get",
+			method: methodAgentPluginDetailGet,
+			params: map[string]any{"plugin_id": "ocr"},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			response := server.dispatch(requestEnvelope{
+				JSONRPC: "2.0",
+				ID:      json.RawMessage(`"req-plugin-invalid"`),
+				Method:  testCase.method,
+				Params:  mustMarshal(t, testCase.params),
+			})
+
+			rpcErr, ok := response.(errorEnvelope)
+			if !ok {
+				t.Fatalf("expected error response envelope, got %#v", response)
+			}
+			if rpcErr.Error.Code != errInvalidParams || rpcErr.Error.Message != "INVALID_PARAMS" {
+				t.Fatalf("expected invalid params response, got %#v", rpcErr)
+			}
+		})
 	}
 }

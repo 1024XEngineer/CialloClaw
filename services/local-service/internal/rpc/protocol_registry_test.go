@@ -98,7 +98,9 @@ func TestStableMethodRegistryDispatchMatrix(t *testing.T) {
 		methodAgentTaskInspectorRun:       decodeParamsRequiringRequestMeta,
 		methodAgentDeliveryOpen:           decodeParamsRequiringRequestMeta,
 		methodAgentSettingsGet:            decodeParamsRequiringRequestMeta,
-		methodAgentPluginDetailGet:        decodeParams,
+		methodAgentPluginRuntimeList:      decodeParamsRequiringRequestMeta,
+		methodAgentPluginList:             decodeParamsRequiringRequestMeta,
+		methodAgentPluginDetailGet:        decodeParamsRequiringRequestMeta,
 	}
 
 	for _, method := range server.stableMethodRegistry() {
