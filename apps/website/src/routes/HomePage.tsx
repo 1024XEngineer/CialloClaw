@@ -7,17 +7,18 @@ import { useI18n } from "@/lib/i18n.tsx";
 import { useWebsiteTheme } from "@/lib/theme.tsx";
 import mascotFallback from "../../../desktop/src/assets/cialloclaw-pet/body.png";
 import { HeroActionButton } from "@/components/HeroActionButton";
+import { assetUrl } from "@/lib/utils";
 
 export function HomePage() {
   const { isDark } = useWebsiteTheme();
   const { t } = useI18n();
-  const [heroImage, setHeroImage] = useState("/assets/images/final.png");
+  const [heroImage, setHeroImage] = useState(assetUrl("assets/images/final.png"));
   const galleryItems = useMemo(
     () => [
-      { image: "/assets/images/floating-ball.png", text: t("home.gallery.desktop-collab") },
-      { image: "/assets/images/dashboard.png", text: t("home.gallery.voice-input") },
-      { image: "/assets/images/dashboard-task.png", text: t("home.gallery.doc-entry") },
-      { image: "/assets/images/dashboard-note.png", text: t("home.gallery.formal-delivery") },
+      { image: assetUrl("assets/images/floating-ball.png"), text: t("home.gallery.desktop-collab") },
+      { image: assetUrl("assets/images/dashboard.png"), text: t("home.gallery.voice-input") },
+      { image: assetUrl("assets/images/dashboard-task.png"), text: t("home.gallery.doc-entry") },
+      { image: assetUrl("assets/images/dashboard-note.png"), text: t("home.gallery.formal-delivery") },
     ],
     [t],
   );

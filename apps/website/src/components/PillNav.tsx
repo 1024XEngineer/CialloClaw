@@ -12,7 +12,7 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { cn } from "@/lib/utils";
+import { assetUrl, cn } from "@/lib/utils";
 
 type NavItem = {
   label: string;
@@ -45,7 +45,7 @@ export function PillNav({ activeHref, className, isHome = false }: PillNavProps)
         <div className="flex min-w-0 flex-1 items-center gap-4 lg:gap-8">
           <Link to="/" className="flex shrink-0 items-center gap-3">
             <img
-              src="/assets/icons/logo.png"
+              src={assetUrl("assets/icons/logo.png")}
               alt="CialloClaw logo"
               className="h-10 w-10 object-cover"
             />
