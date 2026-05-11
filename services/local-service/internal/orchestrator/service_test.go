@@ -3552,6 +3552,9 @@ func TestTaskInspectorRunManualReasonRecordsGeneratedTitleAuditAndTraceWhenSyncF
 	if inspectionID == "" || auditRecords[0].RunID != inspectionID {
 		t.Fatalf("expected failed sync audit record to stay on inspection owner, got %+v", auditRecords[0])
 	}
+	if !strings.Contains(err.Error(), inspectionID) {
+		t.Fatalf("expected sync failure to expose inspection_id for audit correlation, inspection_id=%s err=%v", inspectionID, err)
+	}
 
 	traces, total, traceErr := service.storage.TraceStore().ListTraceRecords(context.Background(), inspectionID, 10, 0)
 	if traceErr != nil || total != 1 || len(traces) != 1 {
@@ -3559,6 +3562,58 @@ func TestTaskInspectorRunManualReasonRecordsGeneratedTitleAuditAndTraceWhenSyncF
 	}
 	if traces[0].TaskID != inspectionID || traces[0].RunID != inspectionID {
 		t.Fatalf("expected failed sync trace owner attribution to stay on inspection owner, got %+v", traces[0])
+	}
+}
+
+func TestServiceSecuritySummaryIncludesManualInspectorTitleGenerationUsageInTodayTotals(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_manual_inspector_title",
+				Provider:   "openai",
+				ModelID:    "gpt-manual-title",
+				OutputText: `{"title":"本周阻塞项复盘"}`,
+				Usage:      model.TokenUsage{InputTokens: 9, OutputTokens: 13, TotalTokens: 22},
+				LatencyMS:  120,
+			}, nil
+		},
+	})
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+
+	todosRoot := filepath.Join(workspaceRoot, "todos")
+	if err := os.MkdirAll(todosRoot, 0o755); err != nil {
+		t.Fatalf("mkdir todos root: %v", err)
+	}
+	content := strings.Join([]string{
+		"- [ ] 复盘",
+		"note: 继续整理本周阻塞项和行动项",
+		"agent: 输出更紧凑标题",
+		"",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(todosRoot, "manual.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write manual note source: %v", err)
+	}
+
+	if _, err := service.TaskInspectorRun(map[string]any{
+		"target_sources": []any{"workspace/todos"},
+		"reason":         "notes_page_manual_run",
+	}); err != nil {
+		t.Fatalf("TaskInspectorRun returned error: %v", err)
+	}
+
+	securityResult, err := service.SecuritySummaryGet()
+	if err != nil {
+		t.Fatalf("security summary failed: %v", err)
+	}
+
+	tokenCostSummary := securityResult["summary"].(map[string]any)["token_cost_summary"].(map[string]any)
+	if tokenCostSummary["current_task_tokens"] != 0 {
+		t.Fatalf("expected manual inspector usage to stay out of current_task_tokens, got %+v", tokenCostSummary)
+	}
+	if tokenCostSummary["today_tokens"] != 22 {
+		t.Fatalf("expected manual inspector usage to contribute to today_tokens, got %+v", tokenCostSummary)
 	}
 }
 

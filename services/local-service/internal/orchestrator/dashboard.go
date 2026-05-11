@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -561,7 +562,12 @@ func buildMirrorProfile(tasks []runengine.TaskRecord) map[string]any {
 	}
 }
 
-func aggregateTokenCostSummary(unfinishedTasks, finishedTasks []runengine.TaskRecord, budgetAutoDowngrade bool) map[string]any {
+type tokenCostUsageSummary struct {
+	TodayTokens int
+	TodayCost   float64
+}
+
+func aggregateTokenCostSummary(unfinishedTasks, finishedTasks []runengine.TaskRecord, budgetAutoDowngrade bool, extraTodayUsage tokenCostUsageSummary) map[string]any {
 	currentTaskTokens := 0
 	currentTaskCost := 0.0
 	if currentTask, ok := latestTokenUsageTask(unfinishedTasks, finishedTasks); ok {
@@ -579,6 +585,8 @@ func aggregateTokenCostSummary(unfinishedTasks, finishedTasks []runengine.TaskRe
 		todayTokens += intValueFromAny(task.TokenUsage["total_tokens"])
 		todayCost += floatValueFromAny(task.TokenUsage["estimated_cost"])
 	}
+	todayTokens += extraTodayUsage.TodayTokens
+	todayCost += extraTodayUsage.TodayCost
 
 	return map[string]any{
 		"current_task_tokens":   currentTaskTokens,
@@ -589,6 +597,75 @@ func aggregateTokenCostSummary(unfinishedTasks, finishedTasks []runengine.TaskRe
 		"daily_limit":           0.0,
 		"budget_auto_downgrade": budgetAutoDowngrade,
 	}
+}
+
+// inspectorTitleGenerationUsage keeps manual inspector note-title generation
+// visible in day-level quota summaries without collapsing these calls into the
+// current task token view.
+func (s *Service) inspectorTitleGenerationUsage(ctx context.Context) tokenCostUsageSummary {
+	if s == nil || s.storage == nil {
+		return tokenCostUsageSummary{}
+	}
+
+	traceRecords, _, err := s.storage.TraceStore().ListTraceRecords(ctx, "", 0, 0)
+	if err != nil {
+		return tokenCostUsageSummary{}
+	}
+
+	now := time.Now().UTC()
+	relevantTraceIDs := make(map[string]struct{}, len(traceRecords))
+	summary := tokenCostUsageSummary{}
+	for _, record := range traceRecords {
+		if !sameDay(parseRFC3339Time(record.CreatedAt), now) {
+			continue
+		}
+		if !strings.HasPrefix(strings.TrimSpace(record.TaskID), "insp_") {
+			continue
+		}
+		if strings.TrimSpace(record.LLMInputSummary) != "task_inspector.generate_note_title" {
+			continue
+		}
+		relevantTraceIDs[record.TraceID] = struct{}{}
+		summary.TodayCost += record.Cost
+	}
+	if len(relevantTraceIDs) == 0 {
+		return summary
+	}
+
+	evalSnapshots, _, err := s.storage.EvalStore().ListEvalSnapshots(ctx, "", 0, 0)
+	if err != nil {
+		return summary
+	}
+	for _, snapshot := range evalSnapshots {
+		if !sameDay(parseRFC3339Time(snapshot.CreatedAt), now) {
+			continue
+		}
+		if _, ok := relevantTraceIDs[snapshot.TraceID]; !ok {
+			continue
+		}
+		summary.TodayTokens += totalTokensFromEvalMetrics(snapshot.MetricsJSON)
+	}
+	return summary
+}
+
+func totalTokensFromEvalMetrics(metricsJSON string) int {
+	metricsJSON = strings.TrimSpace(metricsJSON)
+	if metricsJSON == "" {
+		return 0
+	}
+	metrics := map[string]any{}
+	if err := json.Unmarshal([]byte(metricsJSON), &metrics); err != nil {
+		return 0
+	}
+	return intValueFromAny(metrics["total_tokens"])
+}
+
+func parseRFC3339Time(value string) time.Time {
+	parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(value))
+	if err != nil {
+		return time.Time{}
+	}
+	return parsed
 }
 
 func latestTokenUsageTask(unfinishedTasks, finishedTasks []runengine.TaskRecord) (runengine.TaskRecord, bool) {

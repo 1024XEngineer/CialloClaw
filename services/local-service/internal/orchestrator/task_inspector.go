@@ -67,7 +67,7 @@ func (s *Service) TaskInspectorRun(params map[string]any) (map[string]any, error
 	s.recordInspectorTitleGeneration(result.InspectionID, reason, result.TitleGenerationAuditData)
 	if result.SourceSynced {
 		if err := s.runEngine.SyncNotepadItems(result.NotepadItems); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("sync notepad items for inspection %s: %w", result.InspectionID, err)
 		}
 	}
 
