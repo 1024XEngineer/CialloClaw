@@ -80,19 +80,23 @@ type AgentTaskStartParams = orchestrator.StartTaskRequest
 type AgentTaskDetailGetParams = orchestrator.TaskDetailGetRequest
 
 func decodeAgentInputSubmitParams(raw json.RawMessage) (map[string]any, *rpcError) {
-	return decodeTypedProtocolParams(raw, validateAgentInputSubmitParams, decodeTypedProtocolDTO[AgentInputSubmitParams], func(request AgentInputSubmitParams) map[string]any {
+	return decodeTypedProtocolParams(raw, validateAgentInputSubmitParams, orchestrator.SubmitInputRequestFromParams, func(request AgentInputSubmitParams) map[string]any {
 		return request.ProtocolParamsMap()
 	})
 }
 
 func decodeAgentTaskStartParams(raw json.RawMessage) (map[string]any, *rpcError) {
-	return decodeTypedProtocolParams(raw, validateAgentTaskStartParams, decodeTypedProtocolDTO[AgentTaskStartParams], func(request AgentTaskStartParams) map[string]any {
+	return decodeTypedProtocolParams(raw, validateAgentTaskStartParams, func(params map[string]any) AgentTaskStartParams {
+		request := orchestrator.StartTaskRequestFromParams(params)
+		request.Intent = nil
+		return request
+	}, func(request AgentTaskStartParams) map[string]any {
 		return request.ProtocolParamsMap()
 	})
 }
 
 func decodeAgentTaskDetailGetParams(raw json.RawMessage) (map[string]any, *rpcError) {
-	return decodeTypedProtocolParams(raw, validateAgentTaskDetailGetParams, decodeTypedProtocolDTO[AgentTaskDetailGetParams], func(request AgentTaskDetailGetParams) map[string]any {
+	return decodeTypedProtocolParams(raw, validateAgentTaskDetailGetParams, orchestrator.TaskDetailGetRequestFromParams, func(request AgentTaskDetailGetParams) map[string]any {
 		return request.ProtocolParamsMap()
 	})
 }
@@ -101,7 +105,7 @@ func decodeAgentTaskListParams(raw json.RawMessage) (map[string]any, *rpcError) 
 	return decodeParamsWithValidation(raw, validateAgentTaskListParams)
 }
 
-func decodeTypedProtocolParams[T any](raw json.RawMessage, validate func(map[string]any) *rpcError, decode func([]byte) (T, error), normalize func(T) map[string]any) (map[string]any, *rpcError) {
+func decodeTypedProtocolParams[T any](raw json.RawMessage, validate func(map[string]any) *rpcError, fromParams func(map[string]any) T, normalize func(T) map[string]any) (map[string]any, *rpcError) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 		trimmed = []byte("{}")
@@ -120,20 +124,11 @@ func decodeTypedProtocolParams[T any](raw json.RawMessage, validate func(map[str
 			return nil, err
 		}
 	}
-	if decode != nil && normalize != nil {
-		typedPayload, err := decode(trimmed)
-		if err != nil {
-			return nil, invalidParamsError("params do not match the registered method dto")
-		}
+	if fromParams != nil && normalize != nil {
+		typedPayload := fromParams(payload)
 		return normalize(typedPayload), nil
 	}
 	return map[string]any{}, nil
-}
-
-func decodeTypedProtocolDTO[T any](raw []byte) (T, error) {
-	var dto T
-	err := json.Unmarshal(raw, &dto)
-	return dto, err
 }
 
 func decodeParamsRequiringRequestMeta(raw json.RawMessage) (map[string]any, *rpcError) {
@@ -182,8 +177,17 @@ func validateAgentInputSubmitParams(params map[string]any) *rpcError {
 	if err := validateContextEnvelope(params); err != nil {
 		return err
 	}
-	options := mapObject(params, "options")
+	if err := validateVoiceMeta(params); err != nil {
+		return err
+	}
+	options, err := optionalObject(params, "options")
+	if err != nil {
+		return err
+	}
 	if err := optionalEnumValue(options, "preferred_delivery", deliveryTypeSet); err != nil {
+		return err
+	}
+	if err := optionalBoolField(options, "confirm_required"); err != nil {
 		return err
 	}
 	return nil
@@ -212,11 +216,21 @@ func validateAgentTaskStartParams(params map[string]any) *rpcError {
 	if err := validateContextEnvelope(params); err != nil {
 		return err
 	}
-	delivery := mapObject(params, "delivery")
+	delivery, err := optionalObject(params, "delivery")
+	if err != nil {
+		return err
+	}
 	if err := optionalEnumValue(delivery, "preferred", deliveryTypeSet); err != nil {
 		return err
 	}
 	if err := optionalEnumValue(delivery, "fallback", deliveryTypeSet); err != nil {
+		return err
+	}
+	options, err := optionalObject(params, "options")
+	if err != nil {
+		return err
+	}
+	if err := optionalBoolField(options, "confirm_required"); err != nil {
 		return err
 	}
 	return nil
@@ -288,16 +302,106 @@ func validateTaskStartInputPayload(input, context map[string]any) *rpcError {
 }
 
 func validateContextEnvelope(params map[string]any) *rpcError {
-	pageContext := mapObject(mapObject(params, "input"), "page_context")
-	if err := optionalEnumValue(pageContext, "browser_kind", browserKindSet); err != nil {
+	input := mapObject(params, "input")
+	pageContext, err := optionalObject(input, "page_context")
+	if err != nil {
 		return err
 	}
-	context := mapObject(params, "context")
+	if err := validatePageContext(pageContext); err != nil {
+		return err
+	}
+	context, err := optionalObject(params, "context")
+	if err != nil {
+		return err
+	}
 	if len(context) == 0 {
 		return nil
 	}
-	page := mapObject(context, "page")
-	if err := optionalEnumValue(page, "browser_kind", browserKindSet); err != nil {
+	page, err := optionalObject(context, "page")
+	if err != nil {
+		return err
+	}
+	if err := validatePageContext(page); err != nil {
+		return err
+	}
+	screen, err := optionalObject(context, "screen")
+	if err != nil {
+		return err
+	}
+	if err := validateStringFields(screen, "summary", "screen_summary", "visible_text", "window_title", "hover_target"); err != nil {
+		return err
+	}
+	behavior, err := optionalObject(context, "behavior")
+	if err != nil {
+		return err
+	}
+	if err := validateStringFields(behavior, "last_action"); err != nil {
+		return err
+	}
+	if err := validateIntegerFields(behavior, "dwell_millis", "copy_count", "window_switch_count", "page_switch_count"); err != nil {
+		return err
+	}
+	selection, err := optionalObject(context, "selection")
+	if err != nil {
+		return err
+	}
+	if err := validateStringFields(selection, "text"); err != nil {
+		return err
+	}
+	errorContext, err := optionalObject(context, "error")
+	if err != nil {
+		return err
+	}
+	if err := validateStringFields(errorContext, "message"); err != nil {
+		return err
+	}
+	clipboard, err := optionalObject(context, "clipboard")
+	if err != nil {
+		return err
+	}
+	if err := validateStringFields(clipboard, "text"); err != nil {
+		return err
+	}
+	if err := validateStringFields(context, "text", "selection_text", "screen_summary", "clipboard_text", "hover_target", "last_action"); err != nil {
+		return err
+	}
+	if err := validateIntegerFields(context, "dwell_millis", "copy_count", "window_switch_count", "page_switch_count"); err != nil {
+		return err
+	}
+	if err := optionalStringSliceField(context, "files"); err != nil {
+		return err
+	}
+	if err := optionalStringSliceField(context, "file_paths"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateVoiceMeta(params map[string]any) *rpcError {
+	voiceMeta, err := optionalObject(params, "voice_meta")
+	if err != nil {
+		return err
+	}
+	if err := validateStringFields(voiceMeta, "voice_session_id", "segment_id"); err != nil {
+		return err
+	}
+	if err := optionalBoolField(voiceMeta, "is_locked_session"); err != nil {
+		return err
+	}
+	if err := optionalNumberField(voiceMeta, "asr_confidence"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validatePageContext(values map[string]any) *rpcError {
+	if err := validateStringFields(values, "title", "app_name", "url", "process_path", "window_title", "visible_text", "hover_target"); err != nil {
+		return err
+	}
+	if err := optionalEnumValue(values, "browser_kind", browserKindSet); err != nil {
+		return err
+	}
+	if err := validateIntegerFields(values, "process_id"); err != nil {
 		return err
 	}
 	return nil
@@ -341,6 +445,18 @@ func mapObject(values map[string]any, key string) map[string]any {
 	return object
 }
 
+func optionalObject(values map[string]any, key string) (map[string]any, *rpcError) {
+	raw, ok := values[key]
+	if !ok || raw == nil {
+		return map[string]any{}, nil
+	}
+	object, ok := raw.(map[string]any)
+	if !ok {
+		return nil, invalidParamsError("field must be a json object: " + key)
+	}
+	return object, nil
+}
+
 func requireNonEmptyString(values map[string]any, key string) *rpcError {
 	raw, ok := values[key]
 	if !ok {
@@ -361,6 +477,88 @@ func requireInteger(values map[string]any, key string) *rpcError {
 	value, ok := raw.(float64)
 	if !ok || math.Trunc(value) != value {
 		return invalidParamsError("field must be an integer: " + key)
+	}
+	return nil
+}
+
+func optionalIntegerField(values map[string]any, key string) *rpcError {
+	raw, ok := values[key]
+	if !ok || raw == nil {
+		return nil
+	}
+	value, ok := raw.(float64)
+	if !ok || math.Trunc(value) != value {
+		return invalidParamsError("field must be an integer: " + key)
+	}
+	return nil
+}
+
+func optionalNumberField(values map[string]any, key string) *rpcError {
+	raw, ok := values[key]
+	if !ok || raw == nil {
+		return nil
+	}
+	switch raw.(type) {
+	case float64:
+		return nil
+	default:
+		return invalidParamsError("field must be a number: " + key)
+	}
+}
+
+func optionalBoolField(values map[string]any, key string) *rpcError {
+	raw, ok := values[key]
+	if !ok || raw == nil {
+		return nil
+	}
+	if _, ok := raw.(bool); !ok {
+		return invalidParamsError("field must be a boolean: " + key)
+	}
+	return nil
+}
+
+func optionalStringField(values map[string]any, key string) *rpcError {
+	raw, ok := values[key]
+	if !ok || raw == nil {
+		return nil
+	}
+	if _, ok := raw.(string); !ok {
+		return invalidParamsError("field must be a string: " + key)
+	}
+	return nil
+}
+
+func optionalStringSliceField(values map[string]any, key string) *rpcError {
+	raw, ok := values[key]
+	if !ok || raw == nil {
+		return nil
+	}
+	items, ok := raw.([]any)
+	if !ok {
+		return invalidParamsError("field must be an array of strings: " + key)
+	}
+	for _, item := range items {
+		if _, ok := item.(string); !ok {
+			return invalidParamsError("field must be an array of strings: " + key)
+		}
+	}
+	return nil
+}
+
+func validateStringFields(values map[string]any, keys ...string) *rpcError {
+	for _, key := range keys {
+		if err := optionalStringField(values, key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateIntegerFields(values map[string]any, keys ...string) *rpcError {
+	for _, key := range keys {
+		if err := optionalIntegerField(values, key); err != nil {
+			return err
+		}
 	}
 	return nil
 }
