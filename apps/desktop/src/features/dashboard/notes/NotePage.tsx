@@ -16,7 +16,12 @@ import { navigateToDashboardTaskDetail } from "@/features/dashboard/shared/dashb
 import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import { navigateToDashboardTaskDelivery } from "@/features/dashboard/tasks/taskDeliveryNavigation";
-import { openTaskDeliveryForTask, performTaskOpenExecution, resolveTaskOpenExecutionPlan } from "@/features/dashboard/tasks/taskOutput.service";
+import {
+  openTaskDeliveryForTask,
+  performTaskOpenExecution,
+  resolveTaskOpenExecutionPlan,
+  shouldAutoOpenTaskDeliveryResult,
+} from "@/features/dashboard/tasks/taskOutput.service";
 import { cn } from "@/utils/cn";
 import { buildNoteSummary, describeNotePreview, formatNoteBoardTimeHint, formatNoteDisplayPath, getNoteBucketLabel, getNoteStatusBadgeClass, groupClosedNotes, sortClosedNotes, sortNotesByUrgency } from "./notePage.mapper";
 import { buildDashboardNoteBucketInvalidateKeys, buildDashboardNoteBucketQueryKey, dashboardNoteBucketGroups, getDashboardNoteRefreshPlan } from "./notePage.query";
@@ -1646,7 +1651,7 @@ export function NotePage() {
     mutationFn: (itemId: string) => convertNoteToTask(itemId, dataMode),
     onSuccess: async (outcome) => {
       await invalidateNoteBuckets(outcome.result.refresh_groups);
-      if (outcome.result.delivery_result) {
+      if (shouldAutoOpenTaskDeliveryResult(outcome.result.delivery_result)) {
         try {
           showFeedback(await openNoteConvertDelivery(outcome.result.task.task_id, dataMode, navigate));
           return;
