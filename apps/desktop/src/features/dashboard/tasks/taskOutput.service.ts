@@ -103,7 +103,10 @@ export function getTaskDeliveryOpenLabel(deliveryResult: DeliveryResult | null |
  * target. Inline bubble outputs stay readable in place and should not render a
  * dead-end open action.
  */
-export function canOpenTaskDeliveryResult(deliveryResult: DeliveryResult | null | undefined, fallbackTaskId: string | null = null): boolean {
+export function canOpenTaskDeliveryResult(
+  deliveryResult: DeliveryResult | null | undefined,
+  fallbackTaskId: string | null = null,
+): boolean {
   if (!deliveryResult) {
     return false;
   }
@@ -112,7 +115,11 @@ export function canOpenTaskDeliveryResult(deliveryResult: DeliveryResult | null 
     return typeof deliveryResult.payload.url === "string" && deliveryResult.payload.url.trim().length > 0;
   }
 
-  if (deliveryResult.type === "workspace_document" || deliveryResult.type === "open_file" || deliveryResult.type === "reveal_in_folder") {
+  if (
+    deliveryResult.type === "workspace_document" ||
+    deliveryResult.type === "open_file" ||
+    deliveryResult.type === "reveal_in_folder"
+  ) {
     return typeof deliveryResult.payload.path === "string" && deliveryResult.payload.path.trim().length > 0;
   }
 
@@ -121,6 +128,20 @@ export function canOpenTaskDeliveryResult(deliveryResult: DeliveryResult | null 
   }
 
   return false;
+}
+
+/**
+ * Auto-open should only run for delivery types that already have a stable
+ * renderer-to-OS or dashboard handoff. Bubble-like results stay on the current
+ * task surface even though they still use the formal delivery contract.
+ *
+ * @param deliveryResult Formal delivery result returned by task creation or replay.
+ * @returns Whether the renderer can safely auto-open the delivery target.
+ */
+export function shouldAutoOpenTaskDeliveryResult(
+  deliveryResult: DeliveryResult | null | undefined,
+): deliveryResult is DeliveryResult {
+  return canOpenTaskDeliveryResult(deliveryResult);
 }
 
 async function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {

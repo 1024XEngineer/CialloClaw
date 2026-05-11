@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { AnimatePresence, LayoutGroup, motion } from "motion/react";
 import { subscribeDeliveryReady, subscribeTaskRuntime, subscribeTaskUpdated } from "@/rpc/subscriptions";
+import { useDashboardEscapeHandler } from "@/features/dashboard/shared/dashboardEscapeCoordinator";
 import { readDashboardTaskDetailRouteState } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { buildDashboardSafetyNavigationState } from "@/features/dashboard/shared/dashboardSafetyNavigation";
 import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
@@ -485,6 +486,12 @@ export function TaskPage() {
     setStageInitialized(true);
     setDetailOpen(false);
   }
+
+  useDashboardEscapeHandler({
+    enabled: detailOpen,
+    handleEscape: () => setDetailOpen(false),
+    priority: 220,
+  });
 
   const taskControlMutation = useMutation({
     mutationFn: ({ action, taskId }: { action: "pause" | "resume" | "cancel" | "restart"; taskId: string }) => controlTaskByAction(taskId, action, dataMode),

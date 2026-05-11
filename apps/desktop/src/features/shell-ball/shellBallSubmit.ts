@@ -31,7 +31,7 @@ export function createShellBallInputSubmitParams(input: ShellBallTextSubmitInput
 
 /**
  * Routes every shell-ball free-form submit through the same formal intake path
- * so hover, voice, and clipboard prompts share browser-context enrichment.
+ * without reusing ambient browser-page context.
  *
  * @param input Trigger metadata together with the draft text to submit.
  * @returns The formal submit result, or `null` when the draft is empty.
@@ -42,7 +42,6 @@ export async function submitShellBallInput(input: ShellBallTextSubmitInput) {
     source: "floating_ball",
     trigger: input.trigger,
     inputMode: input.inputMode,
-    includeForegroundBrowserPageContext: true,
     sessionId: input.sessionId,
     options: {
       confirm_required: false,

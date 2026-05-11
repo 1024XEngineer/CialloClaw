@@ -34,6 +34,26 @@ func TestStreamRequestTrackerAssociatesStartedTaskByTrace(t *testing.T) {
 	}
 }
 
+func TestStreamRequestTrackerSubscribesForNotepadConvertToTask(t *testing.T) {
+	tracker := newStreamRequestTracker(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-tracker-notepad-start"`),
+		Method:  "agent.notepad.convert_to_task",
+		Params: mustMarshal(t, map[string]any{
+			"request_meta": map[string]any{
+				"trace_id": "trace_notepad_tracker",
+			},
+		}),
+	})
+
+	if !tracker.shouldSubscribeRuntime() || !tracker.shouldSubscribeTaskStart() {
+		t.Fatal("expected notepad.convert_to_task tracker to subscribe before the task id is known")
+	}
+	if !tracker.matchesTaskStart("other_session", "trace_notepad_tracker") {
+		t.Fatal("expected notepad.convert_to_task tracker to associate started task by trace id")
+	}
+}
+
 func TestStreamRequestTrackerConsumesLiveRuntimeReplayOnce(t *testing.T) {
 	tracker := newStreamRequestTracker(requestEnvelope{
 		JSONRPC: "2.0",

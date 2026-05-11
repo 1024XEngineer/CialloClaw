@@ -34,6 +34,7 @@ import type {
 import { JsonRpcClientError } from "@/rpc/client";
 import { subscribeApprovalPending, subscribeTask } from "@/rpc/subscriptions";
 import { navigateToDashboardTaskDetail } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
+import { useDashboardEscapeHandler } from "@/features/dashboard/shared/dashboardEscapeCoordinator";
 import {
   isDashboardSafetyApprovalSnapshotOnly,
   resolveDashboardSafetyNavigationRoute,
@@ -1119,23 +1120,14 @@ export function SecurityApp() {
     };
   }, [cardKeys, getBoardLayout]);
 
-  useEffect(() => {
-    if (!activeDetailKey) {
-      return;
-    }
-
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setActiveDetailKey(null);
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [activeDetailKey]);
+  useDashboardEscapeHandler({
+    enabled: activeDetailKey !== null,
+    handleEscape: () => {
+      setActionError(null);
+      setActiveDetailKey(null);
+    },
+    priority: 220,
+  });
 
   const openTaskDetail = useCallback(
     (taskId: string) => {
