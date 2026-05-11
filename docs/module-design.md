@@ -64,8 +64,8 @@
 1. **前端只承接交互与视图，不拥有正式执行真源**  
    前端可以拥有局部状态机，但不能自行发明正式业务状态，也不能绕过协议层改变后端状态。
 
-2. **后端 Harness 是唯一编排中枢**  
-   Context Manager、Intent、Skill / Blueprint、Prompt、RunEngine、Memory、Delivery、Hooks、Review、Trace 等都必须回到 Harness 主链路，而不是由前端、worker 或插件各自分散协调。
+2. **后端 Harness 是唯一任务状态与运行编排中枢**  
+   Context Manager、Intent、Skill / Blueprint、Prompt、RunEngine、Memory、Delivery、Hooks、Review、Trace 等可以作为独立子模块工作，但不得绕过 Harness 改写 `task / run` 主状态，也不得由前端、worker 或插件各自分散推进正式任务链。
 
 3. **能力与存储层中的能力接入子层只提供能力，不持有主业务状态**
    模型、工具、Playwright、OCR、LSP、RAG 只提供标准输入输出，不能自持 task/run 状态机。
@@ -97,7 +97,8 @@ CialloClaw 采用 **“前端桌面承接层 + JSON-RPC 协议边界 + 后端任
 - 前端不得直接 import Go 服务内部实现；
 - worker 不得被前端直接调用，必须经过 Go service 编排；
 - 所有正式联调接口都必须登记到 `/packages/protocol/rpc`；
-- 所有类型定义必须登记到 `/packages/protocol/types` 与 `/packages/protocol/schemas`；
+- 所有对外冻结类型必须登记到 `/packages/protocol/types`；
+- 只有需要跨语言校验或运行时校验的冻结对象，才必须补充到 `/packages/protocol/schemas`；
 - 所有错误必须回落到统一 `100xxxx` 错误码体系。
 
 ### 2.4.3 阅读提示
@@ -595,6 +596,7 @@ flowchart TB
 ### 约束
 - 局部状态不可直接映射为正式协议状态；
 - 对后端推送的 `task.updated` 等事件必须以 `task_id` 为锚点回写；
+- Notification 只作为刷新触发器；任务列表、任务详情、安全摘要、插件面板和交付视图的最终展示必须回到对应查询接口重取正式对象，不得长期依赖 notification payload 作为唯一真源；
 - 不允许在 store 中自造与协议冲突的字段；
 - 局部状态机必须能在页面刷新或窗口切换后恢复到可解释状态；
 - 查询缓存不应承担唯一真源角色。
@@ -678,15 +680,16 @@ flowchart TB
 - `taskService.startTask() / confirmTask() / getTaskDetail() / controlTask()`
 - `recommendationService.getRecommendations()`
 - `voiceService.submitVoiceInput()`
-- `fileService.parseDroppedFile() / openArtifact()`
+- `fileService.parseDroppedFile() / openArtifact() / openDelivery()`
 - `memoryService.getMirrorOverview()`
 - `securityService.getPendingApprovals() / respondApproval()`
-- `settingsService.getSnapshot() / updateSettings()`
+- `settingsService.getSnapshot() / validateModelSettings() / updateSettings()`
 
 ### 边界
 - 不直接访问数据库；
 - 不直接读取 Go 内部结构体；
 - 正式设置快照只能通过 `agent.settings.get / agent.settings.update` 读取和更新；
+- 涉及模型配置保存时，前端必须先调用 `validateModelSettings()` 对应的 `agent.settings.model.validate`，确认草稿可用后再进入 `agent.settings.update`；
 - 只能通过协议和平台适配层访问系统能力；
 - 返回值必须对齐正式对象模型，不得额外夹带隐式字段给表现层做依赖。
 
@@ -769,8 +772,12 @@ flowchart TB
 - 文件、窗口、通知等系统动作结果。
 
 ### 关键接口
-- `rpcClient.call(method, params)`
-- `rpcClient.subscribe(eventName, handler)`
+- `rpcClient.request(method, params)`
+- `subscriptionAdapter.subscribeTaskUpdated(handler)`
+- `subscriptionAdapter.subscribeDeliveryReady(handler)`
+- `subscriptionAdapter.subscribeApprovalPending(handler)`
+- `subscriptionAdapter.subscribeTaskRuntime(taskId, handler)`
+- `subscriptionAdapter.subscribePluginUpdated(handler)`（P1）
 - `pipeTransport.connect() / reconnect()`
 - `windowBridge.open(name, options)`
 - `trayBridge.registerMenu()`
@@ -780,6 +787,7 @@ flowchart TB
 ### 边界
 - 不持有业务真源；
 - 不解释 task/run 语义；
+- 插件相关订阅适配当前属于 P1；P0 插件面板应优先通过 `agent.plugin.runtime.list / agent.plugin.list / agent.plugin.detail.get` 查询刷新；
 - 只负责传输、系统能力和平台动作适配。
 
 ### 异常处理
@@ -803,6 +811,8 @@ flowchart TB
 ### 3.7.1 入口与轻量承接域
 
 系统默认以悬浮球为近场入口，以气泡和轻量输入区作为任务承接层，而不是以聊天页作为主入口。该功能域负责把语音、悬停输入、文本选中、文件拖拽和推荐点击统一承接，并在当前现场完成对象识别、意图确认、短结果返回和下一步分流。只有正式工作请求会升级为 `task`；无任务锚点的纯社交 / 闲聊输入只允许返回脱离 `task` 的轻量气泡，不进入任务详情、运行态或正式交付链。
+
+补充约束：这类无任务锚点轻量反馈属于 detached bubble，必须使用 `bubble_message.task_id = null`；前端不得把空字符串、临时 ID 或伪 task ID 当作正式任务锚点。
 
 核心入口包括：
 
@@ -1097,11 +1107,17 @@ flowchart TB
 | 通知回流器 | `TaskRecord` 通知队列、治理层回流对象 | 有序通知批次、订阅投影、重放顺序 | `task.updated / delivery.ready / approval.pending / loop.*` 等正式通知 |
 
 ### 职责
-- 解析请求并校验 schema；
+- 完成 JSON-RPC 结构解析、方法存在性校验、`params` 对象校验与统一错误包装；
 - 把请求绑定到稳定的 `task / session / trace` 锚点；
 - 把查询请求装配成前端可消费的正式对象；
 - 回放运行期通知和治理回流；
 - 向前端返回正式对象和标准错误结构。
+
+### 校验分阶段约束
+
+- **P0**：接入层必须完成 JSON-RPC 结构解析、方法存在性校验、`params` 对象校验、统一错误包装，以及在客户端缺省时生成并回传 `trace_id`。
+- **P1**：对 stable 方法逐步接入 JSON Schema 校验，优先覆盖 `agent.task.start`、`agent.input.submit`、`agent.task.confirm`、`agent.settings.update` 等高频写接口；前端此时应显式传入 `request_meta.trace_id`，缺省时后端产生 warning。
+- **P2**：补齐 stable request / response 的 schema 生成、回归测试与文档一致性检查，并再通过 schema 强制 `trace_id` 等关键链路字段。
 
 ### 上下游关系
 - 上游是桌面入口层发起的 JSON-RPC 请求，以及前端对正式对象的查询和控制动作。
@@ -1118,6 +1134,8 @@ flowchart TB
 - 订阅流与运行通知；
 - 任务列表、任务详情、仪表盘、安全摘要等查询视图。
 
+补充约束：运行通知只负责触发刷新、提示状态变化或携带轻量状态，不承载长期消费的完整业务对象；前端需要展示正式对象时，应通过 `agent.task.detail.get`、`agent.task.list`、`agent.security.*`、`agent.plugin.*` 或交付相关查询重新装配。
+
 ### 关键接口
 - `handleRequest(jsonrpcRequest)`
 - `publishNotification(method, params)`
@@ -1133,7 +1151,7 @@ flowchart TB
 
 ### 异常处理
 - 非法方法：返回统一协议错误码；
-- 参数不合法：走 schema 校验错误；
+- 参数不合法：P0 返回统一参数或结构错误，P1 起对已接入 schema 的 stable 方法返回 schema 校验错误；
 - 内核异常：包装成正式错误结构，不透传临时栈信息；
 - 订阅方断开：回收订阅资源，不阻断主运行对象。
 
@@ -1327,6 +1345,12 @@ flowchart TB
 - 页面与窗口上下文：`page_title / page_url / app_name / window_title / visible_text`
 - 屏幕与行为上下文：`screen_summary / hover_target / last_action / dwell_millis / copy_count / switch_count`
 - 系统补充上下文：`clipboard_text`
+
+#### canonicalization 约束
+
+- 旧客户端或平台桥带来的扁平字段只作为兼容入口，进入 `TaskContextSnapshot` 前必须收敛为一份 canonical context。
+- 当嵌套 `context.*` 与扁平兼容字段同时存在时，以嵌套字段优先，例如 `context.selection.text` 优先于 `selection_text`，`context.screen.summary` 优先于 `screen_summary`。
+- 任务编排、记忆查询、审计与运行快照都应复用同一份 `TaskContextSnapshot`，避免各模块自行二次猜测上下文。
 
 #### 关键中间产物
 - `TaskContextSnapshot`
@@ -1595,7 +1619,7 @@ flowchart TB
 - RAG / 记忆检索层
 
 ### 子模块说明
-- **模型接入**：统一承接 OpenAI Responses API 和后续模型路由，不允许业务层直连 provider SDK。
+- **模型接入**：通过 Model Provider Adapter 统一承接文本生成、tool calling、模型校验、usage/cost 回写和后续模型路由；前端展示别名与后端 canonical provider 路由分离，不允许业务层直连具体 provider SDK。
 - **工具执行适配器**：统一承接文件、网页、命令和其它工具调用，并把结果回写到正式对象链。
 - **LSP / 代码语义能力**：为前馈和审查提供代码级语义支撑，而不是作为独立业务入口。
 - **Playwright / OCR / Media Worker**：承接浏览器自动化、文字识别、媒体处理等外部能力，并通过统一 health-check 与错误码收口。
@@ -1645,16 +1669,24 @@ flowchart TB
 统一承接大模型接入，禁止业务层自行直连模型 SDK。
 
 #### 职责
-- 使用 OpenAI 官方 Responses API SDK；
-- 对接标准 API，不自行实现 API 标准，也不自行维护一套独立客户端协议；
-- 模型切换以配置为主：模型 ID、API 端点、密钥、预算策略；
+- 通过 Model Provider Adapter 暴露统一模型能力，包括文本生成、tool calling capability probe、模型配置校验和 usage/cost accounting；
+- 当前默认 canonical provider 路由名可为 `openai_responses`，但前端展示名可以继续使用 provider alias；
+- 模型切换以配置为主：provider、模型 ID、API 端点、密钥、预算策略；
 - 支持 tool calling、流式结果与多轮关联；
 - 模型调用审计与预算治理纳入统一链路。
+
+#### 成熟度边界
+
+| 阶段 | 模型接入能力边界 |
+| --- | --- |
+| P0 | 文本生成、基础 tool calling capability probe、`agent.settings.model.validate` 可用性校验 |
+| P1 | usage / latency / route 元数据回写、模型调用审计链路补齐 |
+| P2 | 流式结果、provider routing / failover、结构化输出合同与更完整的多 provider 能力 |
 
 #### 处理主线
 1. 根据任务意图、预算策略和设置快照解析当前模型路由。
 2. 读取密钥与 provider 配置，形成一次受控 `model invocation`。
-3. 调用 Responses API，接收文本、工具调用和 usage 元数据。
+3. 通过当前 provider adapter 调用对应模型能力，接收文本、工具调用和 usage 元数据。
 4. 把 provider 响应归一成执行层可消费的标准输出块。
 5. 把 `latency / token / cost / route` 元数据回写给 Trace / Eval 和成本治理。
 
@@ -1891,6 +1923,19 @@ flowchart TB
 - **Doom Loop / Human-in-the-loop**：在执行异常、重复无进展或高不确定性场景下，负责熔断、重规划和人工升级。
 - **审计与恢复**：负责动作留痕、恢复点创建、恢复结果回流。
 - **成本与边界策略**：负责预算降级、白名单、工作区边界和执行约束，保证高风险动作不会越界。
+
+### 当前阶段成熟度边界
+
+- **Review**：P1 能力，主链路保留审查结论和结构化失败原因；不要求一次性覆盖所有 lint、CI、语义一致性和人工复核规则。
+- **Trace**：P0/P1 能力，必须优先稳定关联 `task / run / step / tool_call`、模型调用摘要、latency、cost 和错误上下文。
+- **Eval**：P2 能力，先作为后端质量回放与对比实验真源；前端展示和协议对象冻结应等待稳定协议收口。
+- **Doom Loop / HITL**：P1/P2 能力，当前优先要求重复无进展和审查失败能结构化阻断或升级；不要求完整人工工单系统。
+
+### 安全摘要基线约束
+
+- 治理与交付层应输出统一 `SecuritySummary` 视图模型，基线字段至少包括 `security_status`、`pending_authorizations`、`latest_restore_point`、`risk_level`。
+- `token_cost_summary` 可作为扩展字段由安全总览附带返回，但不应替代基线字段。
+- 任务详情、安全卫士首页和仪表盘信任区都应共享这份基线模型，只做投影或扩展，不各自发明不兼容结构。
 
 ### 层内处理细节
 
@@ -3028,7 +3073,7 @@ sequenceDiagram
 ### 6.10 控制面板打开时序：托盘 -> 设置读取 / 保存
 
 **链路目标**：提供与近场窗口独立的系统级设置和控制入口。  
-**关键结果**：通过 `agent.settings.get / agent.settings.update` 读取和更新正式设置快照，并按 `apply_mode / need_restart` 驱动前端表现。  
+**关键结果**：通过 `agent.settings.get / agent.settings.model.validate / agent.settings.update` 读取、预校验并更新正式设置快照，并按 `apply_mode / need_restart` 驱动前端表现。  
 **实现说明**：控制面板是低频设置域，应以正式协议为主边界；前端本地存储只承接未保存草稿、窗口布局和面板状态，不作为正式设置真源。
 
 ```mermaid
@@ -3060,15 +3105,27 @@ sequenceDiagram
     opt 用户修改设置并保存
         U->>P: 修改设置项并点击保存
         P->>A: 提交设置变更
-        A->>V: 调用设置服务保存设置
-        V->>RPC: 更新设置（agent.settings.update）
+        A->>V: 调用设置服务校验模型相关草稿
+        V->>RPC: 校验模型设置（agent.settings.model.validate）
         RPC->>API: 协议请求
-        API-->>RPC: 返回生效设置 / 应用方式 / 重启标记
-        RPC-->>V: 返回保存结果
-        V-->>A: 返回保存结果
-        A->>S: 更新控制面板状态=已保存
-        A->>P: 按 apply_mode 更新提示
-        P-->>U: 提示保存成功或需要重启
+        API-->>RPC: 返回校验结果 / 配置指纹
+        RPC-->>V: 返回校验结果
+        V-->>A: 返回校验结果
+        alt 校验通过
+            A->>V: 调用设置服务保存设置
+            V->>RPC: 更新设置（agent.settings.update）
+            RPC->>API: 协议请求
+            API-->>RPC: 返回生效设置 / 应用方式 / 重启标记
+            RPC-->>V: 返回保存结果
+            V-->>A: 返回保存结果
+            A->>S: 更新控制面板状态=已保存
+            A->>P: 按 apply_mode 更新提示
+            P-->>U: 提示保存成功或需要重启
+        else 校验失败
+            A->>S: 保留未保存草稿态
+            A->>P: 展示校验失败信息
+            P-->>U: 提示先修正模型配置
+        end
     end
 ```
 
@@ -3078,6 +3135,12 @@ sequenceDiagram
 **关键结果**：统一形成 `delivery_result`，并可能伴随 `artifact`。  
 **重点约束**：长结果自动分流属于交付内核策略，不新增独立协议方法。  
 **实现说明**：分发顺序应遵循“先告知，再正式交付，再提供入口”，保证用户能理解发生了什么。
+
+补充约束：
+
+- 从任务主结果、气泡“打开结果”或结果页“打开正式交付”进入时，应调用 `agent.delivery.open`。
+- 从 artifact 列表、任务详情具体产物卡片或文件产物按钮进入时，应调用 `agent.task.artifact.open`。
+- 平台层只执行后端解析后的 `open_action / resolved_payload`，不自行决定 artifact 与 delivery 的归属。
 
 ```mermaid
 sequenceDiagram
