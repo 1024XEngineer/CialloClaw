@@ -4444,6 +4444,10 @@ test("shell-ball dashboard gesture policy stays task-2 explicit", () => {
     true,
   );
   assert.equal(
+    getShellBallDashboardOpenGesturePolicy({ gesture: "double_click", state: "waiting_auth", interactionConsumed: false }),
+    true,
+  );
+  assert.equal(
     getShellBallDashboardOpenGesturePolicy({ gesture: "double_click", state: "hover_input", interactionConsumed: true }),
     false,
   );
@@ -8951,6 +8955,10 @@ test("shell-ball app dashboard-open gate stays blocked for consumed or non-resti
   );
   assert.equal(
     getShellBallDashboardOpenGesturePolicy({ gesture: "double_click", state: "hover_input", interactionConsumed: false }),
+    true,
+  );
+  assert.equal(
+    getShellBallDashboardOpenGesturePolicy({ gesture: "double_click", state: "waiting_auth", interactionConsumed: false }),
     true,
   );
   assert.equal(
