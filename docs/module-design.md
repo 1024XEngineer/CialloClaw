@@ -868,7 +868,7 @@ flowchart TB
 - 重复事项补强字段中，`repeat_rule_text`、`next_occurrence_at`、`recent_instance_status`、`effective_scope` 用于规则引擎与巡检底座；前端稳定消费的协议字段仍以 `TodoItem.repeat_rule / next_occurrence_at / recent_instance_status / effective_scope / recurring_enabled` 为准。
 - complete / cancel / restore / toggle-recurring / delete 等事项动作已经通过 `agent.notepad.update` 进入稳定 RPC 面；运行态与存储层继续负责真实生命周期收敛。
 - “打开相关资料”当前通过 `related_resources[].open_action / open_payload` 与共享 delivery open 语义承接，不额外冻结专用 `agent.notepad.open_resource` 接口。
-- `agent.notepad.convert_to_task` 以 `note_text / title` 作为正式任务文本输入，并复用普通 free-text 任务入口的确认门槛；对带有 provenance 的当前事项，用户显式填写的 `note_text` 优先进入正式输入，title-only 事项回退到原始 `title`，而不是使用 dashboard 展示态补写的说明文案；对于缺少 `note_text_origin` 的 legacy 持久化行，只要已存 `note_text` 非空，运行时会保守地继续按用户正文处理，避免在重载后静默丢掉真实输入；用户显式关联且位于当前 workspace 内的文件型 `related_resources` 会写入 `TaskContextSnapshot.Files`，并统一投影为 `workspace/...` 形式；目录资源、系统派生的默认目录和 workspace 外路径仍只保留为来源事项的展示与打开上下文，避免把 dashboard 展示兜底误判成用户执行输入，也避免把目录误当成可预读文件喂给执行输入；如果 shared stream 已经对外发布了这条转换任务，后续启动阶段失败时必须把任务收口为 `failed` 并解除便签关联，而不是删除已对外可见的 task。
+- `agent.notepad.convert_to_task` 以 `note_text / title` 作为正式任务文本输入，并复用普通 free-text 任务入口的确认门槛；对带有 provenance 的当前事项，用户显式填写的 `note_text` 优先进入正式输入，title-only 事项回退到原始 `title`，而不是使用 dashboard 展示态补写的说明文案；对于缺少 `note_text_origin` 的 legacy 持久化行，只要已存 `note_text` 非空，运行时会保守地继续按用户正文处理，避免在重载后静默丢掉真实输入；用户显式关联且位于当前 workspace 内的文件型 `related_resources` 会写入 `TaskContextSnapshot.Files`，并统一投影为 `workspace/...` 形式；目录资源、系统派生的默认目录和 workspace 外路径仍只保留为来源事项的展示与打开上下文，避免把 dashboard 展示兜底误判成用户执行输入，也避免把目录误当成可预读文件喂给执行输入；如果 shared stream 已经对外发布了这条转换任务，后续启动阶段失败时必须把任务收口为 `failed` 并保留便签关联，而不是删除已对外可见的 task 或偷偷断开来源链接。
 
 ### 3.7.4 镜子记忆与长期协作域
 
