@@ -36,13 +36,17 @@ func (s *Service) scheduleTaskTitleRefresh(task runengine.TaskRecord, snapshot t
 	if taskID == "" || fallbackTitle == "" {
 		return
 	}
-	refreshToken := task.TitleRefreshToken
-	if refreshToken == 0 {
-		var ok bool
-		refreshToken, ok = s.runEngine.ReserveTitleRefresh(taskID, fallbackTitle)
-		if !ok {
-			return
-		}
+	currentTask, ok := s.runEngine.GetTask(taskID)
+	if !ok || !currentTask.UpdatedAt.Equal(task.UpdatedAt) {
+		return
+	}
+	// Each async refresh needs a fresh reservation so an older goroutine cannot
+	// reuse a task-carried token and overwrite a newer context snapshot when the
+	// responses arrive out of order. The stale-task guard above keeps older task
+	// views from reclaiming ownership after a newer state has already published.
+	refreshToken, ok := s.runEngine.ReserveTitleRefresh(taskID, fallbackTitle)
+	if !ok {
+		return
 	}
 	intentValue := cloneMap(taskIntent)
 	go func() {

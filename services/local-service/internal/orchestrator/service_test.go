@@ -107,6 +107,15 @@ type stagedTitleModelClient struct {
 	allowFirstReply chan struct{}
 }
 
+type orderedTitleModelClient struct {
+	mu               sync.Mutex
+	titleCallCount   int
+	firstStarted     chan struct{}
+	secondStarted    chan struct{}
+	allowFirstReply  chan struct{}
+	allowSecondReply chan struct{}
+}
+
 type delayedModelClient struct {
 	delay  time.Duration
 	output string
@@ -845,6 +854,48 @@ func (s *stagedTitleModelClient) GenerateText(_ context.Context, request model.G
 }
 
 func (s *stagedTitleModelClient) GenerateToolCalls(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+	return model.ToolCallResult{
+		RequestID:  "req_tool_unused",
+		Provider:   "openai_responses",
+		ModelID:    "gpt-5.4",
+		OutputText: "执行结果",
+	}, nil
+}
+
+func (s *orderedTitleModelClient) GenerateText(_ context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	if !isTaskTitleGenerationRequest(request) {
+		return model.GenerateTextResponse{
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			RequestID:  "req_ordered_immediate",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "执行结果",
+		}, nil
+	}
+	s.mu.Lock()
+	s.titleCallCount++
+	callIndex := s.titleCallCount
+	s.mu.Unlock()
+	switch callIndex {
+	case 1:
+		if s.firstStarted != nil {
+			close(s.firstStarted)
+		}
+		<-s.allowFirstReply
+		return model.GenerateTextResponse{OutputText: `{"title":"旧上下文标题"}`}, nil
+	case 2:
+		if s.secondStarted != nil {
+			close(s.secondStarted)
+		}
+		<-s.allowSecondReply
+		return model.GenerateTextResponse{OutputText: `{"title":"最新上下文标题"}`}, nil
+	default:
+		return model.GenerateTextResponse{OutputText: `{"title":"额外标题调用"}`}, nil
+	}
+}
+
+func (s *orderedTitleModelClient) GenerateToolCalls(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
 	return model.ToolCallResult{
 		RequestID:  "req_tool_unused",
 		Provider:   "openai_responses",
@@ -2721,6 +2772,69 @@ func TestServiceTaskTitleRefreshKeepsLatestReservation(t *testing.T) {
 	}
 	record, _ := service.runEngine.GetTask(task.TaskID)
 	t.Fatalf("expected newest async title refresh to win, got %+v", record)
+}
+
+func TestServiceTaskTitleRefreshReservesNewTokenForEachSchedule(t *testing.T) {
+	client := &orderedTitleModelClient{
+		firstStarted:     make(chan struct{}),
+		secondStarted:    make(chan struct{}),
+		allowFirstReply:  make(chan struct{}),
+		allowSecondReply: make(chan struct{}),
+	}
+	service, _ := newTestServiceWithModelClient(t, client)
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_title_refresh_new_token",
+		Title:       "构建失败分析",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+		Snapshot: taskcontext.TaskContextSnapshot{
+			InputType: "text",
+			Text:      "请分析构建失败",
+			Trigger:   "hover_text_input",
+		},
+	})
+
+	service.scheduleTaskTitleRefresh(task, task.Snapshot, task.Intent, task.Title)
+	select {
+	case <-client.firstStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected first title refresh to start")
+	}
+
+	service.scheduleTaskTitleRefresh(task, taskcontext.TaskContextSnapshot{
+		InputType: "text",
+		Text:      "请分析构建失败，并补充最新客户影响",
+		Trigger:   "hover_text_input",
+	}, task.Intent, task.Title)
+	select {
+	case <-client.secondStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected second title refresh to start")
+	}
+
+	close(client.allowFirstReply)
+	time.Sleep(50 * time.Millisecond)
+	record, _ := service.runEngine.GetTask(task.TaskID)
+	if record.Title == "旧上下文标题" {
+		t.Fatalf("expected older refresh to lose once a newer schedule reserved ownership, got %+v", record)
+	}
+
+	close(client.allowSecondReply)
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		record, ok := service.runEngine.GetTask(task.TaskID)
+		if ok && record.Title == "最新上下文标题" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	record, _ = service.runEngine.GetTask(task.TaskID)
+	t.Fatalf("expected latest refresh to win after older reply arrived first, got %+v", record)
 }
 
 func TestServiceTaskTitleRefreshRejectsStaleSchedulerAfterNewStateVisible(t *testing.T) {
