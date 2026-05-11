@@ -6,6 +6,14 @@ import (
 	"testing"
 )
 
+type mappableProtocolResult struct {
+	Value string `json:"value"`
+}
+
+func (result mappableProtocolResult) Map() map[string]any {
+	return map[string]any{"value": "mapped"}
+}
+
 func TestJSONRPCDecodeHelpers(t *testing.T) {
 	req := requestEnvelope{
 		JSONRPC: "2.0",
@@ -92,6 +100,17 @@ func TestJSONRPCEnvelopeHelpers(t *testing.T) {
 	notification := newNotificationEnvelope("task.updated", map[string]any{"task_id": "task_001"})
 	if notification.JSONRPC != "2.0" || notification.Method != "task.updated" {
 		t.Fatalf("unexpected notification envelope %+v", notification)
+	}
+}
+
+func TestNewSuccessEnvelopeKeepsTypedProtocolResult(t *testing.T) {
+	response := newSuccessEnvelope(json.RawMessage(`"req-typed"`), mappableProtocolResult{Value: "typed"}, "2026-04-08T10:00:00Z")
+	marshaled := string(mustMarshal(t, response))
+	if !strings.Contains(marshaled, `"value":"typed"`) {
+		t.Fatalf("expected success envelope to marshal typed payload directly, got %s", marshaled)
+	}
+	if strings.Contains(marshaled, `"value":"mapped"`) {
+		t.Fatalf("expected success envelope to avoid Map() fallback, got %s", marshaled)
 	}
 }
 

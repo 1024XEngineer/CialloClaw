@@ -117,20 +117,15 @@ func newSuccessEnvelope(id json.RawMessage, data any, serverTime string) success
 		JSONRPC: "2.0",
 		ID:      normalizeID(id),
 		Result: resultEnvelope{
-			Data: protocolResultData(data),
+			// Keep typed DTO responses intact so the transport layer can marshal
+			// the already-normalized protocol object without rebuilding a map.
+			Data: data,
 			Meta: responseMeta{
 				ServerTime: serverTime,
 			},
 			Warnings: []string{},
 		},
 	}
-}
-
-func protocolResultData(data any) any {
-	if mappable, ok := data.(interface{ Map() map[string]any }); ok {
-		return mappable.Map()
-	}
-	return data
 }
 
 // newErrorEnvelope assembles the shared error response format.

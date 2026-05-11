@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"sort"
 	"testing"
+
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/orchestrator"
 )
 
 func TestTaskIDsFromResponseCollectsNestedIDs(t *testing.T) {
@@ -52,6 +54,18 @@ func TestOwnedTaskIDsForReplayClaimsResponseTaskIDsForTaskStart(t *testing.T) {
 	expected := []string{"task_started"}
 	if !reflect.DeepEqual(taskIDs, expected) {
 		t.Fatalf("expected task.start to claim response task ids %v, got %v", expected, taskIDs)
+	}
+}
+
+func TestOwnedTaskIDsForReplayClaimsTypedTaskStartResponseTaskIDs(t *testing.T) {
+	response := newSuccessEnvelope(json.RawMessage(`"req-task-start-typed"`), orchestrator.TaskEntryResponse{
+		Task: &orchestrator.TaskDTO{TaskID: "task_started_typed"},
+	}, "2026-04-08T10:00:00Z")
+
+	taskIDs := ownedTaskIDsForReplay("agent.task.start", nil, response)
+	expected := []string{"task_started_typed"}
+	if !reflect.DeepEqual(taskIDs, expected) {
+		t.Fatalf("expected task.start to claim typed response task ids %v, got %v", expected, taskIDs)
 	}
 }
 

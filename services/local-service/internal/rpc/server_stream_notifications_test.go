@@ -66,7 +66,7 @@ func TestHandleStreamConnEmitsApprovalNotifications(t *testing.T) {
 	if err := decoder.Decode(&response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if response.Result.Data.(map[string]any)["task"].(map[string]any)["status"] != "waiting_auth" {
+	if protocolMap(t, response.Result.Data)["task"].(map[string]any)["status"] != "waiting_auth" {
 		t.Fatalf("expected waiting_auth task status in response")
 	}
 
@@ -144,7 +144,7 @@ func TestHandleStreamConnEmitsLoopLifecycleNotifications(t *testing.T) {
 	if err := decoder.Decode(&response); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if response.Result.Data.(map[string]any)["task"].(map[string]any)["task_id"] != taskID {
+	if protocolMap(t, response.Result.Data)["task"].(map[string]any)["task_id"] != taskID {
 		t.Fatalf("expected task detail response for %s, got %+v", taskID, response)
 	}
 

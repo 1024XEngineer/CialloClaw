@@ -41,7 +41,7 @@ func TestDispatchTaskStartIgnoresUnsupportedIntentField(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	task := success.Result.Data.(map[string]any)["task"].(map[string]any)
+	task := protocolMap(t, success.Result.Data)["task"].(map[string]any)
 	if task["status"] != "confirming_intent" {
 		t.Fatalf("expected task.start to stay in confirming_intent when intent is stripped, got %+v", task)
 	}
@@ -82,7 +82,7 @@ func TestDispatchTaskStartFileInstructionSkipsIntentConfirmation(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	result := success.Result.Data.(map[string]any)
+	result := protocolMap(t, success.Result.Data)
 	task := result["task"].(map[string]any)
 	if task["status"] == "confirming_intent" || task["current_step"] == "intent_confirmation" {
 		t.Fatalf("expected instructed file start to skip intent confirmation, got %+v", task)
@@ -136,7 +136,7 @@ func TestDispatchTaskDetailGetIncludesActiveApprovalAnchor(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	data := success.Result.Data.(map[string]any)
+	data := protocolMap(t, success.Result.Data)
 	approvalRequest, ok := data["approval_request"].(map[string]any)
 	if !ok || approvalRequest["task_id"] != taskID {
 		t.Fatalf("expected approval_request task_id %s, got %+v", taskID, data["approval_request"])
@@ -189,7 +189,7 @@ func TestDispatchTaskDetailGetOmitsApprovalAnchorForCompletedTask(t *testing.T) 
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	data := success.Result.Data.(map[string]any)
+	data := protocolMap(t, success.Result.Data)
 	if data["approval_request"] != nil {
 		t.Fatalf("expected approval_request to be nil, got %+v", data["approval_request"])
 	}
@@ -314,8 +314,8 @@ func TestDispatchTaskListClampsPagingParams(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	data := success.Result.Data.(map[string]any)
-	items := data["items"].([]map[string]any)
+	data := protocolMap(t, success.Result.Data)
+	items := protocolMapSlice(t, data["items"])
 	if len(items) != 20 {
 		t.Fatalf("expected rpc task.list to clamp zero limit to 20 items, got %d", len(items))
 	}
@@ -360,7 +360,7 @@ func TestDispatchTaskEventsListReturnsLoopEvents(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	items := success.Result.Data.(map[string]any)["items"].([]map[string]any)
+	items := protocolMapSlice(t, protocolMap(t, success.Result.Data)["items"])
 	if len(items) != 1 || items[0]["type"] != "loop.completed" {
 		t.Fatalf("expected rpc task events list to return loop.completed, got %+v", items)
 	}
@@ -399,7 +399,7 @@ func TestDispatchTaskToolCallsListReturnsPersistedToolCalls(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	items := success.Result.Data.(map[string]any)["items"].([]map[string]any)
+	items := protocolMapSlice(t, protocolMap(t, success.Result.Data)["items"])
 	if len(items) != 1 || items[0]["tool_name"] != "read_file" {
 		t.Fatalf("expected rpc task tool calls list to return read_file, got %+v", items)
 	}
@@ -441,8 +441,9 @@ func TestDispatchTaskSteerReturnsUpdatedTask(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	if success.Result.Data.(map[string]any)["task"].(map[string]any)["task_id"] != taskID {
-		t.Fatalf("expected rpc task steer to keep task id, got %+v", success.Result.Data)
+	successData := protocolMap(t, success.Result.Data)
+	if successData["task"].(map[string]any)["task_id"] != taskID {
+		t.Fatalf("expected rpc task steer to keep task id, got %+v", successData)
 	}
 }
 
@@ -460,7 +461,7 @@ func TestDispatchReturnsSettingsGet(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	credentials := success.Result.Data.(map[string]any)["settings"].(map[string]any)["models"].(map[string]any)["credentials"].(map[string]any)
+	credentials := protocolMap(t, success.Result.Data)["settings"].(map[string]any)["models"].(map[string]any)["credentials"].(map[string]any)
 	if _, ok := credentials["stronghold"].(map[string]any); !ok {
 		t.Fatalf("expected settings get to include stronghold status, got %+v", credentials)
 	}
@@ -486,15 +487,16 @@ func TestDispatchReturnsSettingsUpdate(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	models := success.Result.Data.(map[string]any)["effective_settings"].(map[string]any)["models"].(map[string]any)
+	successData := protocolMap(t, success.Result.Data)
+	models := successData["effective_settings"].(map[string]any)["models"].(map[string]any)
 	if models["provider_api_key_configured"] != true {
 		t.Fatalf("expected settings update to mark provider key configured, got %+v", models)
 	}
 	if _, exists := models["api_key"]; exists {
 		t.Fatalf("expected settings update response to keep api_key redacted, got %+v", models)
 	}
-	if success.Result.Data.(map[string]any)["apply_mode"] != "next_task_effective" || success.Result.Data.(map[string]any)["need_restart"] != false {
-		t.Fatalf("expected model settings update to be next_task_effective, got %+v", success.Result.Data)
+	if successData["apply_mode"] != "next_task_effective" || successData["need_restart"] != false {
+		t.Fatalf("expected model settings update to be next_task_effective, got %+v", successData)
 	}
 }
 
@@ -517,7 +519,7 @@ func TestDispatchReturnsSettingsModelValidate(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	data := success.Result.Data.(map[string]any)
+	data := protocolMap(t, success.Result.Data)
 	if data["ok"] != false || data["status"] != "missing_api_key" {
 		t.Fatalf("expected structured validation failure result, got %+v", data)
 	}
@@ -535,8 +537,8 @@ func TestDispatchReturnsPluginRuntimeList(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	data := success.Result.Data.(map[string]any)
-	items := data["items"].([]map[string]any)
+	data := protocolMap(t, success.Result.Data)
+	items := protocolMapSlice(t, data["items"])
 	if len(items) == 0 {
 		t.Fatalf("expected plugin runtime query to return declared runtimes, got %+v", data)
 	}
@@ -544,7 +546,7 @@ func TestDispatchReturnsPluginRuntimeList(t *testing.T) {
 	if !ok || manifest["plugin_id"] == nil || manifest["source"] == nil {
 		t.Fatalf("expected plugin runtime items to include formal manifest linkage, got %+v", items[0])
 	}
-	metrics := data["metrics"].([]map[string]any)
+	metrics := protocolMapSlice(t, data["metrics"])
 	if len(metrics) == 0 {
 		t.Fatalf("expected plugin runtime query to return metric snapshots, got %+v", data)
 	}
@@ -562,9 +564,10 @@ func TestDispatchReturnsPluginList(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	items := success.Result.Data.(map[string]any)["items"].([]map[string]any)
+	successData := protocolMap(t, success.Result.Data)
+	items := protocolMapSlice(t, successData["items"])
 	if len(items) != 1 || items[0]["plugin_id"] != "ocr" {
-		t.Fatalf("expected plugin list query to return filtered ocr plugin, got %+v", success.Result.Data)
+		t.Fatalf("expected plugin list query to return filtered ocr plugin, got %+v", successData)
 	}
 }
 
@@ -580,7 +583,7 @@ func TestDispatchReturnsPluginDetail(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected success response envelope, got %#v", response)
 	}
-	data := success.Result.Data.(map[string]any)
+	data := protocolMap(t, success.Result.Data)
 	if data["plugin"].(map[string]any)["plugin_id"] != "ocr" {
 		t.Fatalf("expected plugin detail query to resolve ocr plugin, got %+v", data)
 	}
@@ -588,7 +591,7 @@ func TestDispatchReturnsPluginDetail(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected ocr worker runtime to exist")
 	}
-	toolItems := data["tools"].([]map[string]any)
+	toolItems := protocolMapSlice(t, data["tools"])
 	if len(toolItems) != len(runtime.Capabilities) {
 		t.Fatalf("expected one contract per declared capability, got %+v", data)
 	}
