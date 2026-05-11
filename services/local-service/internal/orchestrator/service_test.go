@@ -102,8 +102,16 @@ type failingExecutionBackend struct {
 	err error
 }
 
+type failingRiskPrechecker struct {
+	err error
+}
+
 func (b failingExecutionBackend) RunCommand(_ context.Context, _ string, _ []string, _ string) (tools.CommandExecutionResult, error) {
 	return tools.CommandExecutionResult{}, b.err
+}
+
+func (p failingRiskPrechecker) Precheck(context.Context, tools.RiskPrecheckInput) (tools.RiskPrecheckResult, error) {
+	return tools.RiskPrecheckResult{}, p.err
 }
 
 type successfulExecutionBackend struct {
@@ -941,6 +949,79 @@ func newTestServiceWithExecutionWorkersAndScreen(t *testing.T, modelOutput strin
 		screenClient = sidecarclient.NewLocalScreenCaptureClient(fileSystem)
 	}
 	executor := execution.NewService(fileSystem, executionBackend, playwrightClient, ocrClient, mediaClient, screenClient, modelService, auditService, checkpoint.NewService(checkpointWriter), deliveryService, toolRegistry, toolExecutor, pluginService).WithArtifactStore(storageService.ArtifactStore()).WithExtensionAssetCatalog(storageService)
+
+	service, err := NewService(Deps{
+		Context:   taskcontext.NewCaptureService(),
+		Intent:    intent.NewService(),
+		RunEngine: mustNewStoredEngine(t, storageService.TaskRunStore()),
+		Delivery:  deliveryService,
+		Memory:    memory.NewServiceFromStorage(storageService.MemoryStore(), storageService.Capabilities().MemoryRetrievalBackend),
+		Risk:      risk.NewService(),
+		Model:     modelService,
+		Tools:     toolRegistry,
+		Plugin:    pluginService,
+		Audit:     auditService,
+		TraceEval: traceeval.NewService(storageService.TraceStore(), storageService.EvalStore()),
+		Executor:  executor,
+		Inspector: taskinspector.NewService(fileSystem),
+		Storage:   storageService,
+	})
+	if err != nil {
+		t.Fatalf("new service: %v", err)
+	}
+
+	return service, workspaceRoot
+}
+
+func newTestServiceWithExecutionPrechecker(t *testing.T, modelOutput string, prechecker tools.RiskPrechecker) (*Service, string) {
+	t.Helper()
+
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("new local path policy: %v", err)
+	}
+	storageService := storage.NewService(platform.NewLocalStorageAdapter(filepath.Join(t.TempDir(), "service.db")))
+	t.Cleanup(func() { _ = storageService.Close() })
+	modelService := model.NewService(modelConfig(), stubModelClient{output: modelOutput})
+	auditService := audit.NewService(storageService.AuditWriter())
+	deliveryService := delivery.NewService()
+	toolRegistry := tools.NewRegistry()
+	if err := builtin.RegisterBuiltinTools(toolRegistry); err != nil {
+		t.Fatalf("register builtin tools: %v", err)
+	}
+	if err := sidecarclient.RegisterPlaywrightTools(toolRegistry); err != nil {
+		t.Fatalf("register playwright tools: %v", err)
+	}
+	if err := sidecarclient.RegisterOCRTools(toolRegistry); err != nil {
+		t.Fatalf("register ocr tools: %v", err)
+	}
+	if err := sidecarclient.RegisterMediaTools(toolRegistry); err != nil {
+		t.Fatalf("register media tools: %v", err)
+	}
+	toolExecutor := tools.NewToolExecutor(
+		toolRegistry,
+		tools.WithToolCallRecorder(tools.NewToolCallRecorder(storageService.ToolCallSink())),
+		tools.WithRiskPrechecker(prechecker),
+	)
+	pluginService := plugin.NewService()
+	seedTestExtensionAssets(t, storageService, pluginService)
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	executor := execution.NewService(
+		fileSystem,
+		platform.LocalExecutionBackend{},
+		sidecarclient.NewNoopPlaywrightSidecarClient(),
+		sidecarclient.NewNoopOCRWorkerClient(),
+		sidecarclient.NewNoopMediaWorkerClient(),
+		sidecarclient.NewLocalScreenCaptureClient(fileSystem),
+		modelService,
+		auditService,
+		checkpoint.NewService(storageService.RecoveryPointWriter()),
+		deliveryService,
+		toolRegistry,
+		toolExecutor,
+		pluginService,
+	).WithArtifactStore(storageService.ArtifactStore()).WithExtensionAssetCatalog(storageService)
 
 	service, err := NewService(Deps{
 		Context:   taskcontext.NewCaptureService(),
@@ -2343,7 +2424,99 @@ func TestServiceConfirmTaskRewritesPlaceholderTitleAfterCorrection(t *testing.T)
 	}
 }
 
-func TestServiceConfirmTaskIgnoresCorrectedIntentWhenConfirmedTrue(t *testing.T) {
+func TestServiceConfirmTaskConsumesCorrectionTextOnSameTask(t *testing.T) {
+	calls := 0
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			calls++
+			if calls > 1 {
+				return model.GenerateTextResponse{
+					TaskID:     request.TaskID,
+					RunID:      request.RunID,
+					RequestID:  "req_corrected_execution",
+					Provider:   "openai_responses",
+					ModelID:    "gpt-5.4",
+					OutputText: "Explained selected paragraph.",
+				}, nil
+			}
+			if !strings.Contains(request.Input, "Explain this selected paragraph instead.") {
+				t.Fatalf("expected correction text in model prompt, got %q", request.Input)
+			}
+			if !strings.Contains(request.Input, "selected paragraph") || !strings.Contains(request.Input, "Issue 474") {
+				t.Fatalf("expected original task context in correction prompt, got %q", request.Input)
+			}
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_correction",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: `{"intent":{"name":"explain","arguments":{"detail":"brief"}},"reason":"user corrected the target action"}`,
+			}, nil
+		},
+	})
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_confirm_correction_text",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "selected paragraph",
+			"page_context": map[string]any{
+				"title": "Issue 474",
+				"url":   "https://example.test/issues/474",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+
+	confirmResult, err := service.ConfirmTask(map[string]any{
+		"task_id":         taskID,
+		"confirmed":       false,
+		"correction_text": "Explain this selected paragraph instead.",
+	})
+	if err != nil {
+		t.Fatalf("confirm task correction failed: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("expected correction inference plus execution model call, got %d", calls)
+	}
+	task := confirmResult["task"].(map[string]any)
+	if task["task_id"] != taskID {
+		t.Fatalf("expected correction to stay on same task, got %+v", task)
+	}
+	if task["status"] != "completed" {
+		t.Fatalf("expected corrected task to execute on the same task, got %+v", task)
+	}
+	intentValue := task["intent"].(map[string]any)
+	if intentValue["name"] != "explain" {
+		t.Fatalf("expected model-corrected explain intent, got %+v", intentValue)
+	}
+	bubble := confirmResult["bubble_message"].(map[string]any)
+	if bubble["type"] == "intent_confirm" {
+		t.Fatalf("expected corrected task not to return to intent confirmation, got %+v", bubble)
+	}
+	deliveryResult, ok := confirmResult["delivery_result"].(map[string]any)
+	if !ok || deliveryResult["type"] == nil {
+		t.Fatalf("expected correction to produce a delivery result, got %+v", confirmResult["delivery_result"])
+	}
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected corrected task to remain in runtime")
+	}
+	if record.SessionID != "sess_confirm_correction_text" || record.Snapshot.Text != "selected paragraph" || record.Snapshot.PageTitle != "Issue 474" {
+		t.Fatalf("expected correction to preserve original task context, got %+v", record)
+	}
+	if record.TaskID != taskID || record.Status != "completed" {
+		t.Fatalf("expected runtime task to reflect direct correction execution, got %+v", record)
+	}
+}
+
+func TestServiceConfirmTaskRejectsCorrectionPayloadConflicts(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Explained content.")
 
 	startResult, err := service.StartTask(map[string]any{
@@ -2361,7 +2534,7 @@ func TestServiceConfirmTaskIgnoresCorrectedIntentWhenConfirmedTrue(t *testing.T)
 	startTask := startResult["task"].(map[string]any)
 
 	taskID := startTask["task_id"].(string)
-	confirmResult, err := service.ConfirmTask(map[string]any{
+	_, err = service.ConfirmTask(map[string]any{
 		"task_id":   taskID,
 		"confirmed": true,
 		"corrected_intent": map[string]any{
@@ -2371,17 +2544,211 @@ func TestServiceConfirmTaskIgnoresCorrectedIntentWhenConfirmedTrue(t *testing.T)
 			},
 		},
 	})
+	if err == nil || !errors.Is(err, errTaskConfirmCorrectionPayloadInvalid) {
+		t.Fatalf("expected confirmed=true correction payload to be rejected, got %v", err)
+	}
+	_, err = service.ConfirmTask(map[string]any{
+		"task_id":         taskID,
+		"confirmed":       false,
+		"correction_text": "translate this instead",
+		"corrected_intent": map[string]any{
+			"name":      "translate",
+			"arguments": map[string]any{"target_language": "en"},
+		},
+	})
+	if err == nil || !errors.Is(err, errTaskConfirmCorrectionPayloadInvalid) {
+		t.Fatalf("expected correction_text and corrected_intent conflict to be rejected, got %v", err)
+	}
+}
+
+func TestServiceConfirmTaskExecutesCorrectedResultPageIntent(t *testing.T) {
+	service := newTestService()
+
+	startResult, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_invalid_corrected_intent",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "你好",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	confirmResult, err := service.ConfirmTask(map[string]any{
+		"task_id":   taskID,
+		"confirmed": false,
+		"corrected_intent": map[string]any{
+			"name":      "page_read",
+			"arguments": map[string]any{"url": "https://example.test/issues/474"},
+		},
+	})
 	if err != nil {
 		t.Fatalf("confirm task failed: %v", err)
 	}
 
 	task := confirmResult["task"].(map[string]any)
-	intentValue, ok := task["intent"].(map[string]any)
-	if !ok || !reflect.DeepEqual(intentValue, startTask["intent"]) {
-		t.Fatalf("expected confirm=true to keep the original task intent, got %+v", task["intent"])
+	if task["status"] != "completed" {
+		t.Fatalf("expected corrected result-page intent to execute immediately, got %+v", task)
 	}
-	if task["title"] != startTask["title"] {
-		t.Fatalf("expected confirm=true to keep the original title, got %v", task["title"])
+	intentValue, ok := task["intent"].(map[string]any)
+	if !ok || intentValue["name"] != "page_read" {
+		t.Fatalf("expected corrected page_read intent to persist, got %+v", task["intent"])
+	}
+	deliveryResult, ok := confirmResult["delivery_result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected corrected result-page intent to return delivery_result, got %+v", confirmResult["delivery_result"])
+	}
+	if deliveryResult["type"] != "result_page" {
+		t.Fatalf("expected corrected page_read intent to keep result_page delivery, got %+v", deliveryResult)
+	}
+}
+
+func TestServiceConfirmTaskDowngradesUnavailableCorrectionTextIntent(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_screen_correction",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: `{"intent":{"name":"screen_analyze","arguments":{"language":"eng"}},"reason":"user asked to inspect the current page"}`,
+			}, nil
+		},
+	})
+	service.attachExecutor(nil)
+
+	startResult, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_screen_correction_fallback",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "帮我总结这个构建问题",
+		},
+		"context": map[string]any{
+			"page": map[string]any{
+				"title":        "Build Dashboard",
+				"window_title": "Browser - Build Dashboard",
+				"visible_text": "Fatal build error: missing release asset",
+			},
+			"screen_summary": "release validation failed on current screen",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	confirmResult, err := service.ConfirmTask(map[string]any{
+		"task_id":         taskID,
+		"confirmed":       false,
+		"correction_text": "改成查看当前页面的错误",
+	})
+	if err != nil {
+		t.Fatalf("confirm task correction failed: %v", err)
+	}
+
+	task := confirmResult["task"].(map[string]any)
+	if task["status"] == "confirming_intent" || task["current_step"] == "intent_confirmation" {
+		t.Fatalf("expected downgraded correction to continue execution instead of re-confirming, got %+v", task)
+	}
+	intentValue := task["intent"].(map[string]any)
+	if intentValue["name"] != "agent_loop" {
+		t.Fatalf("expected unavailable screen correction to downgrade into agent_loop, got %+v", intentValue)
+	}
+	bubble := confirmResult["bubble_message"].(map[string]any)
+	if bubble["type"] == "intent_confirm" {
+		t.Fatalf("expected downgraded correction not to return to intent confirmation, got %+v", bubble)
+	}
+	if confirmResult["delivery_result"] == nil {
+		t.Fatalf("expected downgraded correction to return the direct execution delivery_result, got %+v", confirmResult["delivery_result"])
+	}
+}
+
+func TestServiceConfirmTaskKeepsNaturalLanguageBrowserCorrectionOnSameTask(t *testing.T) {
+	calls := 0
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			calls++
+			if calls > 1 {
+				return model.GenerateTextResponse{
+					TaskID:     request.TaskID,
+					RunID:      request.RunID,
+					RequestID:  "req_browser_delivery",
+					Provider:   "openai_responses",
+					ModelID:    "gpt-5.4",
+					OutputText: "Captured the browser snapshot.",
+				}, nil
+			}
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_browser_correction",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: `{"intent":{"name":"browser_snapshot","arguments":{"url":"https://example.test/pr/512"}},"reason":"user wants the current page snapshot instead of a summary"}`,
+			}, nil
+		},
+	})
+
+	startResult, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_browser_correction",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "帮我总结这个 PR",
+		},
+		"context": map[string]any{
+			"page": map[string]any{
+				"title": "PR 512",
+				"url":   "https://example.test/pr/512",
+			},
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	confirmResult, err := service.ConfirmTask(map[string]any{
+		"task_id":         taskID,
+		"confirmed":       false,
+		"correction_text": "不要总结，改成抓当前页面快照",
+	})
+	if err != nil {
+		t.Fatalf("confirm task correction failed: %v", err)
+	}
+
+	task := confirmResult["task"].(map[string]any)
+	if task["task_id"] != taskID || task["status"] != "completed" {
+		t.Fatalf("expected browser correction to execute on the same task, got %+v", task)
+	}
+	intentValue := task["intent"].(map[string]any)
+	if intentValue["name"] != "browser_snapshot" {
+		t.Fatalf("expected natural-language correction to preserve browser_snapshot, got %+v", intentValue)
+	}
+	bubble := confirmResult["bubble_message"].(map[string]any)
+	if bubble["type"] == "intent_confirm" {
+		t.Fatalf("expected natural-language browser correction not to return to intent confirmation, got %+v", bubble)
+	}
+	deliveryResult, ok := confirmResult["delivery_result"].(map[string]any)
+	if !ok || deliveryResult["type"] != "result_page" {
+		t.Fatalf("expected browser correction execution to keep result_page delivery, got %+v", confirmResult["delivery_result"])
 	}
 }
 
@@ -2794,7 +3161,7 @@ func TestServiceNotepadListReturnsRuntimeItemsByBucket(t *testing.T) {
 }
 
 func TestServiceNotepadConvertToTaskUsesRuntimeItemWithoutClosingTodo(t *testing.T) {
-	service := newTestService()
+	service, _ := newTestServiceWithExecution(t, "Converted notepad task finished.")
 	now := time.Date(2026, 4, 10, 9, 0, 0, 0, time.UTC)
 	service.runEngine.ReplaceNotepadItems([]map[string]any{
 		{
@@ -2805,6 +3172,14 @@ func TestServiceNotepadConvertToTaskUsesRuntimeItemWithoutClosingTodo(t *testing
 			"type":             "todo_item",
 			"due_at":           now.Add(3 * time.Hour).Format(time.RFC3339),
 			"agent_suggestion": "translate into English",
+			"note_text":        "Finish the computer homework before tonight and use the materials in workspace/homework.",
+			"related_resources": []map[string]any{
+				{
+					"resource_id":   "todo_translate_homework",
+					"path":          "workspace/homework",
+					"resource_type": "folder",
+				},
+			},
 		},
 	})
 
@@ -2817,16 +3192,19 @@ func TestServiceNotepadConvertToTaskUsesRuntimeItemWithoutClosingTodo(t *testing
 	}
 
 	task := result["task"].(map[string]any)
-	if task["title"] != "translate the meeting notes" {
-		t.Fatalf("expected converted task title to come from runtime notepad item, got %v", task["title"])
+	if task["title"] != "处理：Finish the computer h..." {
+		t.Fatalf("expected converted task title to stay anchored on notepad note text, got %v", task["title"])
 	}
 	if task["source_type"] != "todo" {
 		t.Fatalf("expected converted task source_type todo, got %v", task["source_type"])
 	}
+	if task["status"] != "completed" || task["current_step"] != "return_result" {
+		t.Fatalf("expected explicit notepad text to reuse the direct free-text execution path, got %+v", task)
+	}
 
 	intentValue := task["intent"].(map[string]any)
-	if intentValue["name"] != "translate" {
-		t.Fatalf("expected runtime notepad conversion to infer translate intent, got %v", intentValue["name"])
+	if intentValue["name"] != "agent_loop" {
+		t.Fatalf("expected runtime notepad conversion to stay on agent_loop, got %v", intentValue["name"])
 	}
 
 	taskID := task["task_id"].(string)
@@ -2837,10 +3215,37 @@ func TestServiceNotepadConvertToTaskUsesRuntimeItemWithoutClosingTodo(t *testing
 	if len(record.MemoryReadPlans) == 0 {
 		t.Fatal("expected converted task to attach memory read plans")
 	}
+	if record.Snapshot.Text != "Finish the computer homework before tonight and use the materials in workspace/homework." {
+		t.Fatalf("expected notepad note_text to drive task snapshot text, got %+v", record.Snapshot)
+	}
+	if len(record.Snapshot.Files) != 0 {
+		t.Fatalf("expected explicit directory resources to stay out of task snapshot files, got %+v", record.Snapshot.Files)
+	}
+	deliveryResult, ok := result["delivery_result"].(map[string]any)
+	if !ok {
+		t.Fatal("expected direct notepad conversion to return delivery_result")
+	}
+	if deliveryResult["type"] != "workspace_document" {
+		t.Fatalf("expected explicit note resources to keep workspace delivery, got %+v", deliveryResult)
+	}
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["type"] != "result" {
+		t.Fatalf("expected direct notepad conversion to return result bubble, got %+v", bubble)
+	}
 
 	sourceItem := result["notepad_item"].(map[string]any)
 	if sourceItem["linked_task_id"] != taskID {
 		t.Fatalf("expected convert_to_task to return linked source item, got %+v", sourceItem)
+	}
+	if _, ok := sourceItem["note_text_origin"]; ok {
+		t.Fatalf("expected convert_to_task response to keep note_text_origin internal, got %+v", sourceItem)
+	}
+	if resources, ok := sourceItem["related_resources"].([]map[string]any); ok {
+		for _, resource := range resources {
+			if _, leaked := resource["resource_origin"]; leaked {
+				t.Fatalf("expected convert_to_task response resources to keep resource_origin internal, got %+v", resources)
+			}
+		}
 	}
 	refreshGroups := result["refresh_groups"].([]string)
 	if len(refreshGroups) != 1 || refreshGroups[0] != "upcoming" {
@@ -2856,6 +3261,617 @@ func TestServiceNotepadConvertToTaskUsesRuntimeItemWithoutClosingTodo(t *testing
 	}
 	if upcomingItems[0]["linked_task_id"] != taskID {
 		t.Fatalf("expected runtime notepad item to keep linked_task_id, got %+v", upcomingItems[0])
+	}
+}
+
+func TestServiceNotepadConvertToTaskFallsBackToTitleAndIgnoresNonPathResources(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Converted title-only notepad task finished.")
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":   "todo_title_only",
+		"title":     "整理明天评审要点",
+		"bucket":    "upcoming",
+		"status":    "normal",
+		"type":      "todo_item",
+		"note_text": "",
+		"related_resources": []map[string]any{{
+			"resource_id":   "todo_title_only_link",
+			"url":           "https://example.com/review",
+			"resource_type": "link",
+		}},
+	}})
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_title_only",
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected converted task to remain available in runtime")
+	}
+	if record.Snapshot.Text != "整理明天评审要点" {
+		t.Fatalf("expected title-only note to use the original title text, got %+v", record.Snapshot)
+	}
+	if len(record.Snapshot.Files) != 0 {
+		t.Fatalf("expected non-path resources to stay out of task snapshot files, got %+v", record.Snapshot.Files)
+	}
+	if record.Status != "completed" || record.CurrentStep != "return_result" {
+		t.Fatalf("expected title-only note to reuse the direct free-text execution path, got %+v", record)
+	}
+}
+
+func TestServiceNotepadConvertToTaskKeepsUserNoteTextWhenItMatchesSyntheticDisplayText(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Converted synthetic-match note finished.")
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":          "todo_real_note_text",
+		"title":            "整理评审要点",
+		"bucket":           "upcoming",
+		"status":           "normal",
+		"type":             "todo_item",
+		"agent_suggestion": "translate into English",
+		"note_text":        "整理评审要点。当前建议：translate into English。",
+	}})
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_real_note_text",
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected converted task to remain available in runtime")
+	}
+	if record.Snapshot.Text != "整理评审要点。当前建议：translate into English。" {
+		t.Fatalf("expected authored note_text to survive even when it matches the synthetic display copy, got %+v", record.Snapshot)
+	}
+}
+
+func TestServiceNotepadConvertToTaskKeepsDerivedDefaultResourcesOutOfSnapshot(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Converted derived-resource notepad task finished.")
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":   "todo_derived_resources",
+		"title":     "整理明天评审要点",
+		"bucket":    "upcoming",
+		"status":    "normal",
+		"type":      "todo_item",
+		"note_text": "整理明天评审要点。",
+	}})
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_derived_resources",
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected converted task to remain available in runtime")
+	}
+	if len(record.Snapshot.Files) != 0 {
+		t.Fatalf("expected derived default resources to stay out of task snapshot files, got %+v", record.Snapshot.Files)
+	}
+
+	items, total := service.runEngine.NotepadItems("upcoming", 10, 0)
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("expected runtime list to keep the source note, total=%d len=%d", total, len(items))
+	}
+	resources, ok := items[0]["related_resources"].([]map[string]any)
+	if !ok || len(resources) == 0 {
+		t.Fatalf("expected projected notepad item to keep display resources, got %+v", items[0]["related_resources"])
+	}
+}
+
+func TestServiceNotepadConvertToTaskKeepsLegacyPersistedFallbacksOutOfSnapshot(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Converted legacy fallback notepad task finished.")
+	todoStore := storage.NewInMemoryTodoStore()
+	if err := todoStore.ReplaceTodoState(context.Background(), []storage.TodoItemRecord{{
+		ItemID:               "todo_legacy_fallbacks",
+		Title:                "周报模板",
+		Bucket:               "upcoming",
+		Status:               "normal",
+		NoteText:             "周报模板。当前处于便签巡检域，等待进入正式执行。",
+		RelatedResourcesJSON: `[{"id":"todo_legacy_fallbacks_drafts","label":"草稿目录","path":"workspace/drafts","type":"directory","target_kind":"folder"},{"id":"todo_legacy_fallbacks_workspace","label":"默认工作区","path":"workspace","type":"directory","target_kind":"folder"}]`,
+		CreatedAt:            "2026-04-20T10:00:00Z",
+		UpdatedAt:            "2026-04-20T10:00:00Z",
+	}}, nil); err != nil {
+		t.Fatalf("seed legacy todo store failed: %v", err)
+	}
+	if err := service.runEngine.WithTodoStore(todoStore); err != nil {
+		t.Fatalf("attach todo store failed: %v", err)
+	}
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_legacy_fallbacks",
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected converted task to remain available in runtime")
+	}
+	if record.Snapshot.Text != "周报模板。当前处于便签巡检域，等待进入正式执行。" {
+		t.Fatalf("expected ambiguous legacy note_text to stay preserved after reload, got %+v", record.Snapshot)
+	}
+	if len(record.Snapshot.Files) != 0 {
+		t.Fatalf("expected legacy fallback resources to stay out of task snapshot files, got %+v", record.Snapshot.Files)
+	}
+}
+
+func TestServiceNotepadConvertToTaskKeepsLegacyDirectoryResourcesOutOfSnapshotFiles(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Converted legacy-resource notepad task finished.")
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":   "todo_legacy_resources",
+		"title":     "整理历史评审材料",
+		"bucket":    "upcoming",
+		"status":    "normal",
+		"type":      "todo_item",
+		"note_text": "Use the historical review materials under workspace/legacy-review.",
+		"related_resources": []map[string]any{{
+			"id":          "todo_legacy_resources_dir",
+			"path":        "workspace/legacy-review",
+			"type":        "directory",
+			"target_kind": "folder",
+		}},
+	}})
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_legacy_resources",
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected converted task to remain available in runtime")
+	}
+	if len(record.Snapshot.Files) != 0 {
+		t.Fatalf("expected legacy directory resources to stay out of task snapshot files, got %+v", record.Snapshot.Files)
+	}
+}
+
+func TestServiceNotepadConvertToTaskCarriesDashboardLabeledFileResourcesIntoSnapshotFiles(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "Converted dashboard-labeled resource notepad task finished.")
+	resourcePath := filepath.Join(workspaceRoot, "notes", "source.md")
+	if err := os.MkdirAll(filepath.Dir(resourcePath), 0o755); err != nil {
+		t.Fatalf("create dashboard resource dir failed: %v", err)
+	}
+	if err := os.WriteFile(resourcePath, []byte("# source"), 0o644); err != nil {
+		t.Fatalf("seed dashboard resource file failed: %v", err)
+	}
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":   "todo_dashboard_file_resource",
+		"title":     "整理源 markdown 便签",
+		"bucket":    "upcoming",
+		"status":    "normal",
+		"type":      "todo_item",
+		"note_text": "把源 markdown 里的内容整理成正式任务输入。",
+		"related_resources": []map[string]any{{
+			"resource_id":   "todo_dashboard_file_resource_source",
+			"label":         "源 markdown",
+			"path":          "workspace/notes/source.md",
+			"resource_type": "Markdown 文件",
+			"open_action":   "open_file",
+		}},
+	}})
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_dashboard_file_resource",
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected converted task to remain available in runtime")
+	}
+	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "workspace/notes/source.md" {
+		t.Fatalf("expected dashboard-labeled file resources to enter task snapshot, got %+v", record.Snapshot.Files)
+	}
+}
+
+func TestServiceNotepadConvertToTaskNormalizesAbsoluteWorkspaceResourcesIntoSnapshotFiles(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "Converted absolute-resource notepad task finished.")
+	resourcePath := filepath.Join(workspaceRoot, "notes", "source.md")
+	if err := os.MkdirAll(filepath.Dir(resourcePath), 0o755); err != nil {
+		t.Fatalf("create absolute resource dir failed: %v", err)
+	}
+	if err := os.WriteFile(resourcePath, []byte("# source"), 0o644); err != nil {
+		t.Fatalf("seed absolute resource file failed: %v", err)
+	}
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":   "todo_absolute_resource",
+		"title":     "整理工作区绝对路径资料",
+		"bucket":    "upcoming",
+		"status":    "normal",
+		"type":      "todo_item",
+		"note_text": "请结合同一工作区中的绝对路径资料整理正式任务。",
+		"related_resources": []map[string]any{{
+			"resource_id":   "todo_absolute_resource_source",
+			"path":          resourcePath,
+			"resource_type": "file",
+		}},
+	}})
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_absolute_resource",
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected converted task to remain available in runtime")
+	}
+	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "workspace/notes/source.md" {
+		t.Fatalf("expected absolute workspace resource to normalize into workspace-formal snapshot path, got %+v", record.Snapshot.Files)
+	}
+}
+
+func TestServiceNotepadConvertToTaskDropsOutOfWorkspaceResourcesFromSnapshotFiles(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Converted out-of-workspace resource notepad task finished.")
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":   "todo_outside_workspace_resource",
+		"title":     "整理越界资料",
+		"bucket":    "upcoming",
+		"status":    "normal",
+		"type":      "todo_item",
+		"note_text": "请整理这些资料，但不应把工作区外路径送进正式任务输入。",
+		"related_resources": []map[string]any{{
+			"resource_id":   "todo_outside_workspace_resource_source",
+			"path":          filepath.Join(t.TempDir(), "outside", "source.md"),
+			"resource_type": "file",
+		}},
+	}})
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_outside_workspace_resource",
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected converted task to remain available in runtime")
+	}
+	if len(record.Snapshot.Files) != 0 {
+		t.Fatalf("expected out-of-workspace resource to stay out of task snapshot files, got %+v", record.Snapshot.Files)
+	}
+}
+
+func TestServiceNotepadConvertToTaskDedupesExplicitSnapshotPaths(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "Converted deduped notepad resource task finished.")
+	resourcePath := filepath.Join(workspaceRoot, "notes", "source.md")
+	if err := os.MkdirAll(filepath.Dir(resourcePath), 0o755); err != nil {
+		t.Fatalf("create dedupe resource dir failed: %v", err)
+	}
+	if err := os.WriteFile(resourcePath, []byte("# source"), 0o644); err != nil {
+		t.Fatalf("seed dedupe resource file failed: %v", err)
+	}
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":   "todo_duplicate_resources",
+		"title":     "整理重复资料",
+		"bucket":    "upcoming",
+		"status":    "normal",
+		"type":      "todo_item",
+		"note_text": "请结合同一路径下的资料整理正式任务。",
+		"related_resources": []map[string]any{
+			{
+				"resource_id":   "todo_duplicate_resources_a",
+				"path":          "workspace/notes/source.md",
+				"resource_type": "Markdown 文件",
+				"open_action":   "open_file",
+			},
+			{
+				"id":          "todo_duplicate_resources_b",
+				"path":        "workspace/research",
+				"type":        "directory",
+				"target_kind": "folder",
+			},
+			{
+				"resource_id":   "todo_duplicate_resources_c",
+				"path":          "workspace/notes/source.md",
+				"resource_type": "file",
+			},
+			{
+				"id":          "todo_duplicate_resources_d",
+				"path":        "workspace/research",
+				"type":        "directory",
+				"target_kind": "folder",
+			},
+		},
+	}})
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_duplicate_resources",
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected converted task to remain available in runtime")
+	}
+	expected := []string{"workspace/notes/source.md"}
+	if !reflect.DeepEqual(record.Snapshot.Files, expected) {
+		t.Fatalf("expected explicit notepad file paths to be deduped like other task entries, got %+v", record.Snapshot.Files)
+	}
+}
+
+func TestServiceNotepadConvertToTaskDropsDirectoryPathsEvenWhenMetadataClaimsFile(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "Converted mislabeled directory resource task finished.")
+	resourcePath := filepath.Join(workspaceRoot, "notes")
+	if err := os.MkdirAll(resourcePath, 0o755); err != nil {
+		t.Fatalf("create mislabeled directory failed: %v", err)
+	}
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":   "todo_mislabeled_directory_resource",
+		"title":     "整理误标目录资源",
+		"bucket":    "upcoming",
+		"status":    "normal",
+		"type":      "todo_item",
+		"note_text": "请不要把目录误当成文件送进正式任务输入。",
+		"related_resources": []map[string]any{{
+			"resource_id":   "todo_mislabeled_directory_resource_source",
+			"path":          "workspace/notes",
+			"resource_type": "file",
+		}},
+	}})
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_mislabeled_directory_resource",
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected converted task to remain available in runtime")
+	}
+	if len(record.Snapshot.Files) != 0 {
+		t.Fatalf("expected mislabeled directory resources to stay out of task snapshot files, got %+v", record.Snapshot.Files)
+	}
+}
+
+func TestServiceNotepadConvertToTaskDropsMissingFilePathsFromSnapshotFiles(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Converted missing-file resource task finished.")
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":   "todo_missing_file_resource",
+		"title":     "整理缺失文件资源",
+		"bucket":    "upcoming",
+		"status":    "normal",
+		"type":      "todo_item",
+		"note_text": "不存在的文件路径不应进入正式任务输入。",
+		"related_resources": []map[string]any{{
+			"resource_id":   "todo_missing_file_resource_source",
+			"path":          "workspace/notes/missing.md",
+			"resource_type": "file",
+		}},
+	}})
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_missing_file_resource",
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected converted task to remain available in runtime")
+	}
+	if len(record.Snapshot.Files) != 0 {
+		t.Fatalf("expected missing file resources to stay out of task snapshot files, got %+v", record.Snapshot.Files)
+	}
+}
+
+func TestServiceNotepadConvertToTaskKeepsDirectoryAttachmentsOutOfSnapshotFiles(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Converted explicit fallback attachment task finished.")
+	todoStore := storage.NewInMemoryTodoStore()
+	if err := todoStore.ReplaceTodoState(context.Background(), []storage.TodoItemRecord{{
+		ItemID:               "todo_explicit_templates",
+		Title:                "模板评审",
+		Bucket:               "upcoming",
+		Status:               "normal",
+		NoteText:             "请直接查看 workspace/templates 里的模板材料。",
+		RelatedResourcesJSON: `[{"id":"user_templates_attachment","label":"关联模板","path":"workspace/templates","type":"directory","target_kind":"folder"}]`,
+		CreatedAt:            "2026-04-20T10:00:00Z",
+		UpdatedAt:            "2026-04-20T10:00:00Z",
+	}}, nil); err != nil {
+		t.Fatalf("seed explicit fallback attachment state failed: %v", err)
+	}
+	if err := service.runEngine.WithTodoStore(todoStore); err != nil {
+		t.Fatalf("attach todo store failed: %v", err)
+	}
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_explicit_templates",
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected converted task to remain available in runtime")
+	}
+	if len(record.Snapshot.Files) != 0 {
+		t.Fatalf("expected directory attachments to stay out of task snapshot files, got %+v", record.Snapshot.Files)
+	}
+}
+
+func TestServiceNotepadConvertToTaskPublishesRequestTraceID(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Converted trace-aware notepad task finished.")
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":   "todo_trace",
+		"title":     "整理 trace 任务",
+		"bucket":    "upcoming",
+		"status":    "normal",
+		"type":      "todo_item",
+		"note_text": "整理 trace 任务。",
+	}})
+
+	starts := make(chan struct {
+		taskID    string
+		sessionID string
+		traceID   string
+	}, 1)
+	unsubscribe := service.SubscribeTaskStarts(func(taskID, sessionID, traceID string) {
+		starts <- struct {
+			taskID    string
+			sessionID string
+			traceID   string
+		}{taskID: taskID, sessionID: sessionID, traceID: traceID}
+	})
+	defer unsubscribe()
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"request_meta": map[string]any{"trace_id": "trace_notepad_convert"},
+		"item_id":      "todo_trace",
+		"confirmed":    true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	select {
+	case start := <-starts:
+		if start.traceID != "trace_notepad_convert" {
+			t.Fatalf("expected notepad conversion to publish request trace id, got %+v", start)
+		}
+		if start.taskID != result["task"].(map[string]any)["task_id"] {
+			t.Fatalf("expected task start to publish the created task id, got %+v result=%+v", start, result["task"])
+		}
+		if start.sessionID == "" {
+			t.Fatalf("expected notepad conversion to publish the created session id, got %+v", start)
+		}
+	default:
+		t.Fatal("expected notepad conversion to publish a task start event")
+	}
+}
+
+func TestServiceNotepadConvertToTaskKeepsPublishedTaskLinkedAfterExecutionFailure(t *testing.T) {
+	service, _ := newTestServiceWithExecutionPrechecker(t, "Converted rollback note finished.", failingRiskPrechecker{
+		err: errors.New("risk precheck unavailable"),
+	})
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":   "todo_governance_failure",
+		"title":     "整理治理失败回滚",
+		"bucket":    "upcoming",
+		"status":    "normal",
+		"type":      "todo_item",
+		"note_text": "请整理这份很长的会议纪要并输出完整文档到工作区，确保结果足够长以走正式文档交付。",
+		"related_resources": []map[string]any{{
+			"resource_id":   "todo_governance_failure_source",
+			"path":          "workspace/review-notes",
+			"resource_type": "folder",
+		}},
+	}})
+
+	starts := make(chan string, 1)
+	unsubscribe := service.SubscribeTaskStarts(func(taskID, _, _ string) {
+		starts <- taskID
+	})
+	defer unsubscribe()
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_governance_failure",
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("expected published notepad conversion failure to return task-centric result, got %v", err)
+	}
+
+	var taskID string
+	select {
+	case taskID = <-starts:
+		if taskID == "" {
+			t.Fatal("expected direct notepad conversion to publish task start before failing")
+		}
+	default:
+		t.Fatal("expected direct notepad conversion to publish task start before failing")
+	}
+
+	if result["delivery_result"] != nil {
+		t.Fatalf("expected failed convert_to_task response not to expose delivery_result, got %+v", result["delivery_result"])
+	}
+	taskPayload, ok := result["task"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected failed convert_to_task response to include task payload, got %+v", result)
+	}
+	if taskPayload["task_id"] != taskID {
+		t.Fatalf("expected failed convert_to_task response to keep published task id %s, got %+v", taskID, taskPayload)
+	}
+	if taskPayload["status"] != "failed" {
+		t.Fatalf("expected published convert task to remain queryable as failed, got %+v", taskPayload)
+	}
+
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatalf("expected published task %s to remain queryable after start failure", taskID)
+	}
+	if record.Status != "failed" {
+		t.Fatalf("expected published task to remain queryable as failed, got %+v", record)
+	}
+	if record.CurrentStep == "" {
+		t.Fatalf("expected published failed task to keep a terminal step, got %+v", record)
+	}
+	notepadItem, ok := result["notepad_item"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected failed convert_to_task response to include notepad_item, got %+v", result)
+	}
+	if linkedTaskID := stringValue(notepadItem, "linked_task_id", ""); linkedTaskID != taskID {
+		t.Fatalf("expected failed convert_to_task response to keep source item linked to published task, got %+v", notepadItem)
+	}
+	refreshGroups, ok := result["refresh_groups"].([]string)
+	if !ok {
+		t.Fatalf("expected failed convert_to_task response to include refresh_groups, got %+v", result)
+	}
+	if len(refreshGroups) != 1 || refreshGroups[0] != "upcoming" {
+		t.Fatalf("expected failed convert_to_task response refresh_groups to target the source bucket, got %+v", refreshGroups)
+	}
+	item, ok := service.runEngine.NotepadItem("todo_governance_failure")
+	if !ok {
+		t.Fatal("expected notepad item to remain available after execution failure")
+	}
+	if linkedTaskID := stringValue(item, "linked_task_id", ""); linkedTaskID != taskID {
+		t.Fatalf("expected source item to keep the published failed task link, got %+v", item)
 	}
 }
 
@@ -3027,6 +4043,16 @@ func TestServiceNotepadUpdateReturnsUpdatedItemAndRefreshGroups(t *testing.T) {
 	updatedItem := result["notepad_item"].(map[string]any)
 	if updatedItem["bucket"] != "upcoming" {
 		t.Fatalf("expected updated item bucket upcoming, got %+v", updatedItem)
+	}
+	if _, ok := updatedItem["note_text_origin"]; ok {
+		t.Fatalf("expected notepad update response to keep note_text_origin internal, got %+v", updatedItem)
+	}
+	if resources, ok := updatedItem["related_resources"].([]map[string]any); ok {
+		for _, resource := range resources {
+			if _, leaked := resource["resource_origin"]; leaked {
+				t.Fatalf("expected notepad update resources to keep resource_origin internal, got %+v", resources)
+			}
+		}
 	}
 	refreshGroups := result["refresh_groups"].([]string)
 	if len(refreshGroups) != 2 || refreshGroups[0] != "later" || refreshGroups[1] != "upcoming" {
@@ -4855,7 +5881,7 @@ func TestServiceAgentLoopToolApprovalPausesWaitingAuth(t *testing.T) {
 			ModelID:   "gpt-5.4",
 			ToolCalls: []model.ToolInvocation{{
 				Name:      "page_read",
-				Arguments: map[string]any{"url": "https://example.com"},
+				Arguments: map[string]any{"url": "http://127.0.0.1:8080/approval"},
 			}},
 		}},
 	}
@@ -4867,7 +5893,7 @@ func TestServiceAgentLoopToolApprovalPausesWaitingAuth(t *testing.T) {
 		"trigger":    "hover_text_input",
 		"input": map[string]any{
 			"type": "text",
-			"text": "去 https://example.com 看一下页面内容",
+			"text": "去 http://127.0.0.1:8080/approval 看一下页面内容",
 		},
 		"intent": map[string]any{
 			"name":      "agent_loop",
@@ -4896,10 +5922,10 @@ func TestServiceAgentLoopToolApprovalPausesWaitingAuth(t *testing.T) {
 	if record.ApprovalRequest == nil || stringValue(record.ApprovalRequest, "operation_name", "") != "page_read" {
 		t.Fatalf("expected page_read approval request, got %+v", record.ApprovalRequest)
 	}
-	if stringValue(record.PendingExecution, "operation_name", "") != "page_read" || stringValue(record.PendingExecution, "target_object", "") != "https://example.com" {
+	if stringValue(record.PendingExecution, "operation_name", "") != "page_read" || stringValue(record.PendingExecution, "target_object", "") != "http://127.0.0.1:8080/approval" {
 		t.Fatalf("expected pending execution to preserve runtime tool target, got %+v", record.PendingExecution)
 	}
-	if !reflect.DeepEqual(mapValue(record.PendingExecution, "approved_tool_input"), map[string]any{"url": "https://example.com"}) {
+	if !reflect.DeepEqual(mapValue(record.PendingExecution, "approved_tool_input"), map[string]any{"url": "http://127.0.0.1:8080/approval"}) {
 		t.Fatalf("expected pending execution to preserve exact runtime tool input, got %+v", record.PendingExecution)
 	}
 	notifications, ok := service.runEngine.PendingNotifications(taskID)
@@ -4928,7 +5954,7 @@ func TestServiceRuntimeApprovalResumeRejectsChangedToolInput(t *testing.T) {
 				ToolCalls: []model.ToolInvocation{{
 					Name: "page_search",
 					Arguments: map[string]any{
-						"url":   "https://example.com",
+						"url":   "http://127.0.0.1:8080/search",
 						"query": "billing",
 						"limit": 3,
 					},
@@ -4941,7 +5967,7 @@ func TestServiceRuntimeApprovalResumeRejectsChangedToolInput(t *testing.T) {
 				ToolCalls: []model.ToolInvocation{{
 					Name: "page_search",
 					Arguments: map[string]any{
-						"url":   "https://example.com",
+						"url":   "http://127.0.0.1:8080/search",
 						"query": "security",
 						"limit": 3,
 					},
@@ -4977,7 +6003,7 @@ func TestServiceRuntimeApprovalResumeRejectsChangedToolInput(t *testing.T) {
 		t.Fatal("expected first waiting_auth task record")
 	}
 	firstApprovedInput := map[string]any{
-		"url":   "https://example.com",
+		"url":   "http://127.0.0.1:8080/search",
 		"query": "billing",
 		"limit": 3,
 	}
@@ -5003,7 +6029,7 @@ func TestServiceRuntimeApprovalResumeRejectsChangedToolInput(t *testing.T) {
 		t.Fatal("expected second waiting_auth task record")
 	}
 	secondApprovedInput := map[string]any{
-		"url":   "https://example.com",
+		"url":   "http://127.0.0.1:8080/search",
 		"query": "security",
 		"limit": 3,
 	}
@@ -17491,16 +18517,8 @@ func TestServiceStartTaskWithExecutorDeliversPageReadResultPage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start task failed: %v", err)
 	}
-	if result["task"].(map[string]any)["status"] != "waiting_auth" {
-		t.Fatalf("expected page_read task to wait for authorization, got %+v", result)
-	}
-	result, err = service.SecurityRespond(map[string]any{
-		"task_id":     result["task"].(map[string]any)["task_id"],
-		"approval_id": activeApprovalIDForTask(t, service, result["task"].(map[string]any)["task_id"].(string)),
-		"decision":    "allow_once",
-	})
-	if err != nil {
-		t.Fatalf("security respond failed: %v", err)
+	if result["task"].(map[string]any)["status"] != "completed" {
+		t.Fatalf("expected page_read task to complete without authorization, got %+v", result)
 	}
 
 	taskID := result["task"].(map[string]any)["task_id"].(string)
@@ -17573,16 +18591,8 @@ func TestServiceStartTaskWithExecutorDeliversPageSearchResultPage(t *testing.T) 
 	if err != nil {
 		t.Fatalf("start task failed: %v", err)
 	}
-	if result["task"].(map[string]any)["status"] != "waiting_auth" {
-		t.Fatalf("expected page_search task to wait for authorization, got %+v", result)
-	}
-	result, err = service.SecurityRespond(map[string]any{
-		"task_id":     result["task"].(map[string]any)["task_id"],
-		"approval_id": activeApprovalIDForTask(t, service, result["task"].(map[string]any)["task_id"].(string)),
-		"decision":    "allow_once",
-	})
-	if err != nil {
-		t.Fatalf("security respond failed: %v", err)
+	if result["task"].(map[string]any)["status"] != "completed" {
+		t.Fatalf("expected page_search task to complete without authorization, got %+v", result)
 	}
 	taskID := result["task"].(map[string]any)["task_id"].(string)
 	deliveryResult := result["delivery_result"].(map[string]any)
@@ -17730,16 +18740,8 @@ func TestServiceStartTaskWithExecutorPageReadFailureUsesUnifiedError(t *testing.
 	if err != nil {
 		t.Fatalf("start task should return task-centric failure result, got %v", err)
 	}
-	if result["task"].(map[string]any)["status"] != "waiting_auth" {
-		t.Fatalf("expected page_read failure task to wait for authorization, got %+v", result)
-	}
-	result, err = service.SecurityRespond(map[string]any{
-		"task_id":     result["task"].(map[string]any)["task_id"],
-		"approval_id": activeApprovalIDForTask(t, service, result["task"].(map[string]any)["task_id"].(string)),
-		"decision":    "allow_once",
-	})
-	if err != nil {
-		t.Fatalf("security respond should surface task-centric failure result, got %v", err)
+	if result["task"].(map[string]any)["status"] != "failed" {
+		t.Fatalf("expected page_read failure task to fail without authorization, got %+v", result)
 	}
 	taskID := result["task"].(map[string]any)["task_id"].(string)
 	if result["delivery_result"] != nil {
@@ -17807,7 +18809,7 @@ func TestServiceStartTaskWithRealLocalPageReadDelivery(t *testing.T) {
 		t.Fatalf("start task failed: %v", err)
 	}
 	if result["task"].(map[string]any)["status"] != "waiting_auth" {
-		t.Fatalf("expected real page_read task to wait for authorization, got %+v", result)
+		t.Fatalf("expected real page_read task to wait for authorization for loopback target, got %+v", result)
 	}
 	result, err = service.SecurityRespond(map[string]any{
 		"task_id":     result["task"].(map[string]any)["task_id"],

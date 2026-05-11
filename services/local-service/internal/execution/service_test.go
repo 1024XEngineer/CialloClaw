@@ -1277,8 +1277,8 @@ func TestExecuteBudgetDowngradeRetainsReadOnlyWebToolsInPlannerCatalog(t *testin
 	if !strings.Contains(modelClient.plannerInputs[0], "- page_read") || !strings.Contains(modelClient.plannerInputs[0], "- page_search") {
 		t.Fatalf("expected read-only web tools to remain visible under budget downgrade, got %q", modelClient.plannerInputs[0])
 	}
-	if !strings.Contains(modelClient.plannerInputs[0], "网页读取可能触发审批") {
-		t.Fatalf("expected planner input to preserve approval boundary for web tools, got %q", modelClient.plannerInputs[0])
+	if !strings.Contains(modelClient.plannerInputs[0], "默认按低风险只读处理") {
+		t.Fatalf("expected planner input to describe low-risk read-only web tools, got %q", modelClient.plannerInputs[0])
 	}
 	if strings.Contains(modelClient.plannerInputs[0], "page_interact") || strings.Contains(modelClient.plannerInputs[0], "browser_interact") || strings.Contains(modelClient.plannerInputs[0], "browser_navigate") {
 		t.Fatalf("expected planner input to stay bounded to read-only web and browser capabilities, got %q", modelClient.plannerInputs[0])
@@ -3455,7 +3455,7 @@ func TestAssessGovernancePageReadUsesURLTarget(t *testing.T) {
 		t.Fatalf("expected page_read to require approval when flagged, got %+v", assessment)
 	}
 	if assessment.RiskLevel != string(risk.RiskLevelYellow) {
-		t.Fatalf("expected page_read yellow risk level, got %+v", assessment)
+		t.Fatalf("expected page_read yellow risk level when flagged, got %+v", assessment)
 	}
 	webpages, _ := assessment.ImpactScope["webpages"].([]string)
 	if len(webpages) != 1 || webpages[0] != "https://example.com/demo" {
@@ -3489,8 +3489,143 @@ func TestAssessGovernancePageSearchPreservesQueryInput(t *testing.T) {
 	if len(webpages) != 1 || webpages[0] != "https://example.com/search" {
 		t.Fatalf("expected webpage impact scope to include search URL, got %+v", assessment.ImpactScope)
 	}
+	if assessment.ApprovalRequired {
+		t.Fatalf("expected page_search to stay low risk by default, got %+v", assessment)
+	}
+	if assessment.RiskLevel != string(risk.RiskLevelGreen) {
+		t.Fatalf("expected page_search green risk level by default, got %+v", assessment)
+	}
+}
+
+func TestAssessGovernancePageReadStaysLowRiskByDefault(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_page_read_default",
+		RunID:  "run_page_read_default",
+		Intent: map[string]any{"name": "page_read", "arguments": map[string]any{
+			"url": "https://example.com/demo",
+		}},
+		DeliveryType: "bubble",
+		ResultTitle:  "网页读取结果",
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected page_read governance path to be handled")
+	}
+	if assessment.ApprovalRequired {
+		t.Fatalf("expected page_read to stay low risk by default, got %+v", assessment)
+	}
+	if assessment.RiskLevel != string(risk.RiskLevelGreen) {
+		t.Fatalf("expected page_read green risk level by default, got %+v", assessment)
+	}
+}
+
+func TestAssessGovernancePageReadStaysLowRiskForBenchmarkIPAddress(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_page_read_benchmark_ip",
+		RunID:  "run_page_read_benchmark_ip",
+		Intent: map[string]any{"name": "page_read", "arguments": map[string]any{
+			"url": "http://198.18.0.58/demo",
+		}},
+		DeliveryType: "bubble",
+		ResultTitle:  "网页读取结果",
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected benchmark-ip page_read governance path to be handled")
+	}
+	if assessment.ApprovalRequired {
+		t.Fatalf("expected benchmark-ip page_read to stay low risk, got %+v", assessment)
+	}
+	if assessment.RiskLevel != string(risk.RiskLevelGreen) {
+		t.Fatalf("expected benchmark-ip page_read green risk level, got %+v", assessment)
+	}
+}
+
+func TestAssessGovernancePageReadRequiresApprovalForLoopbackTarget(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_page_read_loopback",
+		RunID:  "run_page_read_loopback",
+		Intent: map[string]any{"name": "page_read", "arguments": map[string]any{
+			"url": "http://127.0.0.1:8080/admin",
+		}},
+		DeliveryType: "bubble",
+		ResultTitle:  "本地网页读取结果",
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected loopback page_read governance path to be handled")
+	}
 	if !assessment.ApprovalRequired {
-		t.Fatalf("expected page_search to require approval, got %+v", assessment)
+		t.Fatalf("expected loopback page_read to require approval, got %+v", assessment)
+	}
+	if assessment.RiskLevel != string(risk.RiskLevelYellow) {
+		t.Fatalf("expected loopback page_read yellow risk level, got %+v", assessment)
+	}
+}
+
+func TestAssessGovernancePageReadRequiresApprovalForInternalHostname(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_page_read_internal_hostname",
+		RunID:  "run_page_read_internal_hostname",
+		Intent: map[string]any{"name": "page_read", "arguments": map[string]any{
+			"url": "http://printer.local/status",
+		}},
+		DeliveryType: "bubble",
+		ResultTitle:  "内网页面读取结果",
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected internal-hostname page_read governance path to be handled")
+	}
+	if !assessment.ApprovalRequired {
+		t.Fatalf("expected internal-hostname page_read to require approval, got %+v", assessment)
+	}
+	if assessment.RiskLevel != string(risk.RiskLevelYellow) {
+		t.Fatalf("expected internal-hostname page_read yellow risk level, got %+v", assessment)
+	}
+}
+
+func TestAssessGovernanceStructuredDOMStillRequiresApproval(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_structured_dom_auth",
+		RunID:  "run_structured_dom_auth",
+		Intent: map[string]any{"name": "structured_dom", "arguments": map[string]any{
+			"url": "https://example.com/demo",
+		}},
+		DeliveryType: "bubble",
+		ResultTitle:  "结构化页面结果",
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected structured_dom governance path to be handled")
+	}
+	if assessment.OperationName != "structured_dom" || assessment.TargetObject != "https://example.com/demo" {
+		t.Fatalf("unexpected structured_dom assessment: %+v", assessment)
+	}
+	if !assessment.ApprovalRequired {
+		t.Fatalf("expected structured_dom to remain approval-gated, got %+v", assessment)
+	}
+	if assessment.RiskLevel != string(risk.RiskLevelYellow) {
+		t.Fatalf("expected structured_dom yellow risk level, got %+v", assessment)
+	}
+	webpages, _ := assessment.ImpactScope["webpages"].([]string)
+	if len(webpages) != 1 || webpages[0] != "https://example.com/demo" {
+		t.Fatalf("expected structured_dom impact scope to include target URL, got %+v", assessment.ImpactScope)
 	}
 }
 
