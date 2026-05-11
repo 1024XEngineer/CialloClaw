@@ -2916,6 +2916,42 @@ func TestServiceNotepadConvertToTaskCarriesLegacyPathResourcesIntoSnapshotFiles(
 	}
 }
 
+func TestServiceNotepadConvertToTaskCarriesDashboardLabeledFileResourcesIntoSnapshotFiles(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Converted dashboard-labeled resource notepad task finished.")
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":   "todo_dashboard_file_resource",
+		"title":     "整理源 markdown 便签",
+		"bucket":    "upcoming",
+		"status":    "normal",
+		"type":      "todo_item",
+		"note_text": "把源 markdown 里的内容整理成正式任务输入。",
+		"related_resources": []map[string]any{{
+			"resource_id":   "todo_dashboard_file_resource_source",
+			"label":         "源 markdown",
+			"path":          "workspace/notes/source.md",
+			"resource_type": "Markdown 文件",
+			"open_action":   "open_file",
+		}},
+	}})
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_dashboard_file_resource",
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected converted task to remain available in runtime")
+	}
+	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "workspace/notes/source.md" {
+		t.Fatalf("expected dashboard-labeled file resources to enter task snapshot, got %+v", record.Snapshot.Files)
+	}
+}
+
 func TestServiceNotepadConvertToTaskKeepsLegacyUserFallbackDirectoryAttachments(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Converted explicit fallback attachment task finished.")
 	todoStore := storage.NewInMemoryTodoStore()

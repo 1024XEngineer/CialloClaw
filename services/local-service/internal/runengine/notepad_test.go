@@ -315,6 +315,46 @@ func TestEngineTodoStoreReloadKeepsUserAttachedFallbackPathResourcesExplicit(t *
 	}
 }
 
+func TestEngineSyncNotepadItemsRecomputesDerivedOriginWhenUserClearsNoteText(t *testing.T) {
+	engine := NewEngine()
+	now := time.Date(2026, 4, 20, 9, 0, 0, 0, time.UTC)
+	engine.now = func() time.Time { return now }
+
+	if err := engine.SyncNotepadItems([]map[string]any{{
+		"item_id":          "todo_clear_note_text",
+		"title":            "整理评审要点",
+		"bucket":           notepadBucketUpcoming,
+		"status":           "normal",
+		"note_text":        "这是用户之前写下的正文。",
+		"note_text_origin": "user_provided",
+	}}); err != nil {
+		t.Fatalf("seed notepad items failed: %v", err)
+	}
+
+	if err := engine.SyncNotepadItems([]map[string]any{{
+		"item_id":          "todo_clear_note_text",
+		"title":            "整理评审要点",
+		"bucket":           notepadBucketUpcoming,
+		"status":           "normal",
+		"note_text":        "",
+		"note_text_origin": "user_provided",
+	}}); err != nil {
+		t.Fatalf("update notepad items failed: %v", err)
+	}
+
+	detail, ok := engine.NotepadItem("todo_clear_note_text")
+	if !ok {
+		t.Fatal("expected cleared note to remain available")
+	}
+	if detail["note_text_origin"] != "derived_default" {
+		t.Fatalf("expected cleared note_text to recompute derived_default origin, got %+v", detail)
+	}
+	expectedNoteText := deriveSyntheticNotepadNoteText("整理评审要点", "")
+	if detail["note_text"] != expectedNoteText {
+		t.Fatalf("expected cleared note to synthesize display-only note_text, got %+v", detail["note_text"])
+	}
+}
+
 func TestEngineWithTodoStoreStartsEmptyWhenStoreHasNoNotes(t *testing.T) {
 	engine := NewEngine()
 	items, total := engine.NotepadItems("", 20, 0)
