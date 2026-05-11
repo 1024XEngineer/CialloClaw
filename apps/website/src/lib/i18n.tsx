@@ -71,7 +71,7 @@ const dictionaries: Record<Locale, Record<string, string>> = {
     "home.action.download": "Download",
     "home.action.tutorial": "Tutorial",
     /* docs */
-    "docs.page-title": "Documentation",
+    "docs.page-title": "Navigation",
     "docs.outline-title": "On This Page",
     "docs.drawer-title": "Documentation",
     "docs.menu-button": "Documentation",

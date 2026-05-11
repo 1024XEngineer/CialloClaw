@@ -34,8 +34,8 @@ export function HomePage() {
   );
   const heroActions = useMemo(
     () => [
-      { label: t("home.action.download"), href: "/docs/quick-start" },
-      { label: t("home.action.tutorial"), href: "/docs/quick-start" },
+      { label: t("home.action.download"), href: "/docs/quick-start#download-and-launch" },
+      { label: t("home.action.tutorial"), href: "/docs/quick-start#configure-models" },
     ],
     [t],
   );
@@ -156,7 +156,7 @@ export function HomePage() {
             src={heroImage}
             alt="CialloClaw mascot"
             onError={() => setHeroImage(mascotFallback)}
-            className="w-[1450px] max-w-none"
+            className="w-[1250px] max-w-none"
           />
         </div>
 
