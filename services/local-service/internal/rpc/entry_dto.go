@@ -138,6 +138,22 @@ type AgentTaskStartParams struct {
 	Options     *agentTaskStartOptions `json:"options,omitempty"`
 }
 
+type intentPayload struct {
+	Name      string         `json:"name,omitempty"`
+	Arguments map[string]any `json:"arguments,omitempty"`
+}
+
+// AgentTaskConfirmParams mirrors packages/protocol AgentTaskConfirmParams and
+// keeps correction fields typed at the RPC boundary so malformed payloads fail
+// before confirm-flow business logic tries to reinterpret them.
+type AgentTaskConfirmParams struct {
+	RequestMeta     RequestMeta    `json:"request_meta"`
+	TaskID          string         `json:"task_id,omitempty"`
+	Confirmed       bool           `json:"confirmed,omitempty"`
+	CorrectedIntent *intentPayload `json:"corrected_intent,omitempty"`
+	CorrectionText  *string        `json:"correction_text,omitempty"`
+}
+
 func decodeAgentInputSubmitParams(raw json.RawMessage) (map[string]any, *rpcError) {
 	var params AgentInputSubmitParams
 	return decodeTypedProtocolParams(raw, &params)
@@ -145,6 +161,11 @@ func decodeAgentInputSubmitParams(raw json.RawMessage) (map[string]any, *rpcErro
 
 func decodeAgentTaskStartParams(raw json.RawMessage) (map[string]any, *rpcError) {
 	var params AgentTaskStartParams
+	return decodeTypedProtocolParams(raw, &params)
+}
+
+func decodeAgentTaskConfirmParams(raw json.RawMessage) (map[string]any, *rpcError) {
+	var params AgentTaskConfirmParams
 	return decodeTypedProtocolParams(raw, &params)
 }
 

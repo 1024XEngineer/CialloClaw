@@ -483,6 +483,7 @@ export interface AgentTaskConfirmParams {
   task_id: string;
   confirmed: boolean;
   corrected_intent?: IntentPayload;
+  correction_text?: string;
 }
 
 export interface AgentTaskConfirmResult {

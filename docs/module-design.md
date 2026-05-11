@@ -1421,7 +1421,7 @@ flowchart TB
 
 #### 如何承接规划器产物
 - `CreateTaskInput` 决定初始 `Status / CurrentStep / Timeline / Snapshot / Intent`；
-- `ConfirmTask()` 把确认后的意图和标题写回同一任务；
+- `ConfirmTask()` 把确认后的意图和标题写回同一任务；当确认阶段收到 `correction_text` 时，必须复用原 task 的正式上下文重新推断意图，并让同一任务直接继续后续执行链；不得新建 task，也不得额外再插入一次新的确认门；
 - `BeginExecution()` 把任务真正推进到运行态；
 - `CompleteTask()`、`ReopenWaitingInput()`、`ReopenIntentConfirmation()`、`FailTaskExecution()` 等接口负责后续收敛。
 
@@ -1681,7 +1681,7 @@ flowchart TB
 - agent loop 默认只暴露无需审批的浏览器能力（如 `browser_attach_current / browser_snapshot`）；`browser_tabs_list / browser_navigate / browser_tab_focus / browser_interact` 仍受审批边界约束，在具备 loop 内授权暂停前不得进入默认目录。
 - 当前桌面 Agent Loop 的 planner-visible capability catalog 必须由执行层单一真源生成，同一份定义同时派生工具描述、参数 schema 和运行态 allowlist，避免出现“Prompt 里可用但执行层拒绝”或反向漂移。
 - 当前默认冻结的只读规划能力面为 `read_file / list_dir / page_read / page_search`；`page_interact / structured_dom` 虽已是 Playwright sidecar 正式能力，但不进入当前桌面 Agent Loop 的默认规划目录。
-- 每个能力条目都必须同时声明适用场景、不适用场景和约束；网页只读能力还必须保留“可能触发审批”的治理边界。
+- 每个能力条目都必须同时声明适用场景、不适用场景和约束；当前 `page_read / page_search` 对显式 `http(s)` 网页目标默认按低风险只读处理。审批边界仅保留给 `localhost` 风格主机名、单标签主机名、本地域后缀，以及字面量回环 / 私网 / link-local / CGNAT IP 目标；页面交互、导航和跨标签页浏览器动作仍保留审批治理边界。
 
 #### 处理主线
 1. 根据 `Intent` 和 arguments 解析目标工具及目标对象。
@@ -2684,6 +2684,7 @@ sequenceDiagram
 **关键结果**：在执行前形成 `approval_request` 和 `recovery_point`，在执行后形成 `authorization_record` 和 `audit_record`。  
 **异常分支**：执行失败或用户中断时，必须显式回滚或保留可恢复信息。  
 **实现说明**：此链路是治理链的最小闭环，凡是跨工作区、命令执行、联网下载、删除/覆盖等动作，都必须从这里经过。
+补充边界：`agent_loop` 在运行中若某轮工具命中 `approval_required`，也必须立刻把该次真实工具输入回写为 `approval_request / pending_execution`，并把精确 `tool input` 固化到恢复计划中；把任务切回 `waiting_auth`，并且在获批前不得伪造 `delivery_result`。
 
 设计约束：对于 `exec_command` 这类高风险执行，默认应优先进入 Docker Sandbox，并且支持上下文中断后的容器清理；仅在 Windows shell 命令入口上允许走受控宿主路径，其他失败情形不能静默回退到宿主直接执行。
 

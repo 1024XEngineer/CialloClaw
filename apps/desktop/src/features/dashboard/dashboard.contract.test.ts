@@ -380,20 +380,20 @@ function loadNotePageServiceModule(desktopLocalPath?: DashboardContractDesktopLo
       resolveNoteResourceOpenExecutionPlan: (resource: {
         id: string;
         label: string;
-        openAction?: "task_detail" | "open_url" | "open_file" | "reveal_in_folder" | "copy_path" | null;
+        openAction?: "task_detail" | "result_page" | "open_url" | "open_file" | "reveal_in_folder" | "copy_path" | null;
         path: string;
         taskId?: string | null;
         type: string;
         url?: string | null;
       }) => {
-        mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+        mode: "task_detail" | "open_result_page" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
         taskId: string | null;
         path: string | null;
         url: string | null;
         feedback: string;
       };
       performNoteResourceOpenExecution: (plan: {
-        mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+        mode: "task_detail" | "open_result_page" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
         feedback: string;
         path: string | null;
         taskId: string | null;
@@ -401,13 +401,24 @@ function loadNotePageServiceModule(desktopLocalPath?: DashboardContractDesktopLo
       }, options?: {
         onOpenTaskDetail?: (input: {
           plan: {
-            mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+            mode: "task_detail" | "open_result_page" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
             feedback: string;
             path: string | null;
             taskId: string | null;
             url: string | null;
           };
           taskId: string;
+        }) => Promise<string | void> | string | void;
+        onOpenResultPage?: (input: {
+          plan: {
+            mode: "task_detail" | "open_result_page" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+            feedback: string;
+            path: string | null;
+            taskId: string | null;
+            url: string | null;
+          };
+          taskId: string | null;
+          url: string;
         }) => Promise<string | void> | string | void;
       }) => Promise<string>;
     };
@@ -430,6 +441,7 @@ function loadTaskOutputServiceModule(
       openTaskArtifactForTask: (taskId: string, artifactId: string, source: "rpc") => Promise<AgentTaskArtifactOpenResult>;
       openTaskDeliveryForTask: (taskId: string, artifactId: string | undefined, source: "rpc") => Promise<AgentDeliveryOpenResult>;
       shouldAutoOpenTaskDeliveryResult: (deliveryResult: DeliveryResult | null | undefined) => boolean;
+      canOpenTaskDeliveryResult: (deliveryResult: AgentDeliveryOpenResult["delivery_result"] | null | undefined, fallbackTaskId?: string | null) => boolean;
       resolveTaskOpenExecutionPlan: (result: AgentTaskArtifactOpenResult | AgentDeliveryOpenResult) => {
         mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
         taskId: string | null;
@@ -2113,7 +2125,7 @@ test("security board cards keep CJK headlines and status badges readable", () =>
   assert.match(securityAppSource, /className="security-page__status-strip"/);
   assert.match(securityAppSource, /className="security-page__status-badge"/);
   assert.match(securityAppSource, /className="security-page__card-badge"/);
-  assert.match(securityBoardSource, /--security-font-display: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun"/);
+  assert.match(securityBoardSource, /--security-font-display: var\(--cc-font-display\);/);
   assert.match(securityBoardSource, /\.security-page__card-line \{[\s\S]*line-height: 1\.18;/);
   assert.match(securityBoardSource, /\.security-page__card-line \{[\s\S]*overflow-wrap: anywhere;/);
   assert.match(securityBoardSource, /\.security-page__status-badge,[\s\S]*white-space: normal;/);
@@ -2178,7 +2190,7 @@ test("security audit cards and mirror cards stay aligned with the v6 frontend pr
 test("mirror cards use CJK-friendly display typography without clipped line clamps", () => {
   const mirrorStyleSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/mirror.css"), "utf8");
 
-  assert.match(mirrorStyleSource, /--mirror-font-display: "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", "SimSun"/);
+  assert.match(mirrorStyleSource, /--mirror-font-display: var\(--cc-font-display\);/);
   assert.match(mirrorStyleSource, /\.mirror-page__card-line \{[\s\S]*line-height: 1\.28;/);
   assert.match(mirrorStyleSource, /\.mirror-page__card-line \{[\s\S]*padding-bottom: 0\.12em;/);
   assert.match(mirrorStyleSource, /\.mirror-page__card-line--memory \{[\s\S]*word-break: break-word;/);
@@ -4198,8 +4210,8 @@ test("dashboard settings snapshot hydrates runtime defaults before merging scope
       };
     };
 
-    assert.equal(snapshot.settings.general.download.workspace_path, "/runtime/workspace");
-    assert.deepEqual(snapshot.settings.task_automation.task_sources, ["/runtime/workspace/todos"]);
+    assert.equal(snapshot.settings.general.download.workspace_path, "workspace");
+    assert.deepEqual(snapshot.settings.task_automation.task_sources, ["workspace/todos"]);
     assert.equal(snapshot.settings.memory.enabled, false);
     assert.equal(snapshot.settings.memory.lifecycle, "session");
   } finally {
@@ -5876,6 +5888,25 @@ test("task output helpers normalize open actions from existing rpc contracts", a
     },
   );
 
+  assert.equal(
+    outputService.canOpenTaskDeliveryResult({
+      type: "task_detail",
+      title: "Task detail",
+      preview_text: "回到任务详情",
+      payload: { path: "workspace/result.md", url: null, task_id: null },
+    }),
+    false,
+  );
+  assert.equal(
+    outputService.canOpenTaskDeliveryResult({
+      type: "task_detail",
+      title: "Task detail",
+      preview_text: "回到任务详情",
+      payload: { path: null, url: null, task_id: null },
+    }, "task_dashboard_001"),
+    true,
+  );
+
   assert.deepEqual(
     outputService.resolveTaskOpenExecutionPlan({
       open_action: "result_page",
@@ -5957,6 +5988,7 @@ test("task delivery navigation helpers keep dashboard result-page hrefs stable",
   await withDesktopAliasRuntime((requireFn) => {
     const navigationModule = requireFn(resolve(desktopRoot, "src/features/dashboard/tasks/taskDeliveryNavigation.ts")) as {
       isDashboardTaskDeliveryHref: (url: string) => boolean;
+      readDashboardTaskDeliveryTaskId: (url: string) => string | null;
       resolveDashboardTaskDeliveryRouteHref: (taskId: string) => string;
       resolveDashboardTaskDeliveryRoutePath: (taskId: string) => string;
     };
@@ -5973,7 +6005,12 @@ test("task delivery navigation helpers keep dashboard result-page hrefs stable",
       navigationModule.isDashboardTaskDeliveryHref("./dashboard.html#/tasks/delivery/task%20result%2F001"),
       true,
     );
+    assert.equal(
+      navigationModule.readDashboardTaskDeliveryTaskId("./dashboard.html#/tasks/delivery/task%20result%2F001"),
+      "task result/001",
+    );
     assert.equal(navigationModule.isDashboardTaskDeliveryHref("https://example.test/result"), false);
+    assert.equal(navigationModule.readDashboardTaskDeliveryTaskId("https://example.test/result"), null);
   });
 });
 
@@ -6338,6 +6375,52 @@ test("note resource execution delegates task-detail routing through the shared c
   assert.equal(feedback, "已在仪表盘中打开 Task detail。");
 });
 
+test("note result-page execution accepts dashboard delivery hrefs and delegates the in-app callback", async () => {
+  const noteService = loadNotePageServiceModule();
+  const openedTaskIds: string[] = [];
+
+  const feedback = await noteService.performNoteResourceOpenExecution({
+    mode: "open_result_page",
+    feedback: "已打开 Result page。",
+    path: null,
+    taskId: "task_dashboard_001",
+    url: "./dashboard.html#/tasks/delivery/task_dashboard_001",
+  }, {
+    onOpenResultPage: ({ taskId }: { taskId: string | null; url: string; plan: unknown }) => {
+      if (taskId) {
+        openedTaskIds.push(taskId);
+      }
+      return "已在仪表盘中打开结果页。";
+    },
+  });
+
+  assert.deepEqual(openedTaskIds, ["task_dashboard_001"]);
+  assert.equal(feedback, "已在仪表盘中打开结果页。");
+});
+
+test("note result-page execution recovers task ids from dashboard delivery hrefs when payload task_id is missing", async () => {
+  const noteService = loadNotePageServiceModule();
+  const openedTaskIds: string[] = [];
+
+  const feedback = await noteService.performNoteResourceOpenExecution({
+    mode: "open_result_page",
+    feedback: "已打开 Result page。",
+    path: null,
+    taskId: null,
+    url: "./dashboard.html#/tasks/delivery/task_dashboard_002",
+  }, {
+    onOpenResultPage: ({ taskId }: { taskId: string | null; url: string; plan: unknown }) => {
+      if (taskId) {
+        openedTaskIds.push(taskId);
+      }
+      return "已在仪表盘中打开结果页。";
+    },
+  });
+
+  assert.deepEqual(openedTaskIds, ["task_dashboard_002"]);
+  assert.equal(feedback, "已在仪表盘中打开结果页。");
+});
+
 test("task workspace routes formal delivery through a dedicated page and keeps list refresh task-updated aware", () => {
   const dashboardRootSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/DashboardRoot.tsx"), "utf8");
   const tasksPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TasksPage.tsx"), "utf8");
@@ -6353,7 +6436,7 @@ test("task workspace routes formal delivery through a dedicated page and keeps l
   assert.match(taskPageSource, /buildDashboardTaskArtifactQueryKey/);
   assert.match(taskPageSource, /loadTaskArtifactPage/);
   assert.match(taskPageSource, /openTaskArtifactForTask/);
-  assert.match(taskPageSource, /resolveDashboardTaskDeliveryRoutePath/);
+  assert.match(taskPageSource, /navigateToDashboardTaskDelivery/);
   assert.match(taskPageSource, /readDashboardTaskDetailRouteState/);
   assert.match(taskPageSource, /subscribeTaskUpdated\(\(payload\) =>/);
   assert.match(taskPageSource, /subscribeDeliveryReady\(\(payload\) =>/);
@@ -6377,22 +6460,35 @@ test("task workspace routes formal delivery through a dedicated page and keeps l
   assert.match(taskDeliverySource, /subscribeDeliveryReady\(\(payload\) => \{[\s\S]*invalidateCurrentTaskDelivery\(\);/);
   assert.match(taskDeliverySource, /subscribeTaskRuntime\(taskId, \(\) => \{[\s\S]*scheduleTaskDetailRefresh\(\);/);
   assert.match(taskDeliverySource, /const taskDetailArtifacts = useMemo\(\(\) => detailData\?\.detail\.artifacts \?\? \[\], \[detailData\?\.detail\.artifacts\]\);/);
-  assert.match(taskDeliverySource, /const artifactItems = useMemo\(\(\) => \{/);
-  assert.match(taskDeliverySource, /const listedArtifacts = artifactListQuery\.data\?\.items \?\? \[\];/);
-  assert.match(taskDeliverySource, /mergedArtifacts\.push\(artifact\);/);
+  assert.match(taskDeliverySource, /mergeTaskArtifactItems/);
+  assert.match(taskDeliverySource, /const artifactItems = useMemo\([\s\S]*mergeTaskArtifactItems\(artifactListQuery\.data\?\.items \?\? \[\], taskDetailArtifacts\)/);
   assert.doesNotMatch(taskDeliverySource, /const artifactItems = artifactListQuery\.data\?\.items \?\? detailData\?\.detail\.artifacts \?\? \[\];/);
+  assert.match(taskDeliverySource, /canOpenTaskDeliveryResult/);
+  assert.match(taskDeliverySource, /const canOpenFormalDelivery = canOpenTaskDeliveryResult\(formalDeliveryResult, taskId\);/);
+  assert.match(taskDeliverySource, /const plan = resolveTaskOpenExecutionPlan\(result, taskId\);/);
+  assert.match(taskDeliverySource, /getTaskDeliveryOpenLabel/);
   assert.match(taskDeliverySource, /buildDashboardTaskDetailRouteState/);
+  assert.match(taskDeliverySource, /navigateToDashboardTaskDelivery/);
   assert.match(taskDeliverySource, /isAllowedTaskOpenUrl/);
   assert.match(taskDeliverySource, /formalDeliveryUrlIsAllowed/);
   assert.doesNotMatch(taskDeliverySource, /href=\{formalDeliveryResult\.payload\.url\}/);
   assert.match(taskDeliverySource, /当前正式结果已经在交付页中展示/);
+  assert.match(taskDeliverySource, /onOpenTaskDelivery:/);
 
   assert.doesNotMatch(taskDetailSource, /当前协议尚未提供稳定的 artifact\.open 能力/);
   assert.match(taskDetailSource, /onOpenArtifact/);
   assert.match(taskDetailSource, /onOpenLatestDelivery/);
-  assert.match(taskDetailSource, /查看结果页/);
+  assert.match(taskDetailSource, /getTaskDeliveryOpenLabel\(formalDeliveryResult\)/);
+  assert.doesNotMatch(taskDetailSource, /查看结果页/);
   assert.doesNotMatch(taskDetailSource, /文件舱门/);
   assert.match(taskDetailSource, /artifactItems/);
+  assert.match(taskPageSource, /mergeTaskArtifactItems/);
+  assert.match(taskPageSource, /const mergedArtifactItems = useMemo\([\s\S]*mergeTaskArtifactItems\(artifactListQuery\.data\?\.items \?\? \[\], detailData\?\.detail\.artifacts \?\? \[\]\)/);
+  assert.match(taskPageSource, /openTaskDeliveryForTask/);
+  assert.match(taskPageSource, /const deliveryOpenMutation = useMutation\(/);
+  assert.match(taskPageSource, /canOpenTaskDeliveryResult/);
+  assert.match(taskPageSource, /if \(!canOpenTaskDeliveryResult\(detailData\?\.detail\.delivery_result \?\? null, selectedTaskControlTargetId\)\) \{/);
+  assert.match(taskPageSource, /deliveryOpenMutation\.mutate\(\{ taskId: selectedTaskControlTargetId \}\);/);
 
   assert.match(taskDeliveryNavigationSource, /dashboardTaskDeliveryRoutePattern = "delivery\/:taskId"/);
   assert.match(taskDeliveryNavigationSource, /encodeURIComponent\(taskId\)/);
@@ -9664,15 +9760,20 @@ test("note conversion only auto-opens formal deliveries that have a real open ta
   assert.doesNotMatch(notePageSource, /if \(outcome\.result\.delivery_result\) \{/);
 });
 
-test("TaskDetailPanel renders runtime summary fields from the formal detail payload", () => {
+test("TaskDetailPanel folds loop summary signals into the runtime events section", () => {
   const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
 
-  assert.match(panelSource, /Runtime Summary/);
-  assert.match(panelSource, /循环停止原因与调试概览/);
-  assert.match(panelSource, /runtimeSummary\.loop_stop_reason \?\? "当前还没有停止原因"/);
-  assert.match(panelSource, /runtimeSummary\.latest_event_type \?\? "当前还没有 runtime event"/);
+  assert.match(panelSource, /Loop Signals/);
+  assert.match(panelSource, /循环事件与停止信号/);
+  assert.match(panelSource, /runtimeSummary\.latest_event_type \?\? ""\)\.trim\(\)\.startsWith\("loop\."\)/);
+  assert.match(panelSource, /runtimeSummary\.active_steering_count > 0/);
+  assert.match(panelSource, /if \(!runtimeSummary \|\| !hasRuntimeSummarySignals\) \{/);
+  assert.match(panelSource, /<h3 className="task-detail-card__title">执行事件与循环回流<\/h3>[\s\S]*\{renderRuntimeSummarySection\(\)\}/);
+  assert.match(panelSource, /runtimeSummary\.loop_stop_reason \?\? "当前未返回停止原因"/);
+  assert.match(panelSource, /runtimeSummary\.latest_event_type \?\? "当前未返回 runtime event"/);
   assert.match(panelSource, /runtimeSummary\.events_count/);
   assert.match(panelSource, /runtimeSummary\.active_steering_count/);
+  assert.doesNotMatch(panelSource, /循环停止原因与调试概览/);
 });
 
 test("TaskDetailPanel keeps evidence artifacts scoped to formal citation links", () => {
@@ -9682,16 +9783,36 @@ test("TaskDetailPanel keeps evidence artifacts scoped to formal citation links",
   assert.match(panelSource, /const evidenceArtifacts = artifactItems\.filter\(\(artifact\) => evidenceArtifactRefs\.has\(artifact\.artifact_id\) \|\| evidenceArtifactRefs\.has\(artifact\.path\)\)/);
   assert.match(panelSource, /const outputArtifacts = artifactItems\.filter\(\(artifact\) => !evidenceArtifactRefs\.has\(artifact\.artifact_id\) && !evidenceArtifactRefs\.has\(artifact\.path\)\)/);
   assert.match(panelSource, /const formalEvidenceCount = new Set\(/);
+  assert.match(panelSource, /const hasEvidenceContent = evidenceItems\.length > 0 \|\| evidenceArtifacts\.length > 0;/);
+  assert.match(panelSource, /if \(!isScreenTask \|\| detail === null \|\| !hasEvidenceContent\) \{/);
+  assert.match(panelSource, /该区域只在屏幕类任务中展示正式截图、OCR 摘要与引用片段。/);
   assert.match(panelSource, /return sourceRef\.length > 0 \? sourceRef : citation\.citation_id/);
-  assert.doesNotMatch(panelSource, /artifactItems\.map\(\(artifact\) => \(/);
+  assert.match(panelSource, /evidenceArtifacts\.map\(\(artifact\) => \(/);
+  assert.match(panelSource, /outputArtifacts\.map\(\(artifact\) => \(/);
+  assert.doesNotMatch(panelSource, /当前没有可展示的正式证据链/);
 });
 
-test("TaskDetailPanel separates formal delivery from structured evidence metadata", () => {
+test("TaskDetailPanel renders formal delivery as a first-class output entry", () => {
   const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
 
   assert.match(panelSource, /const formalDeliveryResult = detail\?\.delivery_result \?\? null;/);
-  assert.match(panelSource, /Formal Delivery/);
-  assert.match(panelSource, /该区域只消费正式 `delivery_result`/);
+  assert.match(panelSource, /const formalDeliveryPath = formalDeliveryResult\?\.payload\.path\?\.trim\(\) \?\? "";/);
+  assert.match(panelSource, /const formalDeliveryDuplicatesArtifact = Boolean\(/);
+  assert.match(panelSource, /formalDeliveryResult\.type === "workspace_document" \|\| formalDeliveryResult\.type === "open_file" \|\| formalDeliveryResult\.type === "reveal_in_folder"/);
+  assert.match(panelSource, /outputArtifacts\.some\(\(artifact\) => artifact\.path\.trim\(\) === formalDeliveryPath\)/);
+  assert.match(panelSource, /const hasFormalOutput = formalDeliveryResult !== null && !formalDeliveryDuplicatesArtifact;/);
+  assert.match(panelSource, /const canOpenFallbackDelivery = canOpenTaskDeliveryResult\(detailData\?\.detail\.delivery_result \?\? null, task\?\.task_id \?\? null\);/);
+  assert.match(panelSource, /const hasOutputContent = hasFormalOutput \|\| hasOutputArtifacts;/);
+  assert.match(panelSource, /canOpenTaskDeliveryResult/);
+  assert.match(panelSource, /getTaskDeliveryOpenLabel\(formalDeliveryResult\)/);
+  assert.match(panelSource, /\{hasFormalOutput && formalDeliveryResult \? \(/);
+  assert.match(panelSource, /task-detail-output-item--bubble/);
+  assert.match(panelSource, /task-detail-output-item__bubble-copy/);
+  assert.match(panelSource, /const shouldHideEndedResultCopy = ended && isInlineBubbleOutput && !hasOutputArtifacts;/);
+  assert.match(panelSource, /\{canOpenFallbackDelivery \? \(/);
+  assert.match(panelSource, /当前没有可直接打开的产出内容。/);
+  assert.doesNotMatch(panelSource, /Formal Delivery/);
+  assert.doesNotMatch(panelSource, /该区域只消费正式 `delivery_result`/);
   assert.match(panelSource, /citation\.evidence_role/);
   assert.match(panelSource, /citation\.artifact_type/);
   assert.match(panelSource, /citation\.excerpt_text/);
@@ -9721,12 +9842,14 @@ test("TaskDetailPanel keeps runtime sections visible for ended tasks and clears 
   assert.match(panelSource, /steeringSuccessVersion: number/);
   assert.match(panelSource, /if \(steeringPending \|\| steeringSuccessVersion === 0\)/);
   assert.doesNotMatch(panelSource, /handleSubmitSteering\(\)[\s\S]*setSteeringMessage\(""\)/);
-  assert.match(panelSource, /\{renderRuntimeSummarySection\(\)\}/);
+  assert.match(panelSource, /const hasRuntimeProcessContent = hasRuntimeSummarySignals \|\| eventItems\.length > 0 \|\| eventLoading \|\| eventErrorMessage !== null;/);
+  assert.match(panelSource, /if \(detail === null \|\| !hasRuntimeProcessContent\) \{/);
+  assert.match(panelSource, /<h3 className="task-detail-card__title">执行事件与循环回流<\/h3>[\s\S]*\{renderRuntimeSummarySection\(\)\}/);
   assert.match(panelSource, /\{renderRuntimeEventsSection\(\)\}/);
   assert.match(taskPageSource, /const \[steeringSuccessVersion, setSteeringSuccessVersion\] = useState\(0\);/);
   assert.match(taskPageSource, /setSteeringSuccessVersion\(\(current\) => current \+ 1\);/);
   assert.match(taskPageSource, /steeringSuccessVersion=\{steeringSuccessVersion\}/);
-  assert.match(taskPageSource, /invalidateTaskRuntimeQueries\(selectedTaskId\)/);
+  assert.match(taskPageSource, /deliveryActionPending=\{deliveryOpenMutation\.isPending\}/);
 });
 
 test("TaskDetailPanel exposes formal runtime event filters and applies them explicitly", () => {

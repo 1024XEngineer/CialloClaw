@@ -99,6 +99,57 @@ func TestRunMergesSteeringMessagesIntoLaterPlannerRounds(t *testing.T) {
 	}
 }
 
+func TestRunStopsWhenToolRequiresAuthorization(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	request.ToolDefinitions = []model.ToolDefinition{{Name: "page_read"}}
+	request.GenerateToolCalls = func(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+		return model.ToolCallResult{
+			RequestID: "req_auth_tool",
+			Provider:  "openai_responses",
+			ModelID:   "gpt-5.4",
+			ToolCalls: []model.ToolInvocation{{Name: "page_read", Arguments: map[string]any{"url": "https://example.com"}}},
+		}, nil
+	}
+	approvalCode := tools.ToolErrorCodeApprovalRequired
+	request.ExecuteTool = func(_ context.Context, call model.ToolInvocation, _ int) (string, tools.ToolCallRecord) {
+		return "Tool page_read failed with error: approval required", tools.ToolCallRecord{
+			ToolCallID: "tool_call_auth",
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			ToolName:   call.Name,
+			Status:     tools.ToolCallStatusFailed,
+			Input:      cloneMap(call.Arguments),
+			Output: map[string]any{
+				"approval_required": true,
+				"risk_level":        tools.RiskLevelYellow,
+				"reason":            "webpage_requires_approval",
+			},
+			ErrorCode: &approvalCode,
+		}
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected agent loop request to be handled")
+	}
+	if result.StopReason != StopReasonNeedAuthorization {
+		t.Fatalf("expected need_authorization stop reason, got %s", result.StopReason)
+	}
+	if len(result.ToolCalls) != 1 || result.ToolCalls[0].ToolName != "page_read" {
+		t.Fatalf("expected approval-blocked tool call to be preserved, got %+v", result.ToolCalls)
+	}
+	if len(result.Rounds) != 1 || result.Rounds[0].StopReason != StopReasonNeedAuthorization {
+		t.Fatalf("expected round to stop for authorization, got %+v", result.Rounds)
+	}
+	if !hasEventType(result.Events, "loop.round.completed") {
+		t.Fatalf("expected loop.round.completed event, got %+v", result.Events)
+	}
+}
+
 func TestRunCompactsHistoryBeforeLaterPlannerRounds(t *testing.T) {
 	runtime := NewRuntime()
 	plannerInputs := []string{}

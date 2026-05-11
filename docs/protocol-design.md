@@ -229,7 +229,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 ### 5.1 任务状态 `task_status`
 
 - `processing`：任务正在执行。
-- `waiting_auth`：命中高风险动作，等待授权。
+- `waiting_auth`：命中高风险动作，等待授权；既包括执行前的治理预检，也包括 `agent_loop` 在运行中选中具体工具后触发的正式授权暂停。
 - `waiting_input`：等待用户补充必要输入。
 - `confirming_intent`：系统已识别出候选意图，等待用户确认或纠偏。
 - `paused`：任务被用户或系统主动暂停。
@@ -936,16 +936,18 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
   - 用户认为系统猜错时，提交修正后的意图
 - **系统处理**：
   - 采纳确认结果
-  - 更新任务意图
-  - 推进到正式执行阶段
-- **入参**：任务 ID、是否确认、修正后的意图
-- **出参**：更新后的任务对象、状态气泡
+  - 更新任务意图，或基于自然语言纠偏在同一任务上重推并继续执行
+  - 仅在显式确认通过、或调用方提供 `corrected_intent / correction_text` 这类足以落到同一任务执行意图的纠偏信息时推进到正式执行阶段
+- **入参**：任务 ID、是否确认、修正后的正式意图或自然语言纠偏文本
+- **出参**：更新后的任务对象、状态气泡，必要时附带正式交付结果
 
 补充约束：
 
-- `confirmed = true` 时，表示用户确认系统当前猜测的意图正确，此时 `corrected_content` 可省略；若传入也应被忽略，不得覆盖当前意图。
-- `confirmed = false` 时，若调用方传入完整的 `corrected_content`，后端以该对象覆盖任务当前意图后再推进执行。
-- `confirmed = false` 且未传入 `corrected_content` 时，后端不得直接取消任务；应保留任务在 `corrected_content`，并返回要求用户重新说明目标或补充修正意图的状态气泡。
+- `confirmed = true` 时，表示用户确认系统当前猜测的意图正确，此时不得再传入 `corrected_intent` 或 `correction_text`。
+- `confirmed = false` 时，`corrected_intent` 与 `correction_text` 互斥：前者表示调用方已经持有完整正式意图对象，后者表示用户输入了自然语言纠偏文本。
+- `confirmed = false` 且传入完整 `corrected_intent` 时，后端以该对象覆盖任务当前意图后再推进执行。
+- `confirmed = false` 且传入 `correction_text` 时，后端必须基于原 task 已绑定的正式上下文快照重新推断意图，并在同一 `task_id` 上直接继续后续执行链；不得新建 task，也不得再额外插入一次新的 intent 确认门。
+- `confirmed = false` 且未传入 `corrected_intent / correction_text` 时，后端不得直接取消任务；应保留任务在确认阶段，并返回要求用户重新说明目标或补充修正意图的状态气泡。
 - 本接口只处理“意图确认 / 纠偏”这一承接阶段，不替代 `agent.task.control` 的暂停、继续、取消、重启控制语义。
 
 ### agent.task.confirm 入参说明
@@ -956,7 +958,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `request_meta.client_time`   | 前端发起时间         |
 | `task_id`                    | 目标任务 ID          |
 | `confirmed`                  | 是否确认系统猜测正确 |
-| `corrected_content`      | 修正后的用户想法     |
+| `corrected_intent`      | 修正后的正式意图对象     |
+| `correction_text`      | 用户输入的自然语言纠偏文本 |
 
 ### agent.task.confirm 入参示例
 
@@ -972,8 +975,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
     },
     "task_id": "task_101",
     "confirmed": false,
-    "corrected_content": "修正后的用户想法"
-    }
+    "correction_text": "不是总结，改成提取 action items"
   }
 }
 ```
@@ -984,9 +986,13 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | --------------------- | ---------------- |
 | `data.task.task_id`   | 任务 ID          |
 | `data.task.status`    | 更新后的任务状态 |
-| `data.task.corrected_content`    | 生效后的任务意图 |
+| `data.task.intent`    | 生效后的任务意图 |
 | `data.task.current_step` | 当前步骤      |
 | `data.bubble_message` | 状态提示气泡     |
+
+补充约束：
+
+- 只有任务仍停留在确认阶段时，`data.bubble_message.type` 才应为 `intent_confirm`；自然语言纠偏若已继续执行，则应返回与执行结果一致的正式状态气泡或授权等待气泡，而不是再次回到确认气泡。
 
 ### agent.task.confirm 出参示例
 
@@ -998,15 +1004,25 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
     "data": {
       "task": {
         "task_id": "task_101",
-        "status": "processing",
-        "corrected_content": "修正后的用户想法",
-        "current_step": "generate_output"
+        "status": "completed",
+        "intent": {
+          "name": "extract_action_items",
+          "arguments": {
+            "goal": "提取 action items"
+          }
+        },
+        "current_step": "completed"
       },
       "bubble_message": {
         "bubble_id": "bubble_102",
         "task_id": "task_101",
         "type": "status",
-        "text": "已按新的要求开始处理"
+        "text": "已根据修正后的目标继续执行当前任务。"
+      },
+      "delivery_result": {
+        "type": "task_detail",
+        "title": "Task detail",
+        "preview_text": "可查看提取后的 action items 结果。"
       }
     },
     "meta": {
@@ -4350,7 +4366,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - `task.updated`：任务主状态或关键摘要变化；通知参数至少包含 `task_id`、`session_id`、`status`
 - `delivery.ready`：正式交付已可被前端承接
-- `approval.pending`：出现待授权动作
+- `approval.pending`：出现待授权动作；既可来自执行前治理预检，也可来自 `agent_loop` 运行中命中的具体工具调用
 - `task.steered`：运行中补充要求已经写入任务链
 - `task.session_queued`：同一 `session` 下的新任务进入串行等待
 - `task.session_resumed`：队列中的任务重新恢复执行
