@@ -179,6 +179,13 @@ func deriveTaskDetailSecurityStatus(task runengine.TaskRecord, approvalRequest, 
 	if normalizeTaskDetailAuthorizationDecision(stringValue(authorizationRecord, "decision", "")) == "deny_once" {
 		return "intercepted"
 	}
+	// Preflight governance denials do not create an authorization record. When a
+	// historical task detail loses its stored security_summary, the denied audit
+	// anchor is the only formal signal that the task was intercepted by policy.
+	if strings.TrimSpace(stringValue(auditRecord, "action", "")) == "intercept_operation" &&
+		strings.TrimSpace(stringValue(auditRecord, "result", "")) == "denied" {
+		return "intercepted"
+	}
 	if strings.TrimSpace(stringValue(auditRecord, "action", "")) == "restore_apply" {
 		switch strings.TrimSpace(stringValue(auditRecord, "result", "")) {
 		case "success":

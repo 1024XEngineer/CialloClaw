@@ -14,7 +14,9 @@ func SanitizeContextURL(raw string) string {
 	}
 	parsed, err := url.Parse(trimmed)
 	if err != nil {
-		return trimmed
+		// Parsing failures must not fall back to the original value because malformed
+		// URLs can still embed credentials or query text that should never persist.
+		return ""
 	}
 	parsed.User = nil
 	parsed.RawQuery = ""

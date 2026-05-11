@@ -15,3 +15,10 @@ func TestSanitizeContextURLKeepsLocalSchemesStable(t *testing.T) {
 		t.Fatalf("expected local scheme to drop query and fragment, got %q", got)
 	}
 }
+
+func TestSanitizeContextURLDropsMalformedInputsInsteadOfPersistingThemVerbatim(t *testing.T) {
+	got := SanitizeContextURL(" https://user:pass@example.com/%zz?token=secret ")
+	if got != "" {
+		t.Fatalf("expected malformed url to be dropped, got %q", got)
+	}
+}

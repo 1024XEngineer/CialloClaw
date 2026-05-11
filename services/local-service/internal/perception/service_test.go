@@ -53,6 +53,17 @@ func TestCaptureContextSignalsNormalizesNestedSignals(t *testing.T) {
 	}
 }
 
+func TestCaptureContextSignalsDropsMalformedPageURLFromPersistedSignals(t *testing.T) {
+	snapshot := CaptureContextSignals("floating_ball", "hover", map[string]any{
+		"page": map[string]any{
+			"url": "https://user:pass@example.com/%zz?token=secret",
+		},
+	})
+	if snapshot.PageURL != "" {
+		t.Fatalf("expected malformed page url to be dropped, got %+v", snapshot)
+	}
+}
+
 func TestBehaviorSignalsAndOpportunitiesReflectPerceptionContext(t *testing.T) {
 	snapshot := SignalSnapshot{
 		Source:            "floating_ball",
