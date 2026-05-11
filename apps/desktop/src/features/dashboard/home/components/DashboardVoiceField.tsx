@@ -53,7 +53,7 @@ function getDashboardVoiceStatusLabel(stage: DashboardVoiceStage, taskStatus: Ta
 
   switch (taskStatus) {
     case "confirming_intent":
-      return "已进入意图确认";
+      return "正在等待确认处理方式";
     case "waiting_auth":
       return "已进入授权确认";
     case "waiting_input":
@@ -403,12 +403,6 @@ export function DashboardVoiceField({ isOpen, onClose, onRecommendationConfirm, 
   }, [isOpen]);
 
   function handlePanelKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
-    if (event.key === "Escape") {
-      event.preventDefault();
-      handleClose();
-      return;
-    }
-
     if (event.key !== "Tab") {
       return;
     }

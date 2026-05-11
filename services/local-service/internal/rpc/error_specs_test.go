@@ -59,3 +59,35 @@ func TestRPCErrorFromOrchestratorErrorFallsBackToInvalidParams(t *testing.T) {
 		t.Fatalf("fallback rpc error = code:%d message:%s trace:%s", got.Code, got.Message, got.TraceID)
 	}
 }
+
+func TestWrapOrchestratorResultMapsStructuredErrors(t *testing.T) {
+	tests := []struct {
+		name        string
+		err         error
+		wantCode    int
+		wantMessage string
+	}{
+		{name: "artifact not found", err: orchestrator.ErrArtifactNotFound, wantCode: 1005002, wantMessage: "ARTIFACT_NOT_FOUND"},
+		{name: "storage query failed", err: orchestrator.ErrStorageQueryFailed, wantCode: 1005001, wantMessage: "SQLITE_WRITE_FAILED"},
+		{name: "wrapped structured store", err: fmt.Errorf("settings snapshot write failed: %w", storage.ErrStructuredStoreUnavailable), wantCode: 1005001, wantMessage: "SQLITE_WRITE_FAILED"},
+		{name: "recovery point not found", err: orchestrator.ErrRecoveryPointNotFound, wantCode: 1005006, wantMessage: "RECOVERY_POINT_NOT_FOUND"},
+		{name: "stronghold access failed", err: orchestrator.ErrStrongholdAccessFailed, wantCode: 1005004, wantMessage: "STRONGHOLD_ACCESS_FAILED"},
+		{name: "model provider unsupported", err: model.ErrModelProviderUnsupported, wantCode: 1008001, wantMessage: "MODEL_PROVIDER_NOT_FOUND"},
+		{name: "model configuration invalid", err: model.ErrOpenAIEndpointRequired, wantCode: 1008002, wantMessage: "MODEL_NOT_ALLOWED"},
+		{name: "model runtime unavailable", err: model.ErrOpenAIRequestTimeout, wantCode: 1008003, wantMessage: "MODEL_RUNTIME_UNAVAILABLE"},
+		{name: "provider 5xx", err: &model.OpenAIHTTPStatusError{StatusCode: 503, Message: "upstream unavailable"}, wantCode: 1008003, wantMessage: "MODEL_RUNTIME_UNAVAILABLE"},
+		{name: "tool output invalid", err: tools.ErrToolOutputInvalid, wantCode: 1003004, wantMessage: "TOOL_OUTPUT_INVALID"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, rpcErr := wrapOrchestratorResult(nil, test.err)
+			if rpcErr == nil {
+				t.Fatal("expected rpc error")
+			}
+			if rpcErr.Code != test.wantCode || rpcErr.Message != test.wantMessage {
+				t.Fatalf("rpc error = code:%d message:%s, want code:%d message:%s", rpcErr.Code, rpcErr.Message, test.wantCode, test.wantMessage)
+			}
+		})
+	}
+}

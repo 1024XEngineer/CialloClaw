@@ -229,7 +229,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 ### 5.1 任务状态 `task_status`
 
 - `processing`：任务正在执行。
-- `waiting_auth`：命中高风险动作，等待授权。
+- `waiting_auth`：命中高风险动作，等待授权；既包括执行前的治理预检，也包括 `agent_loop` 在运行中选中具体工具后触发的正式授权暂停。
 - `waiting_input`：等待用户补充必要输入。
 - `confirming_intent`：系统已识别出候选意图，等待用户确认或纠偏。
 - `paused`：任务被用户或系统主动暂停。
@@ -270,7 +270,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - `bubble`：气泡轻量交付。
 - `workspace_document`：写入工作区文档。
-- `result_page`：结果页交付。
+- `result_page`：结果页交付；正式载荷应通过 `payload.url` 指向结果页入口，`payload.path` 保持为空。
 - `open_file`：直接打开文件。
 - `reveal_in_folder`：打开文件夹并高亮文件。
 - `task_detail`：跳转任务详情。
@@ -936,16 +936,18 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
   - 用户认为系统猜错时，提交修正后的意图
 - **系统处理**：
   - 采纳确认结果
-  - 更新任务意图
-  - 推进到正式执行阶段
-- **入参**：任务 ID、是否确认、修正后的意图
-- **出参**：更新后的任务对象、状态气泡
+  - 更新任务意图，或基于自然语言纠偏在同一任务上重推并继续执行
+  - 仅在显式确认通过、或调用方提供 `corrected_intent / correction_text` 这类足以落到同一任务执行意图的纠偏信息时推进到正式执行阶段
+- **入参**：任务 ID、是否确认、修正后的正式意图或自然语言纠偏文本
+- **出参**：更新后的任务对象、状态气泡，必要时附带正式交付结果
 
 补充约束：
 
-- `confirmed = true` 时，表示用户确认系统当前猜测的意图正确，此时 `corrected_content` 可省略；若传入也应被忽略，不得覆盖当前意图。
-- `confirmed = false` 时，若调用方传入完整的 `corrected_content`，后端以该对象覆盖任务当前意图后再推进执行。
-- `confirmed = false` 且未传入 `corrected_content` 时，后端不得直接取消任务；应保留任务在 `corrected_content`，并返回要求用户重新说明目标或补充修正意图的状态气泡。
+- `confirmed = true` 时，表示用户确认系统当前猜测的意图正确，此时不得再传入 `corrected_intent` 或 `correction_text`。
+- `confirmed = false` 时，`corrected_intent` 与 `correction_text` 互斥：前者表示调用方已经持有完整正式意图对象，后者表示用户输入了自然语言纠偏文本。
+- `confirmed = false` 且传入完整 `corrected_intent` 时，后端以该对象覆盖任务当前意图后再推进执行。
+- `confirmed = false` 且传入 `correction_text` 时，后端必须基于原 task 已绑定的正式上下文快照重新推断意图，并在同一 `task_id` 上直接继续后续执行链；不得新建 task，也不得再额外插入一次新的 intent 确认门。
+- `confirmed = false` 且未传入 `corrected_intent / correction_text` 时，后端不得直接取消任务；应保留任务在确认阶段，并返回要求用户重新说明目标或补充修正意图的状态气泡。
 - 本接口只处理“意图确认 / 纠偏”这一承接阶段，不替代 `agent.task.control` 的暂停、继续、取消、重启控制语义。
 
 ### agent.task.confirm 入参说明
@@ -956,7 +958,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `request_meta.client_time`   | 前端发起时间         |
 | `task_id`                    | 目标任务 ID          |
 | `confirmed`                  | 是否确认系统猜测正确 |
-| `corrected_content`      | 修正后的用户想法     |
+| `corrected_intent`      | 修正后的正式意图对象     |
+| `correction_text`      | 用户输入的自然语言纠偏文本 |
 
 ### agent.task.confirm 入参示例
 
@@ -972,8 +975,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
     },
     "task_id": "task_101",
     "confirmed": false,
-    "corrected_content": "修正后的用户想法"
-    }
+    "correction_text": "不是总结，改成提取 action items"
   }
 }
 ```
@@ -984,9 +986,13 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | --------------------- | ---------------- |
 | `data.task.task_id`   | 任务 ID          |
 | `data.task.status`    | 更新后的任务状态 |
-| `data.task.corrected_content`    | 生效后的任务意图 |
+| `data.task.intent`    | 生效后的任务意图 |
 | `data.task.current_step` | 当前步骤      |
 | `data.bubble_message` | 状态提示气泡     |
+
+补充约束：
+
+- 只有任务仍停留在确认阶段时，`data.bubble_message.type` 才应为 `intent_confirm`；自然语言纠偏若已继续执行，则应返回与执行结果一致的正式状态气泡或授权等待气泡，而不是再次回到确认气泡。
 
 ### agent.task.confirm 出参示例
 
@@ -998,15 +1004,25 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
     "data": {
       "task": {
         "task_id": "task_101",
-        "status": "processing",
-        "corrected_content": "修正后的用户想法",
-        "current_step": "generate_output"
+        "status": "completed",
+        "intent": {
+          "name": "extract_action_items",
+          "arguments": {
+            "goal": "提取 action items"
+          }
+        },
+        "current_step": "completed"
       },
       "bubble_message": {
         "bubble_id": "bubble_102",
         "task_id": "task_101",
         "type": "status",
-        "text": "已按新的要求开始处理"
+        "text": "已根据修正后的目标继续执行当前任务。"
+      },
+      "delivery_result": {
+        "type": "task_detail",
+        "title": "Task detail",
+        "preview_text": "可查看提取后的 action items 结果。"
       }
     },
     "meta": {
@@ -1193,6 +1209,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - **系统处理**：
   - 若携带 `artifact_id`，优先基于真实 artifact 解析打开动作
   - 若未携带 `artifact_id`，则基于任务当前 `delivery_result` 解析打开动作
+  - 当 `delivery_result.type = result_page` 时，`open_action` 仍为 `result_page`，且 `resolved_payload.url` 必须回落到稳定结果页入口
   - 返回统一的 `delivery_result`、`open_action`、`resolved_payload`
 - **入参**：任务 ID，可选产物 ID
 - **出参**：交付结果、打开动作、解析后的载荷，按需附带产物对象
@@ -1227,7 +1244,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | ----------------------- | ---------------- |
 | `data.delivery_result`  | 主交付对象       |
 | `data.open_action`      | 最终打开动作     |
-| `data.resolved_payload` | 解析后的打开载荷 |
+| `data.resolved_payload` | 解析后的打开载荷；可包含 `path` 或 `url` |
 | `data.artifact`         | 命中的产物对象   |
 
 ### agent.delivery.open 出参示例
@@ -1239,17 +1256,20 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
   "result": {
     "data": {
       "delivery_result": {
-        "type": "workspace_document",
-        "title": "处理结果",
+        "type": "result_page",
+        "title": "网页读取结果",
         "payload": {
-          "path": "D:/CialloClawWorkspace/Q3复盘.md",
-          "task_id": "task_201"
+          "path": null,
+          "task_id": "task_201",
+          "url": "./dashboard.html#/tasks/delivery/task_201"
         },
-        "preview_text": "已为你写入文档并打开"
+        "preview_text": "结果已生成，正在打开结果页"
       },
-      "open_action": "open_file",
+      "open_action": "result_page",
       "resolved_payload": {
-        "path": "D:/CialloClawWorkspace/Q3复盘.md"
+        "path": null,
+        "task_id": "task_201",
+        "url": "./dashboard.html#/tasks/delivery/task_201"
       },
       "artifact": null
     },
@@ -2429,7 +2449,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `data.items[].effective_scope`        | 生效范围                 |
 | `data.items[].ended_at`               | 结束时间                 |
 | `data.items[].linked_task_id`         | 已转正式任务后的 task ID |
-| `data.items[].related_resources`      | 相关资料列表             |
+| `data.items[].related_resources`      | 相关资料列表；显式文件资源仅在路径位于当前 workspace 内且真实指向文件时进入执行上下文，目录仅保留为展示与打开上下文 |
 | `data.page`                           | 分页信息                 |
 
 ### agent.notepad.list 出参示例
@@ -2573,9 +2593,9 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户点击“交给 Agent 处理”时
-- **系统处理**：将事项转成任务，并保留来源关系
+- **系统处理**：将事项按 `note_text / title` 升级为正式任务，并复用普通 free-text 任务入口的意图与执行语义；对带有 provenance 的当前事项，用户显式填写的 `note_text` 优先进入正式任务文本输入，title-only 事项回退到原始 `title`，不会把展示态补写文案当成正式执行输入；对于缺少 `note_text_origin` 的 legacy 持久化行，只要已存 `note_text` 非空，运行时会保守地继续按用户正文处理，避免在重载后静默丢掉真实输入；用户显式关联且位于当前 workspace 内的文件型 `related_resources` 会进入正式任务文件上下文，并统一投影为 `workspace/...` 形式，目录资源、系统派生的默认目录和 workspace 外路径都只保留为来源事项的展示与打开上下文；若自由文本推断已足够明确，任务可直接进入执行并返回 `delivery_result`。一旦这条任务已经通过 shared stream 对外发布 `task_id`，后续启动阶段失败会保留该任务并收口为 `failed`，同时保留来源事项上的 `linked_task_id`，而不是回滚删除已经可见的任务或静默断开关联。
 - **入参**：事项 ID、确认标记
-- **出参**：新任务对象、更新后的来源事项、建议刷新的事项分组
+- **出参**：主任务入口返回对象、更新后的来源事项、建议刷新的事项分组
 
 ### agent.notepad.convert_to_task 入参说明
 
@@ -2609,13 +2629,17 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `data.task.task_id`          | 新任务 ID                       |
 | `data.task.title`            | 任务标题                        |
 | `data.task.source_type`      | 来源类型，通常为 `todo`         |
-| `data.task.status`           | 初始任务状态                    |
+| `data.task.status`           | 复用主链路后的当前任务状态      |
+| `data.bubble_message`        | 主链路即时反馈气泡              |
+| `data.delivery_result`       | Inline 完成时的正式交付结果     |
 | `data.notepad_item.item_id`  | 来源事项 ID                     |
 | `data.notepad_item.bucket`   | 来源事项仍所在的 bucket         |
 | `data.notepad_item.linked_task_id` | 来源事项关联的新 task ID |
 | `data.refresh_groups`        | 建议前端重新拉取的事项分组列表  |
 
 ### agent.notepad.convert_to_task 出参示例
+
+以下示例展示一条直接执行分支响应：事项升级为正式任务后，沿 free-text 主链路直接完成处理并返回正式交付结果。若意图后续需要补充或纠偏，仍可能进入确认分支。
 
 ```json
 {
@@ -2625,9 +2649,22 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
     "data": {
       "task": {
         "task_id": "task_401",
-        "title": "整理 Q3 复盘要点",
+        "title": "处理：整理 Q3 复盘要点",
         "source_type": "todo",
-        "status": "confirming_intent"
+        "status": "completed",
+        "current_step": "return_result"
+      },
+      "bubble_message": {
+        "type": "result",
+        "text": "结果已经生成，可直接查看。"
+      },
+      "delivery_result": {
+        "type": "workspace_document",
+        "title": "处理结果",
+        "preview_text": "已生成正式文档，可继续打开查看。",
+        "payload": {
+          "path": "workspace/tasks/task_401/result.md"
+        }
       },
       "notepad_item": {
         "item_id": "todo_001",
@@ -4329,7 +4366,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - `task.updated`：任务主状态或关键摘要变化；通知参数至少包含 `task_id`、`session_id`、`status`
 - `delivery.ready`：正式交付已可被前端承接
-- `approval.pending`：出现待授权动作
+- `approval.pending`：出现待授权动作；既可来自执行前治理预检，也可来自 `agent_loop` 运行中命中的具体工具调用
 - `task.steered`：运行中补充要求已经写入任务链
 - `task.session_queued`：同一 `session` 下的新任务进入串行等待
 - `task.session_resumed`：队列中的任务重新恢复执行

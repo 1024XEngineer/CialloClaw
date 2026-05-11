@@ -1454,7 +1454,7 @@ test("shell-ball helper window sync maps visual states into visibility and snaps
 
   assert.deepEqual(getShellBallHelperWindowVisibility("idle"), {
     bubble: false,
-    input: false,
+    input: true,
     voice: false,
   });
 
@@ -4606,7 +4606,7 @@ test("shell-ball input bar removes keyboard focus stops outside interactive mode
   assert.match(voiceMarkup, /tabindex="-1"/i);
 });
 
-test("shell-ball input bar uses a resizable textarea for focused draft editing", () => {
+test("shell-ball input bar renders the floating textarea shell", () => {
   const interactiveMarkup = renderToStaticMarkup(
     createElement(ShellBallInputBar, {
       mode: "interactive",
@@ -4622,18 +4622,13 @@ test("shell-ball input bar uses a resizable textarea for focused draft editing",
   const shellBallStyles = readFileSync(resolve(desktopRoot, "src/features/shell-ball/shellBall.css"), "utf8");
 
   assert.match(interactiveMarkup, /<textarea/);
-  assert.match(interactiveMarkup, /shell-ball-input-bar__resize-handle/);
+  assert.match(interactiveMarkup, /shell-ball-uiverse-placeholder/);
   assert.match(inputBarSource, /if \(event\.key !== "Enter" \|\| event\.shiftKey \|\| submitDisabled\) \{/);
-  assert.match(inputBarSource, /focusShellBallInputField\(inputRef\.current\);/);
-  assert.match(inputBarSource, /const restingWidth = measureShellBallInputRestingWidth\(field\);/);
-  assert.doesNotMatch(inputBarSource, /defaultFieldWidthRef/);
-  assert.match(inputBarSource, /!isInteractive \? null : \(/);
-  assert.doesNotMatch(inputBarSource, /inputRef\.current\.select\(\)/);
-  assert.match(shellBallStyles, /\.shell-ball-input-bar__resize-handle \{[\s\S]*cursor:\s*nwse-resize;/);
-  assert.match(shellBallStyles, /\.shell-ball-input-bar__field \{[\s\S]*overflow-y:\s*hidden;/);
-  assert.match(shellBallStyles, /\.shell-ball-input-bar__field::-webkit-scrollbar-thumb \{/);
-  assert.match(shellBallStyles, /\.shell-ball-input-bar--interactive:focus-within \{[\s\S]*border-radius:\s*1rem;/);
-  assert.match(shellBallStyles, /\.shell-ball-input-bar--interactive:focus-within::before \{[\s\S]*border-radius:\s*1rem;/);
+  assert.match(inputBarSource, /function restoreInputFocus\(\) \{/);
+  assert.match(inputBarSource, /const visiblePlaceholder = placeholder\?\.trim\(\) \|\| SHELL_BALL_INPUT_DEFAULT_PLACEHOLDER;/);
+  assert.match(shellBallStyles, /\.shell-ball-uiverse-inputbox::before \{/);
+  assert.match(shellBallStyles, /\.shell-ball-uiverse-fill \{/);
+  assert.match(shellBallStyles, /\.shell-ball-uiverse-placeholder \{/);
 });
 
 test("shell-ball input helpers clamp manual resize and autosize heights", () => {
@@ -4795,11 +4790,11 @@ test("shell-ball input focus helper keeps the caret at the end of the draft", ()
   assert.deepEqual(calls, ["focus", "range:10:10"]);
 });
 
-test("shell-ball bubble roles keep asymmetric straight bottom corners", () => {
+test("shell-ball bubble roles keep asymmetric softened bottom corners", () => {
   const shellBallStyles = readFileSync(resolve(desktopRoot, "src/features/shell-ball/shellBall.css"), "utf8");
 
-  assert.match(shellBallStyles, /\.shell-ball-bubble-message--agent \{[\s\S]*border-bottom-left-radius:\s*0;/);
-  assert.match(shellBallStyles, /\.shell-ball-bubble-message--user \{[\s\S]*border-bottom-right-radius:\s*0;/);
+  assert.match(shellBallStyles, /\.shell-ball-bubble-message--agent \{[\s\S]*border-bottom-left-radius:\s*0\.3rem;/);
+  assert.match(shellBallStyles, /\.shell-ball-bubble-message--user \{[\s\S]*border-bottom-right-radius:\s*0\.3rem;/);
 });
 
 test("shell-ball app drops page-shell copy while preserving the floating shell surface", () => {
@@ -5017,10 +5012,168 @@ test("shell-ball bubble zone renders per-bubble pin and delete controls", () => 
     }),
   );
 
-  assert.match(markup, /shell-ball-bubble-message__pin-control/g);
-  assert.match(markup, /shell-ball-bubble-message__delete-control/g);
-  assert.equal(markup.match(/data-bubble-action="pin"/g)?.length, 2);
+  assert.match(markup, /shell-ball-bubble-message__hover-controls/g);
+  assert.match(markup, /shell-ball-bubble-message__hover-control-icon/g);
+  assert.doesNotMatch(markup, /data-bubble-action="pin"/);
   assert.equal(markup.match(/data-bubble-action="delete"/g)?.length, 2);
+  assert.doesNotMatch(markup, /data-tooltip=/);
+});
+
+test("shell-ball agent bubbles auto-link bare https urls without trailing punctuation", () => {
+  const markup = renderToStaticMarkup(
+    createElement(ShellBallBubbleZone, {
+      visualState: "processing",
+      bubbleItems: [
+        {
+          bubble: {
+            bubble_id: "msg-agent-link-1",
+            task_id: "task-agent-link-1",
+            type: "result",
+            text: "项目地址是 https://github.com/1024XEngineer/CialloClaw。",
+            pinned: false,
+            hidden: false,
+            created_at: "2026-05-08T10:09:00.000Z",
+          },
+          role: "agent",
+          desktop: {
+            lifecycleState: "visible",
+          },
+        },
+      ] satisfies ShellBallBubbleItem[],
+    }),
+  );
+
+  assert.match(markup, /href="https:\/\/github\.com\/1024XEngineer\/CialloClaw"/);
+  assert.doesNotMatch(markup, /href="https:\/\/github\.com\/1024XEngineer\/CialloClaw。"/);
+  assert.match(markup, /target="_blank"/);
+  assert.match(markup, /data-shell-ball-interactive="true"/);
+});
+
+test("shell-ball agent bubbles keep markdown links clickable", () => {
+  const markup = renderToStaticMarkup(
+    createElement(ShellBallBubbleZone, {
+      visualState: "processing",
+      bubbleItems: [
+        {
+          bubble: {
+            bubble_id: "msg-agent-markdown-link-1",
+            task_id: "task-agent-markdown-link-1",
+            type: "result",
+            text: "[项目地址](https://github.com/1024XEngineer/CialloClaw)",
+            pinned: false,
+            hidden: false,
+            created_at: "2026-05-08T10:09:05.000Z",
+          },
+          role: "agent",
+          desktop: {
+            lifecycleState: "visible",
+          },
+        },
+      ] satisfies ShellBallBubbleItem[],
+    }),
+  );
+
+  assert.match(markup, />项目地址<\/a>/);
+  assert.match(markup, /href="https:\/\/github\.com\/1024XEngineer\/CialloClaw"/);
+  assert.match(markup, /data-shell-ball-interactive="true"/);
+});
+
+test("shell-ball bare urls keep balanced parentheses inside the linked href", () => {
+  const markup = renderToStaticMarkup(
+    createElement(ShellBallBubbleZone, {
+      visualState: "processing",
+      bubbleItems: [
+        {
+          bubble: {
+            bubble_id: "msg-agent-paren-link-1",
+            task_id: "task-agent-paren-link-1",
+            type: "result",
+            text: "参考链接：https://en.wikipedia.org/wiki/Function_(mathematics)",
+            pinned: false,
+            hidden: false,
+            created_at: "2026-05-10T10:09:05.000Z",
+          },
+          role: "agent",
+          desktop: {
+            lifecycleState: "visible",
+          },
+        },
+      ] satisfies ShellBallBubbleItem[],
+    }),
+  );
+
+  assert.match(markup, /href="https:\/\/en\.wikipedia\.org\/wiki\/Function_\(mathematics\)"/);
+});
+
+test("shell-ball markdown links keep balanced parentheses inside the linked href", () => {
+  const markup = renderToStaticMarkup(
+    createElement(ShellBallBubbleZone, {
+      visualState: "processing",
+      bubbleItems: [
+        {
+          bubble: {
+            bubble_id: "msg-agent-markdown-paren-link-1",
+            task_id: "task-agent-markdown-paren-link-1",
+            type: "result",
+            text: "[wiki](https://en.wikipedia.org/wiki/Function_(mathematics))",
+            pinned: false,
+            hidden: false,
+            created_at: "2026-05-10T10:12:05.000Z",
+          },
+          role: "agent",
+          desktop: {
+            lifecycleState: "visible",
+          },
+        },
+      ] satisfies ShellBallBubbleItem[],
+    }),
+  );
+
+  assert.match(markup, /href="https:\/\/en\.wikipedia\.org\/wiki\/Function_\(mathematics\)"/);
+  assert.match(markup, />wiki<\/a>/);
+});
+
+test("shell-ball bare urls trim unbalanced full-width closing parentheses", () => {
+  const markup = renderToStaticMarkup(
+    createElement(ShellBallBubbleZone, {
+      visualState: "processing",
+      bubbleItems: [
+        {
+          bubble: {
+            bubble_id: "msg-agent-fullwidth-paren-link-1",
+            task_id: "task-agent-fullwidth-paren-link-1",
+            type: "result",
+            text: "参考链接：（https://github.com/1024XEngineer/CialloClaw）",
+            pinned: false,
+            hidden: false,
+            created_at: "2026-05-10T12:09:05.000Z",
+          },
+          role: "agent",
+          desktop: {
+            lifecycleState: "visible",
+          },
+        },
+      ] satisfies ShellBallBubbleItem[],
+    }),
+  );
+
+  assert.match(markup, /href="https:\/\/github\.com\/1024XEngineer\/CialloClaw"/);
+  assert.doesNotMatch(markup, /href="https:\/\/github\.com\/1024XEngineer\/CialloClaw）"/);
+});
+
+test("shell-ball markdown links open through the desktop external-url bridge", () => {
+  const markdownSource = readFileSync(
+    resolve(desktopRoot, "src/features/shell-ball/components/ShellBallMarkdown.tsx"),
+    "utf8",
+  );
+  const externalUrlSource = readFileSync(
+    resolve(desktopRoot, "src/platform/desktopExternalUrl.ts"),
+    "utf8",
+  );
+
+  assert.match(markdownSource, /openDesktopExternalUrl\(href\)/);
+  assert.doesNotMatch(markdownSource, /window\.open\(/);
+  assert.match(externalUrlSource, /invoke<void>\("desktop_open_external_url", \{ url \}\)/);
 });
 
 test("shell-ball pending-approval bubbles render inline allow and deny controls", () => {
@@ -7762,7 +7915,7 @@ test("shell-ball pinned bubble windows render one coordinator-owned pinned item 
           bubble_id: "msg-pinned-1",
           task_id: "task-pinned-1",
           type: "status",
-          text: "Keep this pinned.",
+          text: "Keep this pinned. https://github.com/1024XEngineer/CialloClaw",
           pinned: true,
           hidden: false,
           created_at: "2026-04-11T10:12:00.000Z",
@@ -7796,7 +7949,7 @@ test("shell-ball pinned bubble windows render one coordinator-owned pinned item 
     {
       react: require("react"),
       "./useShellBallCoordinator": {
-        useShellBallHelperWindowSnapshot() {
+        useShellBallPinnedBubbleSnapshot() {
           return helperSnapshot;
         },
         emitShellBallBubbleAction(action: string, bubbleId: string, source?: string) {
@@ -7825,6 +7978,7 @@ test("shell-ball pinned bubble windows render one coordinator-owned pinned item 
   const markup = renderToStaticMarkup(createElement(RuntimeShellBallPinnedBubbleWindow, null));
 
   assert.match(markup, /Keep this pinned\./);
+  assert.match(markup, /href="https:\/\/github\.com\/1024XEngineer\/CialloClaw"/);
   assert.doesNotMatch(markup, /Leave this in the region\./);
   assert.match(markup, /Unpin/);
   assert.match(markup, /Delete/);
@@ -8670,7 +8824,7 @@ test("shell-ball app routes fresh clipboard prompts through the formal text subm
   assert.match(submitSource, /export async function submitShellBallInput/);
   assert.match(submitSource, /trigger: input\.trigger/);
   assert.match(submitSource, /inputMode: input\.inputMode/);
-  assert.match(submitSource, /includeForegroundBrowserPageContext: true/);
+  assert.doesNotMatch(submitSource, /includeForegroundBrowserPageContext: true/);
   assert.match(syncSource, /clipboardSnapshot: "desktop-shell-ball:clipboard-snapshot"/);
 });
 
@@ -8906,25 +9060,25 @@ test("shell-ball app routes real selection snapshots into the formal selected-te
   );
 });
 
-test("shell-ball resize drag keeps pointer capture and releases resize state on cleanup", () => {
+test("shell-ball input bar no longer relies on resize drag pointer capture", () => {
   const inputBarSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallInputBar.tsx"), "utf8");
 
-  assert.match(inputBarSource, /onResizeStateChange\(true\);/);
-  assert.match(inputBarSource, /handle\.setPointerCapture\(pointerId\);/);
-  assert.match(inputBarSource, /handle\.addEventListener\("lostpointercapture", cleanup\);/);
-  assert.match(inputBarSource, /window\.addEventListener\("blur", cleanup\);/);
-  assert.match(inputBarSource, /onResizeStateChange\(false\);/);
+  assert.doesNotMatch(inputBarSource, /onResizeStateChange\(true\);/);
+  assert.doesNotMatch(inputBarSource, /handle\.setPointerCapture\(pointerId\);/);
+  assert.doesNotMatch(inputBarSource, /handle\.addEventListener\("lostpointercapture", cleanup\);/);
+  assert.doesNotMatch(inputBarSource, /window\.addEventListener\("blur", cleanup\);/);
+  assert.doesNotMatch(inputBarSource, /onResizeStateChange\(false\);/);
 });
 
 test("shell-ball input bar restores textarea focus after attach and send actions", () => {
   const inputBarSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallInputBar.tsx"), "utf8");
 
-  assert.match(inputBarSource, /function restoreTextareaFocus\(\) \{/);
+  assert.match(inputBarSource, /function restoreInputFocus\(\) \{/);
   assert.match(inputBarSource, /field\.focus\(\);/);
   assert.match(inputBarSource, /field\.setSelectionRange\(selectionIndex, selectionIndex\);/);
   assert.match(inputBarSource, /onMouseDown=\{\(event\) => \{\s*event\.preventDefault\(\);/);
-  assert.match(inputBarSource, /onAttachFile\(\);\s*restoreTextareaFocus\(\);/);
-  assert.match(inputBarSource, /onSubmit\(\);\s*restoreTextareaFocus\(\);/);
+  assert.match(inputBarSource, /onAttachFile\(\);\s*restoreInputFocus\(\);/);
+  assert.match(inputBarSource, /onSubmit\(\);\s*restoreInputFocus\(\);/);
 });
 
 test("shell-ball app dashboard-open gate stays blocked for consumed or non-resting double clicks", () => {
@@ -8988,13 +9142,26 @@ test("shell-ball inline input preserves readonly snapshots and only upgrades hid
 });
 
 test("shell-ball input bar mode stays aligned with visual states", () => {
-  assert.equal(getShellBallInputBarMode("idle"), "hidden");
+  assert.equal(getShellBallInputBarMode("idle"), "interactive");
   assert.equal(getShellBallInputBarMode("hover_input"), "interactive");
-  assert.equal(getShellBallInputBarMode("confirming_intent"), "readonly");
+  assert.equal(getShellBallInputBarMode("confirming_intent"), "interactive");
   assert.equal(getShellBallInputBarMode("waiting_auth"), "readonly");
   assert.equal(getShellBallInputBarMode("processing"), "readonly");
   assert.equal(getShellBallInputBarMode("voice_listening"), "hidden");
   assert.equal(getShellBallInputBarMode("voice_locked"), "hidden");
+});
+
+test("intent confirm cancel action is wired to formal task cancellation", () => {
+  const bubbleMessageSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallBubbleMessage.tsx"), "utf8");
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+
+  assert.match(bubbleMessageSource, />取消任务</);
+  assert.match(bubbleMessageSource, /data-bubble-action="cancel_task"/);
+  assert.match(coordinatorSource, /const decisionText = payload\.decision === "confirm" \? "确认" : "取消任务";/);
+  assert.match(
+    coordinatorSource,
+    /payload\.decision === "confirm"\s*\?\s*await confirmTask\([\s\S]*:\s*await controlTask\(\{[\s\S]*action:\s*"cancel"/,
+  );
 });
 
 test("shell-ball text submit clears drafts before RPC completion and fully restores failed optimistic submits", () => {

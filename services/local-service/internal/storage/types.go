@@ -8,7 +8,7 @@ import (
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -102,6 +102,7 @@ type TodoItemRecord struct {
 	TagsJSON             string
 	AgentSuggestion      string
 	NoteText             string
+	NoteTextOrigin       string
 	Prerequisite         string
 	PlannedAt            string
 	PreviousBucket       string
@@ -361,7 +362,7 @@ type TaskRunRecord struct {
 	Citations         []map[string]any
 	AuditRecords      []map[string]any
 	MirrorReferences  []map[string]any
-	Snapshot          contextsvc.TaskContextSnapshot
+	Snapshot          taskcontext.TaskContextSnapshot
 	SecuritySummary   map[string]any
 	ApprovalRequest   map[string]any
 	PendingExecution  map[string]any

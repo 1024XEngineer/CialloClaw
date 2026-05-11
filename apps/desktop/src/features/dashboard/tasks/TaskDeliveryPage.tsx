@@ -11,12 +11,16 @@ import { resolveDashboardModuleRoutePath, resolveDashboardRoutePath } from "@/fe
 import { subscribeDeliveryReady, subscribeTaskRuntime, subscribeTaskUpdated } from "@/rpc/subscriptions";
 import { cn } from "@/utils/cn";
 import { formatTimestamp } from "@/utils/formatters";
+import { navigateToDashboardTaskDelivery } from "./taskDeliveryNavigation";
 import { getTaskPreviewStatusLabel, getTaskStatusBadgeClass } from "./taskPage.mapper";
 import { buildDashboardTaskArtifactQueryKey, buildDashboardTaskDetailQueryKey } from "./taskPage.query";
 import { loadTaskDetailData, type TaskPageDataMode } from "./taskPage.service";
 import {
+  canOpenTaskDeliveryResult,
+  getTaskDeliveryOpenLabel,
   isAllowedTaskOpenUrl,
   loadTaskArtifactPage,
+  mergeTaskArtifactItems,
   openTaskArtifactForTask,
   openTaskDeliveryForTask,
   performTaskOpenExecution,
@@ -90,28 +94,10 @@ export function TaskDeliveryPage() {
   const detailState = taskDetailQuery.isError ? "error" : taskDetailQuery.isPending ? "loading" : "ready";
   const detailErrorMessage = taskDetailQuery.isError ? (taskDetailQuery.error instanceof Error ? taskDetailQuery.error.message : "交付详情请求失败") : null;
   const taskDetailArtifacts = useMemo(() => detailData?.detail.artifacts ?? [], [detailData?.detail.artifacts]);
-  const artifactItems = useMemo(() => {
-    const listedArtifacts = artifactListQuery.data?.items ?? [];
-    const mergedArtifacts = [...listedArtifacts];
-    const artifactKeys = new Set(
-      listedArtifacts.map((artifact) => `${artifact.artifact_id}::${artifact.path}`),
-    );
-
-    // Task detail can outpace the dedicated artifact query while a run is
-    // active, so keep newer detail-only artifacts visible until the list query
-    // catches up.
-    for (const artifact of taskDetailArtifacts) {
-      const artifactKey = `${artifact.artifact_id}::${artifact.path}`;
-      if (artifactKeys.has(artifactKey)) {
-        continue;
-      }
-
-      artifactKeys.add(artifactKey);
-      mergedArtifacts.push(artifact);
-    }
-
-    return mergedArtifacts;
-  }, [artifactListQuery.data?.items, taskDetailArtifacts]);
+  const artifactItems = useMemo(
+    () => mergeTaskArtifactItems(artifactListQuery.data?.items ?? [], taskDetailArtifacts),
+    [artifactListQuery.data?.items, taskDetailArtifacts],
+  );
   const formalDeliveryResult = detailData?.detail.delivery_result ?? null;
   const formalDeliveryUrl = formalDeliveryResult?.payload.url ?? null;
   const formalDeliveryUrlIsAllowed = formalDeliveryUrl !== null && isAllowedTaskOpenUrl(formalDeliveryUrl);
@@ -128,9 +114,7 @@ export function TaskDeliveryPage() {
   );
   const evidenceArtifacts = artifactItems.filter((artifact) => evidenceArtifactRefs.has(artifact.artifact_id) || evidenceArtifactRefs.has(artifact.path));
   const outputArtifacts = artifactItems.filter((artifact) => !evidenceArtifactRefs.has(artifact.artifact_id) && !evidenceArtifactRefs.has(artifact.path));
-  const canOpenFormalDelivery =
-    formalDeliveryResult !== null &&
-    (formalDeliveryResult.type !== "task_detail" || Boolean(formalDeliveryResult.payload.path) || Boolean(formalDeliveryResult.payload.url));
+  const canOpenFormalDelivery = canOpenTaskDeliveryResult(formalDeliveryResult, taskId);
 
   useEffect(() => {
     return () => {
@@ -239,7 +223,7 @@ export function TaskDeliveryPage() {
   }
 
   async function handleResolvedOpen(result: TaskDeliveryOpenResult) {
-    const plan = resolveTaskOpenExecutionPlan(result);
+    const plan = resolveTaskOpenExecutionPlan(result, taskId);
 
     if (plan.mode === "task_detail" && plan.taskId === taskId) {
       showFeedback("当前正式结果已经在交付页中展示。");
@@ -254,8 +238,41 @@ export function TaskDeliveryPage() {
           });
           return plan.feedback;
         },
+        onOpenTaskDelivery: ({ taskId: resolvedTaskId }) => {
+          navigateToDashboardTaskDelivery(navigate, resolvedTaskId);
+          return plan.feedback;
+        },
       }),
     );
+  }
+
+  async function handleOpenFormalDeliveryUrl() {
+    if (!formalDeliveryResult || !formalDeliveryUrl) {
+      return;
+    }
+
+    if (formalDeliveryResult.type === "result_page") {
+      const deliveryOpenResult: TaskDeliveryOpenResult = {
+        delivery_result: formalDeliveryResult,
+        open_action: "result_page",
+        resolved_payload: {
+          path: formalDeliveryResult.payload.path ?? null,
+          task_id: formalDeliveryResult.payload.task_id ?? taskId,
+          url: formalDeliveryUrl,
+        },
+      };
+
+      await handleResolvedOpen(deliveryOpenResult);
+      return;
+    }
+
+    showFeedback(await performTaskOpenExecution({
+      feedback: "已打开链接。",
+      mode: "open_url",
+      path: formalDeliveryResult.payload.path ?? null,
+      taskId: formalDeliveryResult.payload.task_id ?? taskId,
+      url: formalDeliveryUrl,
+    }));
   }
 
   const artifactOpenMutation = useMutation({
@@ -277,20 +294,6 @@ export function TaskDeliveryPage() {
       showFeedback(error instanceof Error ? `执行正式打开动作失败：${error.message}` : "执行正式打开动作失败，请稍后再试。");
     },
   });
-
-  function getFormalOpenLabel() {
-    switch (formalDeliveryResult?.type) {
-      case "result_page":
-        return "打开网页结果";
-      case "workspace_document":
-      case "open_file":
-        return "打开交付文件";
-      case "reveal_in_folder":
-        return "定位交付文件";
-      default:
-        return "执行正式打开动作";
-    }
-  }
 
   if (!taskId) {
     return <Navigate replace to={resolveDashboardModuleRoutePath("tasks")} />;
@@ -343,7 +346,7 @@ export function TaskDeliveryPage() {
           {canOpenFormalDelivery ? (
             <Button disabled={deliveryOpenMutation.isPending} onClick={() => deliveryOpenMutation.mutate()} type="button">
               <ArrowUpRight className="h-4 w-4" />
-              {deliveryOpenMutation.isPending ? "执行中..." : getFormalOpenLabel()}
+              {deliveryOpenMutation.isPending ? "执行中..." : getTaskDeliveryOpenLabel(formalDeliveryResult)}
             </Button>
           ) : null}
         </div>
@@ -436,9 +439,9 @@ export function TaskDeliveryPage() {
                 <dd>
                   {formalDeliveryUrl ? (
                     formalDeliveryUrlIsAllowed ? (
-                      <a href={formalDeliveryUrl} rel="noreferrer noopener" target="_blank">
+                      <button className="task-delivery-page__inline-link" onClick={() => void handleOpenFormalDeliveryUrl()} type="button">
                         {formalDeliveryUrl}
-                      </a>
+                      </button>
                     ) : (
                       <span>{formalDeliveryUrl}</span>
                     )

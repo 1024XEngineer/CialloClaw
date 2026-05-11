@@ -3,10 +3,10 @@ package execution
 import (
 	"strings"
 
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/perception"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 // supplementalExecutionBoundaryAssets attributes model-provider and perception
@@ -70,7 +70,7 @@ func perceptionPackageRef(request Request) (storage.ExtensionAssetReference, boo
 
 // snapshotUsesPerceptionBoundary keeps perception-package attribution scoped to
 // actual page/screen/clipboard/behavior signals instead of generic text input.
-func snapshotUsesPerceptionBoundary(snapshot contextsvc.TaskContextSnapshot) bool {
+func snapshotUsesPerceptionBoundary(snapshot taskcontext.TaskContextSnapshot) bool {
 	return strings.TrimSpace(snapshot.PageTitle) != "" ||
 		strings.TrimSpace(snapshot.PageURL) != "" ||
 		strings.TrimSpace(snapshot.AppName) != "" ||

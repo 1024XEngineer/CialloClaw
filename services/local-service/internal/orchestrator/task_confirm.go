@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"strings"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 )
 
@@ -20,16 +21,45 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	}
 	confirmed := boolValue(params, "confirmed", false)
 	correctedIntent := mapValue(params, "corrected_intent")
-	intentValue := cloneMap(task.Intent)
-	if !confirmed && len(correctedIntent) > 0 {
-		intentValue = correctedIntent
+	correctionText := strings.TrimSpace(stringValue(params, "correction_text", ""))
+	if err := validateTaskConfirmCorrectionPayload(confirmed, correctedIntent, correctionText); err != nil {
+		return nil, err
 	}
-	if !confirmed && len(correctedIntent) == 0 {
+	snapshot := snapshotFromTask(task)
+	intentValue := cloneMap(task.Intent)
+	updatedTitle := task.Title
+	if !confirmed && correctionText != "" {
+		suggestion := s.reinferTaskIntentFromCorrection(task, snapshot, correctionText)
+		intentValue = suggestion.Intent
+		updatedTitle = suggestion.TaskTitle
+	} else if !confirmed && len(correctedIntent) > 0 {
+		if normalizedIntent, ok := normalizeTaskConfirmIntent(correctedIntent); ok {
+			suggestion := s.normalizedTaskConfirmSuggestion(snapshot, normalizedIntent, false)
+			intentValue = suggestion.Intent
+			updatedTitle = suggestion.TaskTitle
+		} else {
+			updatedTask, err := s.revertTaskToIntentConfirmation(task)
+			if err != nil {
+				return nil, err
+			}
+			bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleConfirmRejected, nil), updatedTask.UpdatedAt.Format(dateTimeLayout))
+			if presentedTask, ok := s.runEngine.SetPresentation(task.TaskID, bubble, nil, nil); ok {
+				updatedTask = presentedTask
+			} else {
+				return nil, ErrTaskNotFound
+			}
+			return map[string]any{
+				"task":            taskMap(updatedTask),
+				"bubble_message":  bubble,
+				"delivery_result": nil,
+			}, nil
+		}
+	} else if !confirmed && len(correctedIntent) == 0 {
 		updatedTask, err := s.revertTaskToIntentConfirmation(task)
 		if err != nil {
 			return nil, err
 		}
-		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "这不是我该做的处理方式。请重新说明你的目标，或给我一个更准确的处理意图。", updatedTask.UpdatedAt.Format(dateTimeLayout))
+		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleConfirmRejected, nil), updatedTask.UpdatedAt.Format(dateTimeLayout))
 		if presentedTask, ok := s.runEngine.SetPresentation(task.TaskID, bubble, nil, nil); ok {
 			updatedTask = presentedTask
 		} else {
@@ -42,7 +72,7 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		}, nil
 	}
 	if strings.TrimSpace(stringValue(intentValue, "name", "")) == "" {
-		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "请先明确告诉我你希望执行的处理方式。", task.UpdatedAt.Format(dateTimeLayout))
+		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleConfirmMissingIntent, nil), task.UpdatedAt.Format(dateTimeLayout))
 		if updatedTask, ok := s.runEngine.SetPresentation(task.TaskID, bubble, nil, nil); ok {
 			return map[string]any{
 				"task":            taskMap(updatedTask),
@@ -52,9 +82,11 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		}
 		return nil, ErrTaskNotFound
 	}
-	updatedTitle := s.intent.Suggest(snapshotFromTask(task), intentValue, false).TaskTitle
+	if confirmed {
+		updatedTitle = s.intent.Suggest(snapshot, intentValue, false).TaskTitle
+	}
 
-	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", "已按新的要求开始处理", task.UpdatedAt.Format(dateTimeLayout))
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleConfirmStarted, nil), task.UpdatedAt.Format(dateTimeLayout))
 	updatedTask, ok := s.runEngine.UpdateIntent(task.TaskID, updatedTitle, intentValue)
 	if !ok {
 		return nil, ErrTaskNotFound
@@ -82,9 +114,9 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	if !ok {
 		return nil, ErrTaskNotFound
 	}
-	snapshot := snapshotFromTask(updatedTask)
+	executionSnapshot := snapshotFromTask(updatedTask)
 
-	updatedTask, resultBubble, deliveryResult, _, err := s.executeTask(updatedTask, snapshot, intentValue)
+	updatedTask, resultBubble, deliveryResult, _, err := s.executeTask(updatedTask, executionSnapshot, intentValue)
 	if err != nil {
 		return nil, err
 	}

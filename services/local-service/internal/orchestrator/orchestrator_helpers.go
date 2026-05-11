@@ -2,12 +2,18 @@ package orchestrator
 
 import (
 	"encoding/json"
+	"os"
+	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 func storageTaskRunRecordFromSnapshotJSON(payload string) (storage.TaskRunRecord, error) {
@@ -45,14 +51,180 @@ func cloneTimePointer(value *time.Time) *time.Time {
 	return &cloned
 }
 
-func notepadSnapshot(item map[string]any) contextsvc.TaskContextSnapshot {
-	return contextsvc.TaskContextSnapshot{
+// notepadSnapshot rebuilds a free-text task snapshot from one notepad item so
+// convert_to_task can reuse the normal task pipeline without narrowing the
+// user's goal into a notepad-specific intent bucket first. Title-only notes
+// must stay anchored on the original title instead of the synthetic note_text
+// fallback that the dashboard uses for display-only notepad cards.
+func notepadSnapshot(item map[string]any, workspaceRoot string) taskcontext.TaskContextSnapshot {
+	text := notepadSnapshotText(item)
+
+	return taskcontext.TaskContextSnapshot{
 		Source:    "dashboard",
+		Trigger:   "recommendation_click",
 		InputType: "text",
-		Text:      stringValue(item, "title", ""),
+		InputMode: "text",
+		Text:      text,
+		Files:     notepadResourcePaths(item, workspaceRoot),
 		PageTitle: "notepad",
 		AppName:   "dashboard",
 	}
+}
+
+func notepadSnapshotText(item map[string]any) string {
+	title := strings.TrimSpace(stringValue(item, "title", ""))
+	noteText := strings.TrimSpace(stringValue(item, "note_text", ""))
+	if noteText == "" {
+		return title
+	}
+	if title == "" {
+		return noteText
+	}
+
+	// Title-only notes receive a synthetic note_text for dashboard display, but
+	// task routing must only collapse back to title when the note body was
+	// synthesized by runtime normalization instead of authored by the user.
+	if strings.TrimSpace(stringValue(item, "note_text_origin", "")) == "derived_default" {
+		return title
+	}
+	return noteText
+}
+
+func notepadTaskTitle(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) string {
+	if strings.TrimSpace(snapshot.Text) == "" {
+		return suggestion.TaskTitle
+	}
+
+	titleSnapshot := snapshot
+	titleSnapshot.Files = nil
+	return intent.NewService().Suggest(titleSnapshot, suggestion.Intent, suggestion.RequiresConfirm).TaskTitle
+}
+
+func notepadResourcePaths(item map[string]any, workspaceRoot string) []string {
+	resources := relatedResourceMaps(item["related_resources"])
+	if len(resources) == 0 {
+		return nil
+	}
+
+	paths := make([]string, 0, len(resources))
+	seen := make(map[string]struct{}, len(resources))
+	for _, resource := range resources {
+		// Derived defaults keep notepad cards actionable in the dashboard, but
+		// they must not widen the formal task snapshot as if the user attached
+		// those paths explicitly.
+		if strings.TrimSpace(stringValue(resource, "resource_origin", "")) == "derived_default" {
+			continue
+		}
+		path := strings.TrimSpace(stringValue(resource, "path", ""))
+		if path == "" {
+			continue
+		}
+
+		switch notepadResourceTargetKind(resource) {
+		case "file":
+			path, ok := normalizeNotepadSnapshotPath(path, workspaceRoot)
+			if !ok {
+				continue
+			}
+			if _, duplicated := seen[path]; duplicated {
+				continue
+			}
+			seen[path] = struct{}{}
+			paths = append(paths, path)
+		}
+	}
+
+	if len(paths) == 0 {
+		return nil
+	}
+	return paths
+}
+
+// normalizeNotepadSnapshotPath only promotes explicit note resources that stay
+// inside the current workspace root. Snapshot file inputs must keep the same
+// workspace-formal shape as other desktop task entry points so execution does
+// not accidentally treat arbitrary host paths as model-readable context.
+func normalizeNotepadSnapshotPath(resourcePath, workspaceRoot string) (string, bool) {
+	trimmedPath := strings.TrimSpace(resourcePath)
+	trimmedRoot := strings.TrimSpace(workspaceRoot)
+	if trimmedPath == "" || trimmedRoot == "" {
+		return "", false
+	}
+	if !filepath.IsAbs(trimmedPath) && !hasWindowsDriveLetterPrefix(trimmedPath) {
+		normalized := strings.Trim(strings.ReplaceAll(trimmedPath, "\\", "/"), "/")
+		if normalized == "workspace" {
+			trimmedPath = "."
+		} else if strings.HasPrefix(normalized, "workspace/") {
+			trimmedPath = strings.TrimPrefix(normalized, "workspace/")
+		}
+	}
+
+	pathPolicy, err := platform.NewLocalPathPolicy(trimmedRoot)
+	if err != nil {
+		return "", false
+	}
+	safePath, err := pathPolicy.EnsureWithinWorkspace(trimmedPath)
+	if err != nil {
+		return "", false
+	}
+	info, err := os.Stat(filepath.Clean(safePath))
+	if err != nil || !info.Mode().IsRegular() {
+		return "", false
+	}
+
+	relative, ok := relativizePathWithinRoot(filepath.Clean(safePath), filepath.Clean(trimmedRoot))
+	if !ok {
+		return "", false
+	}
+	if relative == "" {
+		return "workspace", true
+	}
+	return filepath.ToSlash(path.Join("workspace", filepath.ToSlash(relative))), true
+}
+
+func notepadResourceTargetKind(resource map[string]any) string {
+	if targetKind := strings.TrimSpace(stringValue(resource, "target_kind", "")); targetKind != "" {
+		return targetKind
+	}
+	switch strings.TrimSpace(stringValue(resource, "open_action", "")) {
+	case "open_file":
+		return "file"
+	case "reveal_in_folder":
+		return "folder"
+	}
+	switch strings.TrimSpace(firstNonEmptyString(
+		stringValue(resource, "resource_type", ""),
+		stringValue(resource, "type", ""),
+	)) {
+	case "file":
+		return "file"
+	case "folder", "directory":
+		return "folder"
+	default:
+		return ""
+	}
+}
+
+func relatedResourceMaps(rawValue any) []map[string]any {
+	if resources, ok := rawValue.([]map[string]any); ok {
+		return cloneMapSlice(resources)
+	}
+	anyResources, ok := rawValue.([]any)
+	if !ok {
+		return nil
+	}
+	result := make([]map[string]any, 0, len(anyResources))
+	for _, rawResource := range anyResources {
+		resource, ok := rawResource.(map[string]any)
+		if !ok {
+			continue
+		}
+		result = append(result, cloneMap(resource))
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 func latestOutputPathFromTasks(tasks []runengine.TaskRecord) string {
@@ -74,18 +246,18 @@ func latestOutputPathFromTasks(tasks []runengine.TaskRecord) string {
 
 // snapshotFromTask rebuilds the minimum context snapshot needed for resume and
 // other post-creation flows.
-func snapshotFromTask(task runengine.TaskRecord) contextsvc.TaskContextSnapshot {
+func snapshotFromTask(task runengine.TaskRecord) taskcontext.TaskContextSnapshot {
 	if !isEmptySnapshot(task.Snapshot) {
 		return cloneTaskSnapshot(task.Snapshot)
 	}
-	return contextsvc.TaskContextSnapshot{
+	return taskcontext.TaskContextSnapshot{
 		Trigger:   task.SourceType,
 		InputType: "text",
 		Text:      originalTextFromTaskTitle(task.Title),
 	}
 }
 
-func cloneTaskSnapshot(snapshot contextsvc.TaskContextSnapshot) contextsvc.TaskContextSnapshot {
+func cloneTaskSnapshot(snapshot taskcontext.TaskContextSnapshot) taskcontext.TaskContextSnapshot {
 	cloned := snapshot
 	if len(snapshot.Files) > 0 {
 		cloned.Files = append([]string(nil), snapshot.Files...)
@@ -93,7 +265,7 @@ func cloneTaskSnapshot(snapshot contextsvc.TaskContextSnapshot) contextsvc.TaskC
 	return cloned
 }
 
-func isEmptySnapshot(snapshot contextsvc.TaskContextSnapshot) bool {
+func isEmptySnapshot(snapshot taskcontext.TaskContextSnapshot) bool {
 	return strings.TrimSpace(snapshot.Source) == "" &&
 		strings.TrimSpace(snapshot.Trigger) == "" &&
 		strings.TrimSpace(snapshot.InputType) == "" &&
@@ -122,7 +294,7 @@ func isEmptySnapshot(snapshot contextsvc.TaskContextSnapshot) bool {
 
 func originalTextFromTaskTitle(title string) string {
 	trimmed := strings.TrimSpace(title)
-	for _, prefix := range []string{"确认处理方式：", "改写：", "翻译：", "解释错误：", "解释：", "总结文件：", "总结：", "处理："} {
+	for _, prefix := range presentation.TaskTitlePrefixes() {
 		if strings.HasPrefix(trimmed, prefix) {
 			return strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
 		}
@@ -133,9 +305,9 @@ func originalTextFromTaskTitle(title string) string {
 func confirmationTitleFromTask(task runengine.TaskRecord) string {
 	subject := strings.TrimSpace(originalTextFromTaskTitle(task.Title))
 	if subject == "" {
-		subject = "当前任务"
+		subject = presentation.Text(presentation.MessageTaskTitleCurrentTask, nil)
 	}
-	return "确认处理方式：" + subject
+	return presentation.TaskTitle("", presentation.TaskTitleOptions{Subject: subject})
 }
 
 // mergeSuggestedDeliveryPreference preserves explicit caller preferences and only

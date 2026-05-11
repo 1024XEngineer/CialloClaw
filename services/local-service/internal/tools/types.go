@@ -1,12 +1,13 @@
-// Package tools 定义 CialloClaw 后端工具能力接入层的核心类型与接口。
+// Package tools defines backend tool capability boundaries and shared carriers.
 //
-// 本模块只负责 tool registry、tool adapter、tool executor facade、
-// builtin tool 和 worker/sidecar client 接入，不负责 intent 识别、
-// orchestrator/runengine 状态机、delivery_result 编排或前端协议消费。
+// This package owns the tool registry, adapters, executor facade, built-in
+// tools, and worker/sidecar client boundaries. It does not own intent
+// recognition, orchestrator/runengine state machines, delivery_result assembly,
+// or frontend protocol consumption.
 //
-// 所有 tool 名称使用 snake_case，所有输出结构服从 /packages/protocol，
-// 所有工具执行都必须产生 ToolCall 记录，平台相关逻辑必须通过
-// platform adapter 注入。
+// Tool names use snake_case, outputs must remain mappable to /packages/protocol,
+// each execution must produce a ToolCall record, and platform behavior must be
+// injected through a platform adapter.
 package tools
 
 import (
@@ -20,36 +21,33 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// ToolSource：工具来源分类
+// Tool source classification.
 // ---------------------------------------------------------------------------
 
-// ToolSource 表示工具的来源类型，用于 registry 和 executor 区分工具能力层级。
+// ToolSource classifies the capability layer used by registry and executor code.
 type ToolSource string
 
 const (
-	// ToolSourceBuiltin 表示本地内置工具，进程内直接执行。
+	// ToolSourceBuiltin marks local built-in tools executed in-process.
 	ToolSourceBuiltin ToolSource = "builtin"
-	// ToolSourceWorker 表示通过独立 worker 进程调用的外部工具。
+	// ToolSourceWorker marks tools invoked through a worker process.
 	ToolSourceWorker ToolSource = "worker"
-	// ToolSourceSidecar 表示通过 sidecar 进程调用的外部工具。
+	// ToolSourceSidecar marks tools invoked through a sidecar process.
 	ToolSourceSidecar ToolSource = "sidecar"
 )
 
 // ---------------------------------------------------------------------------
-// ToolMetadata：工具元数据
+// Tool metadata.
 // ---------------------------------------------------------------------------
 
-// ToolMetadata 描述一个已注册工具的静态元信息。
+// ToolMetadata describes static metadata for one registered tool.
 //
-// name 必须使用 snake_case，全局唯一，与 ToolCall.tool_name 对齐。
-// display_name 是面向展示的可读名称，不作为注册键。
-// description 用于工具发现与推荐场景的简短说明。
-// source 标识工具来源：builtin / worker / sidecar。
-// risk_hint 提示该工具的风险等级，与统一状态 risk_level 对齐。
-// timeout_sec 表示单次执行的超时秒数，0 表示由 executor 默认值接管。
-// input_schema_ref 和 output_schema_ref 引用 /packages/protocol 中的
-// schema 定义路径，本模块不自行解析 schema，只保留引用。
-// supports_dry_run 表示该工具是否支持预检查（dry run）模式。
+// name must be snake_case, globally unique, and aligned with ToolCall.tool_name.
+// display_name is a user-facing label, not the registry key. description is a
+// short discovery hint. source marks builtin/worker/sidecar ownership. risk_hint
+// aligns with shared risk_level semantics. timeout_sec uses executor defaults
+// when zero. input_schema_ref and output_schema_ref reference /packages/protocol
+// schemas without parsing them here. supports_dry_run advertises precheck support.
 type ToolMetadata struct {
 	Name            string     `json:"name"`
 	DisplayName     string     `json:"display_name"`
@@ -62,7 +60,7 @@ type ToolMetadata struct {
 	SupportsDryRun  bool       `json:"supports_dry_run"`
 }
 
-// Validate 校验 ToolMetadata 的必填字段与命名规范。
+// Validate enforces required metadata fields and tool-name format.
 func (m ToolMetadata) Validate() error {
 	if m.Name == "" {
 		return ErrToolNameRequired
@@ -83,7 +81,7 @@ func (m ToolMetadata) Validate() error {
 }
 
 // ---------------------------------------------------------------------------
-// ToolResult：工具执行结果
+// Tool execution results.
 // ---------------------------------------------------------------------------
 
 // ToolResult is normalized tool output before executor lifecycle recording.
@@ -141,11 +139,9 @@ type ToolCallSink interface {
 	SaveToolCall(ctx context.Context, record ToolCallRecord) error
 }
 
-// ArtifactRef 描述工具执行产生的产物引用。
-//
-// 本类型不替代 /packages/protocol 中的 Artifact 定义，
-// 只在 tools 模块内部用于向上层传递产物信息，
-// 上层负责将其映射为正式协议对象。
+// ArtifactRef is a module-local reference to an artifact produced by tool work.
+// It does not replace the protocol Artifact shape; callers map it to the formal
+// delivery boundary.
 type ArtifactRef struct {
 	ArtifactType string `json:"artifact_type"`
 	Title        string `json:"title"`
@@ -153,7 +149,7 @@ type ArtifactRef struct {
 	MimeType     string `json:"mime_type"`
 }
 
-// ToolResultError 描述工具执行失败的归一化错误信息。
+// ToolResultError is normalized error information returned by tool execution.
 type ToolResultError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
@@ -161,49 +157,44 @@ type ToolResultError struct {
 }
 
 // ---------------------------------------------------------------------------
-// Tool 接口
+// Tool interface.
 // ---------------------------------------------------------------------------
 
-// Tool 是所有工具必须实现的核心接口。
+// Tool is the core interface implemented by every executable tool.
 //
-// Metadata 返回工具的静态元信息，用于 registry 注册和 executor 查找。
-// Validate 在执行前对输入做业务级校验，避免无效输入进入执行路径。
-// Execute 执行工具逻辑，接收 ToolExecuteContext 和原始输入，
-// 返回归一化的 ToolResult。
+// Metadata returns static registry data. Validate performs business-level input
+// checks before execution. Execute performs tool work with ToolExecuteContext and
+// raw input, then returns normalized ToolResult data.
 //
-// 约束：
-//   - Execute 必须能产出 ToolCall 记录所需的全部数据；
-//   - Execute 不得直接推进 task/run/step/event 状态机；
-//   - Execute 不得直接编排 delivery_result；
-//   - Execute 不得返回未登记的临时 JSON。
+// Execute must provide all data required for ToolCall recording, must not advance
+// task/run/step/event state machines directly, must not assemble delivery_result
+// directly, and must not return unregistered ad hoc JSON as a formal result.
 type Tool interface {
 	Metadata() ToolMetadata
 	Validate(input map[string]any) error
 	Execute(ctx context.Context, execCtx *ToolExecuteContext, input map[string]any) (*ToolResult, error)
 }
 
-// DryRunTool 是可选接口，支持预检查模式的工具可以实现它。
+// DryRunTool is implemented by tools that support precheck mode.
 type DryRunTool interface {
 	Tool
 	DryRun(ctx context.Context, execCtx *ToolExecuteContext, input map[string]any) (*ToolResult, error)
 }
 
 // ---------------------------------------------------------------------------
-// ToolExecuteContext：工具执行上下文
+// Tool execution context.
 // ---------------------------------------------------------------------------
 
-// StorageCapability 是 tools 模块所需的存储能力最小接口。
-//
-// 不直接引用 storage 包内部类型，避免 tools 与 storage 产生编译期耦合。
-// 具体实现由 bootstrap 通过 storage 适配注入。
+// StorageCapability is the minimal storage dependency required by tools.
+// It avoids compile-time coupling to storage internals; bootstrap injects the
+// concrete adapter.
 type StorageCapability interface {
 	DatabasePath() string
 }
 
-// PlatformCapability 是 tools 模块所需的平台能力最小接口。
-//
-// 不直接引用 platform 包内部类型，避免 tools 与 platform 产生编译期耦合。
-// 具体实现由 bootstrap 通过 platform 适配注入。
+// PlatformCapability is the minimal platform dependency required by tools.
+// It avoids compile-time coupling to platform internals; bootstrap injects the
+// concrete adapter.
 type PlatformCapability interface {
 	Join(elem ...string) string
 	Abs(path string) (string, error)
@@ -214,28 +205,22 @@ type PlatformCapability interface {
 	Stat(path string) (fs.FileInfo, error)
 }
 
-// RiskEvaluator 是 tools 模块所需的风险评估最小接口。
-//
-// 不直接引用 risk 包内部类型，由 bootstrap 注入。
+// RiskEvaluator is the minimal risk-evaluation boundary required by tools.
 type RiskEvaluator interface {
 	EvaluateOperation(operationName string, targetObject string) (riskLevel string, err error)
 }
 
-// AuditWriter 是 tools 模块所需的审计写入最小接口。
-//
-// 不直接引用 audit 包内部类型，由 bootstrap 注入。
+// AuditWriter is the minimal audit-write boundary required by tools.
 type AuditWriter interface {
 	WriteAuditRecord(taskID, runID, auditType, action, summary, target, result string) error
 }
 
-// ExecutionCapability 是 tools 模块所需的最小执行后端接口。
-//
-// 该接口用于受控命令执行工具，不直接暴露平台实现细节。
+// ExecutionCapability is the minimal controlled-command execution backend.
 type ExecutionCapability interface {
 	RunCommand(ctx context.Context, command string, args []string, workingDir string) (CommandExecutionResult, error)
 }
 
-// CommandExecutionResult 描述一次受控命令执行的最小输出。
+// CommandExecutionResult is the minimal output from one controlled command.
 type CommandExecutionResult struct {
 	Stdout           string
 	Stderr           string
@@ -282,7 +267,7 @@ type BrowserExecutionMetadata struct {
 	EndpointURL      string
 }
 
-// BrowserPageReadResult 描述浏览器页面读取的最小结果。
+// BrowserPageReadResult is the minimal output of one browser page read.
 type BrowserPageReadResult struct {
 	BrowserExecutionMetadata
 	URL         string
@@ -293,7 +278,7 @@ type BrowserPageReadResult struct {
 	Source      string
 }
 
-// BrowserPageSearchResult 描述页面内基础搜索的最小结果。
+// BrowserPageSearchResult is the minimal output of one browser page search.
 type BrowserPageSearchResult struct {
 	BrowserExecutionMetadata
 	URL        string
@@ -573,35 +558,26 @@ type ScreenCaptureClient interface {
 	CleanupExpiredScreenTemps(ctx context.Context, input ScreenCleanupInput) (ScreenCleanupResult, error)
 }
 
-// CheckpointService 是 tools 模块所需的恢复点最小接口。
-//
-// 不直接引用 checkpoint 包内部类型，由 bootstrap 注入。
+// CheckpointService is the minimal recovery-point boundary required by tools.
 type CheckpointService interface {
 	CreateRecoveryPoint(taskID, summary string, objects []string) error
 }
 
-// ModelCapability 是 tools 模块所需的统一模型能力接口。
-//
-// 工具层只能通过这层接口访问模型接入，不得直接在工具实现里散落 SDK 调用。
-// 具体实现由 internal/model.Service 提供，并由 bootstrap 注入到执行上下文。
+// ModelCapability is the unified model boundary exposed to tool implementations.
+// Tool code must use this interface instead of calling provider SDKs directly.
 type ModelCapability interface {
 	GenerateText(ctx context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error)
 	Provider() string
 	ModelID() string
 }
 
-// ToolExecuteContext 携带单次工具执行所需的全部运行时上下文。
+// ToolExecuteContext carries all runtime state needed for one tool execution.
 //
-// task_id / run_id / step_id 与协议层的 Task / Run / Step 对齐，
-// trace_id 用于链路追踪。
-// workspace_path 是当前工作区根路径，平台路径操作必须通过
-// PlatformCapability 完成，不能直接拼接。
-// logger 保留为 any 类型，避免引入具体日志库依赖，
-// 工具实现按需做类型断言或通过简单接口使用。
-// timeout 和 cancel 由 executor 在创建 context 时设置，
-// 工具实现应尊重 ctx.Done() 信号。
-// storage / platform / risk / audit / checkpoint 均为可选注入，
-// 工具实现使用前需做 nil 检查，不得假设一定可用。
+// TaskID, RunID, and StepID align with protocol Task/Run/Step identities. TraceID
+// supports trace correlation. WorkspacePath is the workspace root; path work must
+// go through PlatformCapability. Logger remains any to avoid binding the tools
+// package to a logging library. Timeout and Cancel are executor-owned, and tools
+// must honor ctx.Done(). Optional dependencies must be nil-checked before use.
 type ToolExecuteContext struct {
 	TaskID               string
 	RunID                string
@@ -614,6 +590,7 @@ type ToolExecuteContext struct {
 	ApprovalGranted      bool
 	ApprovedOperation    string
 	ApprovedTargetObject string
+	ApprovedToolInput    map[string]any
 
 	Storage    StorageCapability
 	Platform   PlatformCapability
@@ -629,27 +606,27 @@ type ToolExecuteContext struct {
 }
 
 // ---------------------------------------------------------------------------
-// 错误类型
+// Error values.
 // ---------------------------------------------------------------------------
 
 var (
-	// ErrToolNameRequired 表示工具名称不能为空。
+	// ErrToolNameRequired reports a missing tool name.
 	ErrToolNameRequired = errors.New("tools: tool name is required")
-	// ErrToolNameInvalid 表示工具名称不符合 snake_case 规范。
+	// ErrToolNameInvalid reports a tool name that is not snake_case.
 	ErrToolNameInvalid = errors.New("tools: tool name is invalid")
-	// ErrToolSourceRequired 表示工具来源不能为空。
+	// ErrToolSourceRequired reports a missing tool source.
 	ErrToolSourceRequired = errors.New("tools: tool source is required")
-	// ErrToolSourceInvalid 表示工具来源不在允许范围内。
+	// ErrToolSourceInvalid reports an unsupported tool source.
 	ErrToolSourceInvalid = errors.New("tools: tool source is invalid")
-	// ErrToolDisplayNameRequired 表示工具显示名称不能为空。
+	// ErrToolDisplayNameRequired reports a missing display name.
 	ErrToolDisplayNameRequired = errors.New("tools: tool display_name is required")
-	// ErrToolNotFound 表示请求的工具未在 registry 中注册。
+	// ErrToolNotFound reports a registry lookup miss.
 	ErrToolNotFound = errors.New("tools: tool not found")
-	// ErrToolValidationFailed 表示工具输入校验失败。
+	// ErrToolValidationFailed reports invalid tool input.
 	ErrToolValidationFailed = errors.New("tools: tool validation failed")
-	// ErrToolExecutionFailed 表示工具执行过程中发生错误。
+	// ErrToolExecutionFailed reports a tool execution failure.
 	ErrToolExecutionFailed = errors.New("tools: tool execution failed")
-	// ErrToolExecutionTimeout 表示工具执行超时。
+	// ErrToolExecutionTimeout reports a tool execution timeout.
 	ErrToolExecutionTimeout = errors.New("tools: tool execution timeout")
 	// ErrToolOutputInvalid indicates invalid tool output.
 	ErrToolOutputInvalid = errors.New("tools: tool output invalid")
@@ -673,27 +650,26 @@ var (
 	ErrScreenKeyframeSamplingFailed = errors.New("tools: screen keyframe sampling failed")
 	// ErrScreenCleanupFailed indicates temporary screen artifact cleanup failed.
 	ErrScreenCleanupFailed = errors.New("tools: screen artifact cleanup failed")
-	// ErrToolDryRunNotSupported 表示工具不支持预检查模式。
+	// ErrToolDryRunNotSupported reports a tool that cannot run in precheck mode.
 	ErrToolDryRunNotSupported = errors.New("tools: tool dry run not supported")
-	// ErrToolDuplicateName 表示注册时发现同名工具已存在。
+	// ErrToolDuplicateName reports a duplicate registry name.
 	ErrToolDuplicateName = errors.New("tools: duplicate tool name")
-	// ErrApprovalRequired 表示命中审批门禁，当前执行被阻塞。
+	// ErrApprovalRequired reports an execution blocked by authorization gates.
 	ErrApprovalRequired = errors.New("tools: approval required")
-	// ErrWorkspaceBoundaryDenied 表示目标路径超出工作区边界。
+	// ErrWorkspaceBoundaryDenied reports a target outside the workspace boundary.
 	ErrWorkspaceBoundaryDenied = errors.New("tools: workspace boundary denied")
-	// ErrCommandNotAllowed 表示命中了被拦截的危险命令。
+	// ErrCommandNotAllowed reports a blocked dangerous command.
 	ErrCommandNotAllowed = errors.New("tools: command not allowed")
-	// ErrCapabilityDenied 表示当前平台能力不足，无法安全执行。
+	// ErrCapabilityDenied reports missing platform capability for safe execution.
 	ErrCapabilityDenied = errors.New("tools: capability denied")
 )
 
 // ---------------------------------------------------------------------------
-// 辅助函数
+// Helpers.
 // ---------------------------------------------------------------------------
 
-// isSnakeCase 判断字符串是否符合 snake_case 规范。
-//
-// 允许小写字母、数字和下划线，不允许大写字母、连字符或空格。
+// isSnakeCase reports whether s uses lower snake_case with digits after the
+// first character.
 func isSnakeCase(s string) bool {
 	if s == "" {
 		return false

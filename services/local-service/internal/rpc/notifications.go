@@ -44,7 +44,7 @@ func requestRoutingHints(request requestEnvelope) (map[string]bool, string, stri
 }
 
 func shouldTrackStartedTask(method string) bool {
-	return method == "agent.task.start" || method == "agent.input.submit"
+	return method == methodAgentTaskStart || method == methodAgentInputSubmit || method == methodAgentNotepadConvertToTask
 }
 
 // shouldClaimResponseTaskOwnership scopes late response-based task ownership to

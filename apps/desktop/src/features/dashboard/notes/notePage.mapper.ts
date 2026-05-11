@@ -50,10 +50,53 @@ export function describeNotePreview(item: TodoItem, experience: NoteDetailExperi
   }
 
   if (item.bucket === "recurring_rule") {
+    if (experience.isRecurringEnabled === false) {
+      return "重复规则 · 已暂停";
+    }
+
     return `${experience.repeatRule ?? "重复规则"} · 下次 ${experience.timeHint}`;
   }
 
   return `${experience.previewStatus} · ${experience.timeHint}`;
+}
+
+export function formatNoteBoardTimeHint(item: TodoItem, experience: NoteDetailExperience) {
+  if (item.bucket === "recurring_rule") {
+    if (experience.isRecurringEnabled === false) {
+      return "重复已暂停";
+    }
+
+    return `下次执行 ${experience.timeHint}`;
+  }
+
+  if (item.bucket === "closed") {
+    return `结束时间 ${experience.timeHint}`;
+  }
+
+  return `开始时间 ${experience.timeHint}`;
+}
+
+/**
+ * Strips Windows extended-path prefixes from note UI copy while keeping the
+ * underlying filesystem path untouched for open/reveal actions.
+ *
+ * @param value Raw path-like text from note metadata or related resources.
+ * @returns User-facing path text without the `\\?\` prefix.
+ */
+export function formatNoteDisplayPath(value: string | null | undefined) {
+  if (!value) {
+    return "";
+  }
+
+  if (value.startsWith("\\\\?\\UNC\\")) {
+    return `\\\\${value.slice("\\\\?\\UNC\\".length)}`;
+  }
+
+  if (value.startsWith("\\\\?\\")) {
+    return value.slice("\\\\?\\".length);
+  }
+
+  return value;
 }
 
 export function buildNoteSummary(groups: Pick<Record<NotePreviewGroupKey, NoteListItem[]>, "upcoming" | "recurring_rule">) {

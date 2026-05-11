@@ -1,8 +1,7 @@
 package risk
 
-// RiskLevel 定义风险等级。
-//
-// 取值严格对齐已冻结枚举：green / yellow / red。
+// RiskLevel is the canonical risk level used by backend risk decisions.
+// Values must stay aligned with the frozen green/yellow/red protocol semantics.
 type RiskLevel string
 
 const (
@@ -22,10 +21,8 @@ const (
 	ReasonNormal            = "normal"
 )
 
-// ImpactScope 是 risk 模块内部使用的最小影响面结构。
-//
-// 字段语义对齐 protocol 中已定义的 ImpactScope，
-// 但本类型只在后端 risk 模块内部使用，不直接替代协议真源。
+// ImpactScope is the module-local impact shape used before protocol mapping.
+// It mirrors the protocol ImpactScope fields without replacing the source of truth.
 type ImpactScope struct {
 	Files                 []string
 	Webpages              []string
@@ -34,9 +31,8 @@ type ImpactScope struct {
 	OverwriteOrDeleteRisk bool
 }
 
-// AssessmentInput 描述一次风险评估的最小输入。
-//
-// 本阶段只保留 risk 模块真正需要的判断信息，避免侵入主链路状态机。
+// AssessmentInput is the minimal data needed for one risk evaluation.
+// It avoids pulling task state-machine details into the risk package.
 type AssessmentInput struct {
 	OperationName       string
 	TargetObject        string
@@ -46,11 +42,9 @@ type AssessmentInput struct {
 	ImpactScope         ImpactScope
 }
 
-// AssessmentResult 描述一次风险评估的最小结果。
-//
-// approval_required 表示应交由上层进入人工确认流；
-// deny 表示当前模块建议直接拦截，不进入执行；
-// reason 用于上层构造统一错误或审批原因，但不直接等同完整协议对象。
+// AssessmentResult is the minimal risk decision returned to orchestrator.
+// ApprovalRequired asks the caller to enter authorization, Deny blocks execution,
+// and Reason stays a local explanation rather than a full protocol object.
 type AssessmentResult struct {
 	RiskLevel          RiskLevel
 	ApprovalRequired   bool
