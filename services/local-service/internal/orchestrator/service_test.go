@@ -19,6 +19,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/agentloop"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
@@ -2453,8 +2454,7 @@ func TestServiceConfirmTaskConsumesCorrectionTextOnSameTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start task failed: %v", err)
 	}
-	startTask := startResult["task"].(map[string]any)
-	taskID := startTask["task_id"].(string)
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
 
 	confirmResult, err := service.ConfirmTask(map[string]any{
 		"task_id":         taskID,
@@ -2514,7 +2514,6 @@ func TestServiceConfirmTaskRejectsCorrectionPayloadConflicts(t *testing.T) {
 		t.Fatalf("start task failed: %v", err)
 	}
 	taskID := startResult["task"].(map[string]any)["task_id"].(string)
-
 	_, err = service.ConfirmTask(map[string]any{
 		"task_id":   taskID,
 		"confirmed": true,
@@ -5524,6 +5523,199 @@ func TestServiceStartTaskWaitingAuthDoesNotSetFinishedAt(t *testing.T) {
 	}
 	if record.FinishedAt != nil {
 		t.Fatal("expected runtime waiting_auth task to keep finished_at nil")
+	}
+}
+
+func TestServiceAgentLoopToolApprovalPausesWaitingAuth(t *testing.T) {
+	modelClient := &stubToolCallingModelClient{
+		toolCalls: []model.ToolCallResult{{
+			RequestID: "req_agent_loop_page_read",
+			Provider:  "openai_responses",
+			ModelID:   "gpt-5.4",
+			ToolCalls: []model.ToolInvocation{{
+				Name:      "page_read",
+				Arguments: map[string]any{"url": "http://127.0.0.1:8080/approval"},
+			}},
+		}},
+	}
+	service, _ := newTestServiceWithModelClient(t, modelClient)
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_agent_loop_auth",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "去 http://127.0.0.1:8080/approval 看一下页面内容",
+		},
+		"intent": map[string]any{
+			"name":      "agent_loop",
+			"arguments": map[string]any{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	startedTask := startResult["task"].(map[string]any)
+	if startedTask["status"] != "waiting_auth" || startedTask["current_step"] != "waiting_authorization" {
+		t.Fatalf("expected runtime approval to enter waiting_auth, got %+v", startedTask)
+	}
+	if startResult["delivery_result"] != nil {
+		t.Fatalf("expected runtime approval pause not to produce delivery_result, got %+v", startResult["delivery_result"])
+	}
+	taskID := startedTask["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected task to remain in runtime")
+	}
+	if record.LoopStopReason != string(agentloop.StopReasonNeedAuthorization) {
+		t.Fatalf("expected loop stop reason need_authorization, got %q", record.LoopStopReason)
+	}
+	if record.ApprovalRequest == nil || stringValue(record.ApprovalRequest, "operation_name", "") != "page_read" {
+		t.Fatalf("expected page_read approval request, got %+v", record.ApprovalRequest)
+	}
+	if stringValue(record.PendingExecution, "operation_name", "") != "page_read" || stringValue(record.PendingExecution, "target_object", "") != "http://127.0.0.1:8080/approval" {
+		t.Fatalf("expected pending execution to preserve runtime tool target, got %+v", record.PendingExecution)
+	}
+	if !reflect.DeepEqual(mapValue(record.PendingExecution, "approved_tool_input"), map[string]any{"url": "http://127.0.0.1:8080/approval"}) {
+		t.Fatalf("expected pending execution to preserve exact runtime tool input, got %+v", record.PendingExecution)
+	}
+	notifications, ok := service.runEngine.PendingNotifications(taskID)
+	if !ok {
+		t.Fatal("expected waiting task notifications")
+	}
+	hasApprovalPending := false
+	for _, notification := range notifications {
+		if notification.Method == "approval.pending" {
+			hasApprovalPending = true
+			break
+		}
+	}
+	if !hasApprovalPending {
+		t.Fatalf("expected approval.pending notification, got %+v", notifications)
+	}
+}
+
+func TestServiceRuntimeApprovalResumeRejectsChangedToolInput(t *testing.T) {
+	modelClient := &stubToolCallingModelClient{
+		toolCalls: []model.ToolCallResult{
+			{
+				RequestID: "req_agent_loop_search_first",
+				Provider:  "openai_responses",
+				ModelID:   "gpt-5.4",
+				ToolCalls: []model.ToolInvocation{{
+					Name: "page_search",
+					Arguments: map[string]any{
+						"url":   "http://127.0.0.1:8080/search",
+						"query": "billing",
+						"limit": 3,
+					},
+				}},
+			},
+			{
+				RequestID: "req_agent_loop_search_second",
+				Provider:  "openai_responses",
+				ModelID:   "gpt-5.4",
+				ToolCalls: []model.ToolInvocation{{
+					Name: "page_search",
+					Arguments: map[string]any{
+						"url":   "http://127.0.0.1:8080/search",
+						"query": "security",
+						"limit": 3,
+					},
+				}},
+			},
+		},
+	}
+	service, _ := newTestServiceWithModelClient(t, modelClient)
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_agent_loop_exec_auth",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "先看看当前仓库状态",
+		},
+		"intent": map[string]any{
+			"name":      "agent_loop",
+			"arguments": map[string]any{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	if startResult["task"].(map[string]any)["status"] != "waiting_auth" {
+		t.Fatalf("expected first runtime approval to enter waiting_auth, got %+v", startResult["task"])
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	firstRecord, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected first waiting_auth task record")
+	}
+	firstApprovedInput := map[string]any{
+		"url":   "http://127.0.0.1:8080/search",
+		"query": "billing",
+		"limit": 3,
+	}
+	if !reflect.DeepEqual(mapValue(firstRecord.PendingExecution, "approved_tool_input"), firstApprovedInput) {
+		t.Fatalf("expected first runtime approval to preserve exact tool input, got %+v", firstRecord.PendingExecution)
+	}
+
+	respondResult, err := service.SecurityRespond(map[string]any{
+		"task_id":     taskID,
+		"approval_id": activeApprovalIDForTask(t, service, taskID),
+		"decision":    "allow_once",
+	})
+	if err != nil {
+		t.Fatalf("security respond allow_once failed: %v", err)
+	}
+
+	respondTask := respondResult["task"].(map[string]any)
+	if respondTask["status"] != "waiting_auth" {
+		t.Fatalf("expected changed replay input to require fresh approval, got %+v", respondTask)
+	}
+	secondRecord, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected second waiting_auth task record")
+	}
+	secondApprovedInput := map[string]any{
+		"url":   "http://127.0.0.1:8080/search",
+		"query": "security",
+		"limit": 3,
+	}
+	if !reflect.DeepEqual(mapValue(secondRecord.PendingExecution, "approved_tool_input"), secondApprovedInput) {
+		t.Fatalf("expected renewed approval to track second tool input, got %+v", secondRecord.PendingExecution)
+	}
+}
+
+func TestRuntimeApprovalTargetObjectPreservesBrowserSelectors(t *testing.T) {
+	titleTarget := runtimeApprovalTargetObject(tools.ToolCallRecord{
+		ToolName: "browser_attach_current",
+		Input: map[string]any{
+			"attach": map[string]any{
+				"browser_kind": "chrome",
+				"target":       map[string]any{"title_contains": "Pinned Tab"},
+			},
+		},
+	})
+	if titleTarget != "Pinned Tab" {
+		t.Fatalf("expected browser title selector target, got %q", titleTarget)
+	}
+
+	tabTarget := runtimeApprovalTargetObject(tools.ToolCallRecord{
+		ToolName: "browser_tab_focus",
+		Input: map[string]any{
+			"attach": map[string]any{
+				"browser_kind": "chrome",
+				"target":       map[string]any{"page_index": 2},
+			},
+		},
+	})
+	if tabTarget != "browser_tab:2" {
+		t.Fatalf("expected browser tab selector target, got %q", tabTarget)
 	}
 }
 
@@ -17922,16 +18114,8 @@ func TestServiceStartTaskWithExecutorDeliversPageReadResultPage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start task failed: %v", err)
 	}
-	if result["task"].(map[string]any)["status"] != "waiting_auth" {
-		t.Fatalf("expected page_read task to wait for authorization, got %+v", result)
-	}
-	result, err = service.SecurityRespond(map[string]any{
-		"task_id":     result["task"].(map[string]any)["task_id"],
-		"approval_id": activeApprovalIDForTask(t, service, result["task"].(map[string]any)["task_id"].(string)),
-		"decision":    "allow_once",
-	})
-	if err != nil {
-		t.Fatalf("security respond failed: %v", err)
+	if result["task"].(map[string]any)["status"] != "completed" {
+		t.Fatalf("expected page_read task to complete without authorization, got %+v", result)
 	}
 
 	taskID := result["task"].(map[string]any)["task_id"].(string)
@@ -18004,16 +18188,8 @@ func TestServiceStartTaskWithExecutorDeliversPageSearchResultPage(t *testing.T) 
 	if err != nil {
 		t.Fatalf("start task failed: %v", err)
 	}
-	if result["task"].(map[string]any)["status"] != "waiting_auth" {
-		t.Fatalf("expected page_search task to wait for authorization, got %+v", result)
-	}
-	result, err = service.SecurityRespond(map[string]any{
-		"task_id":     result["task"].(map[string]any)["task_id"],
-		"approval_id": activeApprovalIDForTask(t, service, result["task"].(map[string]any)["task_id"].(string)),
-		"decision":    "allow_once",
-	})
-	if err != nil {
-		t.Fatalf("security respond failed: %v", err)
+	if result["task"].(map[string]any)["status"] != "completed" {
+		t.Fatalf("expected page_search task to complete without authorization, got %+v", result)
 	}
 	taskID := result["task"].(map[string]any)["task_id"].(string)
 	deliveryResult := result["delivery_result"].(map[string]any)
@@ -18161,16 +18337,8 @@ func TestServiceStartTaskWithExecutorPageReadFailureUsesUnifiedError(t *testing.
 	if err != nil {
 		t.Fatalf("start task should return task-centric failure result, got %v", err)
 	}
-	if result["task"].(map[string]any)["status"] != "waiting_auth" {
-		t.Fatalf("expected page_read failure task to wait for authorization, got %+v", result)
-	}
-	result, err = service.SecurityRespond(map[string]any{
-		"task_id":     result["task"].(map[string]any)["task_id"],
-		"approval_id": activeApprovalIDForTask(t, service, result["task"].(map[string]any)["task_id"].(string)),
-		"decision":    "allow_once",
-	})
-	if err != nil {
-		t.Fatalf("security respond should surface task-centric failure result, got %v", err)
+	if result["task"].(map[string]any)["status"] != "failed" {
+		t.Fatalf("expected page_read failure task to fail without authorization, got %+v", result)
 	}
 	taskID := result["task"].(map[string]any)["task_id"].(string)
 	if result["delivery_result"] != nil {
@@ -18238,7 +18406,7 @@ func TestServiceStartTaskWithRealLocalPageReadDelivery(t *testing.T) {
 		t.Fatalf("start task failed: %v", err)
 	}
 	if result["task"].(map[string]any)["status"] != "waiting_auth" {
-		t.Fatalf("expected real page_read task to wait for authorization, got %+v", result)
+		t.Fatalf("expected real page_read task to wait for authorization for loopback target, got %+v", result)
 	}
 	result, err = service.SecurityRespond(map[string]any{
 		"task_id":     result["task"].(map[string]any)["task_id"],

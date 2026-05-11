@@ -155,11 +155,20 @@
   overflow-wrap: anywhere;
 }
 
+.task-delivery-page__inline-link,
 .task-delivery-page__payload-list a {
+  appearance: none;
+  background: none;
+  border: 0;
   color: var(--task-accent-strong);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-align: left;
   text-decoration: none;
 }
 
+.task-delivery-page__inline-link:hover,
 .task-delivery-page__payload-list a:hover {
   text-decoration: underline;
 }

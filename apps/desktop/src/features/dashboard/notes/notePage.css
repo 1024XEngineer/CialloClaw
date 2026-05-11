@@ -24,6 +24,10 @@
   position: relative;
 }
 
+.dashboard-page.note-preview-page {
+  padding: var(--note-canvas-inset);
+}
+
 .app-shell.note-preview-page {
   padding: 0;
 }

@@ -134,16 +134,12 @@ func (s *Service) recordInspectorTitleGeneration(inspectionID string, reason str
 }
 
 func modelInvocationTokenUsage(invocation model.InvocationRecord) map[string]any {
-	return map[string]any{
-		"input_tokens":   invocation.Usage.InputTokens,
-		"output_tokens":  invocation.Usage.OutputTokens,
-		"total_tokens":   invocation.Usage.TotalTokens,
-		"estimated_cost": 0.0,
-		"request_id":     invocation.RequestID,
-		"provider":       invocation.Provider,
-		"model_id":       invocation.ModelID,
-		"latency_ms":     invocation.LatencyMS,
-	}
+	return auxiliaryTokenUsageSummary{
+		InputTokens:   invocation.Usage.InputTokens,
+		OutputTokens:  invocation.Usage.OutputTokens,
+		TotalTokens:   invocation.Usage.TotalTokens,
+		EstimatedCost: 0.0,
+	}.Map()
 }
 
 func inspectorConfigFromSettings(settings map[string]any) map[string]any {

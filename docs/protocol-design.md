@@ -4349,7 +4349,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - `task.updated`：任务主状态或关键摘要变化；通知参数至少包含 `task_id`、`session_id`、`status`
 - `delivery.ready`：正式交付已可被前端承接
-- `approval.pending`：出现待授权动作
+- `approval.pending`：出现待授权动作；既可来自执行前治理预检，也可来自 `agent_loop` 运行中命中的具体工具调用
 - `task.steered`：运行中补充要求已经写入任务链
 - `task.session_queued`：同一 `session` 下的新任务进入串行等待
 - `task.session_resumed`：队列中的任务重新恢复执行

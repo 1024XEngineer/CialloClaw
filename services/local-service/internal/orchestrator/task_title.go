@@ -12,6 +12,84 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/titlegen"
 )
 
+type auxiliaryTokenUsageSummary struct {
+	InputTokens   int
+	OutputTokens  int
+	TotalTokens   int
+	EstimatedCost float64
+}
+
+func (s auxiliaryTokenUsageSummary) Map() map[string]any {
+	return map[string]any{
+		"input_tokens":   s.InputTokens,
+		"output_tokens":  s.OutputTokens,
+		"total_tokens":   s.TotalTokens,
+		"estimated_cost": s.EstimatedCost,
+	}
+}
+
+type taskUpdatedNotification struct {
+	TaskID    string
+	SessionID any
+	Status    string
+}
+
+func (n taskUpdatedNotification) Map() map[string]any {
+	return map[string]any{
+		"task_id":    n.TaskID,
+		"session_id": n.SessionID,
+		"status":     n.Status,
+	}
+}
+
+type titleGenerationAuditMetadata struct {
+	FallbackTitle  string
+	GeneratedTitle string
+	Provider       string
+	ModelID        string
+	RequestID      string
+	LatencyMS      int64
+}
+
+func (m titleGenerationAuditMetadata) Map() map[string]any {
+	return map[string]any{
+		"fallback_title":  m.FallbackTitle,
+		"generated_title": m.GeneratedTitle,
+		"provider":        m.Provider,
+		"model_id":        m.ModelID,
+		"request_id":      m.RequestID,
+		"latency_ms":      m.LatencyMS,
+	}
+}
+
+type titleGenerationAuditRecord struct {
+	AuditID   string
+	TaskID    string
+	RunID     string
+	Type      string
+	Action    string
+	Summary   string
+	Target    string
+	Result    string
+	CreatedAt string
+	Metadata  titleGenerationAuditMetadata
+}
+
+func (r titleGenerationAuditRecord) Map() map[string]any {
+	return map[string]any{
+		"audit_id":   r.AuditID,
+		"task_id":    r.TaskID,
+		"run_id":     r.RunID,
+		"type":       r.Type,
+		"action":     r.Action,
+		"summary":    r.Summary,
+		"target":     r.Target,
+		"result":     r.Result,
+		"created_at": r.CreatedAt,
+		"metadata":   r.Metadata.Map(),
+	}
+}
+
 // fallbackTaskTitle keeps the task lifecycle synchronous by using deterministic
 // local data on the hot path. Model-backed refinement, when enabled, happens
 // after the formal task mutation succeeds.
@@ -65,11 +143,11 @@ func (s *Service) scheduleTaskTitleRefresh(task runengine.TaskRecord, snapshot t
 		}
 		// Async title refinement must emit a live task.updated notification because
 		// it happens after the original RPC response has usually already drained.
-		s.publishRuntimeNotification(taskID, "task.updated", map[string]any{
-			"task_id":    updatedTask.TaskID,
-			"session_id": nonEmptySessionID(updatedTask.SessionID),
-			"status":     updatedTask.Status,
-		})
+		s.publishRuntimeNotification(taskID, "task.updated", taskUpdatedNotification{
+			TaskID:    updatedTask.TaskID,
+			SessionID: nonEmptySessionID(updatedTask.SessionID),
+			Status:    updatedTask.Status,
+		}.Map())
 	}()
 }
 
@@ -104,36 +182,36 @@ func (s *Service) appendTaskTitleGenerationAudit(task runengine.TaskRecord, inte
 		summary = "task title model call fell back to local task title"
 		outputResult = "fallback"
 	}
-	record := map[string]any{
-		"audit_id":   fmt.Sprintf("audit_title_%s_%d", task.TaskID, time.Now().UTC().UnixNano()),
-		"task_id":    task.TaskID,
-		"run_id":     task.RunID,
-		"type":       "model",
-		"action":     "title.generate",
-		"summary":    summary,
-		"target":     firstNonEmptyString(intentName, "task_title"),
-		"result":     outputResult,
-		"created_at": time.Now().UTC().Format(time.RFC3339Nano),
-		"metadata": map[string]any{
-			"fallback_title":  fallbackTitle,
-			"generated_title": result.Title,
-			"provider":        result.Invocation.Provider,
-			"model_id":        result.Invocation.ModelID,
-			"request_id":      result.Invocation.RequestID,
-			"latency_ms":      result.Invocation.LatencyMS,
+	record := titleGenerationAuditRecord{
+		AuditID:   fmt.Sprintf("audit_title_%s_%d", task.TaskID, time.Now().UTC().UnixNano()),
+		TaskID:    task.TaskID,
+		RunID:     task.RunID,
+		Type:      "model",
+		Action:    "title.generate",
+		Summary:   summary,
+		Target:    firstNonEmptyString(intentName, "task_title"),
+		Result:    outputResult,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Metadata: titleGenerationAuditMetadata{
+			FallbackTitle:  fallbackTitle,
+			GeneratedTitle: result.Title,
+			Provider:       result.Invocation.Provider,
+			ModelID:        result.Invocation.ModelID,
+			RequestID:      result.Invocation.RequestID,
+			LatencyMS:      result.Invocation.LatencyMS,
 		},
 	}
-	_, _ = s.runEngine.AppendAuditData(task.TaskID, []map[string]any{record}, titleGenerationTokenUsage(*result.Invocation))
+	_, _ = s.runEngine.AppendAuditData(task.TaskID, []map[string]any{record.Map()}, titleGenerationTokenUsage(*result.Invocation))
 }
 
 func titleGenerationTokenUsage(invocation model.InvocationRecord) map[string]any {
 	// Task-level token totals should include auxiliary title generation, but the
 	// representative request metadata must keep pointing at the primary execution
 	// request instead of whichever refinement goroutine finished last.
-	return map[string]any{
-		"input_tokens":   invocation.Usage.InputTokens,
-		"output_tokens":  invocation.Usage.OutputTokens,
-		"total_tokens":   invocation.Usage.TotalTokens,
-		"estimated_cost": 0.0,
-	}
+	return auxiliaryTokenUsageSummary{
+		InputTokens:   invocation.Usage.InputTokens,
+		OutputTokens:  invocation.Usage.OutputTokens,
+		TotalTokens:   invocation.Usage.TotalTokens,
+		EstimatedCost: 0.0,
+	}.Map()
 }
