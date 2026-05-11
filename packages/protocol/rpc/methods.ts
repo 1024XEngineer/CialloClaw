@@ -271,15 +271,19 @@ export interface AgentTaskStartResult {
   delivery_result: DeliveryResult | null;
 }
 
-// AgentTaskConfirmParams 定义当前模块的接口约束。
+// AgentTaskConfirmParams carries the confirmation decision or exactly one
+// correction path for a task that is still waiting at confirming_intent.
 export interface AgentTaskConfirmParams {
   request_meta: RequestMeta;
   task_id: string;
   confirmed: boolean;
   corrected_intent?: IntentPayload;
+  correction_text?: string;
 }
 
-// AgentTaskConfirmResult 定义当前模块的接口约束。
+// AgentTaskConfirmResult returns the same task projection after confirmation,
+// direct natural-language correction execution, or a clarification gate when
+// the caller still needs to provide a usable correction.
 export interface AgentTaskConfirmResult {
   task: Task;
   bubble_message: BubbleMessage | null;

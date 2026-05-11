@@ -169,7 +169,7 @@ export function getTaskStateVoice(task: Task, experience: TaskExperience, timeli
 
   return {
     title: "已结束",
-    body: experience.endedSummary ?? "当前任务已经收束，可查看产出摘要或重新启动。",
+    body: experience.endedSummary ?? "当前任务已经收束。",
   };
 }
 
