@@ -1,5 +1,5 @@
 import { Camera, Mesh, Plane, Program, Renderer, Texture, Transform } from "ogl";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type GL = any;
 
@@ -95,16 +95,21 @@ class Title {
     });
     this.mesh = new Mesh(this.gl, { geometry, program });
     const aspect = width / height;
-    const textHeightScaled = this.plane.scale.y * 0.15;
+    const textHeightScaled = this.plane.scale.y * 0.24;
     const textWidthScaled = textHeightScaled * aspect;
     this.mesh.scale.set(textWidthScaled, textHeightScaled, 1);
-    this.mesh.position.y = -this.plane.scale.y * 0.5 - textHeightScaled * 0.5 - 0.05;
+    this.mesh.position.y = -this.plane.scale.y * 0.5 - textHeightScaled * 0.62 - 0.08;
     this.mesh.setParent(this.plane);
   }
 }
 
 type ScreenSize = { width: number; height: number };
 type Viewport = { width: number; height: number };
+
+const GALLERY_CARD_SCALE = 1.5;
+const GALLERY_CARD_ASPECT_RATIO = 16 / 9;
+const GALLERY_CARD_BASE_HEIGHT = 700;
+const GALLERY_CARD_BASE_WIDTH = GALLERY_CARD_BASE_HEIGHT * GALLERY_CARD_ASPECT_RATIO;
 
 type MediaProps = {
   geometry: any;
@@ -121,6 +126,7 @@ type MediaProps = {
   textColor: string;
   borderRadius?: number;
   font?: string;
+  onTextureReady?: () => void;
 };
 
 class Media {
@@ -139,6 +145,7 @@ class Media {
   textColor: string;
   borderRadius: number;
   font?: string;
+  onTextureReady?: () => void;
   program!: any;
   plane!: any;
   title!: Title;
@@ -151,7 +158,7 @@ class Media {
   isBefore = false;
   isAfter = false;
 
-  constructor({ geometry, gl, image, index, length, renderer, scene, screen, text, viewport, bend, textColor, borderRadius = 0, font }: MediaProps) {
+  constructor({ geometry, gl, image, index, length, renderer, scene, screen, text, viewport, bend, textColor, borderRadius = 0, font, onTextureReady }: MediaProps) {
     this.geometry = geometry;
     this.gl = gl;
     this.image = image;
@@ -166,6 +173,7 @@ class Media {
     this.textColor = textColor;
     this.borderRadius = borderRadius;
     this.font = font;
+    this.onTextureReady = onTextureReady;
     this.createShader();
     this.createMesh();
     this.createTitle();
@@ -178,7 +186,7 @@ class Media {
       depthTest: false,
       depthWrite: false,
       vertex: `precision highp float; attribute vec3 position; attribute vec2 uv; uniform mat4 modelViewMatrix; uniform mat4 projectionMatrix; uniform float uTime; uniform float uSpeed; varying vec2 vUv; void main(){vUv=uv; vec3 p=position; p.z=(sin(p.x*4.0+uTime)*1.5+cos(p.y*2.0+uTime)*1.5)*(0.1+uSpeed*0.5); gl_Position=projectionMatrix*modelViewMatrix*vec4(p,1.0);}`,
-      fragment: `precision highp float; uniform vec2 uImageSizes; uniform vec2 uPlaneSizes; uniform sampler2D tMap; uniform float uBorderRadius; varying vec2 vUv; float roundedBoxSDF(vec2 p, vec2 b, float r){vec2 d=abs(p)-b; return length(max(d, vec2(0.0))) + min(max(d.x,d.y),0.0)-r;} void main(){vec2 ratio=vec2(min((uPlaneSizes.x/uPlaneSizes.y)/(uImageSizes.x/uImageSizes.y),1.0), min((uPlaneSizes.y/uPlaneSizes.x)/(uImageSizes.y/uImageSizes.x),1.0)); vec2 uv=vec2(vUv.x*ratio.x+(1.0-ratio.x)*0.5, vUv.y*ratio.y+(1.0-ratio.y)*0.5); vec4 color=texture2D(tMap,uv); float d=roundedBoxSDF(vUv-0.5, vec2(0.5-uBorderRadius), uBorderRadius); float edgeSmooth=0.002; float alpha=1.0-smoothstep(-edgeSmooth,edgeSmooth,d); gl_FragColor=vec4(color.rgb, alpha);}`,
+      fragment: `precision highp float; uniform vec2 uImageSizes; uniform vec2 uPlaneSizes; uniform sampler2D tMap; uniform float uBorderRadius; varying vec2 vUv; float roundedBoxSDF(vec2 p, vec2 b, float r){vec2 d=abs(p)-b; return length(max(d, vec2(0.0))) + min(max(d.x,d.y),0.0)-r;} void main(){vec2 planeSizes=max(uPlaneSizes,vec2(1.0)); vec2 imageSizes=max(uImageSizes,vec2(1.0)); float planeAspect=planeSizes.x/planeSizes.y; float imageAspect=imageSizes.x/imageSizes.y; vec2 fit=planeAspect>imageAspect?vec2(imageAspect/planeAspect,1.0):vec2(1.0,planeAspect/imageAspect); vec2 uv=(vUv-0.5)/fit+0.5; float inside=step(0.0,uv.x)*step(uv.x,1.0)*step(0.0,uv.y)*step(uv.y,1.0); vec4 color=texture2D(tMap,clamp(uv,0.0,1.0)); float d=roundedBoxSDF(vUv-0.5, vec2(0.5-uBorderRadius), uBorderRadius); float edgeSmooth=0.002; float alpha=(1.0-smoothstep(-edgeSmooth,edgeSmooth,d))*inside; gl_FragColor=vec4(color.rgb, alpha);}`,
       uniforms: {
         tMap: { value: texture },
         uPlaneSizes: { value: [0, 0] },
@@ -195,6 +203,10 @@ class Media {
     img.onload = () => {
       texture.image = img;
       this.program.uniforms.uImageSizes.value = [img.naturalWidth, img.naturalHeight];
+      this.onTextureReady?.();
+    };
+    img.onerror = () => {
+      this.onTextureReady?.();
     };
   }
 
@@ -258,13 +270,13 @@ class Media {
     if (screen) this.screen = screen;
     if (viewport) this.viewport = viewport;
     this.scale = this.screen.height / 1500;
-    this.plane.scale.y = (this.viewport.height * (900 * this.scale)) / this.screen.height;
-    this.plane.scale.x = (this.viewport.width * (700 * this.scale)) / this.screen.width;
+    this.plane.scale.y = (this.viewport.height * (GALLERY_CARD_BASE_HEIGHT * GALLERY_CARD_SCALE * this.scale)) / this.screen.height;
+    this.plane.scale.x = (this.viewport.width * (GALLERY_CARD_BASE_WIDTH * GALLERY_CARD_SCALE * this.scale)) / this.screen.width;
     this.plane.program.uniforms.uPlaneSizes.value = [this.plane.scale.x, this.plane.scale.y];
     this.padding = 2;
     this.width = this.plane.scale.x + this.padding;
     this.widthTotal = this.width * this.length;
-    this.x = this.width * this.index;
+    this.x = -this.viewport.width / 2 + this.plane.scale.x / 2 + this.width * this.index;
   }
 }
 
@@ -276,6 +288,7 @@ type AppConfig = {
   font?: string;
   scrollSpeed?: number;
   scrollEase?: number;
+  onReady?: () => void;
 };
 
 class App {
@@ -299,15 +312,23 @@ class App {
   boundOnTouchDown!: (e: MouseEvent | TouchEvent) => void;
   boundOnTouchMove!: (e: MouseEvent | TouchEvent) => void;
   boundOnTouchUp!: () => void;
+  boundOnPointerEnter!: () => void;
+  boundOnPointerLeave!: () => void;
   isDown = false;
+  isHovered = false;
   start = 0;
+  totalTextures = 0;
+  readyTextures = 0;
+  hasAnnouncedReady = false;
+  onReady?: () => void;
 
-  constructor(container: HTMLElement, { items, bend = 1, textColor = "#ffffff", borderRadius = 0, font = "bold 30px Figtree", scrollSpeed = 2, scrollEase = 0.05 }: AppConfig) {
+  constructor(container: HTMLElement, { items, bend = 1, textColor = "#ffffff", borderRadius = 0, font = "bold 30px Figtree", scrollSpeed = 2, scrollEase = 0.05, onReady }: AppConfig) {
     document.documentElement.classList.remove("no-js");
     this.container = container;
     this.scrollSpeed = scrollSpeed;
-    this.autoScrollSpeed = scrollSpeed * 0.18;
+    this.autoScrollSpeed = scrollSpeed * 0.045;
     this.scroll = { ease: scrollEase, current: 0, target: 0, last: 0 };
+    this.onReady = onReady;
     this.onCheckDebounce = debounce(this.onCheck.bind(this), 200);
     this.createRenderer();
     this.createCamera();
@@ -323,7 +344,11 @@ class App {
     this.renderer = new Renderer({ alpha: true, antialias: true, dpr: Math.min(window.devicePixelRatio || 1, 2) });
     this.gl = this.renderer.gl;
     this.gl.clearColor(0, 0, 0, 0);
-    this.container.appendChild(this.renderer.gl.canvas as HTMLCanvasElement);
+    const canvas = this.renderer.gl.canvas as HTMLCanvasElement;
+    canvas.style.width = "100%";
+    canvas.style.height = "100%";
+    canvas.style.display = "block";
+    this.container.appendChild(canvas);
   }
 
   createCamera() {
@@ -349,6 +374,9 @@ class App {
     ];
     const galleryItems = items && items.length ? items : defaultItems;
     this.mediasImages = galleryItems.concat(galleryItems);
+    this.totalTextures = this.mediasImages.length;
+    this.readyTextures = 0;
+    this.hasAnnouncedReady = false;
     this.medias = this.mediasImages.map((data, index) =>
       new Media({
         geometry: this.planeGeometry,
@@ -365,8 +393,17 @@ class App {
         textColor,
         borderRadius,
         font,
+        onTextureReady: this.handleTextureReady.bind(this),
       }),
     );
+  }
+
+  handleTextureReady() {
+    this.readyTextures += 1;
+    if (!this.hasAnnouncedReady && this.readyTextures >= this.totalTextures) {
+      this.hasAnnouncedReady = true;
+      this.onReady?.();
+    }
   }
 
   onTouchDown(e: MouseEvent | TouchEvent) {
@@ -384,6 +421,14 @@ class App {
 
   onTouchUp() {
     this.isDown = false;
+  }
+
+  onPointerEnter() {
+    this.isHovered = true;
+  }
+
+  onPointerLeave() {
+    this.isHovered = false;
   }
 
   onWheel(e: Event) {
@@ -410,7 +455,7 @@ class App {
   }
 
   update() {
-    if (!this.isDown) {
+    if (!this.isDown && !this.isHovered) {
       this.scroll.target += this.autoScrollSpeed;
     }
     this.scroll.current = lerp(this.scroll.current, this.scroll.target, this.scroll.ease);
@@ -429,9 +474,13 @@ class App {
     this.boundOnTouchDown = this.onTouchDown.bind(this);
     this.boundOnTouchMove = this.onTouchMove.bind(this);
     this.boundOnTouchUp = this.onTouchUp.bind(this);
+    this.boundOnPointerEnter = this.onPointerEnter.bind(this);
+    this.boundOnPointerLeave = this.onPointerLeave.bind(this);
     window.addEventListener("resize", this.boundOnResize);
     window.addEventListener("mousewheel", this.boundOnWheel);
     window.addEventListener("wheel", this.boundOnWheel);
+    this.container.addEventListener("mouseenter", this.boundOnPointerEnter);
+    this.container.addEventListener("mouseleave", this.boundOnPointerLeave);
     this.container.addEventListener("mousedown", this.boundOnTouchDown);
     window.addEventListener("mousemove", this.boundOnTouchMove);
     window.addEventListener("mouseup", this.boundOnTouchUp);
@@ -445,6 +494,8 @@ class App {
     window.removeEventListener("resize", this.boundOnResize);
     window.removeEventListener("mousewheel", this.boundOnWheel);
     window.removeEventListener("wheel", this.boundOnWheel);
+    this.container.removeEventListener("mouseenter", this.boundOnPointerEnter);
+    this.container.removeEventListener("mouseleave", this.boundOnPointerLeave);
     this.container.removeEventListener("mousedown", this.boundOnTouchDown);
     window.removeEventListener("mousemove", this.boundOnTouchMove);
     window.removeEventListener("mouseup", this.boundOnTouchUp);
@@ -469,10 +520,12 @@ interface CircularGalleryProps {
 
 export default function CircularGallery({ items, bend = 3, textColor = "#ffffff", borderRadius = 0.05, font = "bold 30px Figtree", scrollSpeed = 2, scrollEase = 0.05 }: CircularGalleryProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const [isReady, setIsReady] = useState(false);
   useEffect(() => {
     if (!containerRef.current) return;
-    const app = new App(containerRef.current, { items, bend, textColor, borderRadius, font, scrollSpeed, scrollEase });
+    setIsReady(false);
+    const app = new App(containerRef.current, { items, bend, textColor, borderRadius, font, scrollSpeed, scrollEase, onReady: () => setIsReady(true) });
     return () => app.destroy();
   }, [items, bend, textColor, borderRadius, font, scrollSpeed, scrollEase]);
-  return <div className="h-full w-full cursor-grab overflow-hidden active:cursor-grabbing" ref={containerRef} />;
+  return <div className={`h-full w-full cursor-grab overflow-hidden transition-opacity duration-300 active:cursor-grabbing ${isReady ? "opacity-100" : "opacity-0"}`} ref={containerRef} />;
 }

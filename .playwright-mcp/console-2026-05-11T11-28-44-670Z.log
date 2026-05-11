@@ -1,0 +1,6 @@
+[   10431ms] [ERROR] `DialogContent` requires a `DialogTitle` for the component to be accessible for screen reader users.
+
+If you want to hide the `DialogTitle`, you can wrap it with our VisuallyHidden component.
+
+For more information, see https://radix-ui.com/primitives/docs/components/dialog @ http://127.0.0.1:4186/assets/index-B_aOBz0I.js:4797
+[   10432ms] [WARNING] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}. @ http://127.0.0.1:4186/assets/index-B_aOBz0I.js:217

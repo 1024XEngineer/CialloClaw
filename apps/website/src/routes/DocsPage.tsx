@@ -2,9 +2,9 @@ import { Menu as MenuIcon } from "lucide-react";
 import type { AnchorProps, MenuProps } from "antd";
 import { Anchor, Drawer, Menu } from "antd";
 import "antd/dist/reset.css";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
-import { WebsiteLayout } from "@/components/WebsiteLayout";
+import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 import { docsSidebar, getDocsPage } from "@/content/site";
 import "@/styles/docs-page.css";
 
@@ -13,6 +13,7 @@ export function DocsPage() {
   const navigate = useNavigate();
   const entry = getDocsPage(location.pathname);
   const [menuOpen, setMenuOpen] = useState(false);
+  const docsScrollRef = useRef<HTMLElement | null>(null);
 
   const menuItems = useMemo<MenuProps["items"]>(() => {
     return docsSidebar.map((section) => ({
@@ -26,19 +27,25 @@ export function DocsPage() {
     }));
   }, []);
 
-  const anchorItems = useMemo<AnchorProps["items"]>(() => {
-    return entry.sections.map((section) => ({
+  const anchorItems = useMemo<NonNullable<AnchorProps["items"]>>(() => {
+    return entry.outline.map((section) => ({
       key: section.id,
       href: `#${section.id}`,
       title: section.title,
     }));
-  }, [entry.sections]);
+  }, [entry.outline]);
+
+  const scrollToHeading = (href: string) => {
+    const id = href.replace(/^#/, "");
+    const target = docsScrollRef.current?.querySelector<HTMLElement>(`#${id}`);
+    if (!target) return;
+    target.scrollIntoView({ behavior: "smooth", block: "start" });
+    window.history.replaceState(null, "", `${location.pathname}#${id}`);
+  };
 
   return (
-    <WebsiteLayout
-      mainClassName="relative z-10 mx-auto h-full max-w-[1600px] overflow-hidden px-5 pb-0 pt-24 sm:px-8 lg:px-12"
-    >
-      <section className="docs-page grid h-full gap-8 lg:grid-cols-[260px_minmax(0,820px)_220px] lg:justify-center">
+    <>
+      <section ref={docsScrollRef} className="docs-page grid h-full gap-10 lg:grid-cols-[260px_minmax(0,820px)_220px] lg:gap-12 lg:justify-center">
         <aside className="docs-page__sidebar hidden lg:block">
           <div className="docs-page__sticky docs-page__panel docs-page__menu-shell">
             <p className="docs-page__sidebar-title">文档导航</p>
@@ -58,34 +65,35 @@ export function DocsPage() {
               <MenuIcon className="h-4 w-4" />
               <span>文档导航</span>
             </button>
-            <p className="docs-page__eyebrow">Docs</p>
+            <p className="docs-page__eyebrow" lang="en">Docs</p>
             <h1 className="docs-page__title">{entry.title}</h1>
-            <p className="docs-page__summary">{entry.summary}</p>
           </header>
 
           <article className="docs-page__article">
-            {entry.sections.map((section) => (
-              <section key={section.id} id={section.id} className="docs-page__section scroll-mt-28">
-                <h2>{section.title}</h2>
-                {section.body.map((paragraph) => (
-                  <p key={paragraph}>{paragraph}</p>
-                ))}
-              </section>
-            ))}
+            <MarkdownRenderer content={entry.markdown} />
           </article>
         </main>
 
-        <aside className="docs-page__outline hidden lg:block">
-          <div className="docs-page__sticky docs-page__panel docs-page__anchor-shell">
-            <p className="docs-page__sidebar-title docs-page__outline-title">本页大纲</p>
-            <Anchor
-              items={anchorItems}
-              affix={false}
-              targetOffset={104}
-              className="docs-page__anchor"
-            />
-          </div>
-        </aside>
+        {anchorItems.length > 0 ? (
+          <aside className="docs-page__outline hidden lg:block">
+            <div className="docs-page__sticky docs-page__panel docs-page__anchor-shell">
+              <p className="docs-page__sidebar-title docs-page__outline-title">本页大纲</p>
+              <Anchor
+                items={anchorItems}
+                affix={false}
+                targetOffset={104}
+                getContainer={() => docsScrollRef.current ?? window}
+                onClick={(event, link) => {
+                  event.preventDefault();
+                  if (link.href) {
+                    scrollToHeading(link.href);
+                  }
+                }}
+                className="docs-page__anchor"
+              />
+            </div>
+          </aside>
+        ) : null}
       </section>
 
       <Drawer
@@ -112,6 +120,6 @@ export function DocsPage() {
           className="docs-page__menu"
         />
       </Drawer>
-    </WebsiteLayout>
+    </>
   );
 }

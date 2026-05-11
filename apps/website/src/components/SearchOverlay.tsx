@@ -29,12 +29,7 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
 
     return docsPages
       .map((page) => {
-        const haystack = [
-          page.title,
-          page.summary,
-          ...page.sections.map((section) => section.title),
-          ...page.sections.flatMap((section) => section.body),
-        ]
+        const haystack = [page.title, page.summary, ...page.outline.map((section) => section.title), page.markdown]
           .join("\n")
           .toLowerCase();
 
@@ -50,7 +45,7 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
       })
       .filter((entry) => entry.score > 0)
       .sort((left, right) => right.score - left.score || left.page.title.localeCompare(right.page.title))
-      .slice(0, 6);
+          .slice(0, 12);
   }, [normalizedQuery]);
 
   useEffect(() => {
@@ -83,7 +78,7 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
           <CommandInput
             value={query}
             onValueChange={setQuery}
-            placeholder="搜索文档..."
+            placeholder="搜索整个文档..."
             className="text-base"
           />
 
