@@ -85,7 +85,6 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	if confirmed {
 		updatedTitle = s.intent.Suggest(snapshot, intentValue, false).TaskTitle
 	}
-	updatedTitle = s.fallbackTaskTitle(snapshot, intentValue, updatedTitle)
 
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleConfirmStarted, nil), task.UpdatedAt.Format(dateTimeLayout))
 	updatedTask, ok := s.runEngine.UpdateIntent(task.TaskID, updatedTitle, intentValue)
@@ -116,7 +115,6 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		return nil, ErrTaskNotFound
 	}
 	executionSnapshot := snapshotFromTask(updatedTask)
-	s.refreshTitleAfterGovernance(updatedTask, executionSnapshot, intentValue)
 
 	updatedTask, resultBubble, deliveryResult, _, err := s.executeTask(updatedTask, executionSnapshot, intentValue)
 	if err != nil {

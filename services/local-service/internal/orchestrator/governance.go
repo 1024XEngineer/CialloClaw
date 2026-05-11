@@ -244,21 +244,7 @@ func runtimeApprovalTargetObject(toolCall tools.ToolCallRecord) string {
 	if apps := stringSliceValue(impactScope["apps"]); len(apps) > 0 {
 		return apps[0]
 	}
-	defaultTarget := ""
-	switch strings.TrimSpace(toolCall.ToolName) {
-	case "write_file":
-		defaultTarget = stringValue(toolCall.Input, "path", "")
-	case "exec_command":
-		defaultTarget = stringValue(toolCall.Input, "working_dir", "")
-	case "page_read", "page_search", "page_interact", "structured_dom", "browser_navigate":
-		defaultTarget = stringValue(toolCall.Input, "url", "")
-	default:
-		defaultTarget = firstNonEmptyString(stringValue(toolCall.Input, "target_path", ""), stringValue(toolCall.Input, "path", ""))
-		defaultTarget = firstNonEmptyString(defaultTarget, stringValue(toolCall.Input, "file_path", ""))
-		defaultTarget = firstNonEmptyString(defaultTarget, stringValue(toolCall.Input, "output_path", ""))
-		defaultTarget = firstNonEmptyString(defaultTarget, stringValue(toolCall.Input, "output_dir", ""))
-	}
-	return impactScopeTarget(impactScope, defaultTarget)
+	return impactScopeTarget(impactScope, execution.GovernanceTargetObject(toolCall.ToolName, toolCall.Input, nil))
 }
 
 // applyRuntimeApprovedToolInput persists the exact blocked tool payload onto the

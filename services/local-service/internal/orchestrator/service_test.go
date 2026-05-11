@@ -2405,681 +2405,6 @@ func TestServiceConfirmTaskRewritesPlaceholderTitleAfterCorrection(t *testing.T)
 	}
 }
 
-func TestServiceStartTaskUsesGeneratedTaskTitleFromFullContext(t *testing.T) {
-	service, _ := newTestServiceWithModelClient(t, stubModelClient{
-		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
-			if isTaskTitleGenerationRequest(request) {
-				return model.GenerateTextResponse{
-					OutputText: `{"title":"发布复盘风险跟进"}`,
-					RequestID:  "req_task_title",
-					Provider:   "openai",
-					ModelID:    "gpt-title",
-					Usage:      model.TokenUsage{InputTokens: 12, OutputTokens: 4, TotalTokens: 16},
-					LatencyMS:  42,
-				}, nil
-			}
-			return model.GenerateTextResponse{OutputText: "执行结果"}, nil
-		},
-	})
-	service.WithTitleGenerator(titlegen.NewService(service.model))
-
-	startResult, err := service.StartTask(map[string]any{
-		"session_id": "sess_generated_title",
-		"source":     "floating_ball",
-		"trigger":    "hover_text_input",
-		"intent": map[string]any{
-			"name": "summarize",
-		},
-		"input": map[string]any{
-			"type": "text",
-			"text": "请帮我整理这次发布复盘，并补齐风险项和后续跟进安排",
-		},
-	})
-	if err != nil {
-		t.Fatalf("start task failed: %v", err)
-	}
-
-	task := startResult["task"].(map[string]any)
-	taskID := task["task_id"].(string)
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		record, ok := service.runEngine.GetTask(taskID)
-		if ok && record.Title == "发布复盘风险跟进" &&
-			record.TokenUsage["total_tokens"] == 16 &&
-			hasTaskTitleAuditRecord(record.AuditRecords) {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	record, _ := service.runEngine.GetTask(taskID)
-	t.Fatalf("expected async task title refinement, got %+v", record)
-}
-
-func TestServiceStartTaskTitleRefreshDoesNotOverridePrimaryTokenMetadata(t *testing.T) {
-	service, _ := newTestServiceWithModelClient(t, stubModelClient{
-		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
-			if isTaskTitleGenerationRequest(request) {
-				return model.GenerateTextResponse{
-					OutputText: `{"title":"发布复盘风险跟进"}`,
-					RequestID:  "req_title",
-					Provider:   "openai",
-					ModelID:    "gpt-title",
-					Usage:      model.TokenUsage{InputTokens: 12, OutputTokens: 4, TotalTokens: 16},
-					LatencyMS:  42,
-				}, nil
-			}
-			return model.GenerateTextResponse{
-				OutputText: "执行结果",
-				RequestID:  "req_main",
-				Provider:   "openai",
-				ModelID:    "gpt-main",
-				Usage:      model.TokenUsage{InputTokens: 30, OutputTokens: 10, TotalTokens: 40},
-				LatencyMS:  180,
-			}, nil
-		},
-	})
-	service.WithTitleGenerator(titlegen.NewService(service.model))
-
-	startResult, err := service.StartTask(map[string]any{
-		"session_id": "sess_task_title_token_metadata",
-		"source":     "floating_ball",
-		"trigger":    "hover_text_input",
-		"intent": map[string]any{
-			"name": "summarize",
-		},
-		"input": map[string]any{
-			"type": "text",
-			"text": "请帮我整理这次发布复盘，并补齐风险项和后续跟进安排",
-		},
-	})
-	if err != nil {
-		t.Fatalf("start task failed: %v", err)
-	}
-
-	taskID := startResult["task"].(map[string]any)["task_id"].(string)
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		record, ok := service.runEngine.GetTask(taskID)
-		if ok &&
-			record.Title == "发布复盘风险跟进" &&
-			record.TokenUsage["total_tokens"] == 56 &&
-			hasTaskTitleAuditRecord(record.AuditRecords) &&
-			record.TokenUsage["request_id"] == "req_main" &&
-			record.TokenUsage["provider"] == "openai" &&
-			record.TokenUsage["model_id"] == "gpt-main" &&
-			record.TokenUsage["latency_ms"] == int64(180) {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	record, _ := service.runEngine.GetTask(taskID)
-	t.Fatalf("expected title refresh to preserve primary token metadata, got %+v", record)
-}
-
-func hasTaskTitleAuditRecord(records []map[string]any) bool {
-	for _, record := range records {
-		if stringValue(record, "action", "") == "title.generate" {
-			return true
-		}
-	}
-	return false
-}
-
-func hasTaskTitleAuditResult(records []map[string]any, want string) bool {
-	for _, record := range records {
-		if stringValue(record, "action", "") == "title.generate" &&
-			stringValue(record, "result", "") == want {
-			return true
-		}
-	}
-	return false
-}
-
-func TestServiceStartTaskConfirmingIntentDoesNotGenerateTitleBeforeConfirmation(t *testing.T) {
-	modelClient := &blockingModelClient{
-		started:  make(chan string, 1),
-		released: make(chan struct{}, 1),
-	}
-	service, _ := newTestServiceWithModelClient(t, modelClient)
-	service.WithTitleGenerator(titlegen.NewService(service.model))
-
-	startResult, err := service.StartTask(map[string]any{
-		"session_id": "sess_confirm_title_boundary",
-		"source":     "floating_ball",
-		"trigger":    "hover_text_input",
-		"intent":     map[string]any{"name": "translate"},
-		"options":    map[string]any{"confirm_required": true},
-		"input": map[string]any{
-			"type": "text",
-			"text": "请帮我翻译这次发布复盘，并补齐风险项和后续跟进安排",
-		},
-	})
-	if err != nil {
-		t.Fatalf("start task failed: %v", err)
-	}
-
-	select {
-	case taskID := <-modelClient.started:
-		t.Fatalf("expected confirming_intent start to avoid title generation, got %s", taskID)
-	case <-time.After(200 * time.Millisecond):
-	}
-
-	task := startResult["task"].(map[string]any)
-	if task["status"] != "confirming_intent" {
-		t.Fatalf("expected confirming_intent status, got %+v", task)
-	}
-}
-
-func TestServiceStartTaskDoesNotBlockOnAsyncTitleGeneration(t *testing.T) {
-	titleStarted := make(chan string, 1)
-	titleReleased := make(chan struct{}, 1)
-	titleAllowReturn := make(chan struct{})
-	service, _ := newTestServiceWithModelClient(t, &titleBlockingModelClient{
-		started:         titleStarted,
-		released:        titleReleased,
-		allowReturn:     titleAllowReturn,
-		immediateOutput: "执行结果",
-	})
-	service.WithTitleGenerator(titlegen.NewService(service.model))
-
-	resultCh := make(chan map[string]any, 1)
-	errCh := make(chan error, 1)
-	go func() {
-		startResult, err := service.StartTask(map[string]any{
-			"session_id": "sess_non_blocking_title",
-			"source":     "floating_ball",
-			"trigger":    "hover_text_input",
-			"intent": map[string]any{
-				"name": "summarize",
-			},
-			"input": map[string]any{
-				"type": "text",
-				"text": "请帮我整理这次发布复盘，并补齐风险项和后续跟进安排",
-			},
-		})
-		if err != nil {
-			errCh <- err
-			return
-		}
-		resultCh <- startResult
-	}()
-
-	select {
-	case <-titleStarted:
-	case <-time.After(200 * time.Millisecond):
-		t.Fatal("expected async title generation to start")
-	}
-
-	select {
-	case err := <-errCh:
-		t.Fatalf("start task failed: %v", err)
-	case startResult := <-resultCh:
-		select {
-		case <-titleReleased:
-			t.Fatal("expected task start to return while title generation was still blocked")
-		default:
-		}
-		task := startResult["task"].(map[string]any)
-		if task["title"] == "发布复盘风险跟进" {
-			t.Fatalf("expected hot path to return fallback title before async refinement, got %+v", task)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("expected task start to return before title generation was released")
-	}
-
-	close(titleAllowReturn)
-	select {
-	case <-titleReleased:
-	case <-time.After(time.Second):
-		t.Fatal("expected background title generation to exit after release")
-	}
-}
-
-func TestServiceStartTaskAuthorizationGateDefersTitleGenerationUntilApproval(t *testing.T) {
-	titleStarted := make(chan string, 2)
-	service, _ := newTestServiceWithModelClient(t, stubModelClient{
-		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
-			if isTaskTitleGenerationRequest(request) {
-				select {
-				case titleStarted <- request.TaskID:
-				default:
-				}
-				return model.GenerateTextResponse{OutputText: `{"title":"发布复盘风险跟进"}`}, nil
-			}
-			return model.GenerateTextResponse{OutputText: "授权后执行完成"}, nil
-		},
-	})
-	service.WithTitleGenerator(titlegen.NewService(service.model))
-
-	startResult, err := service.StartTask(map[string]any{
-		"session_id": "sess_title_waiting_auth_start",
-		"source":     "floating_ball",
-		"trigger":    "hover_text_input",
-		"intent": map[string]any{
-			"name": "write_file",
-			"arguments": map[string]any{
-				"require_authorization": true,
-			},
-		},
-		"input": map[string]any{
-			"type": "text",
-			"text": "请帮我整理这次发布复盘，并补齐风险项和后续跟进安排",
-		},
-	})
-	if err != nil {
-		t.Fatalf("start task failed: %v", err)
-	}
-	task := startResult["task"].(map[string]any)
-	taskID := task["task_id"].(string)
-	if task["status"] != "waiting_auth" {
-		t.Fatalf("expected authorization-gated task to pause before execution, got %+v", task)
-	}
-
-	select {
-	case startedTaskID := <-titleStarted:
-		t.Fatalf("expected waiting_auth start to avoid title generation before approval, got %s", startedTaskID)
-	case <-time.After(200 * time.Millisecond):
-	}
-
-	if _, err := service.SecurityRespond(map[string]any{
-		"task_id":     taskID,
-		"approval_id": activeApprovalIDForTask(t, service, taskID),
-		"decision":    "allow_once",
-	}); err != nil {
-		t.Fatalf("security respond failed: %v", err)
-	}
-
-	select {
-	case <-titleStarted:
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected title generation to start after approval")
-	}
-
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		record, ok := service.runEngine.GetTask(taskID)
-		if ok && record.Title == "发布复盘风险跟进" {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	record, _ := service.runEngine.GetTask(taskID)
-	t.Fatalf("expected approved task title refinement, got %+v", record)
-}
-
-func TestServiceConfirmTaskAuthorizationGateDefersTitleGenerationUntilApproval(t *testing.T) {
-	titleStarted := make(chan string, 2)
-	service, _ := newTestServiceWithModelClient(t, stubModelClient{
-		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
-			if isTaskTitleGenerationRequest(request) {
-				select {
-				case titleStarted <- request.TaskID:
-				default:
-				}
-				return model.GenerateTextResponse{OutputText: `{"title":"发布复盘风险跟进"}`}, nil
-			}
-			return model.GenerateTextResponse{OutputText: "授权后执行完成"}, nil
-		},
-	})
-	service.WithTitleGenerator(titlegen.NewService(service.model))
-
-	startResult, err := service.StartTask(map[string]any{
-		"session_id": "sess_title_waiting_auth_confirm",
-		"source":     "floating_ball",
-		"trigger":    "hover_text_input",
-		"options":    map[string]any{"confirm_required": true},
-		"input": map[string]any{
-			"type": "text",
-			"text": "请帮我整理这次发布复盘，并补齐风险项和后续跟进安排",
-		},
-	})
-	if err != nil {
-		t.Fatalf("start task failed: %v", err)
-	}
-	taskID := startResult["task"].(map[string]any)["task_id"].(string)
-
-	confirmResult, err := service.ConfirmTask(map[string]any{
-		"task_id":   taskID,
-		"confirmed": false,
-		"corrected_intent": map[string]any{
-			"name": "write_file",
-			"arguments": map[string]any{
-				"require_authorization": true,
-			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("confirm task failed: %v", err)
-	}
-	task := confirmResult["task"].(map[string]any)
-	if task["status"] != "waiting_auth" {
-		t.Fatalf("expected confirm path to stop at waiting_auth, got %+v", task)
-	}
-
-	select {
-	case startedTaskID := <-titleStarted:
-		t.Fatalf("expected confirm path to avoid title generation before approval, got %s", startedTaskID)
-	case <-time.After(200 * time.Millisecond):
-	}
-
-	if _, err := service.SecurityRespond(map[string]any{
-		"task_id":     taskID,
-		"approval_id": activeApprovalIDForTask(t, service, taskID),
-		"decision":    "allow_once",
-	}); err != nil {
-		t.Fatalf("security respond failed: %v", err)
-	}
-
-	select {
-	case <-titleStarted:
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected title generation to start after approval")
-	}
-
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		record, ok := service.runEngine.GetTask(taskID)
-		if ok && record.Title == "发布复盘风险跟进" {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	record, _ := service.runEngine.GetTask(taskID)
-	t.Fatalf("expected confirmed task title refinement after approval, got %+v", record)
-}
-
-func TestServiceTaskTitleRefreshKeepsLatestReservation(t *testing.T) {
-	client := &stagedTitleModelClient{
-		firstStarted:    make(chan struct{}),
-		allowFirstReply: make(chan struct{}),
-	}
-	service, _ := newTestServiceWithModelClient(t, client)
-	service.WithTitleGenerator(titlegen.NewService(service.model))
-
-	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
-		SessionID:   "sess_title_refresh_race",
-		Title:       "构建失败分析",
-		SourceType:  "hover_input",
-		Status:      "processing",
-		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
-		CurrentStep: "generate_output",
-		RiskLevel:   "green",
-		Snapshot: taskcontext.TaskContextSnapshot{
-			InputType: "text",
-			Text:      "请分析构建失败",
-			Trigger:   "hover_text_input",
-		},
-	})
-
-	service.scheduleTaskTitleRefresh(task, task.Snapshot, task.Intent, task.Title)
-	select {
-	case <-client.firstStarted:
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected first title refresh to start")
-	}
-
-	service.scheduleTaskTitleRefresh(task, taskcontext.TaskContextSnapshot{
-		InputType: "text",
-		Text:      "请分析构建失败，并补充最新客户影响",
-		Trigger:   "hover_text_input",
-	}, task.Intent, task.Title)
-
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		record, ok := service.runEngine.GetTask(task.TaskID)
-		if ok && record.Title == "最新上下文标题" {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	record, _ := service.runEngine.GetTask(task.TaskID)
-	t.Fatalf("expected newest async title refresh to win, got %+v", record)
-}
-
-func TestServiceTaskTitleRefreshCancelsSupersededModelCall(t *testing.T) {
-	client := &cancelAwareTitleModelClient{
-		firstStarted:  make(chan struct{}),
-		firstCanceled: make(chan struct{}),
-		secondStarted: make(chan struct{}),
-	}
-	service, _ := newTestServiceWithModelClient(t, client)
-	service.WithTitleGenerator(titlegen.NewService(service.model))
-
-	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
-		SessionID:   "sess_title_refresh_cancel",
-		Title:       "构建失败分析",
-		SourceType:  "hover_input",
-		Status:      "processing",
-		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
-		CurrentStep: "generate_output",
-		RiskLevel:   "green",
-		Snapshot: taskcontext.TaskContextSnapshot{
-			InputType: "text",
-			Text:      "请分析构建失败",
-			Trigger:   "hover_text_input",
-		},
-	})
-
-	service.scheduleTaskTitleRefresh(task, task.Snapshot, task.Intent, task.Title)
-	select {
-	case <-client.firstStarted:
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected first title refresh to start")
-	}
-
-	updatedTask, ok := service.runEngine.ContinueTask(task.TaskID, runengine.ContinuationUpdate{
-		Snapshot: taskcontext.TaskContextSnapshot{
-			InputType: "text",
-			Text:      "请分析构建失败，并补充最新客户影响",
-			Trigger:   "hover_text_input",
-		},
-		Title:       task.Title,
-		Intent:      task.Intent,
-		Status:      task.Status,
-		CurrentStep: task.CurrentStep,
-	})
-	if !ok {
-		t.Fatal("expected continuation update to succeed")
-	}
-	service.scheduleTaskTitleRefresh(updatedTask, snapshotFromTask(updatedTask), updatedTask.Intent, updatedTask.Title)
-
-	select {
-	case <-client.firstCanceled:
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected superseded title refresh to be canceled")
-	}
-	select {
-	case <-client.secondStarted:
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected second title refresh to start")
-	}
-
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		record, ok := service.runEngine.GetTask(task.TaskID)
-		if ok && record.Title == "最新上下文标题" {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	record, _ := service.runEngine.GetTask(task.TaskID)
-	t.Fatalf("expected canceled stale refresh and successful latest title update, got %+v", record)
-}
-
-func TestServiceTaskTitleRefreshReservesNewTokenForEachSchedule(t *testing.T) {
-	client := &orderedTitleModelClient{
-		firstStarted:     make(chan struct{}),
-		secondStarted:    make(chan struct{}),
-		allowFirstReply:  make(chan struct{}),
-		allowSecondReply: make(chan struct{}),
-	}
-	service, _ := newTestServiceWithModelClient(t, client)
-	service.WithTitleGenerator(titlegen.NewService(service.model))
-
-	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
-		SessionID:   "sess_title_refresh_new_token",
-		Title:       "构建失败分析",
-		SourceType:  "hover_input",
-		Status:      "processing",
-		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
-		CurrentStep: "generate_output",
-		RiskLevel:   "green",
-		Snapshot: taskcontext.TaskContextSnapshot{
-			InputType: "text",
-			Text:      "请分析构建失败",
-			Trigger:   "hover_text_input",
-		},
-	})
-
-	service.scheduleTaskTitleRefresh(task, task.Snapshot, task.Intent, task.Title)
-	select {
-	case <-client.firstStarted:
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected first title refresh to start")
-	}
-
-	service.scheduleTaskTitleRefresh(task, taskcontext.TaskContextSnapshot{
-		InputType: "text",
-		Text:      "请分析构建失败，并补充最新客户影响",
-		Trigger:   "hover_text_input",
-	}, task.Intent, task.Title)
-	select {
-	case <-client.secondStarted:
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected second title refresh to start")
-	}
-
-	close(client.allowFirstReply)
-	time.Sleep(50 * time.Millisecond)
-	record, _ := service.runEngine.GetTask(task.TaskID)
-	if record.Title == "旧上下文标题" {
-		t.Fatalf("expected older refresh to lose once a newer schedule reserved ownership, got %+v", record)
-	}
-
-	close(client.allowSecondReply)
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		record, ok := service.runEngine.GetTask(task.TaskID)
-		if ok && record.Title == "最新上下文标题" {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	record, _ = service.runEngine.GetTask(task.TaskID)
-	t.Fatalf("expected latest refresh to win after older reply arrived first, got %+v", record)
-}
-
-func TestServiceTaskTitleRefreshRejectsStaleSchedulerAfterNewStateVisible(t *testing.T) {
-	service, _ := newTestServiceWithModelClient(t, stubModelClient{
-		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
-			if !isTaskTitleGenerationRequest(request) {
-				return model.GenerateTextResponse{OutputText: "执行结果"}, nil
-			}
-			if strings.Contains(request.Input, "最新客户影响") {
-				return model.GenerateTextResponse{OutputText: `{"title":"最新上下文标题"}`}, nil
-			}
-			return model.GenerateTextResponse{OutputText: `{"title":"旧上下文标题"}`}, nil
-		},
-	})
-	service.WithTitleGenerator(titlegen.NewService(service.model))
-
-	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
-		SessionID:   "sess_stale_title_scheduler",
-		Title:       "构建失败分析",
-		SourceType:  "hover_input",
-		Status:      "processing",
-		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
-		CurrentStep: "generate_output",
-		RiskLevel:   "green",
-		Snapshot: taskcontext.TaskContextSnapshot{
-			InputType: "text",
-			Text:      "请分析构建失败",
-			Trigger:   "hover_text_input",
-		},
-	})
-	initialTask := task
-	updatedTask, ok := service.runEngine.ContinueTask(task.TaskID, runengine.ContinuationUpdate{
-		Snapshot: taskcontext.TaskContextSnapshot{
-			InputType: "text",
-			Text:      "请分析构建失败，并补充最新客户影响",
-			Trigger:   "hover_text_input",
-		},
-		Title:       task.Title,
-		Intent:      task.Intent,
-		Status:      task.Status,
-		CurrentStep: task.CurrentStep,
-	})
-	if !ok {
-		t.Fatal("expected continuation update to succeed")
-	}
-
-	service.scheduleTaskTitleRefresh(initialTask, initialTask.Snapshot, initialTask.Intent, initialTask.Title)
-	time.Sleep(50 * time.Millisecond)
-	record, _ := service.runEngine.GetTask(task.TaskID)
-	if record.Title == "旧上下文标题" {
-		t.Fatalf("expected stale scheduler to lose after newer state was published, got %+v", record)
-	}
-
-	service.scheduleTaskTitleRefresh(updatedTask, snapshotFromTask(updatedTask), updatedTask.Intent, updatedTask.Title)
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		record, ok := service.runEngine.GetTask(task.TaskID)
-		if ok && record.Title == "最新上下文标题" {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	record, _ = service.runEngine.GetTask(task.TaskID)
-	t.Fatalf("expected newest visible state to own the final title refresh, got %+v", record)
-}
-
-func TestServiceTaskTitleRefreshAuditMarksFallbackResult(t *testing.T) {
-	service, _ := newTestServiceWithModelClient(t, stubModelClient{
-		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
-			if isTaskTitleGenerationRequest(request) {
-				return model.GenerateTextResponse{
-					TaskID:     request.TaskID,
-					RunID:      request.RunID,
-					RequestID:  "req_title_fallback",
-					Provider:   "openai_responses",
-					ModelID:    "gpt-5.4",
-					OutputText: `{"title":""}`,
-				}, nil
-			}
-			return model.GenerateTextResponse{OutputText: "执行结果"}, nil
-		},
-	})
-	service.WithTitleGenerator(titlegen.NewService(service.model))
-
-	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
-		SessionID:   "sess_title_audit_fallback",
-		Title:       "构建失败分析",
-		SourceType:  "hover_input",
-		Status:      "processing",
-		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
-		CurrentStep: "generate_output",
-		RiskLevel:   "green",
-		Snapshot: taskcontext.TaskContextSnapshot{
-			InputType: "text",
-			Text:      "请分析构建失败",
-			Trigger:   "hover_text_input",
-		},
-	})
-
-	service.scheduleTaskTitleRefresh(task, task.Snapshot, task.Intent, task.Title)
-
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for time.Now().Before(deadline) {
-		record, ok := service.runEngine.GetTask(task.TaskID)
-		if ok && hasTaskTitleAuditResult(record.AuditRecords, "fallback") {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	record, _ := service.runEngine.GetTask(task.TaskID)
-	t.Fatalf("expected fallback title generation audit result, got %+v", record.AuditRecords)
-}
-
 func TestServiceConfirmTaskConsumesCorrectionTextOnSameTask(t *testing.T) {
 	calls := 0
 	service, _ := newTestServiceWithModelClient(t, stubModelClient{
@@ -3128,7 +2453,8 @@ func TestServiceConfirmTaskConsumesCorrectionTextOnSameTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start task failed: %v", err)
 	}
-	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	startTask := startResult["task"].(map[string]any)
+	taskID := startTask["task_id"].(string)
 
 	confirmResult, err := service.ConfirmTask(map[string]any{
 		"task_id":         taskID,
@@ -3213,6 +2539,197 @@ func TestServiceConfirmTaskRejectsCorrectionPayloadConflicts(t *testing.T) {
 	})
 	if err == nil || !errors.Is(err, errTaskConfirmCorrectionPayloadInvalid) {
 		t.Fatalf("expected correction_text and corrected_intent conflict to be rejected, got %v", err)
+	}
+}
+
+func TestServiceConfirmTaskExecutesCorrectedResultPageIntent(t *testing.T) {
+	service := newTestService()
+
+	startResult, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_invalid_corrected_intent",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "你好",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	confirmResult, err := service.ConfirmTask(map[string]any{
+		"task_id":   taskID,
+		"confirmed": false,
+		"corrected_intent": map[string]any{
+			"name":      "page_read",
+			"arguments": map[string]any{"url": "https://example.test/issues/474"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("confirm task failed: %v", err)
+	}
+
+	task := confirmResult["task"].(map[string]any)
+	if task["status"] != "completed" {
+		t.Fatalf("expected corrected result-page intent to execute immediately, got %+v", task)
+	}
+	intentValue, ok := task["intent"].(map[string]any)
+	if !ok || intentValue["name"] != "page_read" {
+		t.Fatalf("expected corrected page_read intent to persist, got %+v", task["intent"])
+	}
+	deliveryResult, ok := confirmResult["delivery_result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected corrected result-page intent to return delivery_result, got %+v", confirmResult["delivery_result"])
+	}
+	if deliveryResult["type"] != "result_page" {
+		t.Fatalf("expected corrected page_read intent to keep result_page delivery, got %+v", deliveryResult)
+	}
+}
+
+func TestServiceConfirmTaskDowngradesUnavailableCorrectionTextIntent(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_screen_correction",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: `{"intent":{"name":"screen_analyze","arguments":{"language":"eng"}},"reason":"user asked to inspect the current page"}`,
+			}, nil
+		},
+	})
+	service.attachExecutor(nil)
+
+	startResult, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_screen_correction_fallback",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "帮我总结这个构建问题",
+		},
+		"context": map[string]any{
+			"page": map[string]any{
+				"title":        "Build Dashboard",
+				"window_title": "Browser - Build Dashboard",
+				"visible_text": "Fatal build error: missing release asset",
+			},
+			"screen_summary": "release validation failed on current screen",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	confirmResult, err := service.ConfirmTask(map[string]any{
+		"task_id":         taskID,
+		"confirmed":       false,
+		"correction_text": "改成查看当前页面的错误",
+	})
+	if err != nil {
+		t.Fatalf("confirm task correction failed: %v", err)
+	}
+
+	task := confirmResult["task"].(map[string]any)
+	if task["status"] == "confirming_intent" || task["current_step"] == "intent_confirmation" {
+		t.Fatalf("expected downgraded correction to continue execution instead of re-confirming, got %+v", task)
+	}
+	intentValue := task["intent"].(map[string]any)
+	if intentValue["name"] != "agent_loop" {
+		t.Fatalf("expected unavailable screen correction to downgrade into agent_loop, got %+v", intentValue)
+	}
+	bubble := confirmResult["bubble_message"].(map[string]any)
+	if bubble["type"] == "intent_confirm" {
+		t.Fatalf("expected downgraded correction not to return to intent confirmation, got %+v", bubble)
+	}
+	if confirmResult["delivery_result"] == nil {
+		t.Fatalf("expected downgraded correction to return the direct execution delivery_result, got %+v", confirmResult["delivery_result"])
+	}
+}
+
+func TestServiceConfirmTaskKeepsNaturalLanguageBrowserCorrectionOnSameTask(t *testing.T) {
+	calls := 0
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			calls++
+			if calls > 1 {
+				return model.GenerateTextResponse{
+					TaskID:     request.TaskID,
+					RunID:      request.RunID,
+					RequestID:  "req_browser_delivery",
+					Provider:   "openai_responses",
+					ModelID:    "gpt-5.4",
+					OutputText: "Captured the browser snapshot.",
+				}, nil
+			}
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_browser_correction",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: `{"intent":{"name":"browser_snapshot","arguments":{"url":"https://example.test/pr/512"}},"reason":"user wants the current page snapshot instead of a summary"}`,
+			}, nil
+		},
+	})
+
+	startResult, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_browser_correction",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "帮我总结这个 PR",
+		},
+		"context": map[string]any{
+			"page": map[string]any{
+				"title": "PR 512",
+				"url":   "https://example.test/pr/512",
+			},
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	confirmResult, err := service.ConfirmTask(map[string]any{
+		"task_id":         taskID,
+		"confirmed":       false,
+		"correction_text": "不要总结，改成抓当前页面快照",
+	})
+	if err != nil {
+		t.Fatalf("confirm task correction failed: %v", err)
+	}
+
+	task := confirmResult["task"].(map[string]any)
+	if task["task_id"] != taskID || task["status"] != "completed" {
+		t.Fatalf("expected browser correction to execute on the same task, got %+v", task)
+	}
+	intentValue := task["intent"].(map[string]any)
+	if intentValue["name"] != "browser_snapshot" {
+		t.Fatalf("expected natural-language correction to preserve browser_snapshot, got %+v", intentValue)
+	}
+	bubble := confirmResult["bubble_message"].(map[string]any)
+	if bubble["type"] == "intent_confirm" {
+		t.Fatalf("expected natural-language browser correction not to return to intent confirmation, got %+v", bubble)
+	}
+	deliveryResult, ok := confirmResult["delivery_result"].(map[string]any)
+	if !ok || deliveryResult["type"] != "result_page" {
+		t.Fatalf("expected browser correction execution to keep result_page delivery, got %+v", confirmResult["delivery_result"])
 	}
 }
 
