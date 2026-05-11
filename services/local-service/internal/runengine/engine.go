@@ -83,7 +83,7 @@ type TaskRecord struct {
 	LoopStopReason    string
 	SteeringMessages  []string
 	CurrentStepStatus string
-	titleRefreshToken uint64
+	TitleRefreshToken uint64
 }
 
 // TaskStepRecord represents one task-facing timeline step.
@@ -348,6 +348,7 @@ func (e *Engine) CreateTask(input CreateTaskInput) TaskRecord {
 		SecuritySummary:   buildSecuritySummary(input.RiskLevel, nil),
 		CurrentStepStatus: currentTimelineStatus(stepTimeline),
 	}
+	e.reserveTitleRefreshLocked(record)
 
 	record.LatestEvent = e.buildEvent(record, "task.updated")
 	record.queueNotification("task.updated", taskUpdatedNotificationParams(record))
@@ -508,6 +509,7 @@ func (e *Engine) ConfirmTask(taskID, title string, intent map[string]any, bubble
 	record.Intent = cloneMap(intent)
 	record.Status = "processing"
 	record.CurrentStep = "generate_output"
+	e.reserveTitleRefreshLocked(record)
 	record.UpdatedAt = e.now()
 	record.BubbleMessage = cloneMap(bubbleMessage)
 	record.Timeline = advanceTimeline(record.Timeline, "generate_output", "running", "生成输出开始")
@@ -582,6 +584,7 @@ func (e *Engine) UpdateIntent(taskID, title string, intent map[string]any) (Task
 
 	record.Title = firstNonEmpty(title, record.Title)
 	record.Intent = cloneMap(intent)
+	e.reserveTitleRefreshLocked(record)
 	record.UpdatedAt = e.now()
 	record.LatestEvent = e.buildEvent(record, "task.updated")
 	record.queueNotification("task.updated", taskUpdatedNotificationParams(record))
@@ -606,8 +609,8 @@ func (e *Engine) ReserveTitleRefresh(taskID, expectedTitle string) (uint64, bool
 	}
 
 	e.titleRefresh++
-	record.titleRefreshToken = e.titleRefresh
-	return record.titleRefreshToken, true
+	record.TitleRefreshToken = e.titleRefresh
+	return record.TitleRefreshToken, true
 }
 
 // UpdateTitleIfCurrent applies an asynchronously generated title only when the
@@ -625,7 +628,7 @@ func (e *Engine) UpdateTitleIfCurrent(taskID, expectedTitle string, expectedToke
 	if strings.TrimSpace(title) == "" ||
 		strings.TrimSpace(record.Title) != strings.TrimSpace(expectedTitle) ||
 		expectedToken == 0 ||
-		record.titleRefreshToken != expectedToken {
+		record.TitleRefreshToken != expectedToken {
 		return TaskRecord{}, false
 	}
 
@@ -655,6 +658,7 @@ func (e *Engine) ReopenIntentConfirmation(taskID, title string, intent map[strin
 	record.Intent = cloneMap(intent)
 	record.Status = "confirming_intent"
 	record.CurrentStep = "confirming_intent"
+	e.reserveTitleRefreshLocked(record)
 	record.UpdatedAt = e.now()
 	record.FinishedAt = nil
 	record.DeliveryResult = nil
@@ -698,6 +702,7 @@ func (e *Engine) ReopenWaitingInput(taskID, title string, intent map[string]any,
 	record.Intent = cloneMap(intent)
 	record.Status = "waiting_input"
 	record.CurrentStep = "collect_input"
+	e.reserveTitleRefreshLocked(record)
 	record.UpdatedAt = e.now()
 	record.FinishedAt = nil
 	record.DeliveryResult = nil
@@ -923,6 +928,7 @@ func (e *Engine) ContinueTask(taskID string, update ContinuationUpdate) (TaskRec
 	if strings.TrimSpace(update.CurrentStep) != "" {
 		record.CurrentStep = strings.TrimSpace(update.CurrentStep)
 	}
+	e.reserveTitleRefreshLocked(record)
 	trimmedSteering := strings.TrimSpace(update.SteeringMessage)
 	if nextStep := strings.TrimSpace(update.CurrentStep); nextStep != "" {
 		record.Timeline = advanceTimeline(record.Timeline, nextStep, timelineStatusForTaskStatus(record.Status), continuationOutputSummary(update.BubbleMessage, trimmedSteering))
@@ -1023,6 +1029,7 @@ func (e *Engine) BlockTaskByPolicy(taskID, riskLevel, outputSummary string, impa
 	now := e.now()
 	record.Status = "cancelled"
 	record.CurrentStep = "risk_blocked"
+	e.reserveTitleRefreshLocked(record)
 	record.UpdatedAt = now
 	record.FinishedAt = &now
 	record.PendingExecution = nil
@@ -1061,6 +1068,7 @@ func (e *Engine) BlockPreparedTaskByPolicy(task TaskRecord, riskLevel, outputSum
 	now := e.now()
 	record.Status = "cancelled"
 	record.CurrentStep = "risk_blocked"
+	e.reserveTitleRefreshLocked(record)
 	record.UpdatedAt = now
 	record.FinishedAt = &now
 	record.PendingExecution = nil
@@ -1202,6 +1210,7 @@ func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any
 			return TaskRecord{}, ErrTaskStatusInvalid
 		}
 		record.Status = "paused"
+		e.reserveTitleRefreshLocked(record)
 	case "resume":
 		if record.isFinished() {
 			return TaskRecord{}, ErrTaskAlreadyFinished
@@ -1211,6 +1220,7 @@ func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any
 		}
 		record.Status = "processing"
 		record.CurrentStep = firstNonEmpty(resumeStepForTask(record), record.CurrentStep)
+		e.reserveTitleRefreshLocked(record)
 		if !wasHumanLoop {
 			record.PendingExecution = nil
 		}
@@ -1219,6 +1229,7 @@ func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any
 			return TaskRecord{}, ErrTaskAlreadyFinished
 		}
 		record.Status = "cancelled"
+		e.reserveTitleRefreshLocked(record)
 		record.FinishedAt = &now
 		record.ApprovalRequest = nil
 		record.PendingExecution = nil
@@ -1237,6 +1248,7 @@ func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any
 		// until queue/governance preflight decides the first persisted state.
 		e.prepareRestartRecordLocked(record, now, bubbleMessage)
 		record.Status = "processing"
+		e.reserveTitleRefreshLocked(record)
 		record.Timeline = advanceTimeline(record.Timeline, "generate_output", "running", "任务已重新开始")
 	default:
 		return TaskRecord{}, ErrTaskStatusInvalid
@@ -1319,6 +1331,7 @@ func (e *Engine) commitPreparedTaskLocked(task TaskRecord) (*TaskRecord, bool) {
 		return nil, false
 	}
 	prepared := task.clone()
+	e.reserveTitleRefreshLocked(&prepared)
 	*record = prepared
 	return record, true
 }
@@ -1346,6 +1359,7 @@ func (e *Engine) MarkWaitingApprovalWithPlan(taskID string, approvalRequest map[
 	now := e.now()
 	record.Status = "waiting_auth"
 	record.CurrentStep = "waiting_authorization"
+	e.reserveTitleRefreshLocked(record)
 	record.UpdatedAt = now
 	record.ApprovalRequest = cloneMap(approvalRequest)
 	record.PendingExecution = cloneMap(pendingExecution)
@@ -1388,6 +1402,7 @@ func (e *Engine) MarkPreparedTaskWaitingApprovalWithPlan(task TaskRecord, approv
 	now := e.now()
 	record.Status = "waiting_auth"
 	record.CurrentStep = "waiting_authorization"
+	e.reserveTitleRefreshLocked(record)
 	record.UpdatedAt = now
 	record.ApprovalRequest = cloneMap(approvalRequest)
 	record.PendingExecution = cloneMap(pendingExecution)
@@ -1463,6 +1478,7 @@ func (e *Engine) ResumeAfterApproval(taskID string, authorization map[string]any
 	now := e.now()
 	record.Status = "processing"
 	record.CurrentStep = "authorized_execution"
+	e.reserveTitleRefreshLocked(record)
 	record.UpdatedAt = now
 	record.Authorization = cloneMap(authorization)
 	record.ImpactScope = cloneMap(impactScope)
@@ -1498,6 +1514,7 @@ func (e *Engine) DenyAfterApproval(taskID string, authorization map[string]any, 
 	now := e.now()
 	record.Status = "cancelled"
 	record.CurrentStep = "authorization_denied"
+	e.reserveTitleRefreshLocked(record)
 	record.UpdatedAt = now
 	record.FinishedAt = &now
 	record.Authorization = cloneMap(authorization)
@@ -1550,6 +1567,7 @@ func (e *Engine) QueueTaskForSession(taskID, blockingTaskID string, bubbleMessag
 
 	record.Status = "blocked"
 	record.CurrentStep = "session_queue"
+	e.reserveTitleRefreshLocked(record)
 	record.UpdatedAt = e.now()
 	record.BubbleMessage = cloneMap(bubbleMessage)
 	record.Timeline = advanceTimeline(record.Timeline, "session_queue", "pending", "等待同一会话中的前序任务完成")
@@ -1582,6 +1600,7 @@ func (e *Engine) QueuePreparedTaskForSession(task TaskRecord, blockingTaskID str
 
 	record.Status = "blocked"
 	record.CurrentStep = "session_queue"
+	e.reserveTitleRefreshLocked(record)
 	record.UpdatedAt = e.now()
 	record.BubbleMessage = cloneMap(bubbleMessage)
 	record.Timeline = advanceTimeline(record.Timeline, "session_queue", "pending", "等待同一会话中的前序任务完成")
@@ -1615,6 +1634,7 @@ func (e *Engine) EscalateHumanLoop(taskID string, escalation map[string]any, bub
 
 	record.Status = "blocked"
 	record.CurrentStep = "human_in_loop"
+	e.reserveTitleRefreshLocked(record)
 	record.PendingExecution = map[string]any{
 		"kind":       "human_in_loop",
 		"escalation": cloneMap(escalation),
@@ -1698,6 +1718,7 @@ func (e *Engine) ResumeQueuedTask(taskID, stepName string, bubbleMessage map[str
 
 	record.Status = "processing"
 	record.CurrentStep = firstNonEmpty(stepName, "generate_output")
+	e.reserveTitleRefreshLocked(record)
 	record.UpdatedAt = e.now()
 	record.BubbleMessage = cloneMap(bubbleMessage)
 	record.Timeline = advanceTimeline(record.Timeline, record.CurrentStep, "running", "前序任务完成，当前会话任务开始执行")
@@ -2217,6 +2238,14 @@ func mergeTaskTokenUsage(current map[string]any, update map[string]any) map[stri
 		merged["fallback"] = fallback
 	}
 	return merged
+}
+
+func (e *Engine) reserveTitleRefreshLocked(record *TaskRecord) {
+	if e == nil || record == nil {
+		return
+	}
+	e.titleRefresh++
+	record.TitleRefreshToken = e.titleRefresh
 }
 
 func tokenUsageInt(value any) int {

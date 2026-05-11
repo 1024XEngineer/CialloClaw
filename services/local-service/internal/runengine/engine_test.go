@@ -354,6 +354,37 @@ func TestEngineAppendAuditDataMergesTokenUsage(t *testing.T) {
 	}
 }
 
+func TestEngineUpdateIntentReservesNewTitleRefreshBeforeStatePublish(t *testing.T) {
+	engine := NewEngine()
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_title_refresh_reservation",
+		Title:       "构建失败分析",
+		SourceType:  "hover_input",
+		Status:      "confirming_intent",
+		Intent:      map[string]any{"name": "summarize"},
+		CurrentStep: "intent_confirmation",
+		RiskLevel:   "green",
+	})
+	initialToken := task.TitleRefreshToken
+	if initialToken == 0 {
+		t.Fatal("expected created task to carry a title refresh reservation")
+	}
+
+	updated, ok := engine.UpdateIntent(task.TaskID, task.Title, map[string]any{"name": "summarize", "arguments": map[string]any{"style": "bullets"}})
+	if !ok {
+		t.Fatal("expected UpdateIntent to succeed")
+	}
+	if updated.TitleRefreshToken == 0 || updated.TitleRefreshToken == initialToken {
+		t.Fatalf("expected UpdateIntent to publish a newer title refresh reservation, got %+v", updated)
+	}
+	if _, ok := engine.UpdateTitleIfCurrent(task.TaskID, task.Title, initialToken, "旧上下文标题"); ok {
+		t.Fatal("expected stale title refresh reservation to be rejected after UpdateIntent")
+	}
+	if refreshed, ok := engine.UpdateTitleIfCurrent(task.TaskID, task.Title, updated.TitleRefreshToken, "最新上下文标题"); !ok || refreshed.Title != "最新上下文标题" {
+		t.Fatalf("expected latest reservation to remain valid, got %+v ok=%v", refreshed, ok)
+	}
+}
+
 func TestEngineDefaultSettingsIncludeBudgetPolicy(t *testing.T) {
 	engine := NewEngine()
 	settings := engine.Settings()

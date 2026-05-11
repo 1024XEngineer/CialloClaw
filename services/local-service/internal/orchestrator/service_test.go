@@ -2662,6 +2662,70 @@ func TestServiceTaskTitleRefreshKeepsLatestReservation(t *testing.T) {
 	t.Fatalf("expected newest async title refresh to win, got %+v", record)
 }
 
+func TestServiceTaskTitleRefreshRejectsStaleSchedulerAfterNewStateVisible(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			if !isTaskTitleGenerationRequest(request) {
+				return model.GenerateTextResponse{OutputText: "执行结果"}, nil
+			}
+			if strings.Contains(request.Input, "最新客户影响") {
+				return model.GenerateTextResponse{OutputText: `{"title":"最新上下文标题"}`}, nil
+			}
+			return model.GenerateTextResponse{OutputText: `{"title":"旧上下文标题"}`}, nil
+		},
+	})
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_stale_title_scheduler",
+		Title:       "构建失败分析",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+		Snapshot: taskcontext.TaskContextSnapshot{
+			InputType: "text",
+			Text:      "请分析构建失败",
+			Trigger:   "hover_text_input",
+		},
+	})
+	initialTask := task
+	updatedTask, ok := service.runEngine.ContinueTask(task.TaskID, runengine.ContinuationUpdate{
+		Snapshot: taskcontext.TaskContextSnapshot{
+			InputType: "text",
+			Text:      "请分析构建失败，并补充最新客户影响",
+			Trigger:   "hover_text_input",
+		},
+		Title:       task.Title,
+		Intent:      task.Intent,
+		Status:      task.Status,
+		CurrentStep: task.CurrentStep,
+	})
+	if !ok {
+		t.Fatal("expected continuation update to succeed")
+	}
+
+	service.scheduleTaskTitleRefresh(initialTask, initialTask.Snapshot, initialTask.Intent, initialTask.Title)
+	time.Sleep(50 * time.Millisecond)
+	record, _ := service.runEngine.GetTask(task.TaskID)
+	if record.Title == "旧上下文标题" {
+		t.Fatalf("expected stale scheduler to lose after newer state was published, got %+v", record)
+	}
+
+	service.scheduleTaskTitleRefresh(updatedTask, snapshotFromTask(updatedTask), updatedTask.Intent, updatedTask.Title)
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		record, ok := service.runEngine.GetTask(task.TaskID)
+		if ok && record.Title == "最新上下文标题" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	record, _ = service.runEngine.GetTask(task.TaskID)
+	t.Fatalf("expected newest visible state to own the final title refresh, got %+v", record)
+}
+
 func TestServiceConfirmTaskIgnoresCorrectedIntentWhenConfirmedTrue(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Explained content.")
 

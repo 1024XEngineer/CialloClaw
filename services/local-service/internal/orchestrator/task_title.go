@@ -36,9 +36,13 @@ func (s *Service) scheduleTaskTitleRefresh(task runengine.TaskRecord, snapshot t
 	if taskID == "" || fallbackTitle == "" {
 		return
 	}
-	refreshToken, ok := s.runEngine.ReserveTitleRefresh(taskID, fallbackTitle)
-	if !ok {
-		return
+	refreshToken := task.TitleRefreshToken
+	if refreshToken == 0 {
+		var ok bool
+		refreshToken, ok = s.runEngine.ReserveTitleRefresh(taskID, fallbackTitle)
+		if !ok {
+			return
+		}
 	}
 	intentValue := cloneMap(taskIntent)
 	go func() {
