@@ -43,7 +43,12 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 			if err != nil {
 				return nil, err
 			}
-			bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleConfirmRejected, nil), updatedTask.UpdatedAt.Format(dateTimeLayout))
+			snapshot := snapshotFromTask(updatedTask)
+			clarificationText := rejectedIntentClarificationText(snapshot)
+			if clarificationHits := s.clarificationPreviewHits(updatedTask, snapshot); len(clarificationHits) > 0 {
+				clarificationText = clarificationText + " " + clarificationBubbleText(map[string]any{}, snapshot, clarificationHits)
+			}
+			bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", clarificationText, updatedTask.UpdatedAt.Format(dateTimeLayout))
 			if presentedTask, ok := s.runEngine.SetPresentation(task.TaskID, bubble, nil, nil); ok {
 				updatedTask = presentedTask
 			} else {
