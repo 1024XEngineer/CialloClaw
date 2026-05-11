@@ -16,7 +16,6 @@ import { openDesktopExternalUrl } from "@/platform/desktopExternalUrl";
 import { navigateToDashboardTaskDetail } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
-import { navigateToDashboardTaskDelivery } from "@/features/dashboard/tasks/taskDeliveryNavigation";
 import {
   openTaskDeliveryForTask,
   performTaskOpenExecution,

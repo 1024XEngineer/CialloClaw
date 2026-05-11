@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"encoding/json"
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -164,6 +165,10 @@ func normalizeNotepadSnapshotPath(resourcePath, workspaceRoot string) (string, b
 	}
 	safePath, err := pathPolicy.EnsureWithinWorkspace(trimmedPath)
 	if err != nil {
+		return "", false
+	}
+	info, err := os.Stat(filepath.Clean(safePath))
+	if err != nil || !info.Mode().IsRegular() {
 		return "", false
 	}
 

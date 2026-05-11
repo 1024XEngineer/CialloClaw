@@ -3289,7 +3289,14 @@ func TestServiceNotepadConvertToTaskKeepsLegacyDirectoryResourcesOutOfSnapshotFi
 }
 
 func TestServiceNotepadConvertToTaskCarriesDashboardLabeledFileResourcesIntoSnapshotFiles(t *testing.T) {
-	service, _ := newTestServiceWithExecution(t, "Converted dashboard-labeled resource notepad task finished.")
+	service, workspaceRoot := newTestServiceWithExecution(t, "Converted dashboard-labeled resource notepad task finished.")
+	resourcePath := filepath.Join(workspaceRoot, "notes", "source.md")
+	if err := os.MkdirAll(filepath.Dir(resourcePath), 0o755); err != nil {
+		t.Fatalf("create dashboard resource dir failed: %v", err)
+	}
+	if err := os.WriteFile(resourcePath, []byte("# source"), 0o644); err != nil {
+		t.Fatalf("seed dashboard resource file failed: %v", err)
+	}
 	service.runEngine.ReplaceNotepadItems([]map[string]any{{
 		"item_id":   "todo_dashboard_file_resource",
 		"title":     "整理源 markdown 便签",
@@ -3326,6 +3333,13 @@ func TestServiceNotepadConvertToTaskCarriesDashboardLabeledFileResourcesIntoSnap
 
 func TestServiceNotepadConvertToTaskNormalizesAbsoluteWorkspaceResourcesIntoSnapshotFiles(t *testing.T) {
 	service, workspaceRoot := newTestServiceWithExecution(t, "Converted absolute-resource notepad task finished.")
+	resourcePath := filepath.Join(workspaceRoot, "notes", "source.md")
+	if err := os.MkdirAll(filepath.Dir(resourcePath), 0o755); err != nil {
+		t.Fatalf("create absolute resource dir failed: %v", err)
+	}
+	if err := os.WriteFile(resourcePath, []byte("# source"), 0o644); err != nil {
+		t.Fatalf("seed absolute resource file failed: %v", err)
+	}
 	service.runEngine.ReplaceNotepadItems([]map[string]any{{
 		"item_id":   "todo_absolute_resource",
 		"title":     "整理工作区绝对路径资料",
@@ -3335,7 +3349,7 @@ func TestServiceNotepadConvertToTaskNormalizesAbsoluteWorkspaceResourcesIntoSnap
 		"note_text": "请结合同一工作区中的绝对路径资料整理正式任务。",
 		"related_resources": []map[string]any{{
 			"resource_id":   "todo_absolute_resource_source",
-			"path":          filepath.Join(workspaceRoot, "notes", "source.md"),
+			"path":          resourcePath,
 			"resource_type": "file",
 		}},
 	}})
@@ -3393,7 +3407,14 @@ func TestServiceNotepadConvertToTaskDropsOutOfWorkspaceResourcesFromSnapshotFile
 }
 
 func TestServiceNotepadConvertToTaskDedupesExplicitSnapshotPaths(t *testing.T) {
-	service, _ := newTestServiceWithExecution(t, "Converted deduped notepad resource task finished.")
+	service, workspaceRoot := newTestServiceWithExecution(t, "Converted deduped notepad resource task finished.")
+	resourcePath := filepath.Join(workspaceRoot, "notes", "source.md")
+	if err := os.MkdirAll(filepath.Dir(resourcePath), 0o755); err != nil {
+		t.Fatalf("create dedupe resource dir failed: %v", err)
+	}
+	if err := os.WriteFile(resourcePath, []byte("# source"), 0o644); err != nil {
+		t.Fatalf("seed dedupe resource file failed: %v", err)
+	}
 	service.runEngine.ReplaceNotepadItems([]map[string]any{{
 		"item_id":   "todo_duplicate_resources",
 		"title":     "整理重复资料",
@@ -3444,6 +3465,78 @@ func TestServiceNotepadConvertToTaskDedupesExplicitSnapshotPaths(t *testing.T) {
 	expected := []string{"workspace/notes/source.md"}
 	if !reflect.DeepEqual(record.Snapshot.Files, expected) {
 		t.Fatalf("expected explicit notepad file paths to be deduped like other task entries, got %+v", record.Snapshot.Files)
+	}
+}
+
+func TestServiceNotepadConvertToTaskDropsDirectoryPathsEvenWhenMetadataClaimsFile(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, "Converted mislabeled directory resource task finished.")
+	resourcePath := filepath.Join(workspaceRoot, "notes")
+	if err := os.MkdirAll(resourcePath, 0o755); err != nil {
+		t.Fatalf("create mislabeled directory failed: %v", err)
+	}
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":   "todo_mislabeled_directory_resource",
+		"title":     "整理误标目录资源",
+		"bucket":    "upcoming",
+		"status":    "normal",
+		"type":      "todo_item",
+		"note_text": "请不要把目录误当成文件送进正式任务输入。",
+		"related_resources": []map[string]any{{
+			"resource_id":   "todo_mislabeled_directory_resource_source",
+			"path":          "workspace/notes",
+			"resource_type": "file",
+		}},
+	}})
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_mislabeled_directory_resource",
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected converted task to remain available in runtime")
+	}
+	if len(record.Snapshot.Files) != 0 {
+		t.Fatalf("expected mislabeled directory resources to stay out of task snapshot files, got %+v", record.Snapshot.Files)
+	}
+}
+
+func TestServiceNotepadConvertToTaskDropsMissingFilePathsFromSnapshotFiles(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Converted missing-file resource task finished.")
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":   "todo_missing_file_resource",
+		"title":     "整理缺失文件资源",
+		"bucket":    "upcoming",
+		"status":    "normal",
+		"type":      "todo_item",
+		"note_text": "不存在的文件路径不应进入正式任务输入。",
+		"related_resources": []map[string]any{{
+			"resource_id":   "todo_missing_file_resource_source",
+			"path":          "workspace/notes/missing.md",
+			"resource_type": "file",
+		}},
+	}})
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_missing_file_resource",
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected converted task to remain available in runtime")
+	}
+	if len(record.Snapshot.Files) != 0 {
+		t.Fatalf("expected missing file resources to stay out of task snapshot files, got %+v", record.Snapshot.Files)
 	}
 }
 
