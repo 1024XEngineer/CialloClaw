@@ -2241,26 +2241,27 @@ func TestServiceConfirmTaskConsumesCorrectionTextOnSameTask(t *testing.T) {
 	if err != nil {
 		t.Fatalf("confirm task correction failed: %v", err)
 	}
-	if calls != 1 {
-		t.Fatalf("expected one correction model call, got %d", calls)
+	if calls != 2 {
+		t.Fatalf("expected correction inference plus execution model call, got %d", calls)
 	}
 	task := confirmResult["task"].(map[string]any)
 	if task["task_id"] != taskID {
 		t.Fatalf("expected correction to stay on same task, got %+v", task)
 	}
-	if task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
-		t.Fatalf("expected corrected task to keep confirmation gate, got %+v", task)
+	if task["status"] != "completed" {
+		t.Fatalf("expected corrected task to execute on the same task, got %+v", task)
 	}
 	intentValue := task["intent"].(map[string]any)
 	if intentValue["name"] != "explain" {
 		t.Fatalf("expected model-corrected explain intent, got %+v", intentValue)
 	}
 	bubble := confirmResult["bubble_message"].(map[string]any)
-	if bubble["type"] != "intent_confirm" {
-		t.Fatalf("expected corrected intent confirmation bubble, got %+v", bubble)
+	if bubble["type"] == "intent_confirm" {
+		t.Fatalf("expected corrected task not to return to intent confirmation, got %+v", bubble)
 	}
-	if confirmResult["delivery_result"] != nil {
-		t.Fatalf("expected correction to avoid execution before next confirmation, got %+v", confirmResult["delivery_result"])
+	deliveryResult, ok := confirmResult["delivery_result"].(map[string]any)
+	if !ok || deliveryResult["type"] == nil {
+		t.Fatalf("expected correction to produce a delivery result, got %+v", confirmResult["delivery_result"])
 	}
 	record, ok := service.runEngine.GetTask(taskID)
 	if !ok {
@@ -2269,20 +2270,8 @@ func TestServiceConfirmTaskConsumesCorrectionTextOnSameTask(t *testing.T) {
 	if record.SessionID != "sess_confirm_correction_text" || record.Snapshot.Text != "selected paragraph" || record.Snapshot.PageTitle != "Issue 474" {
 		t.Fatalf("expected correction to preserve original task context, got %+v", record)
 	}
-	executionResult, err := service.ConfirmTask(map[string]any{
-		"task_id":   taskID,
-		"confirmed": true,
-	})
-	if err != nil {
-		t.Fatalf("confirm corrected task failed: %v", err)
-	}
-	executedTask := executionResult["task"].(map[string]any)
-	if executedTask["task_id"] != taskID || executedTask["status"] != "completed" {
-		t.Fatalf("expected next confirmation to execute corrected same task, got %+v", executedTask)
-	}
-	executedIntent := executedTask["intent"].(map[string]any)
-	if executedIntent["name"] != "explain" {
-		t.Fatalf("expected corrected intent to drive execution, got %+v", executedIntent)
+	if record.TaskID != taskID || record.Status != "completed" {
+		t.Fatalf("expected runtime task to reflect direct correction execution, got %+v", record)
 	}
 }
 
@@ -2430,19 +2419,19 @@ func TestServiceConfirmTaskDowngradesUnavailableCorrectionTextIntent(t *testing.
 	}
 
 	task := confirmResult["task"].(map[string]any)
-	if task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
-		t.Fatalf("expected downgraded correction to stay in confirmation, got %+v", task)
+	if task["status"] == "confirming_intent" || task["current_step"] == "intent_confirmation" {
+		t.Fatalf("expected downgraded correction to continue execution instead of re-confirming, got %+v", task)
 	}
 	intentValue := task["intent"].(map[string]any)
 	if intentValue["name"] != "agent_loop" {
 		t.Fatalf("expected unavailable screen correction to downgrade into agent_loop, got %+v", intentValue)
 	}
 	bubble := confirmResult["bubble_message"].(map[string]any)
-	if bubble["type"] != "intent_confirm" {
-		t.Fatalf("expected downgraded correction to return intent_confirm bubble, got %+v", bubble)
+	if bubble["type"] == "intent_confirm" {
+		t.Fatalf("expected downgraded correction not to return to intent confirmation, got %+v", bubble)
 	}
-	if confirmResult["delivery_result"] != nil {
-		t.Fatalf("expected downgraded correction not to return delivery_result, got %+v", confirmResult["delivery_result"])
+	if confirmResult["delivery_result"] == nil {
+		t.Fatalf("expected downgraded correction to return the direct execution delivery_result, got %+v", confirmResult["delivery_result"])
 	}
 }
 
@@ -2505,39 +2494,20 @@ func TestServiceConfirmTaskKeepsNaturalLanguageBrowserCorrectionOnSameTask(t *te
 	}
 
 	task := confirmResult["task"].(map[string]any)
-	if task["task_id"] != taskID || task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
-		t.Fatalf("expected browser correction to stay on the same confirming task, got %+v", task)
+	if task["task_id"] != taskID || task["status"] != "completed" {
+		t.Fatalf("expected browser correction to execute on the same task, got %+v", task)
 	}
 	intentValue := task["intent"].(map[string]any)
 	if intentValue["name"] != "browser_snapshot" {
 		t.Fatalf("expected natural-language correction to preserve browser_snapshot, got %+v", intentValue)
 	}
 	bubble := confirmResult["bubble_message"].(map[string]any)
-	if bubble["type"] != "intent_confirm" {
-		t.Fatalf("expected natural-language browser correction to return intent_confirm bubble, got %+v", bubble)
+	if bubble["type"] == "intent_confirm" {
+		t.Fatalf("expected natural-language browser correction not to return to intent confirmation, got %+v", bubble)
 	}
-	if confirmResult["delivery_result"] != nil {
-		t.Fatalf("expected browser correction not to execute before next confirmation, got %+v", confirmResult["delivery_result"])
-	}
-
-	executionResult, err := service.ConfirmTask(map[string]any{
-		"task_id":   taskID,
-		"confirmed": true,
-	})
-	if err != nil {
-		t.Fatalf("confirm corrected browser task failed: %v", err)
-	}
-	executedTask := executionResult["task"].(map[string]any)
-	if executedTask["status"] != "completed" {
-		t.Fatalf("expected next confirmation to execute corrected browser task, got %+v", executedTask)
-	}
-	executedIntent := executedTask["intent"].(map[string]any)
-	if executedIntent["name"] != "browser_snapshot" {
-		t.Fatalf("expected browser correction intent to drive execution, got %+v", executedIntent)
-	}
-	deliveryResult, ok := executionResult["delivery_result"].(map[string]any)
+	deliveryResult, ok := confirmResult["delivery_result"].(map[string]any)
 	if !ok || deliveryResult["type"] != "result_page" {
-		t.Fatalf("expected browser correction execution to keep result_page delivery, got %+v", executionResult["delivery_result"])
+		t.Fatalf("expected browser correction execution to keep result_page delivery, got %+v", confirmResult["delivery_result"])
 	}
 }
 

@@ -261,6 +261,36 @@ function createStubCorrectionIntent(correctionText: string): Task["intent"] {
   };
 }
 
+function createConfirmedTaskResult(taskId: string, intent: Task["intent"]): AgentTaskConfirmResult {
+  const intentName = intent && typeof intent === "object" && "name" in intent ? intent.name : null;
+  const requiresAuthorization = intentName === "write_file"
+    || intentName === "exec_command"
+    || intentName === "page_interact"
+    || intentName === "browser_navigate"
+    || intentName === "browser_tab_focus"
+    || intentName === "browser_interact";
+
+  return {
+    task: {
+      ...createTask(requiresAuthorization ? "waiting_auth" : "completed", requiresAuthorization ? "waiting_authorization" : "completed"),
+      task_id: taskId,
+      intent,
+    },
+    bubble_message: {
+      bubble_id: "bubble_confirm_stub",
+      task_id: taskId,
+      type: "status",
+      text: requiresAuthorization
+        ? "Authorization is required before continuing the corrected task."
+        : "The corrected task was accepted and executed.",
+      pinned: false,
+      hidden: false,
+      created_at: new Date().toISOString(),
+    },
+    delivery_result: requiresAuthorization ? null : createTaskDeliveryResult(),
+  };
+}
+
 function createSecurityApprovalRespondResult(taskId = "task_stub", approvalId = "approval_stub"): AgentSecurityRespondResult {
   return {
     authorization_record: {
@@ -488,18 +518,22 @@ export async function confirmTask(params?: unknown): Promise<AgentTaskConfirmRes
     throw new Error("corrected_intent and correction_text are mutually exclusive");
   }
 
-  if (hasCorrectionText || (!confirmed && !hasCorrectedIntent)) {
+  if (!confirmed && hasCorrectionText) {
+    return createConfirmedTaskResult(taskId, createStubCorrectionIntent(normalizedCorrectionText));
+  }
+
+  if (!confirmed && !hasCorrectedIntent) {
     return {
       task: {
         ...createTask("confirming_intent", "intent_confirmation"),
         task_id: taskId,
-        intent: hasCorrectionText ? createStubCorrectionIntent(normalizedCorrectionText) : null,
+        intent: null,
       },
       bubble_message: {
         bubble_id: "bubble_confirm_stub",
         task_id: taskId,
-        type: hasCorrectionText ? "intent_confirm" : "status",
-        text: hasCorrectionText ? "请确认你希望我如何处理当前内容。" : "This was not the right action. Please clarify the goal or provide a corrected intent.",
+        type: "status",
+        text: "This was not the right action. Please clarify the goal or provide a corrected intent.",
         pinned: false,
         hidden: false,
         created_at: new Date().toISOString(),
@@ -529,32 +563,7 @@ export async function confirmTask(params?: unknown): Promise<AgentTaskConfirmRes
       };
     }
 
-    const requiresAuthorization = normalizedCorrectedIntentName === "write_file"
-      || normalizedCorrectedIntentName === "exec_command"
-      || normalizedCorrectedIntentName === "page_interact"
-      || normalizedCorrectedIntentName === "browser_navigate"
-      || normalizedCorrectedIntentName === "browser_tab_focus"
-      || normalizedCorrectedIntentName === "browser_interact";
-
-    return {
-      task: {
-        ...createTask(requiresAuthorization ? "waiting_auth" : "completed", requiresAuthorization ? "waiting_authorization" : "completed"),
-        task_id: taskId,
-        intent: correctedIntent as Task["intent"],
-      },
-      bubble_message: {
-        bubble_id: "bubble_confirm_stub",
-        task_id: taskId,
-        type: "status",
-        text: requiresAuthorization
-          ? "Authorization is required before continuing the corrected task."
-          : "The corrected task was accepted and executed.",
-        pinned: false,
-        hidden: false,
-        created_at: new Date().toISOString(),
-      },
-      delivery_result: requiresAuthorization ? null : createTaskDeliveryResult(),
-    };
+    return createConfirmedTaskResult(taskId, correctedIntent as Task["intent"]);
   }
 
   return {
