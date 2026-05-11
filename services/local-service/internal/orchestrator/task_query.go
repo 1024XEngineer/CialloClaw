@@ -226,6 +226,9 @@ func intentPayloadFromTaskIntent(intent map[string]any) *IntentPayload {
 	}
 	name := stringValue(intent, "name", "")
 	arguments := cloneMap(mapValue(intent, "arguments"))
+	if arguments == nil {
+		arguments = map[string]any{}
+	}
 	if strings.TrimSpace(name) == "" && len(arguments) == 0 {
 		return nil
 	}

@@ -174,3 +174,32 @@ func TestTaskEntryResponseRejectsMissingRequiredDeclaredFields(t *testing.T) {
 		})
 	}
 }
+
+func TestTaskEntryResponseNormalizesIntentArgumentsToStableObject(t *testing.T) {
+	response, err := newTaskEntryResponse(map[string]any{
+		"task": map[string]any{
+			"task_id":      "task_intent_arguments",
+			"session_id":   "sess_intent_arguments",
+			"title":        "Preserve empty intent arguments",
+			"source_type":  "floating_ball",
+			"status":       "processing",
+			"intent":       map[string]any{"name": "agent_loop"},
+			"current_step": "awaiting_execution",
+			"risk_level":   "green",
+			"started_at":   "2026-05-10T00:00:00Z",
+			"updated_at":   "2026-05-10T00:00:01Z",
+		},
+	})
+	if err != nil {
+		t.Fatalf("build task entry response failed: %v", err)
+	}
+
+	intent := mapValue(mapValue(response.Map(), "task"), "intent")
+	if _, ok := intent["arguments"]; !ok {
+		t.Fatalf("expected stable intent payload to include arguments, got %+v", intent)
+	}
+	arguments := mapValue(intent, "arguments")
+	if len(arguments) != 0 {
+		t.Fatalf("expected empty intent arguments object, got %+v", arguments)
+	}
+}
