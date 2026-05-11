@@ -29,6 +29,7 @@ import {
   saveNoteSource,
 } from "./noteSource.service";
 import { convertNoteToTask, loadNoteBucket, performNoteResourceOpenExecution, resolveNoteResourceOpenExecutionPlan, updateNote, type NotePageDataMode } from "./notePage.service";
+import { isDashboardTaskDeliveryHref, navigateToDashboardTaskDelivery, readDashboardTaskDeliveryTaskId } from "../tasks/taskDeliveryNavigation";
 import {
   buildSourceNoteEditorDraftFromNote,
   createEmptySourceNoteEditorDraft,
@@ -1820,6 +1821,20 @@ export function NotePage() {
       onOpenTaskDetail: ({ taskId }) => {
         openLinkedTaskDetail(taskId);
         return plan.feedback;
+      },
+      onOpenResultPage: ({ taskId, url }) => {
+        const deliveryTaskId = taskId ?? readDashboardTaskDeliveryTaskId(url);
+        if (deliveryTaskId && isDashboardTaskDeliveryHref(url)) {
+          navigateToDashboardTaskDelivery(navigate, deliveryTaskId);
+          return plan.feedback;
+        }
+
+        return openDesktopExternalUrl(url)
+          .then(() => plan.feedback)
+          .catch((error: unknown) => {
+            const detail = error instanceof Error ? error.message.trim() : "";
+            return detail ? `无法通过系统浏览器打开便签结果页链接（${detail}）` : "无法通过系统浏览器打开便签结果页链接";
+          });
       },
     }));
   }

@@ -86,7 +86,7 @@ function pickNextSummonIndex(
 
 function buildSummonTemplateSignature(templates: Array<Omit<DashboardHomeSummonEvent, "id">>) {
   const buildNavigationTargetSignature = (
-    target: DashboardHomeSummonEvent["expandedState"]["navigationTarget"] | undefined,
+    target: NonNullable<DashboardHomeSummonEvent["expandedState"]>["navigationTarget"] | undefined,
   ) => {
     if (!target) {
       return "";

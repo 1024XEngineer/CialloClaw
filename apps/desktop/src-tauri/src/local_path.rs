@@ -77,6 +77,13 @@ pub fn open_trusted_directory(target: &Path, trusted_root: &Path) -> Result<(), 
     open_with_system_handler(&canonical_target)
 }
 
+/// Opens one trusted external http/https URL through the operating system
+/// shell so renderer links leave the embedded desktop WebView.
+pub fn open_external_url(raw_url: &str) -> Result<(), String> {
+    let target = resolve_external_url(raw_url)?;
+    open_url_with_system_handler(&target)
+}
+
 /// Resolves delivery paths against trusted workspace or runtime-open roots and
 /// rejects any target that escapes those formal desktop-open scopes.
 fn resolve_existing_local_path(raw_path: &str, roots: &LocalPathRoots) -> Result<PathBuf, String> {
@@ -133,6 +140,20 @@ fn resolve_path_candidate(raw_path: &str, roots: &LocalPathRoots) -> Result<Path
     }
 
     Err("runtime-relative delivery paths must stay within the trusted temp/ scope".to_string())
+}
+
+fn resolve_external_url(raw_url: &str) -> Result<String, String> {
+    let trimmed = raw_url.trim();
+    if trimmed.is_empty() {
+        return Err("external url is empty".to_string());
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+    if !lower.starts_with("http://") && !lower.starts_with("https://") {
+        return Err("external url must use http or https".to_string());
+    }
+
+    Ok(trimmed.to_string())
 }
 
 fn prepare_trusted_directory_target(target: &Path, trusted_root: &Path) -> Result<PathBuf, String> {
@@ -244,6 +265,29 @@ fn open_with_system_handler(target: &Path) -> Result<(), String> {
 }
 
 #[cfg(windows)]
+fn open_url_with_system_handler(target: &str) -> Result<(), String> {
+    let operation = encode_wide(OsStr::new("open"));
+    let target_wide = encode_wide(OsStr::new(target));
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            PCWSTR(operation.as_ptr()),
+            PCWSTR(target_wide.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+
+    let code = result.0 as isize;
+    if code <= 32 {
+        return Err(format!("shell open failed with code {code}"));
+    }
+
+    Ok(())
+}
+
+#[cfg(windows)]
 fn reveal_with_system_handler(target: &Path) -> Result<(), String> {
     let select_arg = format!("/select,{}", target.display());
     run_platform_command(
@@ -276,6 +320,11 @@ fn reveal_with_system_handler(target: &Path) -> Result<(), String> {
     )
 }
 
+#[cfg(target_os = "macos")]
+fn open_url_with_system_handler(target: &str) -> Result<(), String> {
+    run_platform_string_command("open", &[target], &format!("open external url {target}"))
+}
+
 #[cfg(all(not(windows), not(target_os = "macos")))]
 fn open_with_system_handler(target: &Path) -> Result<(), String> {
     run_platform_command(
@@ -295,8 +344,27 @@ fn reveal_with_system_handler(target: &Path) -> Result<(), String> {
     )
 }
 
+#[cfg(all(not(windows), not(target_os = "macos")))]
+fn open_url_with_system_handler(target: &str) -> Result<(), String> {
+    run_platform_string_command("xdg-open", &[target], &format!("open external url {target}"))
+}
+
 #[cfg(windows)]
 fn run_platform_command(program: &str, args: &[&str], description: &str) -> Result<(), String> {
+    let status = Command::new(program)
+        .args(args)
+        .status()
+        .map_err(|error| format!("failed to {description}: {error}"))?;
+
+    if !status.success() {
+        return Err(format!("failed to {description}: exit status {status}"));
+    }
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn run_platform_string_command(program: &str, args: &[&str], description: &str) -> Result<(), String> {
     let status = Command::new(program)
         .args(args)
         .status()

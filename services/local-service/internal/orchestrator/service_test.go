@@ -4696,7 +4696,7 @@ func TestServiceAgentLoopToolApprovalPausesWaitingAuth(t *testing.T) {
 			ModelID:   "gpt-5.4",
 			ToolCalls: []model.ToolInvocation{{
 				Name:      "page_read",
-				Arguments: map[string]any{"url": "https://example.com"},
+				Arguments: map[string]any{"url": "http://127.0.0.1:8080/approval"},
 			}},
 		}},
 	}
@@ -4708,7 +4708,7 @@ func TestServiceAgentLoopToolApprovalPausesWaitingAuth(t *testing.T) {
 		"trigger":    "hover_text_input",
 		"input": map[string]any{
 			"type": "text",
-			"text": "去 https://example.com 看一下页面内容",
+			"text": "去 http://127.0.0.1:8080/approval 看一下页面内容",
 		},
 		"intent": map[string]any{
 			"name":      "agent_loop",
@@ -4737,10 +4737,10 @@ func TestServiceAgentLoopToolApprovalPausesWaitingAuth(t *testing.T) {
 	if record.ApprovalRequest == nil || stringValue(record.ApprovalRequest, "operation_name", "") != "page_read" {
 		t.Fatalf("expected page_read approval request, got %+v", record.ApprovalRequest)
 	}
-	if stringValue(record.PendingExecution, "operation_name", "") != "page_read" || stringValue(record.PendingExecution, "target_object", "") != "https://example.com" {
+	if stringValue(record.PendingExecution, "operation_name", "") != "page_read" || stringValue(record.PendingExecution, "target_object", "") != "http://127.0.0.1:8080/approval" {
 		t.Fatalf("expected pending execution to preserve runtime tool target, got %+v", record.PendingExecution)
 	}
-	if !reflect.DeepEqual(mapValue(record.PendingExecution, "approved_tool_input"), map[string]any{"url": "https://example.com"}) {
+	if !reflect.DeepEqual(mapValue(record.PendingExecution, "approved_tool_input"), map[string]any{"url": "http://127.0.0.1:8080/approval"}) {
 		t.Fatalf("expected pending execution to preserve exact runtime tool input, got %+v", record.PendingExecution)
 	}
 	notifications, ok := service.runEngine.PendingNotifications(taskID)
@@ -4769,7 +4769,7 @@ func TestServiceRuntimeApprovalResumeRejectsChangedToolInput(t *testing.T) {
 				ToolCalls: []model.ToolInvocation{{
 					Name: "page_search",
 					Arguments: map[string]any{
-						"url":   "https://example.com",
+						"url":   "http://127.0.0.1:8080/search",
 						"query": "billing",
 						"limit": 3,
 					},
@@ -4782,7 +4782,7 @@ func TestServiceRuntimeApprovalResumeRejectsChangedToolInput(t *testing.T) {
 				ToolCalls: []model.ToolInvocation{{
 					Name: "page_search",
 					Arguments: map[string]any{
-						"url":   "https://example.com",
+						"url":   "http://127.0.0.1:8080/search",
 						"query": "security",
 						"limit": 3,
 					},
@@ -4818,7 +4818,7 @@ func TestServiceRuntimeApprovalResumeRejectsChangedToolInput(t *testing.T) {
 		t.Fatal("expected first waiting_auth task record")
 	}
 	firstApprovedInput := map[string]any{
-		"url":   "https://example.com",
+		"url":   "http://127.0.0.1:8080/search",
 		"query": "billing",
 		"limit": 3,
 	}
@@ -4844,7 +4844,7 @@ func TestServiceRuntimeApprovalResumeRejectsChangedToolInput(t *testing.T) {
 		t.Fatal("expected second waiting_auth task record")
 	}
 	secondApprovedInput := map[string]any{
-		"url":   "https://example.com",
+		"url":   "http://127.0.0.1:8080/search",
 		"query": "security",
 		"limit": 3,
 	}
@@ -17230,16 +17230,8 @@ func TestServiceStartTaskWithExecutorDeliversPageReadResultPage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start task failed: %v", err)
 	}
-	if result["task"].(map[string]any)["status"] != "waiting_auth" {
-		t.Fatalf("expected page_read task to wait for authorization, got %+v", result)
-	}
-	result, err = service.SecurityRespond(map[string]any{
-		"task_id":     result["task"].(map[string]any)["task_id"],
-		"approval_id": activeApprovalIDForTask(t, service, result["task"].(map[string]any)["task_id"].(string)),
-		"decision":    "allow_once",
-	})
-	if err != nil {
-		t.Fatalf("security respond failed: %v", err)
+	if result["task"].(map[string]any)["status"] != "completed" {
+		t.Fatalf("expected page_read task to complete without authorization, got %+v", result)
 	}
 
 	taskID := result["task"].(map[string]any)["task_id"].(string)
@@ -17312,16 +17304,8 @@ func TestServiceStartTaskWithExecutorDeliversPageSearchResultPage(t *testing.T) 
 	if err != nil {
 		t.Fatalf("start task failed: %v", err)
 	}
-	if result["task"].(map[string]any)["status"] != "waiting_auth" {
-		t.Fatalf("expected page_search task to wait for authorization, got %+v", result)
-	}
-	result, err = service.SecurityRespond(map[string]any{
-		"task_id":     result["task"].(map[string]any)["task_id"],
-		"approval_id": activeApprovalIDForTask(t, service, result["task"].(map[string]any)["task_id"].(string)),
-		"decision":    "allow_once",
-	})
-	if err != nil {
-		t.Fatalf("security respond failed: %v", err)
+	if result["task"].(map[string]any)["status"] != "completed" {
+		t.Fatalf("expected page_search task to complete without authorization, got %+v", result)
 	}
 	taskID := result["task"].(map[string]any)["task_id"].(string)
 	deliveryResult := result["delivery_result"].(map[string]any)
@@ -17469,16 +17453,8 @@ func TestServiceStartTaskWithExecutorPageReadFailureUsesUnifiedError(t *testing.
 	if err != nil {
 		t.Fatalf("start task should return task-centric failure result, got %v", err)
 	}
-	if result["task"].(map[string]any)["status"] != "waiting_auth" {
-		t.Fatalf("expected page_read failure task to wait for authorization, got %+v", result)
-	}
-	result, err = service.SecurityRespond(map[string]any{
-		"task_id":     result["task"].(map[string]any)["task_id"],
-		"approval_id": activeApprovalIDForTask(t, service, result["task"].(map[string]any)["task_id"].(string)),
-		"decision":    "allow_once",
-	})
-	if err != nil {
-		t.Fatalf("security respond should surface task-centric failure result, got %v", err)
+	if result["task"].(map[string]any)["status"] != "failed" {
+		t.Fatalf("expected page_read failure task to fail without authorization, got %+v", result)
 	}
 	taskID := result["task"].(map[string]any)["task_id"].(string)
 	if result["delivery_result"] != nil {
@@ -17546,7 +17522,7 @@ func TestServiceStartTaskWithRealLocalPageReadDelivery(t *testing.T) {
 		t.Fatalf("start task failed: %v", err)
 	}
 	if result["task"].(map[string]any)["status"] != "waiting_auth" {
-		t.Fatalf("expected real page_read task to wait for authorization, got %+v", result)
+		t.Fatalf("expected real page_read task to wait for authorization for loopback target, got %+v", result)
 	}
 	result, err = service.SecurityRespond(map[string]any{
 		"task_id":     result["task"].(map[string]any)["task_id"],
