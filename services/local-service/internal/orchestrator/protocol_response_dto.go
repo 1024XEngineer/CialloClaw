@@ -427,7 +427,7 @@ func intentPayloadPointerFromMap(values map[string]any, key string) (*IntentPayl
 		return nil, fmt.Errorf("%s: %w", key, err)
 	}
 	if !ok {
-		arguments = nil
+		arguments = map[string]any{}
 	} else {
 		arguments = cloneProtocolMap(arguments)
 	}

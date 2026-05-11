@@ -16,7 +16,7 @@ import (
 
 type screenIntentDTO struct {
 	Name      string         `json:"name"`
-	Arguments map[string]any `json:"arguments,omitempty"`
+	Arguments map[string]any `json:"arguments"`
 }
 
 type emptyIntentArguments struct{}
@@ -346,7 +346,10 @@ func (s *Service) executeScreenAnalysisAfterApproval(task runengine.TaskRecord, 
 }
 
 func protocolIntentMap(name string, arguments any) map[string]any {
-	intent := screenIntentDTO{Name: name}
+	intent := screenIntentDTO{
+		Name:      name,
+		Arguments: map[string]any{},
+	}
 	if arguments != nil {
 		intent.Arguments = protocolMapFromDTO(arguments)
 	}

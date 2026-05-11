@@ -292,6 +292,68 @@ func TestStableDTOsRejectWhitespaceOnlyRequiredStrings(t *testing.T) {
 	}
 }
 
+func TestStableDTOsRejectNonStringOptionalSessionID(t *testing.T) {
+	testCases := []struct {
+		name   string
+		decode func(json.RawMessage) (map[string]any, *rpcError)
+		params map[string]any
+	}{
+		{
+			name:   "agent.input.submit session_id",
+			decode: decodeAgentInputSubmitParams,
+			params: map[string]any{
+				"request_meta": map[string]any{
+					"trace_id":    "trace_input_submit_bad_session",
+					"client_time": "2026-05-09T12:00:00+08:00",
+				},
+				"session_id": 123,
+				"source":     "floating_ball",
+				"trigger":    "hover_text_input",
+				"input": map[string]any{
+					"type":       "text",
+					"text":       "inspect the page",
+					"input_mode": "text",
+				},
+				"context": map[string]any{},
+			},
+		},
+		{
+			name:   "agent.task.start session_id",
+			decode: decodeAgentTaskStartParams,
+			params: map[string]any{
+				"request_meta": map[string]any{
+					"trace_id":    "trace_task_start_bad_session",
+					"client_time": "2026-05-09T12:00:00+08:00",
+				},
+				"session_id": 123,
+				"source":     "floating_ball",
+				"trigger":    "text_selected_click",
+				"input": map[string]any{
+					"type": "text_selection",
+					"text": "selected content",
+				},
+				"context": map[string]any{
+					"selection": map[string]any{
+						"text": "selected content",
+					},
+				},
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, rpcErr := testCase.decode(mustMarshal(t, testCase.params))
+			if rpcErr == nil {
+				t.Fatal("expected non-string session_id to return invalid params")
+			}
+			if rpcErr.Code != errInvalidParams || rpcErr.Message != "INVALID_PARAMS" {
+				t.Fatalf("expected invalid params error, got %+v", rpcErr)
+			}
+		})
+	}
+}
+
 func TestDecodeParamsRequiringRequestMetaMatchesStableContract(t *testing.T) {
 	_, rpcErr := decodeParamsRequiringRequestMeta(mustMarshal(t, map[string]any{
 		"group":  "unfinished",

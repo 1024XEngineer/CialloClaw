@@ -152,6 +152,9 @@ func validateAgentInputSubmitParams(params map[string]any) *rpcError {
 	if err := requireRequestMeta(params); err != nil {
 		return err
 	}
+	if err := optionalStringField(params, "session_id"); err != nil {
+		return err
+	}
 	input, err := requireObject(params, "input")
 	if err != nil {
 		return err
@@ -195,6 +198,9 @@ func validateAgentInputSubmitParams(params map[string]any) *rpcError {
 
 func validateAgentTaskStartParams(params map[string]any) *rpcError {
 	if err := requireRequestMeta(params); err != nil {
+		return err
+	}
+	if err := optionalStringField(params, "session_id"); err != nil {
 		return err
 	}
 	input, err := requireObject(params, "input")
