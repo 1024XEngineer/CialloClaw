@@ -113,13 +113,6 @@ func cloneMap(values map[string]any) map[string]any {
 	return result
 }
 
-func optionalFormalDeliveryResult(deliveryResult map[string]any) any {
-	if len(deliveryResult) == 0 {
-		return nil
-	}
-	return deliveryResult
-}
-
 // cloneMapSlice recursively copies a []map[string]any payload.
 func cloneMapSlice(values []map[string]any) []map[string]any {
 	if len(values) == 0 {
