@@ -90,17 +90,16 @@ def compare_semver(version_a: str, version_b: str) -> int:
 
 
 def github_api_headers() -> dict[str, str]:
-    """Build authenticated GitHub REST headers for mutating release state."""
+    """Build GitHub REST headers for authenticated or anonymous requests."""
 
-    token = os.environ.get("GITHUB_TOKEN", "").strip()
-    if not token:
-        raise RuntimeError("GITHUB_TOKEN is required.")
-
-    return {
-        "Authorization": f"Bearer {token}",
+    headers = {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
     }
+    token = os.environ.get("GITHUB_TOKEN", "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 
 def github_api_request(method: str, url: str, payload: Any | None = None) -> Any | None:
@@ -223,19 +222,55 @@ def run_command(command: list[str], cwd: Path = REPO_ROOT) -> subprocess.Complet
     )
 
 
-def get_latest_release_base_version() -> str:
-    """Return the highest stable SemVer tag version, or the highest SemVer tag as fallback."""
+def list_published_releases() -> list[dict[str, Any]]:
+    """Fetch every published GitHub release so tip versioning follows formal releases first."""
 
-    tag_lines = run_command(["git", "tag", "--list", "v*"]).stdout.splitlines()
-    versions = [tag[1:] for tag in tag_lines if SEMVER_PATTERN.fullmatch(tag[1:])]
+    github_api_url = os.environ.get("GITHUB_API_URL", "").strip()
+    github_repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    if not github_api_url or not github_repository:
+        raise RuntimeError("GITHUB_API_URL and GITHUB_REPOSITORY are required.")
+
+    releases: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        response = github_api_request(
+            "GET",
+            f"{github_api_url}/repos/{github_repository}/releases?per_page=100&page={page}",
+        )
+        if not response:
+            break
+
+        releases.extend(response)
+        if len(response) < 100:
+            break
+        page += 1
+
+    return releases
+
+
+def get_latest_published_release_base_version() -> str:
+    """Return the highest stable SemVer version among published non-prerelease releases."""
+
+    versions: list[str] = []
+    for release in list_published_releases():
+        if release.get("draft") or release.get("prerelease"):
+            continue
+
+        tag_name = str(release.get("tag_name", "")).strip()
+        if not tag_name.startswith("v"):
+            continue
+
+        version = tag_name[1:]
+        match = SEMVER_PATTERN.fullmatch(version)
+        if not match or match.group("prerelease") is not None:
+            continue
+
+        versions.append(version)
+
     if not versions:
-        raise RuntimeError("Could not determine the latest SemVer tag version.")
+        raise RuntimeError("Could not determine the latest published SemVer release version.")
 
-    stable_versions = [
-        version for version in versions if SEMVER_PATTERN.fullmatch(version).group("prerelease") is None
-    ]
-    candidates = stable_versions or versions
-    return max(candidates, key=functools.cmp_to_key(compare_semver))
+    return max(versions, key=functools.cmp_to_key(compare_semver))
 
 
 def resolve_metadata() -> None:
@@ -270,7 +305,7 @@ def resolve_metadata() -> None:
         return
 
     if github_ref == "refs/heads/main":
-        latest_release_version = get_latest_release_base_version()
+        latest_release_version = get_latest_published_release_base_version()
         latest_release_match = SEMVER_PATTERN.fullmatch(latest_release_version)
         if latest_release_match is None:
             raise RuntimeError(f"Invalid latest SemVer tag version: {latest_release_version}")
@@ -337,37 +372,6 @@ def verify_version_manifests() -> None:
     if cargo_version != version:
         raise RuntimeError("Cargo.toml [package] version mismatch")
 
-
-def build_sidecar() -> None:
-    """Build the Go sidecar and expose its target filename to the workflow."""
-
-    rust_version = run_command(["rustc", "-vV"]).stdout
-    host_line = next((line for line in rust_version.splitlines() if line.startswith("host:")), None)
-    if not host_line:
-        raise RuntimeError("Failed to detect Rust host triple.")
-
-    triple = host_line.split(":", 1)[1].strip()
-    extension = ".exe" if os.name == "nt" else ""
-    name = f"local-service-{triple}{extension}"
-    binaries_dir = REPO_ROOT / "apps/desktop/src-tauri/binaries"
-    binaries_dir.mkdir(parents=True, exist_ok=True)
-
-    subprocess.run(
-        [
-            "go",
-            "build",
-            "-trimpath",
-            "-o",
-            str(binaries_dir / name),
-            "./services/local-service/cmd/server",
-        ],
-        cwd=REPO_ROOT,
-        check=True,
-    )
-
-    write_workflow_output("sidecar_file_name", name)
-
-
 def repoint_release_tag() -> None:
     """Force the rolling release tag to reference the commit that was just published."""
 
@@ -407,7 +411,6 @@ def build_argument_parser() -> argparse.ArgumentParser:
             "resolve-metadata",
             "rewrite-version-manifests",
             "verify-version-manifests",
-            "build-sidecar",
             "repoint-release-tag",
         ),
     )
@@ -422,7 +425,6 @@ def main() -> int:
         "resolve-metadata": resolve_metadata,
         "rewrite-version-manifests": rewrite_version_manifests,
         "verify-version-manifests": verify_version_manifests,
-        "build-sidecar": build_sidecar,
         "repoint-release-tag": repoint_release_tag,
     }
     actions[args.action]()

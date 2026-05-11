@@ -2,10 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { HashRouter, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { HashRouter, Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { DashboardVoiceField } from "@/features/dashboard/home/components/DashboardVoiceField";
 import {
-  getDashboardHomeFallbackData,
   loadDashboardHomeData,
   submitDashboardHomeRecommendationFeedback,
 } from "@/features/dashboard/home/dashboardHome.service";
@@ -18,56 +17,69 @@ import {
   type DashboardTaskDetailOpenRequest,
 } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { resolveDashboardModuleRoutePath, resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
+import {
+  dashboardTaskDeliveryNavigationEvent,
+  navigateToDashboardTaskDelivery,
+  type DashboardTaskDeliveryOpenRequest,
+} from "@/features/dashboard/tasks/taskDeliveryNavigation";
 import { TasksPage } from "@/features/dashboard/tasks/TasksPage";
 import { subscribeApprovalPending, subscribeDeliveryReady, subscribeTaskUpdated } from "@/rpc/subscriptions";
 import { rememberConversationSessionFromTaskUpdated } from "@/services/conversationSessionService";
 import { cn } from "@/utils/cn";
 import { DashboardHome } from "./DashboardHome";
+import { createDashboardOpeningTransitionController } from "./dashboardOpeningTransition";
 import "./dashboard.css";
 
 const DASHBOARD_TASK_DETAIL_REQUEST_MEMORY_MS = 5_000;
 
-function useDashboardDomainExpansion() {
+/**
+ * Replays the dashboard opening mask after a hidden desktop window becomes
+ * visible again so long-idle sessions do not stay visually clipped.
+ */
+function useDashboardOpeningTransitionState() {
   const [isOpening, setIsOpening] = useState(true);
-  const hiddenRef = useRef(false);
 
   useEffect(() => {
-    let frame = 0;
-    let timeout = 0;
-
-    const trigger = () => {
-      window.cancelAnimationFrame(frame);
-      window.clearTimeout(timeout);
-      setIsOpening(true);
-      frame = window.requestAnimationFrame(() => {
-        setIsOpening(false);
-      });
-      // Hidden/background Tauri windows can miss the RAF edge and stay clipped.
-      timeout = window.setTimeout(() => {
-        setIsOpening(false);
-      }, 720);
-    };
+    let disposed = false;
+    let clearWindowFocusListener: (() => void) | null = null;
+    // Keep the visibility/focus recovery state machine outside the hook so the
+    // long-idle window path stays contract-testable without mounting Tauri.
+    const openingTransitionController = createDashboardOpeningTransitionController({
+      cancelAnimationFrame: (handle) => window.cancelAnimationFrame(handle),
+      clearTimeout: (handle) => window.clearTimeout(handle),
+      hasFocus: () => document.hasFocus(),
+      getVisibilityState: () => document.visibilityState,
+      requestAnimationFrame: (callback) => window.requestAnimationFrame(callback),
+      setIsOpening,
+      setTimeout: (callback, timeoutMs) => window.setTimeout(callback, timeoutMs),
+    });
 
     const handleVisibilityChange = () => {
-      if (document.visibilityState === "hidden") {
-        hiddenRef.current = true;
-        return;
-      }
-
-      if (!hiddenRef.current) {
-        return;
-      }
-
-      hiddenRef.current = false;
-      trigger();
+      openingTransitionController.handleVisibilityChange();
     };
 
-    trigger();
+    openingTransitionController.trigger();
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    void getCurrentWindow()
+      .onFocusChanged(({ payload: focused }) => {
+        openingTransitionController.handleWindowFocusChanged(focused);
+      })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+
+        clearWindowFocusListener = unlisten;
+      })
+      .catch((error) => {
+        console.warn("dashboard focus listener failed", error);
+      });
 
     return () => {
-      window.cancelAnimationFrame(frame);
-      window.clearTimeout(timeout);
+      disposed = true;
+      openingTransitionController.dispose();
+      clearWindowFocusListener?.();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, []);
@@ -79,7 +91,7 @@ function DashboardRoutes() {
   const location = useLocation();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const isOpening = useDashboardDomainExpansion();
+  const isOpening = useDashboardOpeningTransitionState();
   const [voiceOpen, setVoiceOpen] = useState(false);
   const handledTaskDetailRequestIdsRef = useRef<Map<string, number>>(new Map());
   const dashboardHomeQuery = useQuery({
@@ -91,7 +103,7 @@ function DashboardRoutes() {
     refetchOnWindowFocus: false,
     retry: false,
   });
-  const dashboardHomeData = dashboardHomeQuery.data ?? getDashboardHomeFallbackData();
+  const dashboardHomeData = dashboardHomeQuery.data ?? null;
   const recommendationFeedbackMutation = useMutation({
     mutationFn: ({ feedback, recommendationId }: { feedback: "positive" | "negative"; recommendationId: string }) =>
       submitDashboardHomeRecommendationFeedback(recommendationId, feedback),
@@ -130,7 +142,8 @@ function DashboardRoutes() {
 
   useEffect(() => {
     let disposed = false;
-    let cleanup: (() => void) | null = null;
+    let clearTaskDetailNavigation: (() => void) | null = null;
+    let clearTaskDeliveryNavigation: (() => void) | null = null;
 
     void getCurrentWindow()
       .listen<DashboardTaskDetailOpenRequest>(dashboardTaskDetailNavigationEvent, ({ payload }) => {
@@ -147,15 +160,37 @@ function DashboardRoutes() {
           return;
         }
 
-        cleanup = unlisten;
+        clearTaskDetailNavigation = unlisten;
       })
       .catch((error) => {
         console.warn("dashboard task-detail navigation listener failed", error);
       });
 
+    void getCurrentWindow()
+      .listen<DashboardTaskDeliveryOpenRequest>(dashboardTaskDeliveryNavigationEvent, ({ payload }) => {
+        if (!rememberHandledTaskDetailRequest(payload.request_id)) {
+          return;
+        }
+
+        setVoiceOpen(false);
+        navigateToDashboardTaskDelivery(navigate, payload.task_id);
+      })
+      .then((unlisten) => {
+        if (disposed) {
+          unlisten();
+          return;
+        }
+
+        clearTaskDeliveryNavigation = unlisten;
+      })
+      .catch((error) => {
+        console.warn("dashboard task-delivery navigation listener failed", error);
+      });
+
     return () => {
       disposed = true;
-      cleanup?.();
+      clearTaskDetailNavigation?.();
+      clearTaskDeliveryNavigation?.();
     };
   }, [navigate]);
 
@@ -238,6 +273,25 @@ function DashboardRoutes() {
     recommendationFeedbackMutation.mutate({ feedback, recommendationId });
   };
 
+  const dashboardHomeRoute = dashboardHomeData
+    ? (
+        <DashboardHome
+          data={dashboardHomeData}
+          onRecommendationFeedback={handleRecommendationFeedback}
+          onVoiceOpen={() => setVoiceOpen(true)}
+          voiceOpen={voiceOpen}
+        />
+      )
+    : (
+        <DashboardHomeStatusShell
+          title={dashboardHomeQuery.isError ? "首页同步失败" : "正在同步首页轨道"}
+          message={dashboardHomeQuery.isError
+            ? (dashboardHomeQuery.error instanceof Error ? dashboardHomeQuery.error.message : "首页总览请求失败")
+            : "正在连接任务、便签、镜子与安全模块的正式摘要。"}
+          onRetry={dashboardHomeQuery.isError ? () => void dashboardHomeQuery.refetch() : null}
+        />
+      );
+
   return (
     <div className={cn("dashboard-app", isOpening && "is-opening")}>
       <AnimatePresence mode="wait">
@@ -252,14 +306,7 @@ function DashboardRoutes() {
         >
           <Routes location={location}>
             <Route
-              element={
-                <DashboardHome
-                  data={dashboardHomeData}
-                  onRecommendationFeedback={handleRecommendationFeedback}
-                  onVoiceOpen={() => setVoiceOpen(true)}
-                  voiceOpen={voiceOpen}
-                />
-              }
+              element={dashboardHomeRoute}
               path={resolveDashboardRoutePath("home")}
             />
             <Route element={<TasksPage />} path={`${resolveDashboardModuleRoutePath("tasks")}/*`} />
@@ -276,12 +323,52 @@ function DashboardRoutes() {
         onRecommendationConfirm={(recommendationId) => {
           recommendationFeedbackMutation.mutate({ feedback: "positive", recommendationId });
         }}
-        sequences={dashboardHomeData.voiceSequences}
+        sequences={dashboardHomeData?.voiceSequences ?? []}
       />
     </div>
   );
 }
 
+type DashboardHomeStatusShellProps = {
+  title: string;
+  message: string;
+  onRetry: (() => void) | null;
+};
+
+const dashboardHomeStatusShellModules = [
+  { label: "任务", route: resolveDashboardModuleRoutePath("tasks") },
+  { label: "便签", route: resolveDashboardModuleRoutePath("notes") },
+  { label: "镜子", route: resolveDashboardModuleRoutePath("memory") },
+  { label: "安全", route: resolveDashboardModuleRoutePath("safety") },
+] as const;
+
+function DashboardHomeStatusShell({ title, message, onRetry }: DashboardHomeStatusShellProps) {
+  return (
+    <main className="dashboard-home dashboard-home--status">
+      <section className="dashboard-home__status-card">
+        <p className="dashboard-page__eyebrow">dashboard</p>
+        <h1 className="dashboard-home__status-title">{title}</h1>
+        <p className="dashboard-home__status-copy">{message}</p>
+        <div className="dashboard-home__status-links">
+          {dashboardHomeStatusShellModules.map((module) => (
+            <Link key={module.route} className="dashboard-home__status-link" to={module.route}>
+              打开{module.label}
+            </Link>
+          ))}
+        </div>
+        {onRetry ? (
+          <button className="dashboard-home__status-action" onClick={onRetry} type="button">
+            重试
+          </button>
+        ) : null}
+      </section>
+    </main>
+  );
+}
+
+/**
+ * Mounts the dashboard router tree for the dedicated desktop window.
+ */
 export function DashboardRoot() {
   return (
     <HashRouter>

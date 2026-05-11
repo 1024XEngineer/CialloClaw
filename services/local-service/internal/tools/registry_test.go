@@ -225,7 +225,7 @@ func TestNewRegistryPanicsOnBadInitialTool(t *testing.T) {
 func ExampleRegistry() {
 	reg := NewRegistry()
 
-	reg.MustRegister(makeRegistryTool("read_file", "读取文件", ToolSourceBuiltin))
+	reg.MustRegister(makeRegistryTool("read_file", "Read file", ToolSourceBuiltin))
 	reg.MustRegister(makeRegistryTool("ocr_scan", "OCR扫描", ToolSourceWorker))
 
 	tool, err := reg.Get("read_file")
@@ -240,7 +240,7 @@ func ExampleRegistry() {
 	fmt.Println(len(builtins))
 
 	// Output:
-	// 读取文件
+	// Read file
 	// 2
 	// 1
 }

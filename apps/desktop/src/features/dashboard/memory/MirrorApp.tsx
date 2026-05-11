@@ -1,4 +1,4 @@
-import {
+﻿import {
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -12,8 +12,6 @@ import { X } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { PanelSurface, StatusBadge } from "@cialloclaw/ui";
 import { subscribeMirrorOverviewUpdated } from "@/rpc/subscriptions";
-import { loadDashboardDataMode, saveDashboardDataMode } from "@/features/dashboard/shared/dashboardDataMode";
-import { DashboardMockToggle } from "@/features/dashboard/shared/DashboardMockToggle";
 import {
   formatDashboardSettingsMutationFeedback,
   updateDashboardSettings,
@@ -23,7 +21,6 @@ import {
   applyMirrorSettingsSnapshot,
   loadMirrorOverviewData,
   type MirrorOverviewData,
-  type MirrorOverviewSource,
 } from "./mirrorService";
 import { MirrorDetailContent, type MirrorHistoryDetailView } from "./MirrorDetailContent";
 import { loadMirrorFloatingPositions, saveMirrorFloatingPositions } from "./mirrorLayoutStorage";
@@ -85,6 +82,7 @@ type MirrorRouteState = {
   focusMemoryId?: string;
   historyDetailView?: MirrorHistoryDetailView;
 };
+type MirrorPresentationMode = "rpc" | "mock";
 
 const INITIAL_MODULE_STACK: MirrorDirectionKey[] = DEFAULT_MIRROR_DIRECTION_STACK;
 const DRAG_THRESHOLD = 8;
@@ -143,15 +141,12 @@ function readMirrorRouteState(value: unknown) {
         : null,
   };
 }
-
-function formatMirrorDate(value: string) {
-  return new Date(value).toLocaleDateString("zh-CN", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
+// The roadshow mode is a front-end-only override, so a query string can flip
+// the mirror page onto the fixed mock fixture without touching formal state.
+function readMirrorPresentationMode(search: string): MirrorPresentationMode {
+  const params = new URLSearchParams(search);
+  return params.get("mirror_mode") === "mock" ? "mock" : "rpc";
 }
-
 function formatShortMirrorDate(value: string) {
   return new Date(value).toLocaleDateString("zh-CN", {
     month: "short",
@@ -571,10 +566,11 @@ function pickFloatingModulePositions(positions: ModulePositions): Record<Floatin
 export function MirrorApp() {
   const location = useLocation();
   const navigate = useNavigate();
+  const presentationMode = readMirrorPresentationMode(location.search);
   const storedFloatingPositionsRef = useRef(loadMirrorFloatingPositions());
   const hasStoredFloatingPositionsRef = useRef(storedFloatingPositionsRef.current !== null);
   const [mirrorData, setMirrorData] = useState<MirrorOverviewData | null>(null);
-  const [dataMode, setDataMode] = useState<MirrorOverviewSource>(() => loadDashboardDataMode("memory") as MirrorOverviewSource);
+  const settingsMode: MirrorPresentationMode = presentationMode;
   const [loadError, setLoadError] = useState<string | null>(null);
   const [modulePositions, setModulePositions] = useState<ModulePositions>(() => ({
     ...DEFAULT_MODULE_POSITIONS,
@@ -594,13 +590,10 @@ export function MirrorApp() {
   const modulePositionsRef = useRef<ModulePositions>(DEFAULT_MODULE_POSITIONS);
   const hasPlacedModulesRef = useRef(false);
   const isMountedRef = useRef(true);
-  const dataModeRef = useRef<MirrorOverviewSource>(dataMode);
   const fetchInFlightRef = useRef(false);
   const pendingRefreshRef = useRef(false);
   const refreshSequenceRef = useRef(0);
   const lastSavedFloatingPositionsRef = useRef<string | null>(null);
-
-  dataModeRef.current = dataMode;
 
   const openDetail = useCallback((key: MirrorDirectionKey, options?: { focusMemoryId?: string | null; historyDetailView?: MirrorHistoryDetailView | null }) => {
     setActiveDetailKey(key);
@@ -644,19 +637,6 @@ export function MirrorApp() {
   }, [historyDetailView, mirrorData]);
 
   const refreshMirrorData = useCallback(() => {
-    if (dataMode === "mock") {
-      const nextSequence = ++refreshSequenceRef.current;
-      pendingRefreshRef.current = false;
-      fetchInFlightRef.current = false;
-      setLoadError(null);
-      void loadMirrorOverviewData("mock").then((nextData) => {
-        if (isMountedRef.current && refreshSequenceRef.current === nextSequence) {
-          setMirrorData(nextData);
-        }
-      });
-      return;
-    }
-
     if (fetchInFlightRef.current) {
       pendingRefreshRef.current = true;
       return;
@@ -669,7 +649,7 @@ export function MirrorApp() {
       try {
         do {
           pendingRefreshRef.current = false;
-          const nextData = await loadMirrorOverviewData("rpc");
+          const nextData = await loadMirrorOverviewData(presentationMode);
 
           if (!isMountedRef.current || refreshSequenceRef.current !== nextSequence) {
             return;
@@ -691,37 +671,31 @@ export function MirrorApp() {
       } finally {
         fetchInFlightRef.current = false;
 
-        if (pendingRefreshRef.current && isMountedRef.current && dataModeRef.current === "rpc") {
+        if (pendingRefreshRef.current && isMountedRef.current && presentationMode === "rpc") {
           refreshMirrorData();
         }
       }
     })();
-  }, [dataMode]);
+  }, [presentationMode]);
 
   useEffect(() => {
-    saveDashboardDataMode("memory", dataMode);
-  }, [dataMode]);
-
-  useEffect(() => {
-    if (dataMode === "mock") {
-      setLastMirrorUpdate(null);
-      refreshMirrorData();
-      return;
-    }
-
     setMirrorData(null);
+    setLastMirrorUpdate(null);
 
-    const unsubscribe = subscribeMirrorOverviewUpdated((notification) => {
-      setLastMirrorUpdate(notification);
-      refreshMirrorData();
-    });
+    const unsubscribe =
+      presentationMode === "rpc"
+        ? subscribeMirrorOverviewUpdated((notification) => {
+            setLastMirrorUpdate(notification);
+            refreshMirrorData();
+          })
+        : () => {};
 
     refreshMirrorData();
 
     return () => {
       unsubscribe();
     };
-  }, [dataMode, refreshMirrorData]);
+  }, [presentationMode, refreshMirrorData]);
 
   const bringModuleToFront = useCallback((key: MirrorDirectionKey) => {
     setModuleStack((currentStack) => [...currentStack.filter((item) => item !== key), key]);
@@ -856,7 +830,7 @@ export function MirrorApp() {
   }, [activeDetailKey, closeDetail]);
   const handleSettingsUpdate = useCallback(
     async (subject: string, patch: DashboardSettingsPatch) => {
-      const result = await updateDashboardSettings(patch, dataMode);
+      const result = await updateDashboardSettings(patch, settingsMode);
 
       if (isMountedRef.current) {
         setLoadError(null);
@@ -865,7 +839,7 @@ export function MirrorApp() {
 
       return formatDashboardSettingsMutationFeedback(result, subject);
     },
-    [dataMode],
+    [settingsMode],
   );
 
   if (!mirrorData) {
@@ -874,7 +848,6 @@ export function MirrorApp() {
         <div className="mirror-page__canvas mirror-page__canvas--full mirror-page__canvas--loading">
           <p className="mirror-page__loading-copy">{loadError ? `镜子页同步失败：${loadError}` : "正在点亮检片台…"}</p>
         </div>
-        <DashboardMockToggle enabled={dataMode === "mock"} onToggle={() => setDataMode((current) => (current === "rpc" ? "mock" : "rpc"))} />
       </main>
     );
   }
@@ -885,8 +858,12 @@ export function MirrorApp() {
   const dataSourceDetails = [
     mirrorData.source === "rpc"
       ? "当前展示来自本地 JSON-RPC 服务。"
-      : "当前展示的是本地 mock 示例数据。",
+      : "当前展示的是路演用的前端固定素材。",
   ];
+
+  if (mirrorData.source === "mock") {
+    dataSourceDetails.push("用户画像与每日日报已切到本地 mock。");
+  }
 
   if (mirrorData.rpcContext.serverTime) {
     dataSourceDetails.push(`服务端时间 ${formatMirrorDateTime(mirrorData.rpcContext.serverTime)}`);
@@ -904,14 +881,14 @@ export function MirrorApp() {
     dataSourceDetails.push(`warnings：${mirrorData.rpcContext.warnings.join("；")}`);
   }
 
-  if (loadError && dataMode === "rpc") {
+  if (loadError && presentationMode === "rpc") {
     dataSourceDetails.push(`error：${loadError}`);
   }
 
   const dataSourceBadge =
     mirrorData.source === "rpc"
       ? { label: "LIVE", tone: "green" as const, copy: dataSourceDetails.join(" · ") }
-      : { label: "MOCK", tone: "processing" as const, copy: dataSourceDetails.join(" · ") };
+      : { label: "ROADSHOW", tone: "processing" as const, copy: dataSourceDetails.join(" · ") };
   const latestMemoryReference = overview.memory_references[0] ?? null;
   const latestConversation = mirrorData.conversations[0] ?? null;
 
@@ -1132,9 +1109,9 @@ export function MirrorApp() {
     if (key === "profile") {
       const primaryProfileItem = profileView.backend_items[0] ?? profileView.local_stat_items[0] ?? null;
       return {
-        badge: profileView.backend_items.length > 0 ? `${profileView.backend_items.length} 个后端字段` : "暂无后端字段",
+        badge: profileView.backend_items.length > 0 ? `${profileView.backend_items.length} 个画像字段` : "暂无画像字段",
         tone: "green",
-        detailLine: profileView.local_stat_items.length > 0 ? `${profileView.local_stat_items.length} 条最近本地统计。` : "仅显示后端画像字段。",
+        detailLine: profileView.local_stat_items.length > 0 ? `${profileView.local_stat_items.length} 条最近本地统计。` : "仅显示画像字段。",
         accent: getMirrorDirectionMeta(key).accent,
         mainLine: primaryProfileItem?.value ?? "暂无画像资料",
       };
@@ -1148,7 +1125,7 @@ export function MirrorApp() {
         latestConversation?.user_text ??
         (mirrorData.conversationSummary.total_records > 0
           ? `本地仍保留 ${mirrorData.conversationSummary.total_records} 条最近对话。`
-          : "轻触查看后端历史概要与本地最近 100 条对话记录。");
+          : "轻触查看镜子历史概要与本地最近 100 条对话记录。");
 
       return {
         badge:
@@ -1172,8 +1149,8 @@ export function MirrorApp() {
       detailLine:
         memorySummary ??
         (mirrorData.conversationSummary.total_records > 0
-          ? `后端暂无新引用；本地仍保留 ${mirrorData.conversationSummary.total_records} 条最近对话统计。`
-          : "等待新的后端记忆引用记录。"),
+          ? `镜子暂无新引用；本地仍保留 ${mirrorData.conversationSummary.total_records} 条最近对话统计。`
+          : "等待新的记忆引用记录。"),
       accent: getMirrorDirectionMeta(key).accent,
       mainLine: latestMemoryReference?.memory_id ?? "暂无近期被调用记忆",
       emphasis: "memory",
@@ -1285,7 +1262,6 @@ export function MirrorApp() {
         {moduleStack.map(renderDraggableModule)}
         {activeDetailKey ? <div data-testid="mirror-detail-overlay">{renderDetailOverlay()}</div> : null}
       </div>
-      <DashboardMockToggle enabled={dataMode === "mock"} onToggle={() => setDataMode((current) => (current === "rpc" ? "mock" : "rpc"))} />
     </main>
   );
 }

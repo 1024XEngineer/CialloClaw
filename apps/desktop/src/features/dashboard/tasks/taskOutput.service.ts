@@ -7,13 +7,15 @@ import type {
   AgentTaskArtifactOpenResult,
   Artifact,
   DeliveryPayload,
+  DeliveryResult,
   RequestMeta,
 } from "@cialloclaw/protocol";
+import { openDesktopExternalUrl } from "@/platform/desktopExternalUrl";
 import { openDesktopLocalPath, revealDesktopLocalPath } from "@/platform/desktopLocalPath";
 import { listTaskArtifacts, openDelivery, openTaskArtifact } from "@/rpc/methods";
-import { getMockTaskDetail } from "./taskPage.mock";
+import { isDashboardTaskDeliveryHref, requestDashboardTaskDeliveryOpen } from "./taskDeliveryNavigation";
 
-export type TaskOutputDataMode = "rpc" | "mock";
+export type TaskOutputDataMode = "rpc";
 
 export type TaskOpenExecutionPlan = {
   mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
@@ -25,6 +27,10 @@ export type TaskOpenExecutionPlan = {
 
 export type TaskOpenExecutionOptions = {
   onOpenTaskDetail?: (input: {
+    plan: TaskOpenExecutionPlan;
+    taskId: string;
+  }) => Promise<string | void> | string | void;
+  onOpenTaskDelivery?: (input: {
     plan: TaskOpenExecutionPlan;
     taskId: string;
   }) => Promise<string | void> | string | void;
@@ -48,6 +54,75 @@ export function isAllowedTaskOpenUrl(url: string): boolean {
   }
 }
 
+/**
+ * Merges task artifacts from the dedicated artifact query and the task detail
+ * payload so both task detail and delivery views expose the same formal output
+ * set while the backend catches list queries up with fresh detail payloads.
+ */
+export function mergeTaskArtifactItems(listedArtifacts: Artifact[], detailArtifacts: Artifact[]): Artifact[] {
+  const mergedArtifacts = [...listedArtifacts];
+  const artifactKeys = new Set(
+    listedArtifacts.map((artifact) => `${artifact.artifact_id}::${artifact.path}`),
+  );
+
+  for (const artifact of detailArtifacts) {
+    const artifactKey = `${artifact.artifact_id}::${artifact.path}`;
+    if (artifactKeys.has(artifactKey)) {
+      continue;
+    }
+
+    artifactKeys.add(artifactKey);
+    mergedArtifacts.push(artifact);
+  }
+
+  return mergedArtifacts;
+}
+
+/**
+ * Resolves the user-facing open label for the formal delivery result shown in
+ * task detail output rows.
+ */
+export function getTaskDeliveryOpenLabel(deliveryResult: DeliveryResult | null | undefined): string {
+  switch (deliveryResult?.type) {
+    case "result_page":
+      return "打开结果页";
+    case "workspace_document":
+    case "open_file":
+      return "打开文件";
+    case "reveal_in_folder":
+      return "定位文件";
+    case "task_detail":
+      return "查看任务详情";
+    default:
+      return "打开结果";
+  }
+}
+
+/**
+ * Returns whether the current formal delivery result exposes a real open
+ * target. Inline bubble outputs stay readable in place and should not render a
+ * dead-end open action.
+ */
+export function canOpenTaskDeliveryResult(deliveryResult: DeliveryResult | null | undefined, fallbackTaskId: string | null = null): boolean {
+  if (!deliveryResult) {
+    return false;
+  }
+
+  if (deliveryResult.type === "result_page") {
+    return typeof deliveryResult.payload.url === "string" && deliveryResult.payload.url.trim().length > 0;
+  }
+
+  if (deliveryResult.type === "workspace_document" || deliveryResult.type === "open_file" || deliveryResult.type === "reveal_in_folder") {
+    return typeof deliveryResult.payload.path === "string" && deliveryResult.payload.path.trim().length > 0;
+  }
+
+  if (deliveryResult.type === "task_detail") {
+    return Boolean(deliveryResult.payload.task_id || fallbackTaskId);
+  }
+
+  return false;
+}
+
 async function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
   return Promise.race([
     promise,
@@ -57,60 +132,12 @@ async function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
   ]);
 }
 
-function buildMockArtifactPage(taskId: string): AgentTaskArtifactListResult {
-  const detail = getMockTaskDetail(taskId).detail;
-
-  return {
-    items: detail.artifacts,
-    page: {
-      has_more: false,
-      limit: detail.artifacts.length,
-      offset: 0,
-      total: detail.artifacts.length,
-    },
-  };
-}
-
-function buildMockDeliveryPayload(taskId: string, artifact: Artifact | null): DeliveryPayload {
-  return {
-    path: artifact?.path ?? null,
-    task_id: taskId,
-    url: null,
-  };
-}
-
-function inferMockOpenAction(artifact: Artifact | null) {
-  if (!artifact) {
-    return "task_detail" as const;
-  }
-
-  if (artifact.artifact_type === "reveal_in_folder") {
-    return "reveal_in_folder" as const;
-  }
-
-  return "open_file" as const;
-}
-
-function buildMockOpenResult(taskId: string, artifact: Artifact | null): AgentTaskArtifactOpenResult | AgentDeliveryOpenResult {
-  const openAction = inferMockOpenAction(artifact);
-  const payload = buildMockDeliveryPayload(taskId, artifact);
-  const title = artifact?.title ?? "任务结果";
-
-  return {
-    ...(artifact ? { artifact } : {}),
-    delivery_result: {
-      payload,
-      preview_text: title,
-      title,
-      type: openAction,
-    },
-    open_action: openAction,
-    resolved_payload: payload,
-  };
-}
-
-function resolveTaskId(payload: DeliveryPayload, result: AgentTaskArtifactOpenResult | AgentDeliveryOpenResult) {
-  return payload.task_id ?? result.artifact?.task_id ?? null;
+function resolveTaskId(
+  payload: DeliveryPayload,
+  result: AgentTaskArtifactOpenResult | AgentDeliveryOpenResult,
+  fallbackTaskId: string | null = null,
+) {
+  return payload.task_id ?? result.artifact?.task_id ?? fallbackTaskId;
 }
 
 /**
@@ -121,9 +148,12 @@ function resolveTaskId(payload: DeliveryPayload, result: AgentTaskArtifactOpenRe
  * @param result Formal artifact or delivery open payload returned by RPC.
  * @returns The renderer execution plan for the requested output action.
  */
-export function resolveTaskOpenExecutionPlan(result: AgentTaskArtifactOpenResult | AgentDeliveryOpenResult): TaskOpenExecutionPlan {
+export function resolveTaskOpenExecutionPlan(
+  result: AgentTaskArtifactOpenResult | AgentDeliveryOpenResult,
+  fallbackTaskId: string | null = null,
+): TaskOpenExecutionPlan {
   const payload = result.resolved_payload;
-  const taskId = resolveTaskId(payload, result);
+  const taskId = resolveTaskId(payload, result, fallbackTaskId);
   const path = payload.path;
   const url = payload.url;
 
@@ -202,6 +232,15 @@ function localPathExecutionFailure(message: string, error: unknown) {
   return `${message}（${detail}）`;
 }
 
+function externalUrlExecutionFailure(message: string, error: unknown) {
+  const detail = error instanceof Error ? error.message.trim() : "";
+  if (!detail) {
+    return message;
+  }
+
+  return `${message}（${detail}）`;
+}
+
 /**
  * Executes a renderer-side open plan while keeping task-detail routing and
  * copy-path fallback inside the same formal execution entry.
@@ -223,12 +262,33 @@ export async function performTaskOpenExecution(plan: TaskOpenExecutionPlan, opti
   }
 
   if (plan.mode === "open_url" && plan.url) {
+    if (plan.taskId && isDashboardTaskDeliveryHref(plan.url)) {
+      // Result-page URLs stay inside the formal dashboard surface instead of
+      // leaking into an external browser tab, even when the request starts from
+      // shell-ball or another non-dashboard window.
+      const deliveryFeedback = await options.onOpenTaskDelivery?.({
+        plan,
+        taskId: plan.taskId,
+      });
+
+      if (typeof deliveryFeedback === "string" && deliveryFeedback.trim() !== "") {
+        return deliveryFeedback;
+      }
+
+      await requestDashboardTaskDeliveryOpen(plan.taskId);
+      return plan.feedback;
+    }
+
     if (!isAllowedTaskOpenUrl(plan.url)) {
       return "已拦截不受支持的结果链接。";
     }
 
-    window.open(plan.url, "_blank", "noopener,noreferrer");
-    return plan.feedback;
+    try {
+      await openDesktopExternalUrl(plan.url);
+      return plan.feedback;
+    } catch (error) {
+      return externalUrlExecutionFailure("无法通过系统浏览器打开结果链接", error);
+    }
   }
 
   if (plan.mode === "open_local_path" && plan.path) {
@@ -264,11 +324,7 @@ export function describeTaskOpenResultForCurrentTask(plan: TaskOpenExecutionPlan
   return null;
 }
 
-export async function loadTaskArtifactPage(taskId: string, source: TaskOutputDataMode = "rpc"): Promise<AgentTaskArtifactListResult> {
-  if (source === "mock") {
-    return buildMockArtifactPage(taskId);
-  }
-
+export async function loadTaskArtifactPage(taskId: string, _source: TaskOutputDataMode = "rpc"): Promise<AgentTaskArtifactListResult> {
   const params: AgentTaskArtifactListParams = {
     limit: 50,
     offset: 0,
@@ -279,15 +335,7 @@ export async function loadTaskArtifactPage(taskId: string, source: TaskOutputDat
   return withTimeout(listTaskArtifacts(params), `task artifacts ${taskId}`);
 }
 
-export async function openTaskArtifactForTask(taskId: string, artifactId: string, source: TaskOutputDataMode = "rpc"): Promise<AgentTaskArtifactOpenResult> {
-  if (source === "mock") {
-    const artifact = getMockTaskDetail(taskId).detail.artifacts.find((item) => item.artifact_id === artifactId);
-    if (!artifact) {
-      throw new Error(`mock artifact not found: ${artifactId}`);
-    }
-    return buildMockOpenResult(taskId, artifact) as AgentTaskArtifactOpenResult;
-  }
-
+export async function openTaskArtifactForTask(taskId: string, artifactId: string, _source: TaskOutputDataMode = "rpc"): Promise<AgentTaskArtifactOpenResult> {
   const params: AgentTaskArtifactOpenParams = {
     artifact_id: artifactId,
     request_meta: createRequestMeta(`task_artifact_open_${artifactId}`),
@@ -297,12 +345,7 @@ export async function openTaskArtifactForTask(taskId: string, artifactId: string
   return withTimeout(openTaskArtifact(params), `task artifact open ${artifactId}`);
 }
 
-export async function openTaskDeliveryForTask(taskId: string, artifactId: string | undefined, source: TaskOutputDataMode = "rpc"): Promise<AgentDeliveryOpenResult> {
-  if (source === "mock") {
-    const artifact = artifactId ? getMockTaskDetail(taskId).detail.artifacts.find((item) => item.artifact_id === artifactId) ?? null : null;
-    return buildMockOpenResult(taskId, artifact) as AgentDeliveryOpenResult;
-  }
-
+export async function openTaskDeliveryForTask(taskId: string, artifactId: string | undefined, _source: TaskOutputDataMode = "rpc"): Promise<AgentDeliveryOpenResult> {
   const params: AgentDeliveryOpenParams = {
     ...(artifactId ? { artifact_id: artifactId } : {}),
     request_meta: createRequestMeta(`task_delivery_open_${taskId}`),

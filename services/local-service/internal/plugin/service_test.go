@@ -126,6 +126,14 @@ func TestCatalogEntriesAndSnapshotsAreCloned(t *testing.T) {
 	if freshSnapshot.Catalog.DisplayName == "mutated" || freshSnapshot.Manifest.Name == "mutated" || freshSnapshot.Runtimes[0].Name == "mutated" {
 		t.Fatalf("expected catalog snapshots to be cloned, got %+v", freshSnapshot)
 	}
+	if len(freshSnapshot.Manifest.Capabilities) != 10 {
+		t.Fatalf("expected playwright snapshot to expose full browser capability set, got %+v", freshSnapshot.Manifest.Capabilities)
+	}
+	for _, capability := range []string{"browser_attach_current", "browser_snapshot", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact"} {
+		if !containsCapability(freshSnapshot.Manifest.Capabilities, capability) {
+			t.Fatalf("expected playwright snapshot to include capability %q, got %+v", capability, freshSnapshot.Manifest.Capabilities)
+		}
+	}
 }
 
 func TestNilServiceCatalogSnapshotsStillExposeBuiltinStaticView(t *testing.T) {
@@ -181,6 +189,15 @@ func TestCatalogEntriesIncludeNonBuiltinPluginRuntimeSources(t *testing.T) {
 	if len(snapshot.RecentEvents) == 0 || snapshot.RecentEvents[0].Name != "community_skill_worker" {
 		t.Fatalf("expected dynamic plugin runtime snapshot to include runtime events, got %+v", snapshot)
 	}
+}
+
+func containsCapability(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func assertError(message string) error { return testError(message) }

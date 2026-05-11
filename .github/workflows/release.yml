@@ -13,7 +13,6 @@ on:
       - main
     tags:
       - "v*"
-  workflow_dispatch:
 
 permissions:
   contents: write
@@ -43,6 +42,8 @@ jobs:
       - name: Resolve release metadata
         id: meta
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python ./.github/scripts/desktop_release.py resolve-metadata
 
       - name: Set up pnpm
@@ -96,12 +97,6 @@ jobs:
           pnpm --dir apps/desktop typecheck
           pnpm --dir apps/desktop test:dashboard
           pnpm --dir apps/desktop test:memory
-
-      - name: Build sidecar
-        id: sidecar
-        shell: bash
-        run: python ./.github/scripts/desktop_release.py build-sidecar
-
       - name: Publish release (tag)
         if: steps.meta.outputs.release_mode == 'tag'
         uses: tauri-apps/tauri-action@v0
@@ -113,7 +108,7 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: ${{ github.ref_name }}
           prerelease: ${{ steps.meta.outputs.release_is_prerelease == 'true' }}
-          assetNamePattern: ${{ steps.meta.outputs.release_asset_name_pattern }}
+          releaseAssetNamePattern: ${{ steps.meta.outputs.release_asset_name_pattern }}
           generateReleaseNotes: true
           retryAttempts: 4
           args: --bundles ${{ steps.meta.outputs.release_bundles }}
@@ -128,7 +123,7 @@ jobs:
           tauriScript: pnpm exec tauri
           tagName: tip
           releaseName: tip
-          assetNamePattern: ${{ steps.meta.outputs.release_asset_name_pattern }}
+          releaseAssetNamePattern: ${{ steps.meta.outputs.release_asset_name_pattern }}
           prerelease: true
           retryAttempts: 4
           args: --bundles ${{ steps.meta.outputs.release_bundles }}

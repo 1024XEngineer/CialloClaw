@@ -1,8 +1,9 @@
 import { useMemo } from "react";
-import { Archive, ArrowRight, BadgeAlert, BarChart3, BellOff, BrainCircuit, CalendarCheck2, Check, Clock3, Eye, FileSearch, FileText, Flag, FolderOpen, History, Info, Lightbulb, Link2, LoaderCircle, Lock, Mail, MessageCircleMore, NotebookPen, PauseCircle, PencilLine, RefreshCcw, Repeat2, Search, Send, ShieldCheck, Sparkles, Target, UserRound, X } from "lucide-react";
+import { Archive, ArrowRight, BadgeAlert, BarChart3, BellOff, BrainCircuit, CalendarCheck2, Check, Clock3, Eye, FileText, Flag, History, Info, Lightbulb, Link2, LoaderCircle, Lock, Mail, MessageCircleMore, NotebookPen, PauseCircle, PencilLine, RefreshCcw, Repeat2, Search, Send, ShieldCheck, Sparkles, Target, UserRound, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
+import { navigateToDashboardTaskDetail } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { resolveDashboardModuleRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import type { DashboardHomeContextItem, DashboardHomeEventStateKey, DashboardHomeModuleKey, DashboardHomeSignalItem, DashboardHomeStateData, DashboardHomeStateGroup } from "../dashboardHome.types";
 
@@ -47,6 +48,75 @@ const contextIcons = {
   time: Clock3,
   user: UserRound,
 };
+
+function normalizePanelCopy(text: string) {
+  return text.trim().replace(/\s+/g, " ");
+}
+
+function buildPanelCopyRegistry(activeState: DashboardHomeStateData) {
+  return new Set(
+    [activeState.headline, activeState.subline]
+      .filter((text): text is string => typeof text === "string")
+      .map((text) => normalizePanelCopy(text))
+      .filter(Boolean),
+  );
+}
+
+function filterDistinctContextItems(items: DashboardHomeContextItem[], registry: Set<string>) {
+  return items.filter((item) => {
+    const normalized = normalizePanelCopy(item.text);
+    if (normalized === "" || registry.has(normalized)) {
+      return false;
+    }
+
+    registry.add(normalized);
+    return true;
+  });
+}
+
+function filterDistinctInsights(
+  insights: NonNullable<DashboardHomeStateData["insights"]>,
+  registry: Set<string>,
+) {
+  return insights.filter((insight) => {
+    const normalized = normalizePanelCopy(insight.text);
+    if (normalized === "" || registry.has(normalized)) {
+      return false;
+    }
+
+    registry.add(normalized);
+    return true;
+  });
+}
+
+function filterDistinctSignals(signals: DashboardHomeSignalItem[], registry: Set<string>) {
+  return signals.filter((signal) => {
+    const normalized = normalizePanelCopy(`${signal.label} ${signal.value} ${signal.translation ?? ""}`);
+    if (normalized === "" || registry.has(normalized)) {
+      return false;
+    }
+
+    registry.add(normalized);
+    return true;
+  });
+}
+
+function buildMetaPills(activeState: DashboardHomeStateData, moduleLabel: string | undefined) {
+  const candidates = [activeState.tag, activeState.progressLabel, moduleLabel].filter(
+    (item): item is string => typeof item === "string" && item.trim() !== "",
+  );
+  const seen = new Set<string>();
+
+  return candidates.filter((item) => {
+    const normalized = normalizePanelCopy(item);
+    if (seen.has(normalized)) {
+      return false;
+    }
+
+    seen.add(normalized);
+    return true;
+  });
+}
 
 function renderContext(items: DashboardHomeContextItem[]) {
   return items.map((item) => (
@@ -96,13 +166,36 @@ function modulePrimaryLabel(module: DashboardHomeModuleKey) {
   return labels[module];
 }
 
+function resolvePrimaryActionLabel(activeState: DashboardHomeStateData) {
+  return activeState.navigationTarget?.label ?? modulePrimaryLabel(activeState.module);
+}
+
 export function DashboardEventPanel({ activeState, onClose, onStateChange, stateGroups, stateMap }: DashboardEventPanelProps) {
   const navigate = useNavigate();
 
   function handleOpenModule(module: DashboardHomeModuleKey) {
     onClose();
     window.setTimeout(() => {
-      navigate(resolveDashboardModuleRoutePath(module));
+      const target = activeState?.navigationTarget;
+
+      // Home states can promote a task-detail deep link without changing the
+      // formal dashboard overview contract, so keep task routing local here.
+      if (target?.kind === "task_detail") {
+        navigateToDashboardTaskDetail(navigate, target.taskId);
+        return;
+      }
+
+      if (target?.kind === "mirror_detail") {
+        navigate(resolveDashboardModuleRoutePath("memory"), {
+          state: {
+            activeDetailKey: target.activeDetailKey,
+            focusMemoryId: target.focusMemoryId,
+          },
+        });
+        return;
+      }
+
+      navigate(resolveDashboardModuleRoutePath(target?.module ?? module));
     }, 0);
   }
 
@@ -113,6 +206,35 @@ export function DashboardEventPanel({ activeState, onClose, onStateChange, state
 
     return stateGroups.find((group) => group.key === activeState.module)?.states ?? [];
   }, [activeState, stateGroups]);
+
+  const moduleLabel = useMemo(() => {
+    if (!activeState) {
+      return undefined;
+    }
+
+    return stateGroups.find((group) => group.key === activeState.module)?.label;
+  }, [activeState, stateGroups]);
+
+  const metaPills = useMemo(() => {
+    if (!activeState) {
+      return [];
+    }
+
+    return buildMetaPills(activeState, moduleLabel);
+  }, [activeState, moduleLabel]);
+
+  const sectionData = useMemo(() => {
+    if (!activeState) {
+      return null;
+    }
+
+    const registry = buildPanelCopyRegistry(activeState);
+    return {
+      context: filterDistinctContextItems(activeState.context, registry),
+      insights: activeState.insights ? filterDistinctInsights(activeState.insights, registry) : [],
+      signals: activeState.signals ? filterDistinctSignals(activeState.signals, registry) : [],
+    };
+  }, [activeState]);
 
   return (
     <AnimatePresence>
@@ -146,11 +268,15 @@ export function DashboardEventPanel({ activeState, onClose, onStateChange, state
             </div>
 
             <div className="dashboard-orbit-panel__meta-row">
-              <span className="dashboard-orbit-panel__pill" style={{ boxShadow: `0 0 0 1px ${activeState.accentColor}32 inset` }}>
-                {activeState.tag}
-              </span>
-              {activeState.progressLabel ? <span className="dashboard-orbit-panel__pill">{activeState.progressLabel}</span> : null}
-              <span className="dashboard-orbit-panel__pill">{stateGroups.find((group) => group.key === activeState.module)?.label}</span>
+              {metaPills.map((pill, index) => (
+                <span
+                  key={`${pill}-${index}`}
+                  className="dashboard-orbit-panel__pill"
+                  style={index === 0 ? { boxShadow: `0 0 0 1px ${activeState.accentColor}32 inset` } : undefined}
+                >
+                  {pill}
+                </span>
+              ))}
             </div>
 
             {moduleStates.length > 1 ? (
@@ -181,10 +307,12 @@ export function DashboardEventPanel({ activeState, onClose, onStateChange, state
             ) : null}
 
             <div className="dashboard-orbit-panel__section-grid">
-              <section className="dashboard-orbit-panel__section">
-                <h3 className="dashboard-orbit-panel__section-title">当前上下文</h3>
-                <div className="dashboard-orbit-panel__context-list">{renderContext(activeState.context)}</div>
-              </section>
+              {sectionData && sectionData.context.length > 0 ? (
+                <section className="dashboard-orbit-panel__section">
+                  <h3 className="dashboard-orbit-panel__section-title">当前上下文</h3>
+                  <div className="dashboard-orbit-panel__context-list">{renderContext(sectionData.context)}</div>
+                </section>
+              ) : null}
 
               {activeState.notes?.length ? (
                 <section className="dashboard-orbit-panel__section">
@@ -208,11 +336,11 @@ export function DashboardEventPanel({ activeState, onClose, onStateChange, state
                 </section>
               ) : null}
 
-              {activeState.insights?.length ? (
+              {sectionData && sectionData.insights.length > 0 ? (
                 <section className="dashboard-orbit-panel__section">
                   <h3 className="dashboard-orbit-panel__section-title">镜子观察</h3>
                   <div className="dashboard-orbit-panel__context-list">
-                    {activeState.insights.map((insight) => (
+                    {sectionData.insights.map((insight) => (
                       <article key={insight.text} className="dashboard-orbit-panel__context-item">
                         <div className="dashboard-orbit-panel__context-icon-shell">
                           {(() => {
@@ -229,10 +357,10 @@ export function DashboardEventPanel({ activeState, onClose, onStateChange, state
                 </section>
               ) : null}
 
-              {activeState.signals?.length ? (
+              {sectionData && sectionData.signals.length > 0 ? (
                 <section className="dashboard-orbit-panel__section">
                   <h3 className="dashboard-orbit-panel__section-title">边界摘要</h3>
-                  <div className="dashboard-orbit-panel__signal-grid">{renderSignalCards(activeState.signals)}</div>
+                  <div className="dashboard-orbit-panel__signal-grid">{renderSignalCards(sectionData.signals)}</div>
                 </section>
               ) : null}
 
@@ -260,13 +388,9 @@ export function DashboardEventPanel({ activeState, onClose, onStateChange, state
 
             <div className="dashboard-orbit-panel__footer">
               <Button className="dashboard-orbit-panel__primary-button" onClick={() => handleOpenModule(activeState.module)} onPointerDown={(event) => event.stopPropagation()} type="button">
-                {modulePrimaryLabel(activeState.module)}
+                {resolvePrimaryActionLabel(activeState)}
                 <ArrowRight className="h-4 w-4" />
               </Button>
-              <div className="dashboard-orbit-panel__footer-note">
-                <Sparkles className="h-4 w-4" />
-                这是首页事件舱，点击主按钮可进入对应子页面
-              </div>
             </div>
           </motion.aside>
         </>

@@ -56,8 +56,8 @@ type errorEnvelope struct {
 	} `json:"error"`
 }
 
-// notificationEnvelope is used when the transport appends notifications after a
-// request/response exchange.
+// notificationEnvelope is used for streamed JSON-RPC notifications on the same
+// transport connection before or after the matching response envelope.
 type notificationEnvelope struct {
 	JSONRPC string `json:"jsonrpc"`
 	Method  string `json:"method"`

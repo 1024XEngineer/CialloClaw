@@ -3,13 +3,13 @@ package intent
 import (
 	"testing"
 
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 func TestSuggestInfersScreenAnalyzeFromVisualErrorRequest(t *testing.T) {
 	service := NewService()
 
-	suggestion := service.Suggest(contextsvc.TaskContextSnapshot{
+	suggestion := service.Suggest(taskcontext.TaskContextSnapshot{
 		InputType:     "text",
 		Text:          "帮我看看这个页面的报错",
 		PageTitle:     "Build Dashboard",
@@ -42,7 +42,7 @@ func TestSuggestInfersScreenAnalyzeFromVisualErrorRequest(t *testing.T) {
 func TestSuggestKeepsAgentLoopForPlainTextWithoutVisualSignals(t *testing.T) {
 	service := NewService()
 
-	suggestion := service.Suggest(contextsvc.TaskContextSnapshot{
+	suggestion := service.Suggest(taskcontext.TaskContextSnapshot{
 		InputType: "text",
 		Text:      "帮我整理今天的会议纪要",
 	}, nil, false)
@@ -52,13 +52,13 @@ func TestSuggestKeepsAgentLoopForPlainTextWithoutVisualSignals(t *testing.T) {
 	}
 }
 
-func TestSuggestRoutesShortFreeTextToAgentLoopWithoutConfirmation(t *testing.T) {
+func TestSuggestKeepsPlainFreeTextOnAgentLoopBeforeRouting(t *testing.T) {
 	service := NewService()
 
-	testCases := []string{"解释下", "你好", "这个", "🙂", "a.go", "v1.2", `C:\`, `@me`}
+	testCases := []string{"解释下", "整理会议纪要", "a.go", "v1.2", `C:\`, `@me`}
 	for _, testCase := range testCases {
 		t.Run(testCase, func(t *testing.T) {
-			suggestion := service.Suggest(contextsvc.TaskContextSnapshot{
+			suggestion := service.Suggest(taskcontext.TaskContextSnapshot{
 				InputType: "text",
 				Text:      testCase,
 			}, nil, false)
@@ -67,7 +67,7 @@ func TestSuggestRoutesShortFreeTextToAgentLoopWithoutConfirmation(t *testing.T) 
 				t.Fatalf("expected short text to route through agent loop, got %q", got)
 			}
 			if suggestion.RequiresConfirm {
-				t.Fatal("expected non-ambiguous short text to skip forced confirmation")
+				t.Fatal("expected plain free text to skip forced confirmation before submit-time routing")
 			}
 		})
 	}
@@ -76,7 +76,7 @@ func TestSuggestRoutesShortFreeTextToAgentLoopWithoutConfirmation(t *testing.T) 
 func TestSuggestRespectsExplicitConfirmationRequestForFreeText(t *testing.T) {
 	service := NewService()
 
-	suggestion := service.Suggest(contextsvc.TaskContextSnapshot{
+	suggestion := service.Suggest(taskcontext.TaskContextSnapshot{
 		InputType: "text",
 		Text:      "你好",
 	}, nil, true)
@@ -92,7 +92,7 @@ func TestSuggestRespectsExplicitConfirmationRequestForFreeText(t *testing.T) {
 func TestSuggestKeepsPlainTextSubjectAheadOfPageContextForAgentLoop(t *testing.T) {
 	service := NewService()
 
-	suggestion := service.Suggest(contextsvc.TaskContextSnapshot{
+	suggestion := service.Suggest(taskcontext.TaskContextSnapshot{
 		InputType:   "text",
 		Text:        "帮我整理今天的会议纪要",
 		PageTitle:   "Build Dashboard",

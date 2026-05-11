@@ -3,13 +3,15 @@ import test from "node:test";
 import type { AgentInputSubmitParams, AgentMirrorOverviewGetResult, ApprovalRequest, Task, TokenCostSummary } from "@cialloclaw/protocol";
 import {
   buildMirrorConversationDateOptions,
-  buildMirrorConversationSummary,
   buildMirrorConversationTaskMoments,
   buildMirrorDailyDigest,
   buildMirrorProfileBaseItems,
   buildMirrorProfileView,
   filterMirrorConversationRecords,
 } from "./mirrorViewModel";
+import { loadMirrorOverviewData } from "./mirrorService";
+import { createMirrorOverviewMockData, mergeMirrorOverviewWithMockDefaults } from "./mirrorOverview.mock";
+import { updateDashboardSettings } from "../shared/dashboardSettingsMutation";
 import {
   loadMirrorConversationRecords,
   recordMirrorConversationFailure,
@@ -230,6 +232,88 @@ test("mirror conversation lifecycle stops persisting and clears local records wh
   assert.equal(storage.getItem("cialloclaw.mirror.conversations"), null);
 });
 
+test("mirror conversation mock mode keeps using the fixed fixture instead of local storage", () => {
+  const storage = installWindowStorage();
+  storage.setItem(
+    "cialloclaw.mirror.conversations",
+    JSON.stringify({
+      version: 1,
+      records: [
+        createConversationRecord(99),
+      ],
+    }),
+  );
+
+  const records = loadMirrorConversationRecords("mock");
+
+  assert.equal(records.length, 3);
+  assert.equal(records[0]?.trace_id, "trace_mirror_mock_003");
+  assert.notEqual(records[0]?.trace_id, "trace-99");
+});
+
+test("mirror overview mock mode keeps the fixed roadshow fixture and local settings snapshot", async () => {
+  const storage = installWindowStorage();
+  storage.setItem(
+    "cialloclaw.mirror.conversations",
+    JSON.stringify({
+      version: 1,
+      records: [
+        createConversationRecord(99),
+      ],
+    }),
+  );
+
+  const overview = await loadMirrorOverviewData("mock");
+  const mockData = createMirrorOverviewMockData();
+
+  assert.equal(overview.source, "mock");
+  assert.equal(overview.settingsSnapshot.source, "mock");
+  assert.deepEqual(overview.overview.daily_summary, mockData.overview.daily_summary);
+  assert.deepEqual(overview.overview.profile, mockData.overview.profile);
+  assert.equal(overview.conversations.length, 3);
+  assert.equal(overview.conversations[0]?.trace_id, "trace_mirror_mock_003");
+  assert.notEqual(overview.conversations[0]?.trace_id, "trace-99");
+});
+
+test("dashboard settings mock mode persists locally without rpc", async () => {
+  installWindowStorage();
+
+  const result = await updateDashboardSettings(
+    {
+      memory: {
+        enabled: false,
+        lifecycle: "session",
+      },
+    },
+    "mock",
+  );
+
+  assert.equal(result.source, "mock");
+  assert.equal(result.applyMode, "immediate");
+  assert.equal(result.needRestart, false);
+  assert.equal(result.persisted, true);
+  assert.equal(result.readbackWarning, null);
+  assert.equal(result.snapshot.source, "mock");
+  assert.equal(result.snapshot.settings.memory.enabled, false);
+  assert.equal(result.snapshot.settings.memory.lifecycle, "session");
+  assert.equal(loadSettings().settings.memory.enabled, false);
+});
+
+test("mergeMirrorOverviewWithMockDefaults fills the daily report and profile from the mock fixture", () => {
+  const mockData = createMirrorOverviewMockData();
+  const mergedOverview = mergeMirrorOverviewWithMockDefaults({
+    history_summary: ["live history"],
+    daily_summary: null,
+    profile: null,
+    memory_references: [],
+  });
+
+  assert.deepEqual(mergedOverview.history_summary, ["live history"]);
+  assert.deepEqual(mergedOverview.daily_summary, mockData.overview.daily_summary);
+  assert.deepEqual(mergedOverview.profile, mockData.overview.profile);
+  assert.deepEqual(mergedOverview.memory_references, []);
+});
+
 test("buildMirrorDailyDigest surfaces stage and approval context", () => {
   const digest = buildMirrorDailyDigest({
     overview: createOverview(),
@@ -269,7 +353,7 @@ test("buildMirrorDailyDigest surfaces stage and approval context", () => {
   assert.equal(digest.stats[3]?.detail, "仅统计最近 100 条本地输入与前端可见回应记录。");
 });
 
-test("buildMirrorProfileView keeps backend fields and local recent statistics separate", () => {
+test("buildMirrorProfileView keeps profile fields and local recent statistics separate", () => {
   const items = buildMirrorProfileBaseItems({
     profile: createOverview().profile,
     conversations: [createConversationRecord(1), createConversationRecord(2), createConversationRecord(3)],
@@ -282,7 +366,7 @@ test("buildMirrorProfileView keeps backend fields and local recent statistics se
   assert.equal(view.backend_items.length, 3);
   assert.equal(view.local_stat_items.length, 3);
   assert.equal(view.total_items, 6);
-  assert.equal(backendItem?.source_label, "后端画像字段");
+  assert.equal(backendItem?.source_label, "画像字段");
   assert.equal(localStatItem?.source_label, "最近本地统计");
   assert.match(localStatItem?.hint ?? "", /本地记录机械统计/);
 });

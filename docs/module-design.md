@@ -802,7 +802,7 @@ flowchart TB
 
 ### 3.7.1 入口与轻量承接域
 
-系统默认以悬浮球为近场入口，以气泡和轻量输入区作为任务承接层，而不是以聊天页作为主入口。该功能域负责把语音、悬停输入、文本选中、文件拖拽和推荐点击统一转为任务请求，并在当前现场完成对象识别、意图确认、短结果返回和下一步分流。
+系统默认以悬浮球为近场入口，以气泡和轻量输入区作为任务承接层，而不是以聊天页作为主入口。该功能域负责把语音、悬停输入、文本选中、文件拖拽和推荐点击统一承接，并在当前现场完成对象识别、意图确认、短结果返回和下一步分流。只有正式工作请求会升级为 `task`；无任务锚点的纯社交 / 闲聊输入只允许返回脱离 `task` 的轻量气泡，不进入任务详情、运行态或正式交付链。
 
 核心入口包括：
 
@@ -810,14 +810,14 @@ flowchart TB
 - 左键双击：打开仪表盘
 - 左键长按：语音主入口，上滑锁定、下滑取消
 - 鼠标悬停：显示轻量输入与主动推荐
-- 文件拖拽：解析文件后进入意图确认
+- 文件拖拽：先进入附件队列；带明确说明的新任务可直接进入执行链路，裸文件或补充证据按确认 / 等待输入骨架承接
 - 文本选中：进入可操作提示态，再进入意图确认
 
 对应模块分工：
 - 前端表现层负责入口可见形态；
 - 应用编排层负责统一动作归一化；
 - 状态管理层负责轻承接局部状态；
-- 后端本地接入层与任务编排与运行层负责把对象升级为正式 task 请求。
+- 后端本地接入层与任务编排与运行层负责判断对象是否需要升级为正式 task 请求，并保持非任务型轻量反馈与正式任务链分层。
 
 ### 3.7.2 任务状态与持续追踪域
 
@@ -1291,7 +1291,7 @@ flowchart TB
 2. 再调用 `maybeContinueExistingTask()` 判定是继续未完成任务还是创建新任务。
 3. 对新任务调用 `intent.Suggest()` 生成 `Suggestion`，并据此决定 `status / current_step / delivery_type`。
 4. 用 `runengine.CreateTask()` 或 `runengine.ConfirmTask()` 建立正式 `task -> run` 映射。
-5. 调用 `attachMemoryReadPlans()` 把本轮记忆检索计划先挂到任务运行态。
+5. 调用 `attachMemoryReadPlans()` 把本轮记忆检索计划先挂到任务运行态，并把命中的摘要保留在读取计划与镜像引用中，供后续执行、调试、回放和查询解释使用；当前执行层仍通过同一个 prompt 输入通道消费这些摘要，只能依靠结构化序列化和提示文案把它们降级为背景参考，不能把这种做法描述成独立 trust boundary。
 6. 若同一 `session` 已有活动任务，调用 `queueTaskIfSessionBusy()` 进入排队。
 7. 若存在高风险动作或策略拦截，再进入 `handleTaskGovernanceDecision()`。
 8. 只有在前述步骤都通过后，才调用 `executeTask()` 真正开始执行。
@@ -1354,7 +1354,8 @@ flowchart TB
 #### 具体判断方式
 - **确定性规则**：空输入直接进入 `waiting_input`；显式 `intent` 优先。
 - **轻量建议**：`intent.Suggest()` 输出 `Suggestion`，包含 `IntentConfirmed / RequiresConfirm / TaskTitle / DirectDeliveryType` 等字段。
-- **续接分类**：`maybeContinueExistingTask()` 先走确定性与启发式规则，不足时才调用模型做 coarse-grained continuation classification。
+- **确认策略**：`options.confirm_required` 只负责阻止当前输入直接执行；附件等对象型入口若已经带有明确用户说明，应直接进入 Agent Loop / 治理 / 执行链路，裸对象或低置信度输入才停在确认或澄清。
+- **续接分类**：`maybeContinueExistingTask()` 先走确定性与启发式规则，不足时才调用模型做 coarse-grained continuation classification；`confirm_required` 只负责阻止直接执行，不负责抹掉已经明确的任务归属。普通文本补充可续接到同一 `session` 内唯一的 `waiting_input / confirming_intent` 任务，但仍停在确认门后；文件、选区、错误等结构化补充证据若要续接到这类待用户补充的任务，都必须带有任务特定证据（如 lineage、共享文件、同一页面 / 窗口 / 对象锚点），不能只因为输入是结构化对象就续接；多候选场景下只有存在唯一任务特定匹配时才允许结构化续接；不能续接正在执行的任务，也不能自动执行；悬浮球默认入口锚点（如 `desktop / local://shell-ball`）只表示补充证据从哪里进入系统，不应作为正向续接证据，也不应覆盖或冲突于原 task 的真实页面 / 应用锚点。
 - **执行阶段分工**：入口规划只决定“以什么意图、什么交付类型、是否要确认进入主链”；真正的 ReAct/Agent Loop 计划在执行阶段发生。
 
 #### 关键中间产物
@@ -1419,7 +1420,7 @@ flowchart TB
 
 #### 如何承接规划器产物
 - `CreateTaskInput` 决定初始 `Status / CurrentStep / Timeline / Snapshot / Intent`；
-- `ConfirmTask()` 把确认后的意图和标题写回同一任务；
+- `ConfirmTask()` 把确认后的意图和标题写回同一任务；当确认阶段收到 `correction_text` 时，必须复用原 task 的正式上下文重新推断意图，并让同一任务直接继续后续执行链；不得新建 task，也不得额外再插入一次新的确认门；
 - `BeginExecution()` 把任务真正推进到运行态；
 - `CompleteTask()`、`ReopenWaitingInput()`、`ReopenIntentConfirmation()`、`FailTaskExecution()` 等接口负责后续收敛。
 
@@ -1453,7 +1454,8 @@ flowchart TB
 #### 运行控制器如何承接
 - 若 lane 忙，则运行控制器把任务转入 `blocked + session_queue`；
 - 当前序任务完成后，通过 `NextQueuedTaskForSession()` 和 `ResumeQueuedTask()` 恢复；
-- 追加消息通过 `AppendSteeringMessage()` 并入同一 `TaskRecord`。
+- 追加消息通过 `AppendSteeringMessage()` 并入同一 `TaskRecord`；正在 `processing` 的任务只有在当前执行是可轮询的 `agent_loop` 时才接受运行中 steering，普通 prompt 执行中的 follow-up 应排队为后续 task，避免返回“已挂回”但没有消费点。
+- 非 `agent_loop` 的恢复执行路径必须在重新生成 prompt 前合并已排队 steering，确保等待授权或 session queue 期间记录的补充要求不会被静默忽略。
 
 #### 异常处理
 - 候选任务状态不允许续接：直接新开任务；
@@ -1466,7 +1468,7 @@ flowchart TB
 该子模块负责在“真正执行前”和“执行完成后”分别挂接记忆与交付的计划对象。它负责的是**交接与计划**，不是最终的记忆持久化或交付发布拥有者。
 
 #### 核心职责
-- 在任务开始或确认后，通过 `attachMemoryReadPlans()` 预登记本轮记忆召回计划；
+- 在任务开始或确认后，通过 `attachMemoryReadPlans()` 预登记本轮记忆召回计划，并把命中的摘要保留在读取计划和镜像引用里，供执行、调试、回放和查询解释使用；当前执行层消费这些摘要时仍走同一个 prompt 输入通道，因此这里只能做到结构化背景参考，不得把它写成已经建立独立信任边界；
 - 在执行完成后，把 `delivery_result / artifact / citation` 的后续写入和查询补全交给治理与交付层、能力与存储层；
 - 保证即使进程重启，也能说明“这个任务原本打算读什么记忆、写什么交付”。
 
@@ -1494,6 +1496,8 @@ flowchart TB
 - 为一次任务执行标记 `initial / resume / restart` 分段；
 - 隔离长任务的 steering message 和重试上下文；
 - 把执行尝试和人类复核后的继续执行放回同一主任务，而不是分叉出新的正式主对象；
+- `restart` 分段必须来自重启前的终态任务快照与重启后的新 `run_id`，`TaskControl` 完成状态迁移后必须把新尝试送回会话串行队列与风险治理 / 授权边界，只有通过这些前置门禁后才启动执行，避免留下没有 executor 承接的 `processing` 快照或绕过治理的执行；
+- 同一 `task_id` 发生 `restart` 后，任务详情和审计明细中的 `delivery_result / artifact / citation / authorization_record / audit_record` 必须按当前 `run_id` 读取正式记录；其中 `delivery_result / artifact / authorization_record / audit_record` 的旧尝试数据可以保留在存储层，但不能继续污染新尝试的任务详情、失败摘要或安全审计 drill-down；`citation` 当前仍是 task 级替换语义，只保证当前尝试的正式引用链正确，不承诺保留旧尝试的 citation 历史；
 - 为后续真正的一等子任务能力预留边界。
 
 #### 关键中间产物
@@ -1672,12 +1676,24 @@ flowchart TB
 
 补充约束：`exec_command` 默认优先路由到 Docker sandbox；仅对 `cmd` / `powershell` / `pwsh` 这类 Windows shell 入口保留受控宿主执行路径，避免在 Windows 主目标上把本地命令误送入 Linux 容器。
 
+- 真实浏览器附着线索只允许来自桌面快照承接的 `browser_kind / page_url / page_title / window_title`，执行层不得信任模型直接覆盖 CDP 端点或浏览器类型；
+- agent loop 默认只暴露无需审批的浏览器能力（如 `browser_attach_current / browser_snapshot`）；`browser_tabs_list / browser_navigate / browser_tab_focus / browser_interact` 仍受审批边界约束，在具备 loop 内授权暂停前不得进入默认目录。
+- 当前桌面 Agent Loop 的 planner-visible capability catalog 必须由执行层单一真源生成，同一份定义同时派生工具描述、参数 schema 和运行态 allowlist，避免出现“Prompt 里可用但执行层拒绝”或反向漂移。
+- 当前默认冻结的只读规划能力面为 `read_file / list_dir / page_read / page_search`；`page_interact / structured_dom` 虽已是 Playwright sidecar 正式能力，但不进入当前桌面 Agent Loop 的默认规划目录。
+- 每个能力条目都必须同时声明适用场景、不适用场景和约束；当前 `page_read / page_search` 对显式 `http(s)` 网页目标默认按低风险只读处理。审批边界仅保留给 `localhost` 风格主机名、单标签主机名、本地域后缀，以及字面量回环 / 私网 / link-local / CGNAT IP 目标；页面交互、导航和跨标签页浏览器动作仍保留审批治理边界。
+
 #### 处理主线
 1. 根据 `Intent` 和 arguments 解析目标工具及目标对象。
 2. 在真正执行前先生成治理评估，判断是否需要授权、是否越界、是否需要恢复点。
 3. 形成标准工具请求并路由到文件、网页、命令、worker 或执行后端。
 4. 把返回值归一成 `ToolCallRecord / tool output / artifact candidate / citation_seed`。
 5. 把错误统一映射为正式错误码，而不是透传底层异常文本。
+
+#### 浏览器附着补充约束
+- `browser_*` intents 仍然走执行层与治理层的正式工具解析路径，不得因为页面附着优化而绕过 `resolveToolExecution / resolveGovernanceToolExecution` 主链；
+- 对 `page_read / page_search / page_interact / structured_dom` 的 attach 注入只允许建立在可信桌面快照上，至少要求当前 `PageURL` 与请求 `url` 归一化后仍能对齐；
+- 当前 3b 只把 `PageURL / PageTitle / BrowserKind` 用作页面级附着线索，`ProcessPath / ProcessID` 仅在快照和续跑链路中保留，尚未进入 worker attach contract 的进程级会话收窄逻辑；
+- URL 归一化目前只安全忽略 host 大小写、fragment 与默认根路径 / 默认端口差异，不在执行层静态处理 redirects 或所有尾斜杠等价关系，避免误附着到错误页面。
 
 #### 关键中间产物
 - governance assessment
@@ -1721,16 +1737,28 @@ flowchart TB
 - 结构化 DOM/页面结果回传。
 
 #### 实现约束
-- Playwright sidecar 至少支持 `page_read`、`page_search`、`page_interact`、`structured_dom` 四类正式能力；
+- Playwright sidecar 至少支持 `page_read`、`page_search`、`page_interact`、`structured_dom` 四类兼容能力，以及 `browser_attach_current`、`browser_snapshot`、`browser_navigate`、`browser_tabs_list`、`browser_tab_focus`、`browser_interact` 六类真实浏览器动作；
+- sidecar 可在保持既有 launch 路径兼容的前提下附加 `attach.mode = cdp` 请求形状，用于附着已开启调试端口的本地 Chromium 浏览器；
+- 当前执行层会在可信桌面快照的 `PageURL` 与目标 `url` 对齐时，为 `page_*` 请求自动注入 `attach`，未命中时必须回退到既有 launch 路径而不是伪造附着成功；
+- `attach.target.url / title_contains / page_index` 仅在显式提供时才参与附着页缩小；顶层 `url` 继续保留给 launch 路径与展示 fallback，不得隐式升级成 attach 过滤条件；
+- `attach.endpoint_url` 仅允许 loopback 目标（`localhost`、`127.0.0.0/8`、`::1`），避免 sidecar 退化为通用 outbound CDP dialer；
+- `browser_*` 动作必须显式提供 `attach`，不得偷偷回退到 launch 路径；其中 `browser_navigate` 的顶层 `url` 仅表示导航目标，不参与附着页筛选；
+- 进程级 hint（`ProcessPath / ProcessID`）当前只用于快照持久化与续跑恢复，后续若要做更强的 session narrowing，必须先扩展 attach contract 与 worker 目标选择逻辑；
 - sidecar 启动前必须通过健康检查，避免把未就绪 worker 暴露给主执行链；
 - 传输层失败要清空 ready 状态并触发回收，普通请求失败则保留 ready 状态；
 - 页面交互与结构化 DOM 结果必须通过 `tool_call -> event -> delivery_result` 链回写，而不是前端直连 sidecar；
+- 当执行层为 `page_*` 工具注入 `attach` 时，顶层 `url` 仍表示目标页面语义，附着筛选只允许来自可信桌面快照而非模型自报的浏览器覆盖；
 - `tool_call.completed` 事件需要回写 worker/source/output 元信息，便于任务详情、通知订阅和后续审计复用。
+
+#### worker 契约补充
+- attached 模式结果可追加 `attached / browser_kind / browser_transport / endpoint_url / source` 元信息，供后续 Go sidecar、引用映射与前端承接复用；
+- `browser_attach_current`、`browser_snapshot`、`browser_navigate`、`browser_tab_focus` 结果至少需要稳定回写 `page_index / url / title`，`browser_tabs_list` 需要回写 `tabs[]` 与 `tab_count`；
+- worker 至少需要把 `browser_attach_failed`、`browser_kind_mismatch`、`page_target_not_found`、`unsupported_browser_kind`、`invalid_input` 作为结构化错误语义稳定返回，而不是只抛原始运行时异常。
 
 #### 处理主线
 1. 先确认 sidecar 健康状态与浏览器能力可用。
-2. 接收标准页面能力请求，路由到 `page_read / page_search / page_interact / structured_dom`。
-3. 把页面结果、结构化 DOM、截图或 URL 元数据组装成标准工具输出。
+2. 接收标准页面能力请求，路由到 `page_read / page_search / page_interact / structured_dom` 与 `browser_*` 动作。
+3. 把页面结果、结构化 DOM、页签列表、导航结果或 URL 元数据组装成标准工具输出。
 4. 为需要证据链的场景生成 `citation_seed` 与 artifact 候选。
 5. 通过 `tool_call.completed` 和正式交付链回流，而不是独立暴露页面结果。
 
@@ -1856,6 +1884,7 @@ flowchart TB
 ### 子模块说明
 - **风险评估 / 授权承接**：判断动作风险、形成待授权对象，并把用户决策重新并入主链。
 - **正式结果交付协调**：把执行结果装配成 `delivery_result / artifact / citation`，并决定如何进入通知和查询视图。
+- **展示文案渲染**：本轮已把任务标题、确认气泡、授权/排队/续接反馈、交付结果标题与预览，以及执行失败、回退结果、工具气泡等任务侧展示文案收口到 `presentation` 层；编排、意图、交付路径优先只选择语义键与参数，避免继续把中文展示句混入状态机控制流。其余社交回复、感知机会提示、模型校验提示等非本轮主链展示文案仍留在各自模块，后续再独立收口。
 - **记忆与镜像沉淀**：决定哪些运行结果应沉淀为长期记忆或镜像引用，哪些只能保留为运行态痕迹。
 - **结果审查 / Hooks / Trace / Eval**：负责对输出做质量检查、记录命中、沉淀可观测性与评估快照。
 - **Doom Loop / Human-in-the-loop**：在执行异常、重复无进展或高不确定性场景下，负责熔断、重规划和人工升级。
@@ -1868,6 +1897,7 @@ flowchart TB
 | --- | --- | --- | --- |
 | 风险评估与授权承接 | 运行层提交的拟执行动作、目标范围、能力请求 | `risk_level`、`impact_scope`、`approval_request`、`pending_execution` | `approval.pending`、授权结果、阻断或继续执行结论 |
 | 正式结果交付协调 | 执行结果、artifact/citation 候选、交付偏好 | `delivery_result`、artifact 计划、交付说明 | `delivery.ready`、任务详情交付、文件/文档/结果页入口 |
+| 展示文案渲染 | 已迁移主链的意图名、展示语义键、渲染参数 | `presentation.MessageKey`、渲染后的 task/bubble/result 文案 | `bubble_message`、`delivery_result`、任务标题 |
 | 记忆与镜像沉淀 | 已完成阶段结果、检索计划、摘要候选 | `memory_candidate`、`memory_summary`、镜像引用关系 | 后续检索命中、任务详情中的记忆摘要 |
 | 结果审查与 Hooks | 执行结果、工具调用记录、交付对象 | 审查结论、hook 命中、结构化失败原因 | 继续交付、重试、HITL 或阻断 |
 | Trace / Eval | 模型调用、tool_call、输出摘要、资产命中 | `trace_record`、`eval_snapshot`、review result | 调试视图、loop 诊断、评估快照 |
@@ -2090,6 +2120,7 @@ flowchart TB
 #### 实现约束
 - `budget_auto_downgrade` 已进入 Harness 主链路：编排层在执行前依据 token/cost、provider 可用性和 failure signal window 评估预算策略。
 - 执行层在模型或 provider 失败后会转入 lightweight delivery fallback，并对高成本工具类别执行阻断。
+- budget downgrade 可以保留只读 Agent Loop 能力，但不得扩大默认规划目录；浏览器交互、命令执行和媒体重工具仍按高成本类别阻断。
 - 命中结果统一回流到 audit / event / trace 链路，而不是只停留在设置项展示。
 
 #### 处理主线
@@ -2347,6 +2378,10 @@ flowchart TB
 - `TaskContextSnapshot` 是入口阶段的统一上下文快照，不等同于最终 Prompt。
 - `Suggestion` 只决定“怎样入链”，例如 `Intent`、`RequiresConfirm`、`TaskTitle` 和交付偏好，不直接替代执行期 Planner。
 - 真正的 ReAct / Agent Loop 发生在 `execution.Request` 已经成形并进入受控执行循环之后。
+- 进入 Planning Loop 后，planner prompt 默认使用中文，并固定要求“先判断能否直答；最终答复先给结论并保持精简”，避免把交付口径交给模型自由发挥。
+- 规划输入至少由 `当前可用能力 / 用户上下文 / 已观察到的工具结果 / 补充要求` 这些受控片段组成，避免把运行时能力、steering message 和历史观察分散注入。
+- 当模型以纯文本误判“做不到 / 无法访问”，但当前目录中确有可用能力时，运行时允许追加一次 `能力提醒` 并重试一轮；第二次仍拒绝时必须直接回流结果，避免形成 Doom Loop。
+- `能力提醒` 只针对显式 capability denial，不针对普通直答、无工具场景或本来就不该调用工具的回答。
 
 ### 5.3 风险执行与回滚图
 
@@ -2594,13 +2629,13 @@ flowchart TB
 
 ## 6. 关键时序图与实现说明
 
-### 6.1 近场对象承接时序：文本选中 / 文件拖拽 -> 意图确认 -> 执行
+### 6.1 近场对象承接时序：文本选中 / 文件拖拽 -> 确认或直接执行
 
 **链路目标**：把文本选中、文件拖拽等“近场对象承接”转换成正式任务。  
 **主要模块参与**：表现层、应用编排层、协议适配层、本地接入层、上下文归一与准备器、入口判断与规划器、运行控制器、风险评估与授权承接、正式结果交付协调。
 **关键结果**：形成 `task`，必要时生成 `bubble_message` 进行意图确认，最终得到 `delivery_result`。  
 **异常分支**：高风险动作进入授权链路；对象失效则回退到待机或确认失败态。  
-**实现说明**：此链路是所有近场承接动作的统一模板，文本选中、拖拽文件、错误信息承接和主动机会承接都应先落在这个链路上再分化。
+**实现说明**：此链路是所有近场承接动作的统一模板，文本选中、拖拽文件、错误信息承接和主动机会承接都应落在同一确认 / 执行骨架上；带明确说明的文件任务可以直接进入治理与执行，裸文件仍进入确认或补充输入，带任务特定证据的结构化补充证据可续接到正在等待用户输入的原 task。
 
 ```mermaid
 sequenceDiagram
@@ -2648,6 +2683,7 @@ sequenceDiagram
 **关键结果**：在执行前形成 `approval_request` 和 `recovery_point`，在执行后形成 `authorization_record` 和 `audit_record`。  
 **异常分支**：执行失败或用户中断时，必须显式回滚或保留可恢复信息。  
 **实现说明**：此链路是治理链的最小闭环，凡是跨工作区、命令执行、联网下载、删除/覆盖等动作，都必须从这里经过。
+补充边界：`agent_loop` 在运行中若某轮工具命中 `approval_required`，也必须立刻把该次真实工具输入回写为 `approval_request / pending_execution`，并把精确 `tool input` 固化到恢复计划中；把任务切回 `waiting_auth`，并且在获批前不得伪造 `delivery_result`。
 
 设计约束：对于 `exec_command` 这类高风险执行，默认应优先进入 Docker Sandbox，并且支持上下文中断后的容器清理；仅在 Windows shell 命令入口上允许走受控宿主路径，其他失败情形不能静默回退到宿主直接执行。
 
@@ -2883,12 +2919,12 @@ sequenceDiagram
     end
 ```
 
-### 6.8 机会对象承接时序：文本 / 文件 / 推荐 -> 意图确认
+### 6.8 机会对象承接时序：文本 / 文件 / 推荐 -> 确认或执行
 
-**链路目标**：把文本、文件、推荐机会这些对象统一进入意图确认链路。  
-**关键结果**：确认前用 `bubble_message` 承接，确认后转入正式 `task` 执行。  
-**重点约束**：文件解析、机会识别和对象识别都不得直接跳过意图确认逻辑。  
-**实现说明**：无论对象来源是选中文本、拖拽文件还是主动推荐，后续都应收敛到同一套确认与执行骨架。
+**链路目标**：把文本、文件、推荐机会这些对象统一进入确认 / 执行骨架。
+**关键结果**：需要确认时用 `bubble_message` 承接，确认后转入正式 `task` 执行；不需要确认且说明明确时直接进入治理与执行。
+**重点约束**：文件解析、机会识别和对象识别不得维护各自独立的确认状态；裸文件和低置信度对象必须停在确认或补充输入。
+**实现说明**：无论对象来源是选中文本、拖拽文件还是主动推荐，后续都应收敛到同一套确认与执行骨架；带任务特定证据的结构化补充证据可以续接待用户补充的原 task，但不能绕过确认门禁去自动执行。
 
 ```mermaid
 sequenceDiagram
@@ -3073,8 +3109,8 @@ sequenceDiagram
         I-->>U: 打开工作区文档
     else 网页结果或结构化结果
         A->>P: 更新气泡提示=正在打开结果页
-        A->>I: 调用外部能力，打开浏览器或结果页
-        I-->>U: 展示浏览器或结果页
+        A->>I: 调用正式打开链路，优先打开 dashboard 结果页
+        I-->>U: 展示正式结果页；若是外部 URL 再交给浏览器
     else 单个文件产物
         A->>P: 更新气泡提示=已生成文件，正在打开
         A->>I: 打开生成文件
@@ -3192,7 +3228,7 @@ stateDiagram-v2
 ### 6.15 前端状态图：意图确认
 
 **说明**：这是前端承接流程和后端规划流程之间的桥接状态机，结束点通常会进入 `agent.task.confirm` 或直接执行。  
-**实现补充**：所有对象型入口都应进入同一确认骨架，不允许各入口维护不同的确认状态定义。
+**实现补充**：所有对象型入口都应复用同一确认 / 执行骨架，不允许各入口维护不同的确认状态定义；带明确说明的文件任务可直接进入主执行链路，裸文件或低置信度对象进入确认 / 补充输入，带任务特定证据的结构化补充证据可挂回 `waiting_input / confirming_intent` 任务但仍不得自动执行。
 
 ```mermaid
 stateDiagram-v2

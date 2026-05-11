@@ -1,4 +1,4 @@
-export const MIRROR_DIRECTION_KEYS = ["dailyStage", "profile", "memory", "history"] as const;
+﻿export const MIRROR_DIRECTION_KEYS = ["dailyStage", "profile", "memory", "history"] as const;
 
 export type MirrorDirectionKey = (typeof MIRROR_DIRECTION_KEYS)[number];
 export type FloatingMirrorDirectionKey = Exclude<MirrorDirectionKey, "memory">;

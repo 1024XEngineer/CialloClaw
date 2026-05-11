@@ -13,6 +13,8 @@
     }
   },
   "include": [
+    "src/app/dashboard/DashboardWindowErrorBoundary.tsx",
+    "src/app/dashboard/dashboardOpeningTransition.ts",
     "src/features/dashboard/dashboard.contract.test.ts",
     "src/features/dashboard/shared/dashboardContractValidators.ts",
     "src/features/dashboard/shared/dashboardSafetyNavigation.ts",
@@ -20,6 +22,7 @@
     "src/features/dashboard/shared/dashboardSettingsSnapshot.ts",
     "src/features/dashboard/notes/notePage.query.ts",
     "src/features/dashboard/notes/notePage.service.ts",
+    "src/features/dashboard/notes/sourceNoteEditor.ts",
     "src/features/dashboard/tasks/taskPage.query.ts",
     "src/features/dashboard/tasks/taskOutput.service.ts",
     "src/features/dashboard/tasks/taskPage.mapper.ts",

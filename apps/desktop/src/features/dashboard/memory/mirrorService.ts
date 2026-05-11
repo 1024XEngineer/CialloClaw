@@ -8,14 +8,13 @@ import type {
   Task,
   TokenCostSummary,
 } from "@cialloclaw/protocol";
-import mirrorOverviewMock from "./mirrorOverview.json";
 import { isRpcChannelUnavailable, logRpcMockFallback } from "@/rpc/fallback";
 import { getMirrorOverviewDetailed as requestMirrorOverview } from "@/rpc/methods";
 import { loadMirrorConversationRecords, type MirrorConversationRecord } from "@/services/mirrorMemoryService";
 import { loadSecurityModuleData } from "@/features/dashboard/safety/securityService";
 import { loadTaskBuckets } from "@/features/dashboard/tasks/taskPage.service";
 import {
-  getInitialDashboardSettingsSnapshot,
+  buildDashboardSettingsWarningSnapshot,
   loadDashboardSettingsSnapshot,
   type DashboardSettingsSnapshotScope,
   type DashboardSettingsSnapshotData,
@@ -28,9 +27,11 @@ import {
   type MirrorDailyDigest,
   type MirrorProfileBaseItem,
 } from "./mirrorViewModel";
+import { createMirrorOverviewMockData, mergeMirrorOverviewWithMockDefaults } from "./mirrorOverview.mock";
 
-type MirrorOverviewMock = typeof mirrorOverviewMock;
-export type MirrorOverviewSource = "rpc" | "mock";
+export type MirrorOverviewSource = "rpc";
+
+type MirrorOverviewMode = MirrorOverviewSource | "mock";
 
 export type MirrorInsightPreview = {
   badge: string;
@@ -48,7 +49,7 @@ export type MirrorOverviewData = {
     warnings: string[];
   };
   settingsSnapshot: DashboardSettingsSnapshotData;
-  source: MirrorOverviewSource;
+  source: MirrorOverviewMode;
   conversations: MirrorConversationRecord[];
   conversationSummary: MirrorConversationSummary;
   dailyDigest: MirrorDailyDigest;
@@ -68,35 +69,6 @@ type MirrorSupportContext = {
 
 const MIRROR_SETTINGS_SCOPE: DashboardSettingsSnapshotScope = "memory";
 
-function adaptMirrorReference(reference: MirrorOverviewMock["memory_references"][number]): MirrorReference {
-  return {
-    memory_id: reference.memory_id,
-    reason: reference.reason,
-    summary: reference.summary ?? reference.reason,
-  };
-}
-
-function buildFallbackOverview(): AgentMirrorOverviewGetResult {
-  return {
-    history_summary: mirrorOverviewMock.history_summary.map((item) => item),
-    daily_summary: mirrorOverviewMock.daily_summary
-      ? {
-          date: mirrorOverviewMock.daily_summary.date,
-          completed_tasks: mirrorOverviewMock.daily_summary.completed_tasks,
-          generated_outputs: mirrorOverviewMock.daily_summary.generated_outputs,
-        }
-      : null,
-    profile: mirrorOverviewMock.profile
-      ? {
-          work_style: mirrorOverviewMock.profile.work_style,
-          preferred_output: mirrorOverviewMock.profile.preferred_output,
-          active_hours: mirrorOverviewMock.profile.active_hours,
-        }
-      : null,
-    memory_references: mirrorOverviewMock.memory_references.map(adaptMirrorReference),
-  } satisfies AgentMirrorOverviewGetResult;
-}
-
 function createRequestMeta(): RequestMeta {
   return {
     trace_id: `trace_mirror_overview_${Date.now()}`,
@@ -104,23 +76,10 @@ function createRequestMeta(): RequestMeta {
   };
 }
 
-function getEmptyMirrorSupportContext(): MirrorSupportContext {
-  return {
-    finishedTasks: [],
-    unfinishedTasks: [],
-    latestRestorePoint: null,
-    pendingApprovals: [],
-    latestRestorePointSummary: null,
-    securityStatus: null,
-    tokenCostSummary: null,
-    warnings: [],
-  };
-}
-
-async function loadMirrorSupportContext(source: MirrorOverviewSource): Promise<MirrorSupportContext> {
+async function loadMirrorSupportContext(): Promise<MirrorSupportContext> {
   const [taskBucketsResult, securityResult] = await Promise.allSettled([
-    loadTaskBuckets({ source }),
-    loadSecurityModuleData(source),
+    loadTaskBuckets({ source: "rpc" }),
+    loadSecurityModuleData("rpc"),
   ]);
   const warnings: string[] = [];
 
@@ -152,6 +111,87 @@ async function loadMirrorSupportContext(source: MirrorOverviewSource): Promise<M
   };
 }
 
+async function loadMirrorMockSettingsSnapshot(): Promise<DashboardSettingsSnapshotData> {
+  return loadDashboardSettingsSnapshot("mock", MIRROR_SETTINGS_SCOPE);
+}
+
+function loadMirrorMockSupportContext(): MirrorSupportContext {
+  const mockData = createMirrorOverviewMockData();
+
+  return {
+    finishedTasks: mockData.supportContext.finished_tasks.map((task) => ({ ...task })),
+    unfinishedTasks: mockData.supportContext.unfinished_tasks.map((task) => ({ ...task })),
+    latestRestorePoint: mockData.supportContext.latest_restore_point
+      ? {
+          ...mockData.supportContext.latest_restore_point,
+          objects: [...mockData.supportContext.latest_restore_point.objects],
+        }
+      : null,
+    pendingApprovals: mockData.supportContext.pending_approvals.map((approval) => ({ ...approval })),
+    latestRestorePointSummary: mockData.supportContext.latest_restore_point_summary,
+    securityStatus: mockData.supportContext.security_status,
+    tokenCostSummary: mockData.supportContext.token_cost_summary
+      ? { ...mockData.supportContext.token_cost_summary }
+      : null,
+    warnings: [],
+  };
+}
+
+async function loadMirrorOverviewMockData(): Promise<MirrorOverviewData> {
+  const mockData = createMirrorOverviewMockData();
+  const settingsSnapshot = await loadMirrorMockSettingsSnapshot();
+
+  return buildMirrorOverviewData(
+    mockData.overview,
+    "mock",
+    {
+      serverTime: null,
+      warnings: [],
+    },
+    loadMirrorMockSupportContext(),
+    settingsSnapshot,
+  );
+}
+
+async function loadMirrorOverviewRpcData(params: AgentMirrorOverviewGetParams): Promise<MirrorOverviewData> {
+  try {
+    const response = await requestMirrorOverview(params);
+    const [supportContext, settingsSnapshotResult] = await Promise.all([
+      loadMirrorSupportContext(),
+      loadDashboardSettingsSnapshot("rpc", MIRROR_SETTINGS_SCOPE)
+        .then((snapshot) => ({ snapshot, warning: null as string | null }))
+        .catch(async (error) => {
+          const warning = error instanceof Error ? `settings-context: ${error.message}` : "settings-context: load failed";
+
+          return {
+            snapshot: await buildDashboardSettingsWarningSnapshot(warning),
+            warning,
+          };
+        }),
+    ]);
+    const settingsSnapshot = settingsSnapshotResult.snapshot;
+    const settingsWarnings = settingsSnapshotResult.warning ? [settingsSnapshotResult.warning] : [];
+
+    return buildMirrorOverviewData(
+      response.data,
+      "rpc",
+      {
+        serverTime: response.meta?.server_time ?? null,
+        warnings: [...response.warnings, ...settingsWarnings],
+      },
+      supportContext,
+      settingsSnapshot,
+    );
+  } catch (error) {
+    if (isRpcChannelUnavailable(error)) {
+      logRpcMockFallback("mirror.overview", error);
+      return loadMirrorOverviewMockData();
+    }
+
+    throw error;
+  }
+}
+
 export function buildMirrorInsightPreview(
   overview: AgentMirrorOverviewGetResult,
   dailyDigest: MirrorDailyDigest,
@@ -173,17 +213,18 @@ export function buildMirrorInsightPreview(
 }
 function buildMirrorOverviewData(
   overview: AgentMirrorOverviewGetResult,
-  source: MirrorOverviewSource,
+  source: MirrorOverviewMode,
   rpcContext: MirrorOverviewData["rpcContext"],
   supportContext: MirrorSupportContext,
   settingsSnapshot: DashboardSettingsSnapshotData,
 ): MirrorOverviewData {
   // Mirror detail cards mix protocol-backed overview data with frontend support
   // context so the page can explain related tasks, safety state, and settings policy.
+  const resolvedOverview = mergeMirrorOverviewWithMockDefaults(overview);
   const conversations = loadMirrorConversationRecords(source);
   const conversationSummary = buildMirrorConversationSummary(conversations);
   const dailyDigest = buildMirrorDailyDigest({
-    overview,
+    overview: resolvedOverview,
     unfinished_tasks: supportContext.unfinishedTasks,
     finished_tasks: supportContext.finishedTasks,
     pending_approvals: supportContext.pendingApprovals,
@@ -193,13 +234,13 @@ function buildMirrorOverviewData(
     conversations,
   });
   const profileItems = buildMirrorProfileBaseItems({
-    profile: overview.profile,
+    profile: resolvedOverview.profile,
     conversations,
   });
 
   return {
-    overview,
-    insight: buildMirrorInsightPreview(overview, dailyDigest, conversationSummary),
+    overview: resolvedOverview,
+    insight: buildMirrorInsightPreview(resolvedOverview, dailyDigest, conversationSummary),
     latestRestorePoint: supportContext.latestRestorePoint,
     rpcContext: {
       ...rpcContext,
@@ -212,21 +253,6 @@ function buildMirrorOverviewData(
     dailyDigest,
     profileItems,
   };
-}
-
-export function getInitialMirrorOverviewData(): MirrorOverviewData {
-  const overview = buildFallbackOverview();
-
-  return buildMirrorOverviewData(
-    overview,
-    "mock",
-    {
-      serverTime: null,
-      warnings: [],
-    },
-    getEmptyMirrorSupportContext(),
-    getInitialDashboardSettingsSnapshot(),
-  );
 }
 
 /**
@@ -243,72 +269,20 @@ export function applyMirrorSettingsSnapshot(
   };
 }
 
-export async function loadMirrorOverviewData(source: MirrorOverviewSource = "rpc"): Promise<MirrorOverviewData> {
-  if (source === "mock") {
-    const overview = buildFallbackOverview();
-    const [supportContext, settingsSnapshot] = await Promise.all([
-      loadMirrorSupportContext("mock"),
-      loadDashboardSettingsSnapshot("mock", MIRROR_SETTINGS_SCOPE),
-    ]);
-
-    return buildMirrorOverviewData(
-      overview,
-      "mock",
-      {
-        serverTime: null,
-        warnings: [],
-      },
-      supportContext,
-      settingsSnapshot,
-    );
+export async function loadMirrorOverviewData(_source: MirrorOverviewMode = "rpc"): Promise<MirrorOverviewData> {
+  if (_source === "mock") {
+    return loadMirrorOverviewMockData();
   }
 
-  try {
-    const params: AgentMirrorOverviewGetParams = {
-      request_meta: createRequestMeta(),
-      include: ["history_summary", "daily_summary", "profile", "memory_references"],
-    };
+  const params: AgentMirrorOverviewGetParams = {
+    request_meta: createRequestMeta(),
+    include: ["history_summary", "daily_summary", "profile", "memory_references"],
+  };
 
-    // Support context and settings are independent read paths, so load them in
-    // parallel with the main mirror overview request to keep refreshes responsive.
-    const [response, supportContext, settingsSnapshot] = await Promise.all([
-      requestMirrorOverview(params),
-      loadMirrorSupportContext("rpc"),
-      loadDashboardSettingsSnapshot("rpc", MIRROR_SETTINGS_SCOPE),
-    ]);
-    const overview = response.data;
-
-    return buildMirrorOverviewData(
-      overview,
-      "rpc",
-      {
-        serverTime: response.meta?.server_time ?? null,
-        warnings: response.warnings,
-      },
-      supportContext,
-      settingsSnapshot,
-    );
-  } catch (error) {
-    if (isRpcChannelUnavailable(error)) {
-      logRpcMockFallback("mirror overview", error);
-      const overview = buildFallbackOverview();
-      const [supportContext, settingsSnapshot] = await Promise.all([
-        loadMirrorSupportContext("mock"),
-        loadDashboardSettingsSnapshot("mock", MIRROR_SETTINGS_SCOPE),
-      ]);
-
-      return buildMirrorOverviewData(
-        overview,
-        "mock",
-        {
-          serverTime: null,
-          warnings: [],
-        },
-        supportContext,
-        settingsSnapshot,
-      );
-    }
-
-    throw error;
-  }
+  // Support context and settings are independent read paths, so load them in
+  // parallel with the main mirror overview request to keep refreshes responsive.
+  // Settings are advisory for the mirror settings card, so a transient
+  // `agent.settings.get` failure should degrade into a warning instead of
+  // blanking the whole mirror overview page.
+  return loadMirrorOverviewRpcData(params);
 }

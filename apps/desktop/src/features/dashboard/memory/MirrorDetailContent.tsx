@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import type { AgentMirrorOverviewGetResult, RecoveryPoint } from "@cialloclaw/protocol";
-import { BookMarked, BrainCircuit, CalendarDays } from "lucide-react";
+import { BookMarked, BrainCircuit } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { StatusBadge } from "@cialloclaw/ui";
 import { SegmentedControl, Switch } from "@radix-ui/themes";
@@ -28,6 +28,7 @@ import {
   getMirrorConversationSourceLabel,
   getMirrorConversationTriggerLabel,
   groupMirrorConversationRecords,
+  type MirrorDailyStat,
   type MirrorConversationFilters,
   type MirrorConversationInputModeFilter,
   type MirrorConversationScopeFilter,
@@ -61,6 +62,115 @@ export type MirrorHistoryDetailView = "summary" | "conversation";
 
 function MirrorEmptyState({ children }: { children: string }) {
   return <p className="mirror-page__empty-state">{children}</p>;
+}
+type MirrorReportHeroChip = {
+  label: string;
+  value: string;
+  detail: string;
+  tone: string;
+};
+
+type MirrorReportHeroProps = {
+  eyebrow: string;
+  headline: string;
+  lede: string;
+  meta: string;
+  chips: MirrorReportHeroChip[];
+};
+
+function formatMirrorReportDate(value: string) {
+  return new Date(value).toLocaleDateString("zh-CN", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+}
+function buildDailyReportHero(dailyDigest: MirrorDailyDigest): MirrorReportHeroProps {
+  const statMap = new Map(dailyDigest.stats.map((stat) => [stat.id, stat]));
+  const heroStats = [statMap.get("completed"), statMap.get("active"), statMap.get("approvals"), statMap.get("continuity")].filter(
+    (stat): stat is MirrorDailyStat => Boolean(stat),
+  );
+  const chipSource = heroStats.length > 0 ? heroStats : dailyDigest.stats.slice(0, 3);
+
+  return {
+    eyebrow: "今日日报",
+    headline: dailyDigest.headline,
+    lede: dailyDigest.lede,
+    meta: `统计日期 ${formatMirrorReportDate(dailyDigest.date)}`,
+    chips: chipSource.map((stat) => ({
+      label: stat.label,
+      value: stat.value,
+      detail: stat.detail,
+      tone: stat.tone,
+    })),
+  };
+}
+
+function buildProfileReportHero(
+  backendItems: MirrorProfileItemView[],
+  localItems: MirrorProfileItemView[],
+  activeSource: "backend" | "local",
+): MirrorReportHeroProps {
+  const sourceItems = activeSource === "backend" ? backendItems : localItems;
+  const headline =
+    sourceItems[0]?.value ??
+    (activeSource === "backend" ? "当前没有画像字段" : "当前没有可展示的本地统计");
+  const lede =
+    activeSource === "backend"
+      ? [
+          backendItems[0]?.value ? `工作风格：${backendItems[0].value}` : null,
+          backendItems[1]?.value ? `偏好输出：${backendItems[1].value}` : null,
+          backendItems[2]?.value ? `活跃时段：${backendItems[2].value}` : null,
+        ]
+          .filter((part): part is string => Boolean(part))
+          .join(" · ") || "画像字段会先展示用户画像，再叠加本地行为统计做校准。"
+      : [
+          localItems[0]?.value ? `输入方式：${localItems[0].value}` : null,
+          localItems[1]?.value ? `入口来源：${localItems[1].value}` : null,
+          localItems[2]?.value ? `回应情况：${localItems[2].value}` : null,
+        ]
+          .filter((part): part is string => Boolean(part))
+          .join(" · ") || "本地统计只看最近 100 条对话，不混入正式画像字段。";
+
+  return {
+    eyebrow: activeSource === "backend" ? "画像字段" : "最近本地统计",
+    headline,
+    lede,
+    meta: `${sourceItems.length} 条可视证据`,
+    chips: sourceItems.slice(0, 3).map((item) => ({
+      label: item.label,
+      value: item.value,
+      detail: item.hint,
+      tone: item.source_kind === "backend_profile" ? "green" : "processing",
+    })),
+  };
+}
+
+function MirrorReportHero({ eyebrow, headline, lede, meta, chips }: MirrorReportHeroProps) {
+  return (
+    <article className="mirror-page__report-hero">
+      <div className="mirror-page__report-hero-copy">
+        <p className="mirror-page__micro-label">{eyebrow}</p>
+        <p className="mirror-page__report-headline">{headline}</p>
+        <p className="mirror-page__report-lede">{lede}</p>
+      </div>
+      <div className="mirror-page__report-hero-panel">
+        <div className="mirror-page__report-hero-panel-top">
+          <p className="mirror-page__report-hero-meta">{meta}</p>
+          <StatusBadge tone={chips[0]?.tone ?? "processing"}>{`${chips.length} 组证据`}</StatusBadge>
+        </div>
+        <div className="mirror-page__report-chip-grid">
+          {chips.map((chip) => (
+            <article key={`${chip.label}-${chip.value}`} className="mirror-page__report-chip" data-tone={chip.tone}>
+              <p className="mirror-page__report-chip-label">{chip.label}</p>
+              <p className="mirror-page__report-chip-value">{chip.value}</p>
+              <p className="mirror-page__report-chip-detail">{chip.detail}</p>
+            </article>
+          ))}
+        </div>
+      </div>
+    </article>
+  );
 }
 
 function MirrorHistoryDetail({
@@ -147,7 +257,7 @@ function MirrorHistoryDetail({
               <article key={`${item}-${index}`} className="mirror-page__history-item">
                 <div className="mirror-page__history-index">0{index + 1}</div>
                 <div className="mirror-page__history-copy">
-                  <p className="mirror-page__history-label">后端历史概要 {index + 1}</p>
+                  <p className="mirror-page__history-label">历史概要 {index + 1}</p>
                   <p className="mirror-page__history-text">{item}</p>
                 </div>
               </article>
@@ -379,6 +489,8 @@ function MirrorDailyDetail({
   onOpenRestorePoint: (restorePoint: RecoveryPoint) => void;
   onOpenTaskDetail: (taskId: string) => void;
 }) {
+  const heroSummary = buildDailyReportHero(dailyDigest);
+  const stagePeak = Math.max(1, ...dailyDigest.stage_snapshots.map((snapshot) => snapshot.count));
   return (
     <Tabs className="mirror-page__detail-tabs" defaultValue="today">
       <TabsList className="mirror-page__detail-tab-list" variant="line">
@@ -394,29 +506,25 @@ function MirrorDailyDetail({
       </TabsList>
 
       <TabsContent className="mirror-page__detail-tab-panel" value="today">
-        <div className="mirror-page__daily-stack mirror-page__daily-stack--expanded">
-          <div className="mirror-page__date-card">
-            <CalendarDays className="mirror-page__date-icon" />
-            <div>
-              <p className="mirror-page__micro-label">统计日期</p>
-              <p className="mirror-page__date-value">{new Date(dailyDigest.date).toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric" })}</p>
+        <div className="mirror-page__detail-story">
+          <MirrorReportHero {...heroSummary} />
+
+          <div className="mirror-page__daily-stack mirror-page__daily-stack--expanded">
+            <div className="mirror-page__summary-grid">
+              {dailyDigest.stats.map((stat) => (
+                <article key={stat.id} className="mirror-page__summary-card" data-tone={stat.tone}>
+                  <p className="mirror-page__micro-label">{stat.label}</p>
+                  <p className="mirror-page__summary-value">{stat.value}</p>
+                  <p className="mirror-page__summary-copy">{stat.detail}</p>
+                </article>
+              ))}
             </div>
-          </div>
 
-          <div className="mirror-page__summary-grid">
-            {dailyDigest.stats.map((stat) => (
-              <article key={stat.id} className="mirror-page__summary-card">
-                <p className="mirror-page__micro-label">{stat.label}</p>
-                <p className="mirror-page__summary-value">{stat.value}</p>
-                <p className="mirror-page__summary-copy">{stat.detail}</p>
-              </article>
-            ))}
-          </div>
-
-          <div className="mirror-page__detail-note-shell mirror-page__detail-note-shell--stage">
-            <p className="mirror-page__micro-label">今日概览</p>
-            <p className="mirror-page__stage-headline">{dailyDigest.headline}</p>
-            <p className="mirror-page__note">{dailyDigest.lede}</p>
+            <div className="mirror-page__detail-note-shell mirror-page__detail-note-shell--stage">
+              <p className="mirror-page__micro-label">今日概览</p>
+              <p className="mirror-page__report-headline">{dailyDigest.headline}</p>
+              <p className="mirror-page__note">{dailyDigest.lede}</p>
+            </div>
           </div>
         </div>
       </TabsContent>
@@ -424,13 +532,19 @@ function MirrorDailyDetail({
       <TabsContent className="mirror-page__detail-tab-panel" value="stages">
         <div className="mirror-page__stage-grid">
           {dailyDigest.stage_snapshots.map((snapshot) => (
-            <article key={snapshot.id} className="mirror-page__stage-card">
+            <article key={snapshot.id} className="mirror-page__stage-card" data-tone={snapshot.tone}>
               <div className="mirror-page__stage-card-top">
                 <div>
                   <p className="mirror-page__micro-label">{snapshot.label}</p>
                   <p className="mirror-page__stage-headline">{snapshot.count} 条</p>
                 </div>
                 <StatusBadge tone={snapshot.tone}>{snapshot.count > 0 ? "已命中" : "平静"}</StatusBadge>
+              </div>
+              <div className="mirror-page__stage-meter" aria-hidden="true">
+                <span
+                  className="mirror-page__stage-meter-fill"
+                  style={{ "--mirror-stage-fill": `${Math.max(12, Math.round((snapshot.count / stagePeak) * 100))}%` } as CSSProperties}
+                />
               </div>
               <p className="mirror-page__summary-copy">{snapshot.description}</p>
               {snapshot.tasks.length > 0 ? (
@@ -520,7 +634,12 @@ function MirrorProfileGrid({
   return (
     <div className="mirror-page__profile-grid">
       {items.map((item) => (
-        <article key={item.id} className="mirror-page__profile-item" data-testid={`mirror-profile-item-${item.id}`}>
+        <article
+          key={item.id}
+          className="mirror-page__profile-item"
+          data-category={item.category}
+          data-testid={`mirror-profile-item-${item.id}`}
+        >
           <div className="mirror-page__stage-card-top">
             <div>
               <p className="mirror-page__micro-label">{item.label}</p>
@@ -550,7 +669,7 @@ function MirrorProfileDetail({
     <Tabs className="mirror-page__detail-tabs" defaultValue={defaultTab}>
       <TabsList className="mirror-page__detail-tab-list" variant="line">
         <TabsTrigger className="mirror-page__detail-tab-trigger" value="backend">
-          后端画像字段
+          画像字段
         </TabsTrigger>
         <TabsTrigger className="mirror-page__detail-tab-trigger" value="local">
           最近本地统计
@@ -558,20 +677,24 @@ function MirrorProfileDetail({
       </TabsList>
 
       <TabsContent className="mirror-page__detail-tab-panel" value="backend">
-        <div className="mirror-page__profile-local-note">
-          <BrainCircuit className="mirror-page__profile-icon" />
-          <p className="mirror-page__summary-copy">这里直接展示后端 `mirror overview` 返回的 profile 字段。</p>
+        <div className="mirror-page__detail-story">
+          <MirrorReportHero {...buildProfileReportHero(backendItems, localItems, "backend")} />
+          <div className="mirror-page__profile-local-note">
+            <BrainCircuit className="mirror-page__profile-icon" />
+            <p className="mirror-page__summary-copy">这里直接展示 `mirror overview` 返回的 profile 字段，并把它做成更像证据页的视觉分层。</p>
+          </div>
         </div>
-
-        <MirrorProfileGrid badgeTone="green" emptyState="当前没有后端画像字段。" items={backendItems} />
+        <MirrorProfileGrid badgeTone="green" emptyState="当前没有画像字段。" items={backendItems} />
       </TabsContent>
 
       <TabsContent className="mirror-page__detail-tab-panel" value="local">
-        <div className="mirror-page__profile-local-note">
-          <BrainCircuit className="mirror-page__profile-icon" />
-          <p className="mirror-page__summary-copy">这里的条目只按最近 100 条本地对话机械统计，用于展示近期使用情况，并与后端画像字段分层展示。</p>
+        <div className="mirror-page__detail-story">
+          <MirrorReportHero {...buildProfileReportHero(backendItems, localItems, "local")} />
+          <div className="mirror-page__profile-local-note">
+            <BrainCircuit className="mirror-page__profile-icon" />
+            <p className="mirror-page__summary-copy">这里的条目只按最近 100 条本地对话机械统计，用于展示近期使用情况，并与画像字段分层展示。</p>
+          </div>
         </div>
-
         <MirrorProfileGrid badgeTone="processing" emptyState="当前没有可展示的最近本地统计。" items={localItems} />
       </TabsContent>
     </Tabs>
@@ -591,6 +714,8 @@ function MirrorMemoryDetail({
 }) {
   const conversationSummary = buildMirrorConversationSummary(conversations);
   const memorySettings = settingsSnapshot.settings.memory;
+  const settingsSnapshotUsesWarningBaseline = settingsSnapshot.rpcContext.warnings.length > 0;
+  const settingsSnapshotIsMock = settingsSnapshot.source === "mock";
   const [settingsActionKey, setSettingsActionKey] = useState<string | null>(null);
   const [settingsFeedback, setSettingsFeedback] = useState<string | null>(null);
   // Current mirror references do not carry task identifiers, so local conversation
@@ -653,7 +778,7 @@ function MirrorMemoryDetail({
           <div className="mirror-page__memory-list mirror-page__memory-list--expanded">
             <div className="mirror-page__profile-local-note">
               <BookMarked className="mirror-page__memory-icon" />
-              <p className="mirror-page__summary-copy">当前协议只返回 `memory_id / reason / summary`，还没有时间、来源 task 或命中场景明细，所以这里按后端真源直出，不伪造额外来源字段。</p>
+              <p className="mirror-page__summary-copy">当前协议只返回 `memory_id / reason / summary`，还没有时间、来源 task 或命中场景明细，所以这里按正式真源直出，不伪造额外来源字段。</p>
             </div>
 
             {overview.memory_references.map((reference, index) => (
@@ -695,10 +820,10 @@ function MirrorMemoryDetail({
           <article className="mirror-page__risk-card">
             <div className="mirror-page__stage-card-top">
               <div>
-                <p className="mirror-page__micro-label">最近后端记忆引用</p>
+                <p className="mirror-page__micro-label">最近记忆引用</p>
                 <p className="mirror-page__stage-headline">{overview.memory_references[0]?.memory_id ?? "暂无"}</p>
               </div>
-              <StatusBadge tone="green">backend</StatusBadge>
+              <StatusBadge tone="green">镜子</StatusBadge>
             </div>
             <p className="mirror-page__summary-copy">{overview.memory_references[0]?.reason ?? "当前还没有新的记忆命中说明。"}</p>
           </article>
@@ -723,7 +848,7 @@ function MirrorMemoryDetail({
                 </div>
                 <StatusBadge tone="processing">task</StatusBadge>
               </div>
-              <p className="mirror-page__summary-copy">这些 task 来自本地连续记录，可用于回跳任务详情；它们不代表后端记忆引用的正式来源字段。</p>
+              <p className="mirror-page__summary-copy">这些 task 来自本地连续记录，可用于回跳任务详情；它们不代表记忆引用的正式来源字段。</p>
               <div className="mirror-page__conversation-actions">
                 {recentTaskLinkedConversations.map((record) => (
                   <button key={record.task_id} type="button" className="mirror-page__task-link" onClick={() => onOpenTaskDetail(record.task_id!)}>
@@ -740,7 +865,9 @@ function MirrorMemoryDetail({
         <div className="mirror-page__profile-local-note">
           <BookMarked className="mirror-page__memory-icon" />
           <p className="mirror-page__summary-copy">
-            这里展示 `agent.settings.get` 或本地设置回退快照中的镜子记忆策略；已登记到真源的开关会直接写回 `agent.settings.update`。
+            {settingsSnapshotIsMock
+              ? "这里展示的是路演用的本地镜子策略快照；开关变更会直接写回本地存储。"
+              : "这里展示 `agent.settings.get` 返回的镜子记忆策略；已登记到真源的开关会直接写回 `agent.settings.update`。"}
           </p>
         </div>
         {settingsFeedback ? <div className="mirror-page__profile-local-note mirror-page__settings-feedback">{settingsFeedback}</div> : null}
@@ -831,14 +958,22 @@ function MirrorMemoryDetail({
             <div className="mirror-page__stage-card-top">
               <div>
                 <p className="mirror-page__micro-label">设置来源</p>
-                <p className="mirror-page__stage-headline">{settingsSnapshot.source === "rpc" ? "settings.get" : "local fallback"}</p>
+                <p className="mirror-page__stage-headline">
+                  {settingsSnapshotIsMock ? "路演快照" : settingsSnapshotUsesWarningBaseline ? "本地回退快照" : "settings.get"}
+                </p>
               </div>
-              <StatusBadge tone={settingsSnapshot.source === "rpc" ? "green" : "yellow"}>{settingsSnapshot.source}</StatusBadge>
+              <StatusBadge tone={settingsSnapshotIsMock ? "processing" : settingsSnapshotUsesWarningBaseline ? "yellow" : "green"}>
+                {settingsSnapshotIsMock ? "MOCK" : "RPC"}
+              </StatusBadge>
             </div>
             <p className="mirror-page__summary-copy">
               {settingsSnapshot.rpcContext.serverTime
                 ? `服务端快照时间：${settingsSnapshot.rpcContext.serverTime}`
-                : "当前展示的是本地设置回退快照。"}
+                : settingsSnapshotIsMock
+                  ? "当前展示的是本地路演快照，设置变更会直接写回本地存储。"
+                  : settingsSnapshotUsesWarningBaseline
+                  ? "当前展示的是本地缓存的 settings 快照，用于在 settings.get 失败时维持页面可读性。"
+                  : "当前展示的是正式 settings 快照。"}
             </p>
             {settingsSnapshot.rpcContext.warnings.length > 0 ? (
               <div className="mirror-page__conversation-actions">
@@ -856,6 +991,9 @@ function MirrorMemoryDetail({
   );
 }
 
+/**
+ * Renders the mirror detail overlay for daily reports, profiles, memory, and history.
+ */
 export function MirrorDetailContent(props: MirrorDetailContentProps) {
   const navigate = useNavigate();
   const openTaskDetail = useMemo(

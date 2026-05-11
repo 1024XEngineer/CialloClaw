@@ -6,31 +6,22 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"time"
 
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/execution"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/memory"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/orchestrator"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/rpc"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/sidecarclient"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/traceeval"
 )
 
 // App keeps the assembled local-service runtime dependencies.
@@ -55,140 +46,241 @@ var (
 	registerOCRToolsForBootstrap          = sidecarclient.RegisterOCRTools
 	registerMediaToolsForBootstrap        = sidecarclient.RegisterMediaTools
 	newModelServiceFromConfigForBootstrap = model.NewServiceFromConfig
+	getExecutablePathForBootstrap         = os.Executable
 )
+
+type runtimeMigrationPlan struct {
+	legacyWorkspaceRoot string
+	targetWorkspaceRoot string
+	legacyDatabasePath  string
+	targetDatabasePath  string
+	legacySecretPath    string
+	targetSecretPath    string
+}
+
+type sidecarRuntimes struct {
+	playwright *sidecarclient.PlaywrightSidecarRuntime
+	ocr        *sidecarclient.OCRWorkerRuntime
+	media      *sidecarclient.MediaWorkerRuntime
+}
 
 // New assembles a fully wired local-service application.
 func New(cfg config.Config) (*App, error) {
 	if strings.ContainsRune(cfg.WorkspaceRoot, '\x00') {
 		return nil, fmt.Errorf("workspace root contains invalid null byte")
 	}
+	if err := migrateLegacyRuntimeDefaultsIfNeeded(cfg, legacyRuntimeRootsForCompatibility()); err != nil {
+		return nil, err
+	}
+	core, err := buildCoreDeps(cfg)
+	if err != nil {
+		return nil, err
+	}
+	success := false
+	defer func() {
+		if !success {
+			_ = core.storageService.Close()
+		}
+	}()
 
-	pathPolicy, err := newLocalPathPolicyForBootstrap(cfg.WorkspaceRoot)
+	runtimes, err := buildRuntimes(core)
 	if err != nil {
 		return nil, err
 	}
 
-	storageService := storage.NewService(platform.NewLocalStorageAdapter(cfg.DatabasePath))
-	// Bootstrap builds a working client from the canonical runtime route, but an
-	// unsupported persisted provider still needs a clientless placeholder that
-	// preserves the user-facing provider identity for diagnostics and follow-up
-	// settings edits.
-	resolvedModelConfig, placeholderModelConfig, persistedModelRouteChanged, err := loadBootstrapModelConfig(cfg.Model, storageService.SettingsStore())
+	services, err := buildServices(core, runtimes)
 	if err != nil {
-		_ = storageService.Close()
 		return nil, err
 	}
-	auditService := audit.NewService(storageService.AuditWriter())
-	checkpointService := checkpoint.NewService(storageService.RecoveryPointWriter())
-	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
-	executionBackend := platform.NewControlledExecutionBackend(cfg.WorkspaceRoot)
-	osCapability := platform.NewLocalOSCapabilityAdapter()
-	pluginService := plugin.NewService()
-	if err := storageService.EnsureBuiltinExecutionAssets(context.Background()); err != nil {
-		_ = storageService.Close()
-		return nil, err
-	}
-	if err := persistPluginManifests(context.Background(), storageService, pluginService); err != nil {
-		_ = storageService.Close()
-		return nil, err
-	}
+
+	success = true
+	return newApp(cfg, core, runtimes, services), nil
+}
+
+// buildSidecarRuntimes keeps worker startup policy in one bootstrap phase. A
+// runtime may start in an unavailable state, but callers still receive a stable
+// client facade so tool wiring can preserve the formal tool_call flow.
+func buildSidecarRuntimes(pluginService *plugin.Service, osCapability platform.OSCapabilityAdapter) sidecarRuntimes {
 	playwrightRuntime, err := sidecarclient.NewPlaywrightSidecarRuntime(pluginService, osCapability)
 	playwrightRuntime = chooseRuntimeOnStart(playwrightRuntime, err, func() *sidecarclient.PlaywrightSidecarRuntime {
 		return sidecarclient.NewUnavailablePlaywrightSidecarRuntime(pluginService, osCapability)
 	})
-	playwrightClient := playwrightRuntime.Client()
 	ocrRuntime, err := sidecarclient.NewOCRWorkerRuntime(pluginService, osCapability)
 	ocrRuntime = chooseRuntimeOnStart(ocrRuntime, err, func() *sidecarclient.OCRWorkerRuntime {
 		return sidecarclient.NewUnavailableOCRWorkerRuntime(pluginService, osCapability)
 	})
-	ocrClient := ocrRuntime.Client()
 	mediaRuntime, err := sidecarclient.NewMediaWorkerRuntime(pluginService, osCapability)
 	mediaRuntime = chooseRuntimeOnStart(mediaRuntime, err, func() *sidecarclient.MediaWorkerRuntime {
 		return sidecarclient.NewUnavailableMediaWorkerRuntime(pluginService, osCapability)
 	})
-	mediaClient := mediaRuntime.Client()
-	screenClient := sidecarclient.NewLocalScreenCaptureClient(fileSystem)
-	toolRegistry := tools.NewRegistry()
-	if err := registerBuiltinToolsForBootstrap(toolRegistry); err != nil {
-		_ = storageService.Close()
-		return nil, err
+	return sidecarRuntimes{
+		playwright: playwrightRuntime,
+		ocr:        ocrRuntime,
+		media:      mediaRuntime,
 	}
-	if err := registerPlaywrightToolsForBootstrap(toolRegistry); err != nil {
-		_ = storageService.Close()
-		return nil, err
-	}
-	if err := registerOCRToolsForBootstrap(toolRegistry); err != nil {
-		_ = storageService.Close()
-		return nil, err
-	}
-	if err := registerMediaToolsForBootstrap(toolRegistry); err != nil {
-		_ = storageService.Close()
-		return nil, err
-	}
-	toolExecutor := tools.NewToolExecutor(
-		toolRegistry,
-		tools.WithToolCallRecorder(tools.NewToolCallRecorder(storageService.ToolCallSink())),
-	)
+}
 
-	modelService, err := newModelServiceFromConfigForBootstrap(model.ServiceConfig{
-		ModelConfig:  resolvedModelConfig,
-		SecretSource: model.NewStaticSecretSource(storageService),
+// migrateLegacyRuntimeDefaultsIfNeeded copies data from the legacy repo-relative
+// runtime layout into the new per-user runtime root before storage opens. This
+// preserves task history and settings for upgrades that previously relied on
+// relative defaults like ./workspace and ./data/cialloclaw.db.
+func migrateLegacyRuntimeDefaultsIfNeeded(cfg config.Config, legacyRoots []string) error {
+	plan, ok := buildRuntimeMigrationPlan(cfg, legacyRoots)
+	if !ok {
+		return nil
+	}
+	if err := copyDirectoryIfMissing(plan.legacyWorkspaceRoot, plan.targetWorkspaceRoot); err != nil {
+		return err
+	}
+	if err := copyFileIfMissing(plan.legacyDatabasePath, plan.targetDatabasePath); err != nil {
+		return err
+	}
+	if err := copyFileIfMissing(plan.legacySecretPath, plan.targetSecretPath); err != nil {
+		return err
+	}
+	return nil
+}
+
+func buildRuntimeMigrationPlan(cfg config.Config, legacyRoots []string) (runtimeMigrationPlan, bool) {
+	targetWorkspaceRoot := filepath.Clean(cfg.WorkspaceRoot)
+	targetDatabasePath := filepath.Clean(cfg.DatabasePath)
+	if targetWorkspaceRoot != filepath.Clean(config.DefaultWorkspaceRoot()) || targetDatabasePath != filepath.Clean(config.DefaultDatabasePath()) {
+		return runtimeMigrationPlan{}, false
+	}
+	for _, legacyRoot := range legacyRoots {
+		trimmedRoot := strings.TrimSpace(legacyRoot)
+		if trimmedRoot == "" {
+			continue
+		}
+		legacyWorkspaceRoot := filepath.Join(trimmedRoot, "workspace")
+		legacyDatabasePath := filepath.Join(trimmedRoot, "data", "cialloclaw.db")
+		legacySecretPath := secretStorePathForDatabase(legacyDatabasePath)
+		if sameFilePath(legacyWorkspaceRoot, targetWorkspaceRoot) || sameFilePath(legacyDatabasePath, targetDatabasePath) {
+			continue
+		}
+		if !pathExists(legacyWorkspaceRoot) && !pathExists(legacyDatabasePath) && !pathExists(legacySecretPath) {
+			continue
+		}
+		return runtimeMigrationPlan{
+			legacyWorkspaceRoot: legacyWorkspaceRoot,
+			targetWorkspaceRoot: targetWorkspaceRoot,
+			legacyDatabasePath:  legacyDatabasePath,
+			targetDatabasePath:  targetDatabasePath,
+			legacySecretPath:    legacySecretPath,
+			targetSecretPath:    secretStorePathForDatabase(targetDatabasePath),
+		}, true
+	}
+	return runtimeMigrationPlan{}, false
+}
+
+// legacyRuntimeRootsForCompatibility trusts only the executable-adjacent legacy
+// layout because the process working directory is not a stable bootstrap trust
+// boundary in packaged builds.
+func legacyRuntimeRootsForCompatibility() []string {
+	if executablePath, err := getExecutablePathForBootstrap(); err == nil {
+		return dedupePaths([]string{filepath.Dir(executablePath)})
+	}
+	return nil
+}
+
+func dedupePaths(paths []string) []string {
+	seen := map[string]struct{}{}
+	result := make([]string, 0, len(paths))
+	for _, pathValue := range paths {
+		trimmed := strings.TrimSpace(pathValue)
+		if trimmed == "" {
+			continue
+		}
+		cleaned := filepath.Clean(trimmed)
+		key := filepath.ToSlash(cleaned)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, cleaned)
+	}
+	return result
+}
+
+func sameFilePath(left, right string) bool {
+	return filepath.Clean(left) == filepath.Clean(right)
+}
+
+func pathExists(pathValue string) bool {
+	_, err := os.Stat(pathValue)
+	return err == nil
+}
+
+func secretStorePathForDatabase(databasePath string) string {
+	trimmed := strings.TrimSpace(databasePath)
+	if trimmed == "" {
+		return ""
+	}
+	ext := filepath.Ext(trimmed)
+	if ext == "" {
+		return trimmed + ".stronghold.db"
+	}
+	return strings.TrimSuffix(trimmed, ext) + ".stronghold" + ext
+}
+
+func copyDirectoryIfMissing(sourceRoot, targetRoot string) error {
+	if !pathExists(sourceRoot) {
+		return nil
+	}
+	return filepath.WalkDir(sourceRoot, func(currentPath string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relativePath, err := filepath.Rel(sourceRoot, currentPath)
+		if err != nil {
+			return err
+		}
+		targetPath := filepath.Join(targetRoot, relativePath)
+		if entry.IsDir() {
+			return os.MkdirAll(targetPath, 0o755)
+		}
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+			return err
+		}
+		return copyFileContents(currentPath, targetPath, entry.Type())
 	})
+}
+
+func copyFileIfMissing(sourcePath, targetPath string) error {
+	if !pathExists(sourcePath) || pathExists(targetPath) {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		return err
+	}
+	return copyFileContents(sourcePath, targetPath, 0)
+}
+
+func copyFileContents(sourcePath, targetPath string, entryMode os.FileMode) error {
+	reader, err := os.Open(sourcePath)
 	if err != nil {
-		if shouldFallbackBootstrapModelService(err, persistedModelRouteChanged) {
-			modelService = model.NewService(placeholderModelConfig)
-		} else {
-			_ = storageService.Close()
-			return nil, err
+		return err
+	}
+	defer func() { _ = reader.Close() }()
+	mode := os.FileMode(0o644)
+	if entryMode != 0 {
+		mode = entryMode.Perm()
+		if mode == 0 {
+			mode = 0o644
 		}
 	}
-
-	deliveryService := delivery.NewService()
-	traceEvalService := traceeval.NewService(storageService.TraceStore(), storageService.EvalStore())
-	executionService := execution.NewService(fileSystem, executionBackend, playwrightClient, ocrClient, mediaClient, screenClient, modelService, auditService, checkpointService, deliveryService, toolRegistry, toolExecutor, pluginService).
-		WithArtifactStore(storageService.ArtifactStore()).
-		WithLoopRuntimeStore(storageService.LoopRuntimeStore()).
-		WithExtensionAssetCatalog(storageService)
-	inspectorService := taskinspector.NewService(fileSystem)
-	runEngine, err := runengine.NewEngineWithStore(storageService.TaskRunStore())
+	writer, err := os.OpenFile(targetPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 	if err != nil {
-		_ = storageService.Close()
-		return nil, err
+		// Legacy runtime migration must stay idempotent across repeated launches, so
+		// pre-existing destination files are treated as already migrated content.
+		if errors.Is(err, os.ErrExist) {
+			return nil
+		}
+		return err
 	}
-	if err := runEngine.WithTodoStore(storageService.TodoStore()); err != nil {
-		_ = storageService.Close()
-		return nil, err
-	}
-	if err := runEngine.WithSettingsStore(storageService.SettingsStore()); err != nil {
-		_ = storageService.Close()
-		return nil, err
-	}
-	if err := runEngine.WithSessionStore(storageService.SessionStore()); err != nil {
-		_ = storageService.Close()
-		return nil, err
-	}
-
-	orchestratorService := orchestrator.NewService(
-		contextsvc.NewService(),
-		intent.NewService(),
-		runEngine,
-		deliveryService,
-		memory.NewServiceFromStorage(storageService.MemoryStore(), storageService.Capabilities().MemoryRetrievalBackend),
-		risk.NewService(),
-		modelService,
-		toolRegistry,
-		pluginService,
-	).WithAudit(auditService).WithExecutor(executionService).WithStorage(storageService).WithTaskInspector(inspectorService).WithTraceEval(traceEvalService)
-
-	return &App{
-		server:       rpc.NewServer(cfg.RPC, orchestratorService),
-		storage:      storageService,
-		toolRegistry: toolRegistry,
-		toolExecutor: toolExecutor,
-		playwright:   playwrightRuntime,
-		ocr:          ocrRuntime,
-		media:        mediaRuntime,
-	}, nil
+	defer func() { _ = writer.Close() }()
+	_, err = io.Copy(writer, reader)
+	return err
 }
 
 func loadBootstrapModelConfig(base config.ModelConfig, settingsStore storage.SettingsStore) (config.ModelConfig, config.ModelConfig, bool, error) {

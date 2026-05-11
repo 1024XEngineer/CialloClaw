@@ -1,36 +1,31 @@
-// 该文件负责风险评估层的最小骨架。
+// Package risk implements the minimal governance assessment layer.
 package risk
 
-import "strings"
+import (
+	"net"
+	"net/netip"
+	"net/url"
+	"strings"
+)
 
-// Service 提供当前模块的服务能力。
+var carrierGradeNATPrefix = netip.MustParsePrefix("100.64.0.0/10")
+
+// Service evaluates tool risk without mutating orchestrator state.
 type Service struct{}
 
-// NewService 创建并返回Service。
+// NewService constructs a minimal risk assessment service.
 func NewService() *Service {
 	return &Service{}
 }
 
-// DefaultLevel 处理当前模块的相关逻辑。
+// DefaultLevel returns the default risk level used by callers that need a
+// stable fallback before any assessment runs.
 func (s *Service) DefaultLevel() string {
 	return string(RiskLevelGreen)
 }
 
-// Assess 对一次工具或操作请求进行最小风险评估。
-//
-// 当前规则保持保守：
-// 1. 能力不可用 => red + deny
-// 2. 命中危险命令 => red + deny
-// 3. 命中需审批命令 => red + approval_required
-// 4. 超出工作区 => red + deny
-// 5. write_file 且工作区信息未知 => yellow + approval_required
-// 6. 存在覆盖/删除风险 => yellow + checkpoint_required
-// 7. 其他 => green
-//
-// 注意：
-// - 这里不直接生成 ApprovalRequest；
-// - 这里不推进状态机；
-// - 这里只给上层一个稳定、可测试的风险判断结果。
+// Assess returns a stable, testable governance decision for one tool request.
+// It does not allocate approval records or mutate any task state.
 func (s *Service) Assess(input AssessmentInput) AssessmentResult {
 	result := AssessmentResult{
 		RiskLevel:   RiskLevelGreen,
@@ -74,7 +69,18 @@ func (s *Service) Assess(input AssessmentInput) AssessmentResult {
 		return result
 	}
 
-	if isWebpageOperation(input.OperationName) {
+	if isLowRiskBrowserObservationOperation(input.OperationName) {
+		return result
+	}
+
+	if s.requiresApprovalForSensitiveWebTarget(input.OperationName, input.TargetObject) {
+		result.RiskLevel = RiskLevelYellow
+		result.ApprovalRequired = true
+		result.Reason = ReasonWebpageApproval
+		return result
+	}
+
+	if isApprovalBrowserOperation(input.OperationName) {
 		result.RiskLevel = RiskLevelYellow
 		result.ApprovalRequired = true
 		result.Reason = ReasonWebpageApproval
@@ -147,13 +153,100 @@ func isApprovalCommand(commandPreview string) bool {
 	return false
 }
 
-func isWebpageOperation(operationName string) bool {
+func isApprovalBrowserOperation(operationName string) bool {
 	switch strings.TrimSpace(operationName) {
-	case "page_read", "page_search", "page_interact", "structured_dom":
+	case "page_interact", "structured_dom", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact":
 		return true
 	default:
 		return false
 	}
+}
+
+func isLowRiskBrowserObservationOperation(operationName string) bool {
+	switch strings.TrimSpace(operationName) {
+	case "browser_attach_current", "browser_snapshot":
+		return true
+	default:
+		return false
+	}
+}
+
+// requiresApprovalForSensitiveWebTarget keeps read-only web tools low risk for
+// explicit http(s) targets by shape. Approval remains required only for
+// localhost-style hosts, single-label hosts, local-only suffixes, and literal
+// loopback/private/link-local/CGNAT IP targets. The precheck intentionally
+// avoids DNS resolution and broader public-Internet classification so task
+// startup does not block on name service or reinterpret explicit user targets.
+func (s *Service) requiresApprovalForSensitiveWebTarget(operationName, targetObject string) bool {
+	switch strings.TrimSpace(operationName) {
+	case "page_read", "page_search":
+		return s.isSensitiveWebTarget(targetObject)
+	default:
+		return false
+	}
+}
+
+func (s *Service) isSensitiveWebTarget(targetObject string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(targetObject))
+	if err != nil {
+		return true
+	}
+	if scheme := strings.ToLower(strings.TrimSpace(parsed.Scheme)); scheme != "http" && scheme != "https" {
+		return true
+	}
+	hostname := normalizeWebTargetHostname(parsed.Hostname())
+	if hostname == "" {
+		return true
+	}
+	if ip := parseHostnameIP(hostname); ip != nil {
+		return isNonPublicIPAddress(ip)
+	}
+	if isSensitiveHostnamePattern(hostname) {
+		return true
+	}
+	return false
+}
+
+func normalizeWebTargetHostname(hostname string) string {
+	hostname = strings.ToLower(strings.TrimSpace(hostname))
+	hostname = strings.TrimSuffix(hostname, ".")
+	return hostname
+}
+
+func isSensitiveHostnamePattern(hostname string) bool {
+	if hostname == "localhost" || strings.HasSuffix(hostname, ".localhost") {
+		return true
+	}
+	if !strings.Contains(hostname, ".") {
+		return true
+	}
+	for _, suffix := range []string{".local", ".localdomain", ".internal", ".home", ".lan", ".home.arpa"} {
+		if strings.HasSuffix(hostname, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseHostnameIP(hostname string) net.IP {
+	if zoneIndex := strings.LastIndex(hostname, "%"); zoneIndex >= 0 {
+		hostname = hostname[:zoneIndex]
+	}
+	return net.ParseIP(hostname)
+}
+
+func isNonPublicIPAddress(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	if !ip.IsGlobalUnicast() || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+		return true
+	}
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return true
+	}
+	return carrierGradeNATPrefix.Contains(addr.Unmap())
 }
 
 func isWorkspaceWriteOperation(operationName string) bool {

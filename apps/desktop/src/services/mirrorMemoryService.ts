@@ -169,7 +169,13 @@ export function upsertMirrorConversationRecord(records: MirrorConversationRecord
 }
 
 export function loadMirrorConversationRecords(source: "rpc" | "mock" = "rpc") {
-  if (source === "rpc" && !isMirrorConversationMemoryEnabled()) {
+  if (source === "mock") {
+    // Mock mode should always stay on the fixed fixture so roadshow demos do
+    // not drift with whatever happened to be saved in local storage before.
+    return capMirrorConversationRecords(MOCK_MIRROR_CONVERSATION_RECORDS.map(cloneConversationRecord));
+  }
+
+  if (!isMirrorConversationMemoryEnabled()) {
     clearMirrorConversationRecords();
     return [];
   }
@@ -184,10 +190,10 @@ export function loadMirrorConversationRecords(source: "rpc" | "mock" = "rpc") {
       }
     }
   } catch {
-    return source === "mock" ? MOCK_MIRROR_CONVERSATION_RECORDS.map(cloneConversationRecord) : [];
+    return [];
   }
 
-  return source === "mock" ? MOCK_MIRROR_CONVERSATION_RECORDS.map(cloneConversationRecord) : [];
+  return [];
 }
 
 export function saveMirrorConversationRecords(records: MirrorConversationRecord[]) {
@@ -250,7 +256,7 @@ export function recordMirrorConversationSuccess(params: AgentInputSubmitParams, 
     trigger: params.trigger,
     input_mode: params.input.input_mode,
     session_id: params.session_id ?? null,
-    task_id: result.task.task_id,
+    task_id: result.task?.task_id ?? null,
     user_text: params.input.text,
     agent_text: result.bubble_message?.text ?? null,
     agent_bubble_type: result.bubble_message?.type ?? null,
