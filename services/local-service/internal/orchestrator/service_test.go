@@ -116,6 +116,14 @@ type orderedTitleModelClient struct {
 	allowSecondReply chan struct{}
 }
 
+type cancelAwareTitleModelClient struct {
+	mu             sync.Mutex
+	titleCallCount int
+	firstStarted   chan struct{}
+	firstCanceled  chan struct{}
+	secondStarted  chan struct{}
+}
+
 type delayedModelClient struct {
 	delay  time.Duration
 	output string
@@ -896,6 +904,50 @@ func (s *orderedTitleModelClient) GenerateText(_ context.Context, request model.
 }
 
 func (s *orderedTitleModelClient) GenerateToolCalls(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+	return model.ToolCallResult{
+		RequestID:  "req_tool_unused",
+		Provider:   "openai_responses",
+		ModelID:    "gpt-5.4",
+		OutputText: "执行结果",
+	}, nil
+}
+
+func (s *cancelAwareTitleModelClient) GenerateText(ctx context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	if !isTaskTitleGenerationRequest(request) {
+		return model.GenerateTextResponse{
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			RequestID:  "req_cancel_aware_immediate",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "执行结果",
+		}, nil
+	}
+	s.mu.Lock()
+	s.titleCallCount++
+	callIndex := s.titleCallCount
+	s.mu.Unlock()
+	switch callIndex {
+	case 1:
+		if s.firstStarted != nil {
+			close(s.firstStarted)
+		}
+		<-ctx.Done()
+		if s.firstCanceled != nil {
+			close(s.firstCanceled)
+		}
+		return model.GenerateTextResponse{}, ctx.Err()
+	case 2:
+		if s.secondStarted != nil {
+			close(s.secondStarted)
+		}
+		return model.GenerateTextResponse{OutputText: `{"title":"最新上下文标题"}`}, nil
+	default:
+		return model.GenerateTextResponse{OutputText: `{"title":"额外标题调用"}`}, nil
+	}
+}
+
+func (s *cancelAwareTitleModelClient) GenerateToolCalls(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
 	return model.ToolCallResult{
 		RequestID:  "req_tool_unused",
 		Provider:   "openai_responses",
@@ -2473,6 +2525,16 @@ func hasTaskTitleAuditRecord(records []map[string]any) bool {
 	return false
 }
 
+func hasTaskTitleAuditResult(records []map[string]any, want string) bool {
+	for _, record := range records {
+		if stringValue(record, "action", "") == "title.generate" &&
+			stringValue(record, "result", "") == want {
+			return true
+		}
+	}
+	return false
+}
+
 func TestServiceStartTaskConfirmingIntentDoesNotGenerateTitleBeforeConfirmation(t *testing.T) {
 	modelClient := &blockingModelClient{
 		started:  make(chan string, 1),
@@ -2774,6 +2836,76 @@ func TestServiceTaskTitleRefreshKeepsLatestReservation(t *testing.T) {
 	t.Fatalf("expected newest async title refresh to win, got %+v", record)
 }
 
+func TestServiceTaskTitleRefreshCancelsSupersededModelCall(t *testing.T) {
+	client := &cancelAwareTitleModelClient{
+		firstStarted:  make(chan struct{}),
+		firstCanceled: make(chan struct{}),
+		secondStarted: make(chan struct{}),
+	}
+	service, _ := newTestServiceWithModelClient(t, client)
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_title_refresh_cancel",
+		Title:       "构建失败分析",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+		Snapshot: taskcontext.TaskContextSnapshot{
+			InputType: "text",
+			Text:      "请分析构建失败",
+			Trigger:   "hover_text_input",
+		},
+	})
+
+	service.scheduleTaskTitleRefresh(task, task.Snapshot, task.Intent, task.Title)
+	select {
+	case <-client.firstStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected first title refresh to start")
+	}
+
+	updatedTask, ok := service.runEngine.ContinueTask(task.TaskID, runengine.ContinuationUpdate{
+		Snapshot: taskcontext.TaskContextSnapshot{
+			InputType: "text",
+			Text:      "请分析构建失败，并补充最新客户影响",
+			Trigger:   "hover_text_input",
+		},
+		Title:       task.Title,
+		Intent:      task.Intent,
+		Status:      task.Status,
+		CurrentStep: task.CurrentStep,
+	})
+	if !ok {
+		t.Fatal("expected continuation update to succeed")
+	}
+	service.scheduleTaskTitleRefresh(updatedTask, snapshotFromTask(updatedTask), updatedTask.Intent, updatedTask.Title)
+
+	select {
+	case <-client.firstCanceled:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected superseded title refresh to be canceled")
+	}
+	select {
+	case <-client.secondStarted:
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("expected second title refresh to start")
+	}
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		record, ok := service.runEngine.GetTask(task.TaskID)
+		if ok && record.Title == "最新上下文标题" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	record, _ := service.runEngine.GetTask(task.TaskID)
+	t.Fatalf("expected canceled stale refresh and successful latest title update, got %+v", record)
+}
+
 func TestServiceTaskTitleRefreshReservesNewTokenForEachSchedule(t *testing.T) {
 	client := &orderedTitleModelClient{
 		firstStarted:     make(chan struct{}),
@@ -2899,6 +3031,53 @@ func TestServiceTaskTitleRefreshRejectsStaleSchedulerAfterNewStateVisible(t *tes
 	}
 	record, _ = service.runEngine.GetTask(task.TaskID)
 	t.Fatalf("expected newest visible state to own the final title refresh, got %+v", record)
+}
+
+func TestServiceTaskTitleRefreshAuditMarksFallbackResult(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			if isTaskTitleGenerationRequest(request) {
+				return model.GenerateTextResponse{
+					TaskID:     request.TaskID,
+					RunID:      request.RunID,
+					RequestID:  "req_title_fallback",
+					Provider:   "openai_responses",
+					ModelID:    "gpt-5.4",
+					OutputText: `{"title":""}`,
+				}, nil
+			}
+			return model.GenerateTextResponse{OutputText: "执行结果"}, nil
+		},
+	})
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_title_audit_fallback",
+		Title:       "构建失败分析",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+		Snapshot: taskcontext.TaskContextSnapshot{
+			InputType: "text",
+			Text:      "请分析构建失败",
+			Trigger:   "hover_text_input",
+		},
+	})
+
+	service.scheduleTaskTitleRefresh(task, task.Snapshot, task.Intent, task.Title)
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		record, ok := service.runEngine.GetTask(task.TaskID)
+		if ok && hasTaskTitleAuditResult(record.AuditRecords, "fallback") {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	record, _ := service.runEngine.GetTask(task.TaskID)
+	t.Fatalf("expected fallback title generation audit result, got %+v", record.AuditRecords)
 }
 
 func TestServiceConfirmTaskIgnoresCorrectedIntentWhenConfirmedTrue(t *testing.T) {

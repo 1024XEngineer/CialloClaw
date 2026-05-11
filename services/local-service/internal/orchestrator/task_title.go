@@ -1,7 +1,6 @@
 package orchestrator
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -44,14 +43,15 @@ func (s *Service) scheduleTaskTitleRefresh(task runengine.TaskRecord, snapshot t
 	// reuse a task-carried token and overwrite a newer context snapshot when the
 	// responses arrive out of order. The stale-task guard above keeps older task
 	// views from reclaiming ownership after a newer state has already published.
-	refreshToken, ok := s.runEngine.ReserveTitleRefresh(taskID, fallbackTitle)
+	refreshToken, refreshCtx, ok := s.runEngine.ReserveTitleRefresh(taskID, fallbackTitle)
 	if !ok {
 		return
 	}
 	intentValue := cloneMap(taskIntent)
 	go func() {
+		defer s.runEngine.FinishTitleRefresh(taskID, refreshToken)
 		intentName := strings.TrimSpace(stringValue(intentValue, "name", ""))
-		result := s.titleGenerator.GenerateTaskSubjectResult(context.Background(), titlegen.GenerationOwner{
+		result := s.titleGenerator.GenerateTaskSubjectResult(refreshCtx, titlegen.GenerationOwner{
 			TaskID: task.TaskID,
 			RunID:  task.RunID,
 		}, snapshot, intentName, fallbackTitle)
@@ -98,15 +98,21 @@ func (s *Service) appendTaskTitleGenerationAudit(task runengine.TaskRecord, inte
 	if s == nil || s.runEngine == nil || result.Invocation == nil {
 		return
 	}
+	summary := "generate compact task title"
+	outputResult := "success"
+	if !result.Generated {
+		summary = "task title model call fell back to local task title"
+		outputResult = "fallback"
+	}
 	record := map[string]any{
 		"audit_id":   fmt.Sprintf("audit_title_%s_%d", task.TaskID, time.Now().UTC().UnixNano()),
 		"task_id":    task.TaskID,
 		"run_id":     task.RunID,
 		"type":       "model",
 		"action":     "title.generate",
-		"summary":    "generate compact task title",
+		"summary":    summary,
 		"target":     firstNonEmptyString(intentName, "task_title"),
-		"result":     "success",
+		"result":     outputResult,
 		"created_at": time.Now().UTC().Format(time.RFC3339Nano),
 		"metadata": map[string]any{
 			"fallback_title":  fallbackTitle,

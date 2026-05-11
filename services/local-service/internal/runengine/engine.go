@@ -177,6 +177,7 @@ type Engine struct {
 	taskOrder     []string
 	sessionOrder  []string
 	titleRefresh  uint64
+	titleCancels  map[string]context.CancelFunc
 	inspector     InspectorConfig
 	settings      map[string]any
 	notepadItems  []map[string]any
@@ -258,6 +259,7 @@ func newEngine(taskStore storage.TaskRunStore) (*Engine, error) {
 		tasks:         map[string]*TaskRecord{},
 		taskOrder:     []string{},
 		sessionOrder:  []string{},
+		titleCancels:  map[string]context.CancelFunc{},
 		notepadClaims: map[string]struct{}{},
 		inspector: InspectorConfig{
 			TaskSources:          []string{defaultSettingsTaskSourcePath()},
@@ -384,6 +386,7 @@ func (e *Engine) DeleteTask(taskID string) error {
 		}
 	}
 
+	e.cancelTitleRefreshLocked(taskID)
 	delete(e.tasks, taskID)
 	e.taskOrder = removeStringValue(e.taskOrder, taskID)
 	e.untrackSessionLocked(record.SessionID)
@@ -594,23 +597,26 @@ func (e *Engine) UpdateIntent(taskID, title string, intent map[string]any) (Task
 }
 
 // ReserveTitleRefresh records the latest async title-refresh attempt that is
-// allowed to update a task. Each new reservation invalidates older goroutines
-// so equal fallback titles cannot let stale model output win races.
-func (e *Engine) ReserveTitleRefresh(taskID, expectedTitle string) (uint64, bool) {
+// allowed to update a task and returns a cancellation-aware context tied to that
+// reservation. Each new reservation invalidates older goroutines so equal
+// fallback titles cannot let stale model output win races or keep spending model
+// quota after newer task state supersedes them.
+func (e *Engine) ReserveTitleRefresh(taskID, expectedTitle string) (uint64, context.Context, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	record, ok := e.tasks[taskID]
 	if !ok {
-		return 0, false
+		return 0, nil, false
 	}
 	if strings.TrimSpace(expectedTitle) == "" || strings.TrimSpace(record.Title) != strings.TrimSpace(expectedTitle) {
-		return 0, false
+		return 0, nil, false
 	}
 
-	e.titleRefresh++
-	record.TitleRefreshToken = e.titleRefresh
-	return record.TitleRefreshToken, true
+	e.reserveTitleRefreshLocked(record)
+	ctx, cancel := context.WithCancel(context.Background())
+	e.titleCancels[record.TaskID] = cancel
+	return record.TitleRefreshToken, ctx, true
 }
 
 // UpdateTitleIfCurrent applies an asynchronously generated title only when the
@@ -633,12 +639,21 @@ func (e *Engine) UpdateTitleIfCurrent(taskID, expectedTitle string, expectedToke
 	}
 
 	record.Title = title
+	e.finishTitleRefreshLocked(taskID, expectedToken)
 	record.UpdatedAt = e.now()
 	record.LatestEvent = e.buildEvent(record, "task.updated")
 	record.queueNotification("task.updated", taskUpdatedNotificationParams(record))
 	e.persistTaskLocked(record)
 
 	return record.clone(), true
+}
+
+// FinishTitleRefresh clears the live cancellation handle after an async title
+// refresh concludes without updating the task.
+func (e *Engine) FinishTitleRefresh(taskID string, expectedToken uint64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.finishTitleRefreshLocked(taskID, expectedToken)
 }
 
 // ReopenIntentConfirmation moves a reviewed task back into confirming_intent
@@ -2244,8 +2259,32 @@ func (e *Engine) reserveTitleRefreshLocked(record *TaskRecord) {
 	if e == nil || record == nil {
 		return
 	}
+	e.cancelTitleRefreshLocked(record.TaskID)
 	e.titleRefresh++
 	record.TitleRefreshToken = e.titleRefresh
+}
+
+func (e *Engine) cancelTitleRefreshLocked(taskID string) {
+	if e == nil {
+		return
+	}
+	cancel, ok := e.titleCancels[taskID]
+	if !ok {
+		return
+	}
+	delete(e.titleCancels, taskID)
+	cancel()
+}
+
+func (e *Engine) finishTitleRefreshLocked(taskID string, expectedToken uint64) {
+	if e == nil {
+		return
+	}
+	record, ok := e.tasks[taskID]
+	if !ok || expectedToken == 0 || record.TitleRefreshToken != expectedToken {
+		return
+	}
+	delete(e.titleCancels, taskID)
 }
 
 func tokenUsageInt(value any) int {
