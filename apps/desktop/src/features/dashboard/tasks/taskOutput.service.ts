@@ -5,6 +5,7 @@ import type {
   AgentTaskArtifactListResult,
   AgentTaskArtifactOpenParams,
   AgentTaskArtifactOpenResult,
+  DeliveryResult,
   DeliveryPayload,
   RequestMeta,
 } from "@cialloclaw/protocol";
@@ -48,6 +49,33 @@ export function isAllowedTaskOpenUrl(url: string): boolean {
     return parsed.protocol === "https:" || parsed.protocol === "http:";
   } catch {
     return false;
+  }
+}
+
+/**
+ * Auto-open should only run for delivery types that already have a stable
+ * renderer-to-OS or dashboard handoff. Bubble-like results stay on the current
+ * task surface even though they still use the formal delivery contract.
+ *
+ * @param deliveryResult Formal delivery result returned by task creation or replay.
+ * @returns Whether the renderer can safely auto-open the delivery target.
+ */
+export function shouldAutoOpenTaskDeliveryResult(
+  deliveryResult: DeliveryResult | null | undefined,
+): deliveryResult is DeliveryResult {
+  if (!deliveryResult) {
+    return false;
+  }
+
+  switch (deliveryResult.type) {
+    case "task_detail":
+    case "workspace_document":
+    case "open_file":
+    case "reveal_in_folder":
+    case "result_page":
+      return true;
+    default:
+      return false;
   }
 }
 
