@@ -13,6 +13,8 @@ type ShellBallBubbleZoneProps = {
   onConfirmIntentBubble?: (taskId: string) => void;
   onAcceptRecommendationBubble?: (bubbleId: string) => void;
   onIgnoreRecommendationBubble?: (bubbleId: string) => void;
+  onCancelTaskBubble?: (taskId: string) => void;
+  onModifyIntentBubble?: (taskId: string) => void;
 };
 
 export function ShellBallBubbleZone({
@@ -25,6 +27,8 @@ export function ShellBallBubbleZone({
   onConfirmIntentBubble,
   onAcceptRecommendationBubble,
   onIgnoreRecommendationBubble,
+  onCancelTaskBubble,
+  onModifyIntentBubble,
 }: ShellBallBubbleZoneProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);

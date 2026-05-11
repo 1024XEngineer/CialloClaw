@@ -76,8 +76,9 @@ export function getShellBallProcessingReturnState(regionActive: boolean): ShellB
 export function getShellBallInputBarMode(state: ShellBallVisualState): ShellBallInputBarMode {
   switch (state) {
     case "idle":
-      return "hidden";
+      return "interactive";
     case "hover_input":
+    case "confirming_intent":
       return "interactive";
     // Intent confirmation keeps the draft field editable so the user can send
     // a clarifying follow-up without leaving the current shell-ball flow.

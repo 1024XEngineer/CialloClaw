@@ -8,7 +8,7 @@ import (
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -361,7 +361,7 @@ type TaskRunRecord struct {
 	Citations         []map[string]any
 	AuditRecords      []map[string]any
 	MirrorReferences  []map[string]any
-	Snapshot          contextsvc.TaskContextSnapshot
+	Snapshot          taskcontext.TaskContextSnapshot
 	SecuritySummary   map[string]any
 	ApprovalRequest   map[string]any
 	PendingExecution  map[string]any
@@ -388,6 +388,8 @@ type TaskRunStore interface {
 	LoadTaskRuns(ctx context.Context) ([]TaskRunRecord, error)
 	GetTaskRun(ctx context.Context, taskID string) (TaskRunRecord, error)
 	LoadLegacyTaskRuns(ctx context.Context, structuredTaskIDs []string) ([]TaskRunRecord, error)
+	LoadLegacyTaskRunsByTaskIDs(ctx context.Context, taskIDs []string) ([]TaskRunRecord, error)
+	ListLegacyTaskRunsForTaskList(ctx context.Context, statusGroup, sortBy, sortOrder string, limit, offset int) ([]TaskRunRecord, int, error)
 }
 
 // TaskRecord describes one first-class tasks row aligned with the product layer.
@@ -450,6 +452,8 @@ type TaskStore interface {
 	DeleteTask(ctx context.Context, taskID string) error
 	GetTask(ctx context.Context, taskID string) (TaskRecord, error)
 	ListTasks(ctx context.Context, limit, offset int) ([]TaskRecord, int, error)
+	ListTasksByIDs(ctx context.Context, taskIDs []string) ([]TaskRecord, error)
+	ListTasksForTaskList(ctx context.Context, statusGroup, sortBy, sortOrder string, limit, offset int) ([]TaskRecord, int, error)
 	ListTasksBySession(ctx context.Context, sessionID string, limit, offset int) ([]TaskRecord, int, error)
 }
 

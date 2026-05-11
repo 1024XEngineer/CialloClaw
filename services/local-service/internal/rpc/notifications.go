@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 )
 
@@ -43,7 +44,40 @@ func requestRoutingHints(request requestEnvelope) (map[string]bool, string, stri
 }
 
 func shouldTrackStartedTask(method string) bool {
-	return method == "agent.task.start" || method == "agent.input.submit"
+	return method == methodAgentTaskStart || method == methodAgentInputSubmit
+}
+
+// shouldClaimResponseTaskOwnership scopes late response-based task ownership to
+// methods that legitimately create or discover the task at runtime.
+func shouldClaimResponseTaskOwnership(method string) bool {
+	return shouldTrackStartedTask(method)
+}
+
+func ownedTaskIDsForReplay(method string, trackedTaskIDs map[string]bool, response any) []string {
+	owned := map[string]bool{}
+	for taskID, tracked := range trackedTaskIDs {
+		trimmed := strings.TrimSpace(taskID)
+		if tracked && trimmed != "" {
+			owned[trimmed] = true
+		}
+	}
+	if shouldClaimResponseTaskOwnership(method) {
+		for _, taskID := range taskIDsFromResponse(response) {
+			trimmed := strings.TrimSpace(taskID)
+			if trimmed != "" {
+				owned[trimmed] = true
+			}
+		}
+	}
+	if len(owned) == 0 {
+		return nil
+	}
+	result := make([]string, 0, len(owned))
+	for taskID := range owned {
+		result = append(result, taskID)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func isLiveRuntimeMethod(method string) bool {

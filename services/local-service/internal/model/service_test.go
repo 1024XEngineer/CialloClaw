@@ -1,4 +1,3 @@
-// 该测试文件验证模型接入层行为。
 package model
 
 import (
@@ -12,7 +11,6 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 )
 
-// mockClient 定义当前模块的数据结构。
 type mockClient struct {
 	response GenerateTextResponse
 	err      error
@@ -57,7 +55,6 @@ func (s stubSecretStore) ResolveModelAPIKey(provider string) (string, error) {
 	return s.apiKey, nil
 }
 
-// GenerateText 处理当前模块的相关逻辑。
 func (m *mockClient) GenerateText(_ context.Context, request GenerateTextRequest) (GenerateTextResponse, error) {
 	m.called = true
 	m.request = request
@@ -81,7 +78,6 @@ func (m *mockToolCallingClient) GenerateToolCalls(_ context.Context, request Too
 	return m.response, nil
 }
 
-// TestNewServiceStoresConfig 验证NewServiceStoresConfig。
 func TestNewServiceStoresConfig(t *testing.T) {
 	cfg := config.ModelConfig{
 		Provider:             "openai_responses",
@@ -150,7 +146,6 @@ func TestNewServicePreservesConfiguredRetryBudgets(t *testing.T) {
 	}
 }
 
-// TestGenerateTextReturnsErrorWhenClientMissing 验证GenerateTextReturnsErrorWhenClientMissing。
 func TestGenerateTextReturnsErrorWhenClientMissing(t *testing.T) {
 	service := NewService(config.ModelConfig{}, nil)
 
@@ -160,7 +155,6 @@ func TestGenerateTextReturnsErrorWhenClientMissing(t *testing.T) {
 	}
 }
 
-// TestGenerateTextDelegatesToClient 验证GenerateTextDelegatesToClient。
 func TestGenerateTextDelegatesToClient(t *testing.T) {
 	client := &mockClient{
 		response: GenerateTextResponse{
@@ -237,7 +231,6 @@ func TestGenerateToolCallsDelegatesToToolCallingClient(t *testing.T) {
 	}
 }
 
-// TestValidateModelConfigRequiresProvider 验证ValidateModelConfigRequiresProvider。
 func TestValidateModelConfigRequiresProvider(t *testing.T) {
 	err := ValidateModelConfig(config.ModelConfig{})
 	if !errors.Is(err, ErrModelProviderRequired) {
@@ -245,7 +238,6 @@ func TestValidateModelConfigRequiresProvider(t *testing.T) {
 	}
 }
 
-// TestValidateModelConfigRejectsUnsupportedProvider 验证ValidateModelConfigRejectsUnsupportedProvider。
 func TestValidateModelConfigRejectsUnsupportedProvider(t *testing.T) {
 	err := ValidateModelConfig(config.ModelConfig{Provider: "unknown"})
 	if !errors.Is(err, ErrModelProviderUnsupported) {
@@ -301,7 +293,6 @@ func TestBuildProviderClientHandlesUnsupportedAndBuilderErrors(t *testing.T) {
 	}
 }
 
-// TestValidateModelConfigTrimsWhitespace 验证ValidateModelConfigTrimsWhitespace。
 func TestValidateModelConfigTrimsWhitespace(t *testing.T) {
 	err := ValidateModelConfig(config.ModelConfig{
 		Provider: "  openai_responses  ",
@@ -313,7 +304,6 @@ func TestValidateModelConfigTrimsWhitespace(t *testing.T) {
 	}
 }
 
-// TestNewServiceFromConfigBuildsOpenAIClient 验证NewServiceFromConfigBuildsOpenAIClient。
 func TestNewServiceFromConfigBuildsOpenAIClient(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -346,7 +336,6 @@ func TestNewServiceFromConfigBuildsOpenAIClient(t *testing.T) {
 	}
 }
 
-// TestNewServiceFromConfigUsesServiceConfigAPIKey 验证NewServiceFromConfigUsesServiceConfigAPIKey。
 func TestNewServiceFromConfigUsesServiceConfigAPIKey(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer model-config-key" {
@@ -377,7 +366,6 @@ func TestNewServiceFromConfigUsesServiceConfigAPIKey(t *testing.T) {
 	}
 }
 
-// TestGenerateTextResponseInvocationRecord 验证GenerateTextResponseInvocationRecord。
 func TestGenerateTextResponseInvocationRecord(t *testing.T) {
 	response := GenerateTextResponse{
 		TaskID:    "task_001",
@@ -408,7 +396,6 @@ func TestGenerateTextResponseInvocationRecord(t *testing.T) {
 	}
 }
 
-// TestNewServiceFromConfigUsesSecretSourceAPIKey 验证NewServiceFromConfigUsesSecretSourceAPIKey。
 func TestNewServiceFromConfigUsesSecretSourceAPIKey(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer secret-source-key" {
@@ -439,7 +426,6 @@ func TestNewServiceFromConfigUsesSecretSourceAPIKey(t *testing.T) {
 	}
 }
 
-// TestNewServiceFromConfigReturnsSecretSourceError 验证NewServiceFromConfigReturnsSecretSourceError。
 func TestNewServiceFromConfigReturnsSecretSourceError(t *testing.T) {
 	_, err := NewServiceFromConfig(ServiceConfig{
 		ModelConfig: config.ModelConfig{

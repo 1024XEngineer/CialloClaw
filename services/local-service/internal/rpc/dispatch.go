@@ -24,7 +24,7 @@ func (s *Server) dispatch(request requestEnvelope) any {
 		})
 	}
 
-	params, rpcErr := decodeParams(request.Params)
+	params, rpcErr := s.decodeMethodParams(request.Method, request.Params)
 	if rpcErr != nil {
 		return newErrorEnvelope(request.ID, rpcErr)
 	}
@@ -35,6 +35,13 @@ func (s *Server) dispatch(request requestEnvelope) any {
 	}
 
 	return newSuccessEnvelope(request.ID, data, s.nowRFC3339())
+}
+
+func (s *Server) decodeMethodParams(method string, rawParams []byte) (map[string]any, *rpcError) {
+	if spec, ok := s.methodSpecs[method]; ok {
+		return spec.Decode(rawParams)
+	}
+	return decodeParams(rawParams)
 }
 
 // nowRFC3339 returns the shared response timestamp format.

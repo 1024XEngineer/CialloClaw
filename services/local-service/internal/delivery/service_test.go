@@ -1,7 +1,11 @@
 // This test file covers delivery and persistence-plan assembly behavior.
 package delivery
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
+)
 
 // TestBuildStorageAndArtifactPlans verifies storage and artifact plans are
 // assembled together.
@@ -50,6 +54,37 @@ func TestBuildDeliveryResultWithTargetPath(t *testing.T) {
 	}
 	if artifacts[0]["title"] != "output.md" {
 		t.Fatalf("expected artifact title to follow target path base name, got %v", artifacts[0]["title"])
+	}
+}
+
+// TestBuildDeliveryResultForResultPage verifies result_page delivery resolves a
+// stable dashboard URL instead of a workspace path.
+func TestBuildDeliveryResultForResultPage(t *testing.T) {
+	service := NewService()
+	deliveryResult := service.BuildDeliveryResultWithTargetPath(
+		"task result/001",
+		"result_page",
+		"网页读取结果",
+		"结果已生成，正在打开结果页",
+		"ignored.md",
+	)
+
+	payload := deliveryResult["payload"].(map[string]any)
+	if payload["path"] != nil {
+		t.Fatalf("expected result_page delivery to skip workspace path, got %v", payload["path"])
+	}
+	if payload["url"] != "./dashboard.html#/tasks/delivery/task%20result%2F001" {
+		t.Fatalf("expected result_page delivery to expose stable dashboard url, got %v", payload["url"])
+	}
+	if payload["task_id"] != "task result/001" {
+		t.Fatalf("expected result_page delivery to preserve task id, got %v", payload["task_id"])
+	}
+
+	if artifacts := service.BuildArtifact("task result/001", "网页读取结果", deliveryResult); artifacts != nil {
+		t.Fatalf("expected result_page delivery to skip file artifacts, got %+v", artifacts)
+	}
+	if plan := service.BuildStorageWritePlan("task result/001", deliveryResult); plan != nil {
+		t.Fatalf("expected result_page delivery to skip workspace write plan, got %+v", plan)
 	}
 }
 
@@ -142,8 +177,12 @@ func TestBuildApprovalExecutionPlanRoutesByIntent(t *testing.T) {
 		t.Fatalf("expected translate plan to use bubble delivery, got %+v", translatePlan)
 	}
 	writePlan := service.BuildApprovalExecutionPlan("task_001", map[string]any{"name": "write_file"})
-	if writePlan["result_title"] != "文件写入结果" {
+	if writePlan["result_title"] != presentation.Text(presentation.MessageResultTitleWriteFile, nil) {
 		t.Fatalf("expected write_file title override, got %+v", writePlan)
+	}
+	summarizePlan := service.BuildApprovalExecutionPlan("task_001", map[string]any{"name": "summarize"})
+	if summarizePlan["result_title"] != presentation.Text(presentation.MessageResultTitleSummarize, nil) {
+		t.Fatalf("expected summarize approval title override, got %+v", summarizePlan)
 	}
 }
 

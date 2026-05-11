@@ -1,49 +1,14 @@
 // Package rpc routes stable JSON-RPC methods into the main orchestrator.
 package rpc
 
-import (
-	"strings"
-)
-
-// registerHandlers binds stable agent.* JSON-RPC methods to orchestrator entry
-// points.
+// registerHandlers binds stable agent.* JSON-RPC methods to their protocol
+// decoders and orchestrator entry points.
 func (s *Server) registerHandlers() {
-	s.handlers = map[string]methodHandler{
-		"agent.input.submit":                   s.handleAgentInputSubmit,
-		"agent.task.start":                     s.handleAgentTaskStart,
-		"agent.task.confirm":                   s.handleAgentTaskConfirm,
-		"agent.task.artifact.list":             s.handleAgentTaskArtifactList,
-		"agent.task.artifact.open":             s.handleAgentTaskArtifactOpen,
-		"agent.delivery.open":                  s.handleAgentDeliveryOpen,
-		"agent.recommendation.get":             s.handleAgentRecommendationGet,
-		"agent.recommendation.feedback.submit": s.handleAgentRecommendationFeedbackSubmit,
-		"agent.task.list":                      s.handleAgentTaskList,
-		"agent.task.detail.get":                s.handleAgentTaskDetailGet,
-		"agent.task.events.list":               s.handleAgentTaskEventsList,
-		"agent.task.tool_calls.list":           s.handleAgentTaskToolCallsList,
-		"agent.task.steer":                     s.handleAgentTaskSteer,
-		"agent.task.control":                   s.handleAgentTaskControl,
-		"agent.task_inspector.config.get":      s.handleAgentTaskInspectorConfigGet,
-		"agent.task_inspector.config.update":   s.handleAgentTaskInspectorConfigUpdate,
-		"agent.task_inspector.run":             s.handleAgentTaskInspectorRun,
-		"agent.notepad.list":                   s.handleAgentNotepadList,
-		"agent.notepad.update":                 s.handleAgentNotepadUpdate,
-		"agent.notepad.convert_to_task":        s.handleAgentNotepadConvertToTask,
-		"agent.dashboard.overview.get":         s.handleAgentDashboardOverviewGet,
-		"agent.dashboard.module.get":           s.handleAgentDashboardModuleGet,
-		"agent.mirror.overview.get":            s.handleAgentMirrorOverviewGet,
-		"agent.security.summary.get":           s.handleAgentSecuritySummaryGet,
-		"agent.security.audit.list":            s.handleAgentSecurityAuditList,
-		"agent.security.pending.list":          s.handleAgentSecurityPendingList,
-		"agent.security.restore_points.list":   s.handleAgentSecurityRestorePointsList,
-		"agent.security.restore.apply":         s.handleAgentSecurityRestoreApply,
-		"agent.security.respond":               s.handleAgentSecurityRespond,
-		"agent.settings.get":                   s.handleAgentSettingsGet,
-		"agent.settings.update":                s.handleAgentSettingsUpdate,
-		"agent.settings.model.validate":        s.handleAgentSettingsModelValidate,
-		"agent.plugin.runtime.list":            s.handleAgentPluginRuntimeList,
-		"agent.plugin.list":                    s.handleAgentPluginList,
-		"agent.plugin.detail.get":              s.handleAgentPluginDetailGet,
+	s.handlers = map[string]methodHandler{}
+	s.methodSpecs = map[string]methodSpec{}
+	for _, method := range s.stableMethodRegistry() {
+		s.handlers[method.Name] = method.Handle
+		s.methodSpecs[method.Name] = method.methodSpec
 	}
 }
 
@@ -73,7 +38,7 @@ func (s *Server) handleAgentInputSubmit(params map[string]any) (any, *rpcError) 
 
 // handleAgentTaskStart handles agent.task.start.
 func (s *Server) handleAgentTaskStart(params map[string]any) (any, *rpcError) {
-	data, err := s.orchestrator.StartTask(sanitizeTaskStartParams(params))
+	data, err := s.orchestrator.StartTask(params)
 	return wrapOrchestratorResult(data, err)
 }
 
@@ -260,23 +225,6 @@ func (s *Server) handleAgentPluginList(params map[string]any) (any, *rpcError) {
 func (s *Server) handleAgentPluginDetailGet(params map[string]any) (any, *rpcError) {
 	data, err := s.orchestrator.PluginDetailGet(params)
 	return wrapOrchestratorResult(data, err)
-}
-
-// sanitizeTaskStartParams strips any client-supplied intent payload so
-// agent.task.start continues to flow through the authoritative suggestion path.
-func sanitizeTaskStartParams(params map[string]any) map[string]any {
-	if len(params) == 0 {
-		return nil
-	}
-
-	sanitized := make(map[string]any, len(params))
-	for key, value := range params {
-		if strings.TrimSpace(key) == "intent" {
-			continue
-		}
-		sanitized[key] = value
-	}
-	return sanitized
 }
 
 // wrapOrchestratorResult maps orchestrator return values into the shared RPC

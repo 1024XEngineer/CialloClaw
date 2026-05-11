@@ -1,9 +1,9 @@
-package context
+package taskcontext
 
 import "testing"
 
 func TestServiceCaptureNormalizesNestedContext(t *testing.T) {
-	service := NewService()
+	service := NewCaptureService()
 
 	snapshot := service.Capture(map[string]any{
 		"source": "floating_ball",
@@ -71,7 +71,7 @@ func TestServiceCaptureNormalizesNestedContext(t *testing.T) {
 }
 
 func TestServiceCapturePrefersInputPageContextAndFlatFallbackSignals(t *testing.T) {
-	service := NewService()
+	service := NewCaptureService()
 
 	snapshot := service.Capture(map[string]any{
 		"source": "floating_ball",
@@ -133,7 +133,7 @@ func TestServiceCapturePrefersInputPageContextAndFlatFallbackSignals(t *testing.
 }
 
 func TestServiceSnapshotAndCaptureInferenceHelpers(t *testing.T) {
-	service := NewService()
+	service := NewCaptureService()
 	if snapshot := service.Snapshot(); snapshot["source"] != "desktop" {
 		t.Fatalf("expected snapshot descriptor to report desktop source, got %+v", snapshot)
 	}
@@ -157,7 +157,7 @@ func TestServiceSnapshotAndCaptureInferenceHelpers(t *testing.T) {
 	}
 }
 
-func TestContextPrimitiveHelpersCoverAdditionalBranches(t *testing.T) {
+func TestTaskContextPrimitiveHelpersCoverAdditionalBranches(t *testing.T) {
 	if values := stringSliceValue([]string{" demo ", "demo", "notes"}); len(values) != 2 || values[0] != "demo" || values[1] != "notes" {
 		t.Fatalf("expected []string branch to trim and dedupe, got %+v", values)
 	}

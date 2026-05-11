@@ -6,6 +6,7 @@ import type {
   AgentMirrorOverviewGetResult,
   AgentRecommendationFeedbackSubmitResult,
   AgentRecommendationGetResult,
+  AgentTaskConfirmResult,
   AgentTaskControlResult,
   AgentTaskDetailGetResult,
   AgentTaskListResult,
@@ -241,7 +242,7 @@ function createSecurityPendingList(): AgentSecurityPendingListResult {
   };
 }
 
-function readStringParam(params: unknown, key: "approval_id" | "task_id"): string | null {
+function readStringParam(params: unknown, key: "action" | "approval_id" | "task_id"): string | null {
   if (!params || typeof params !== "object") {
     return null;
   }
@@ -452,6 +453,55 @@ export async function startTask(_params?: unknown): Promise<AgentTaskStartResult
   };
 }
 
+export async function confirmTask(params?: unknown): Promise<AgentTaskConfirmResult> {
+  const taskId = readStringParam(params, "task_id") ?? "task_stub";
+  const confirmed = !!(params && typeof params === "object" && (params as { confirmed?: unknown }).confirmed === true);
+  const correctionText = params && typeof params === "object"
+    ? (params as { correction_text?: unknown }).correction_text
+    : undefined;
+  const hasCorrectionText = typeof correctionText === "string" && correctionText.trim() !== "";
+
+  if (hasCorrectionText) {
+    return {
+      task: {
+        ...createTask("confirming_intent", "intent_confirmation"),
+        task_id: taskId,
+        intent: {
+          name: "summarize",
+          arguments: {},
+        },
+      },
+      bubble_message: {
+        bubble_id: "bubble_confirm_stub",
+        task_id: taskId,
+        type: "intent_confirm",
+        text: "请确认你希望我如何处理当前内容。",
+        pinned: false,
+        hidden: false,
+        created_at: new Date().toISOString(),
+      },
+      delivery_result: null,
+    };
+  }
+
+  return {
+    task: {
+      ...createTask(confirmed ? "completed" : "cancelled", confirmed ? "completed" : "cancelled"),
+      task_id: taskId,
+    },
+    bubble_message: {
+      bubble_id: "bubble_confirm_stub",
+      task_id: taskId,
+      type: confirmed ? "result" : "status",
+      text: confirmed ? "The task confirmation was accepted." : "The task was cancelled.",
+      pinned: false,
+      hidden: false,
+      created_at: new Date().toISOString(),
+    },
+    delivery_result: confirmed ? createTaskDeliveryResult() : null,
+  };
+}
+
 export async function getDashboardOverview(_params?: unknown): Promise<AgentDashboardOverviewGetResult> {
   return {
     overview: {
@@ -529,12 +579,36 @@ export async function getTaskDetail(_params?: unknown): Promise<AgentTaskDetailG
   return createTaskDetailResult();
 }
 
-export async function controlTask(_params?: unknown): Promise<AgentTaskControlResult> {
+export async function controlTask(params?: unknown): Promise<AgentTaskControlResult> {
+  const taskId = readStringParam(params, "task_id") ?? "task_stub";
+  const action = readStringParam(params, "action") ?? "pause";
+
+  if (action === "cancel") {
+    return {
+      task: {
+        ...createTask("cancelled", "cancelled"),
+        task_id: taskId,
+      },
+      bubble_message: {
+        bubble_id: "bubble_control_stub",
+        task_id: taskId,
+        type: "status",
+        text: "The task was cancelled.",
+        pinned: false,
+        hidden: false,
+        created_at: new Date().toISOString(),
+      },
+    };
+  }
+
   return {
-    task: createTask("processing", "collect_input"),
+    task: {
+      ...createTask("processing", "collect_input"),
+      task_id: taskId,
+    },
     bubble_message: {
       bubble_id: "bubble_control_stub",
-      task_id: "task_stub",
+      task_id: taskId,
       type: "status",
       text: "The requested task control action was accepted.",
       pinned: false,

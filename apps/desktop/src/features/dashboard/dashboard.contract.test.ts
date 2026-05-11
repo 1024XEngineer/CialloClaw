@@ -195,6 +195,135 @@ function loadNotePageQueryModule() {
   );
 }
 
+function loadSourceNoteEditorModule() {
+  return withDesktopAliasRuntime((requireFn) => {
+    const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/notes/sourceNoteEditor.js");
+    delete requireFn.cache[modulePath];
+
+    return requireFn(modulePath) as {
+      createEmptySourceNoteEditorDraft: (sourcePath?: string | null) => {
+        agentSuggestion: string;
+        bucket: "upcoming" | "later" | "recurring_rule" | "closed";
+        checked: boolean;
+        createdAt: string;
+        dueAt: string;
+        effectiveScope: string;
+        endedAt: string;
+        extraMetadata: Array<{ key: string; value: string }>;
+        nextOccurrenceAt: string;
+        noteText: string;
+        prerequisite: string;
+        recentInstanceStatus: string;
+        repeatRule: string;
+        sourceLine: number | null;
+        sourcePath: string | null;
+        title: string;
+        updatedAt: string;
+      };
+      formatSourceNoteEditorContent: (draft: {
+        title: string;
+        noteText: string;
+      }) => string;
+      formatSourceNoteScheduleInputValue: (value: string | null | undefined) => string;
+      sanitizeSourceNoteBodyText: (
+        value: string | null | undefined,
+        options?: {
+          title?: string | null;
+        },
+      ) => string;
+      parseSourceNoteEditorBlocks: (note: {
+        content: string;
+        fileName: string;
+        modifiedAtMs: number | null;
+        path: string;
+        sourceRoot: string;
+        title: string;
+      }) => Array<{
+        agentSuggestion: string;
+        bucket: "upcoming" | "later" | "recurring_rule" | "closed";
+        checked: boolean;
+        createdAt: string;
+        dueAt: string;
+        effectiveScope: string;
+        endedAt: string;
+        extraMetadata: Array<{ key: string; value: string }>;
+        nextOccurrenceAt: string;
+        noteText: string;
+        prerequisite: string;
+        recentInstanceStatus: string;
+        repeatRule: string;
+        sourceLine: number | null;
+        sourcePath: string | null;
+        title: string;
+        updatedAt: string;
+      }>;
+      removeSourceNoteEditorBlock: (
+        note: {
+          content: string;
+          fileName: string;
+          modifiedAtMs: number | null;
+          path: string;
+          sourceRoot: string;
+          title: string;
+        },
+        draft: {
+          sourceLine: number | null;
+          title: string;
+        },
+      ) => {
+        content: string;
+        removed: boolean;
+      };
+      serializeSourceNoteEditorDraft: (draft: {
+        agentSuggestion: string;
+        bucket: "upcoming" | "later" | "recurring_rule" | "closed";
+        checked: boolean;
+        createdAt: string;
+        dueAt: string;
+        effectiveScope: string;
+        endedAt: string;
+        extraMetadata: Array<{ key: string; value: string }>;
+        nextOccurrenceAt: string;
+        noteText: string;
+        prerequisite: string;
+        recentInstanceStatus: string;
+        repeatRule: string;
+        sourceLine: number | null;
+        sourcePath: string | null;
+        title: string;
+        updatedAt: string;
+      }, now?: Date) => {
+        blockContent: string;
+        normalizedDraft: {
+          noteText: string;
+          title: string;
+        };
+      };
+      buildSourceNoteEditorDraftFromNote: (note: {
+        content: string;
+        fileName: string;
+        modifiedAtMs: number | null;
+        path: string;
+        sourceRoot: string;
+        title: string;
+      }, item: unknown) => {
+        noteText: string;
+        title: string;
+      };
+      updateSourceNoteEditorDraftContent: <TDraft extends {
+        checked: boolean;
+        noteText: string;
+        title: string;
+      }>(draft: TDraft, content: string) => TDraft;
+      resolveSourceNoteDraftBucketForSchedule: (schedule: {
+        dueAt: string;
+        repeatRule: string;
+      }) => "upcoming" | "later" | "recurring_rule" | "closed";
+      serializeSourceNoteScheduleInputValue: (value: string) => string;
+    };
+  });
+}
+
 type DashboardContractDesktopLocalPathOverrides = {
   openDesktopLocalPath?: (path: string) => Promise<void>;
   revealDesktopLocalPath?: (path: string) => Promise<void>;
@@ -204,12 +333,30 @@ type DashboardContractDesktopHostOverrides = {
   invoke?: (command: string, args?: Record<string, unknown>) => Promise<unknown> | unknown;
 };
 
+type DashboardContractWindowControllerOverrides = {
+  openOrFocusDesktopWindow?: (label: "dashboard" | "control-panel") => Promise<string> | string;
+};
+
+type DashboardContractWindowApiOverrides = {
+  getCurrentWindow?: () => {
+    emit: (eventName: string, payload?: unknown) => Promise<void> | void;
+    emitTo: (label: string, eventName: string, payload?: unknown) => Promise<void> | void;
+    label: string;
+  };
+};
+
 function loadNotePageServiceModule(desktopLocalPath?: DashboardContractDesktopLocalPathOverrides) {
   return withDesktopAliasRuntime((requireFn) => {
     const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/notes/notePage.service.js");
     delete requireFn.cache[modulePath];
 
     return requireFn(modulePath) as {
+      buildVisibleNoteText: (
+        value: string | null | undefined,
+        options?: {
+          title?: string | null;
+        },
+      ) => string;
       buildSourceNoteFallbackItems: (note: {
         content: string;
         fileName: string;
@@ -267,7 +414,11 @@ function loadNotePageServiceModule(desktopLocalPath?: DashboardContractDesktopLo
   }, undefined, desktopLocalPath);
 }
 
-function loadTaskOutputServiceModule(desktopLocalPath?: DashboardContractDesktopLocalPathOverrides) {
+function loadTaskOutputServiceModule(
+  desktopLocalPath?: DashboardContractDesktopLocalPathOverrides,
+  windowController?: DashboardContractWindowControllerOverrides,
+  windowApi?: DashboardContractWindowApiOverrides,
+) {
   return withDesktopAliasRuntime((requireFn) => {
     const modulePath = resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/tasks/taskOutput.service.js");
     delete requireFn.cache[modulePath];
@@ -302,16 +453,42 @@ function loadTaskOutputServiceModule(desktopLocalPath?: DashboardContractDesktop
           };
           taskId: string;
         }) => Promise<string | void> | string | void;
+        onOpenTaskDelivery?: (input: {
+          plan: {
+            mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+            taskId: string | null;
+            path: string | null;
+            url: string | null;
+            feedback: string;
+          };
+          taskId: string;
+        }) => Promise<string | void> | string | void;
       }) => Promise<string>;
     };
-  }, undefined, desktopLocalPath);
+  }, undefined, desktopLocalPath, undefined, windowController, windowApi);
 }
 
 function loadTaskPageMapperModule() {
   return withDesktopAliasRuntime((requireFn) =>
     requireFn(resolve(desktopRoot, ".cache/dashboard-tests/features/dashboard/tasks/taskPage.mapper.js")) as {
       canTaskAcceptSteering: (task: Task) => boolean;
+      getTaskRunwayTone: (status: Task["status"]) => "departure" | "holding" | "irregular" | "archive";
       getTaskPrimaryActions: (task: Task, detail: AgentTaskDetailGetResult) => Array<{ action: string; label: string; tooltip: string }>;
+    },
+  );
+}
+
+function loadNotePageMapperModule() {
+  return withDesktopAliasRuntime((requireFn) =>
+    requireFn(resolve(desktopRoot, "src/features/dashboard/notes/notePage.mapper.ts")) as {
+      describeNotePreview: (
+        item: { bucket: "upcoming" | "later" | "recurring_rule" | "closed" },
+        experience: { isRecurringEnabled?: boolean; repeatRule?: string; previewStatus?: string; timeHint: string },
+      ) => string;
+      formatNoteBoardTimeHint: (
+        item: { bucket: "upcoming" | "later" | "recurring_rule" | "closed" },
+        experience: { isRecurringEnabled?: boolean; timeHint: string },
+      ) => string;
     },
   );
 }
@@ -397,16 +574,62 @@ function loadNoteSourceServiceModule(
     (requireFn) => {
       const modulePath = resolve(desktopRoot, "src/features/dashboard/notes/noteSource.service.ts");
       const settingsModulePath = resolve(desktopRoot, ".cache/dashboard-tests/services/settingsService.js");
+      const settingsSnapshotModulePath = resolve(desktopRoot, ".cache/dashboard-tests/platform/desktopSettingsSnapshot.js");
       const runtimeDefaultsModulePath = resolve(desktopRoot, ".cache/dashboard-tests/platform/desktopRuntimeDefaults.js");
       const sourceNotesModulePath = resolve(desktopRoot, "src/platform/desktopSourceNotes.ts");
       delete requireFn.cache[modulePath];
       delete requireFn.cache[settingsModulePath];
+      delete requireFn.cache[settingsSnapshotModulePath];
       delete requireFn.cache[runtimeDefaultsModulePath];
       delete requireFn.cache[sourceNotesModulePath];
 
       return requireFn(modulePath) as {
         loadNoteSourceConfig: () => Promise<{
           task_sources: string[];
+        }>;
+        loadNoteSourceSnapshot: (taskSources: string[]) => Promise<{
+          defaultSourceRoot: string | null;
+          notes: Array<{
+            content: string;
+            fileName: string;
+            modifiedAtMs: number | null;
+            path: string;
+            sourceRoot: string;
+            title: string;
+          }>;
+          sourceRoots: string[];
+        }>;
+        loadNoteSourceIndex: (taskSources: string[]) => Promise<{
+          defaultSourceRoot: string | null;
+          notes: Array<{
+            fileName: string;
+            modifiedAtMs: number | null;
+            path: string;
+            sizeBytes: number;
+            sourceRoot: string;
+          }>;
+          sourceRoots: string[];
+        }>;
+        createNoteSource: (taskSources: string[], content: string) => Promise<{
+          content: string;
+          fileName: string;
+          modifiedAtMs: number | null;
+          path: string;
+          sourceRoot: string;
+          title: string;
+        }>;
+        saveNoteSource: (taskSources: string[], path: string, content: string) => Promise<{
+          content: string;
+          fileName: string;
+          modifiedAtMs: number | null;
+          path: string;
+          sourceRoot: string;
+          title: string;
+        }>;
+        runNoteSourceInspection: (taskSources: string[], reason: string) => Promise<{
+          accepted_sources?: string[];
+          ok?: boolean;
+          reason?: string;
         }>;
       };
     },
@@ -1047,6 +1270,7 @@ type DashboardContractRpcMethodOverrides = {
   convertNotepadToTask?: (params: AgentNotepadConvertToTaskParams) => Promise<AgentNotepadConvertToTaskResult>;
   getDashboardModule?: (params: unknown) => Promise<unknown>;
   getDashboardOverview?: (params: unknown) => Promise<unknown>;
+  getMirrorOverview?: (params: unknown) => Promise<unknown>;
   getRecommendations?: (params: unknown) => Promise<unknown>;
   getMirrorOverviewDetailed?: (params: unknown) => Promise<unknown>;
   getSecuritySummary?: (params: unknown) => Promise<unknown>;
@@ -1076,18 +1300,24 @@ function withDesktopAliasRuntime<T>(
   rpcMethods?: DashboardContractRpcMethodOverrides,
   desktopLocalPath?: DashboardContractDesktopLocalPathOverrides,
   desktopHost?: DashboardContractDesktopHostOverrides,
+  windowController?: DashboardContractWindowControllerOverrides,
+  windowApi?: DashboardContractWindowApiOverrides,
 ): Promise<T>;
 function withDesktopAliasRuntime<T>(
   callback: (requireFn: NodeRequire) => T,
   rpcMethods?: DashboardContractRpcMethodOverrides,
   desktopLocalPath?: DashboardContractDesktopLocalPathOverrides,
   desktopHost?: DashboardContractDesktopHostOverrides,
+  windowController?: DashboardContractWindowControllerOverrides,
+  windowApi?: DashboardContractWindowApiOverrides,
 ): T;
 function withDesktopAliasRuntime<T>(
   callback: (requireFn: NodeRequire) => T | Promise<T>,
   rpcMethods?: DashboardContractRpcMethodOverrides,
   desktopLocalPath?: DashboardContractDesktopLocalPathOverrides,
   desktopHost?: DashboardContractDesktopHostOverrides,
+  windowController?: DashboardContractWindowControllerOverrides,
+  windowApi?: DashboardContractWindowApiOverrides,
 ): T | Promise<T> {
   const NodeModule = require("node:module") as {
     _load: (request: string, parent: unknown, isMain: boolean) => unknown;
@@ -1164,6 +1394,18 @@ function withDesktopAliasRuntime<T>(
       };
     }
 
+    if (request === "@tauri-apps/api/window") {
+      return {
+        getCurrentWindow:
+          windowApi?.getCurrentWindow ??
+          (() => ({
+            label: "dashboard",
+            emit: () => Promise.resolve(),
+            emitTo: () => Promise.resolve(),
+          })),
+      };
+    }
+
     if (request === "@/rpc/methods") {
       return {
         controlTask:
@@ -1190,6 +1432,9 @@ function withDesktopAliasRuntime<T>(
         getDashboardOverview:
           rpcMethods?.getDashboardOverview ??
           (() => Promise.reject(new Error("getDashboardOverview should not run in dashboard contract tests"))),
+        getMirrorOverview:
+          rpcMethods?.getMirrorOverview ??
+          (() => Promise.reject(new Error("getMirrorOverview should not run in dashboard contract tests"))),
         getRecommendations:
           rpcMethods?.getRecommendations ??
           (() => Promise.reject(new Error("getRecommendations should not run in dashboard contract tests"))),
@@ -1282,6 +1527,14 @@ function withDesktopAliasRuntime<T>(
         revealDesktopLocalPath:
           desktopLocalPath?.revealDesktopLocalPath ??
           (() => Promise.resolve()),
+      };
+    }
+
+    if (request === "@/platform/windowController") {
+      return {
+        openOrFocusDesktopWindow:
+          windowController?.openOrFocusDesktopWindow ??
+          (() => Promise.resolve("dashboard")),
       };
     }
 
@@ -1770,6 +2023,46 @@ test("dashboard home no longer replays mock summon or voice presets when live re
   assert.match(dashboardHomeSource, /data\.loadWarnings\.length > 0/);
 });
 
+test("dashboard event panel routes task-detail actions through the shared navigation helper", () => {
+  const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/components/DashboardEventPanel.tsx"), "utf8");
+
+  assert.match(panelSource, /navigateToDashboardTaskDetail/);
+  assert.match(panelSource, /target\?\.kind === "task_detail"/);
+  assert.match(panelSource, /target\?\.kind === "mirror_detail"/);
+  assert.match(panelSource, /activeDetailKey: target\.activeDetailKey/);
+  assert.match(panelSource, /resolvePrimaryActionLabel/);
+  assert.match(panelSource, /activeState\.navigationTarget\?\.label/);
+  assert.match(panelSource, /filterDistinctContextItems/);
+  assert.match(panelSource, /filterDistinctSignals/);
+  assert.match(panelSource, /buildMetaPills/);
+  assert.doesNotMatch(panelSource, /这是首页事件舱/);
+});
+
+test("dashboard home randomizes summons while preferring a different module when alternatives exist", () => {
+  const dashboardHomeSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/DashboardHome.tsx"), "utf8");
+
+  assert.match(dashboardHomeSource, /function pickNextSummonIndex\(/);
+  assert.match(dashboardHomeSource, /function buildSummonTemplateSignature\(/);
+  assert.match(dashboardHomeSource, /function buildNavigationTargetSignature/);
+  assert.match(dashboardHomeSource, /if \(previousIndex < 0 \|\| previousModule === null\) \{/);
+  assert.match(dashboardHomeSource, /return 0;/);
+  assert.match(dashboardHomeSource, /candidate\.module !== previousModule/);
+  assert.match(dashboardHomeSource, /const pool = candidateIndexes\.length > 0 \? candidateIndexes : fallbackIndexes/);
+  assert.match(dashboardHomeSource, /Math\.floor\(Math\.random\(\) \* pool\.length\)/);
+  assert.match(dashboardHomeSource, /lastSummonModuleRef\.current = template\.module/);
+  assert.match(dashboardHomeSource, /const summonTemplatesRef = useRef\(data\.summonTemplates\)/);
+  assert.match(dashboardHomeSource, /const summonTemplateSignature = buildSummonTemplateSignature\(data\.summonTemplates\)/);
+  assert.match(dashboardHomeSource, /const templates = summonTemplatesRef\.current/);
+  assert.match(dashboardHomeSource, /summonTemplatesRef\.current = data\.summonTemplates/);
+  assert.match(dashboardHomeSource, /target\.taskId/);
+  assert.match(dashboardHomeSource, /target\.focusMemoryId \?\? ""/);
+  assert.match(dashboardHomeSource, /buildNavigationTargetSignature\(template\.expandedState\?\.navigationTarget\)/);
+  assert.match(dashboardHomeSource, /\}, \[data\.summonTemplates\.length, scheduleSummon, summonTemplateSignature\]\);/);
+  assert.match(dashboardHomeSource, /const closeActiveOverlay = useCallback\(\(\) => \{/);
+  assert.match(dashboardHomeSource, /if \(event\.key === "Escape" && \(activeStateKey \|\| activeExpandedState\)\) \{/);
+  assert.match(dashboardHomeSource, /onClose=\{closeActiveOverlay\}/);
+});
+
 test("mirror page stays RPC-only instead of exposing a page-level mock toggle", () => {
   const mirrorAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/MirrorApp.tsx"), "utf8");
 
@@ -1932,27 +2225,44 @@ test("task context links back into mirror detail state instead of plain text dea
 });
 
 test("task page keeps waiting-auth anchors and routes follow-up steering through the detail panel", () => {
-  const { canTaskAcceptSteering, getTaskPrimaryActions } = loadTaskPageMapperModule();
+  const { canTaskAcceptSteering, getTaskPrimaryActions, getTaskRunwayTone } = loadTaskPageMapperModule();
+  const confirmingIntentTask = createTask({ status: "confirming_intent", current_step: "intent_confirmation", intent: { name: "summarize", arguments: {} } });
   const waitingAuthTask = createTask({ status: "waiting_auth" });
   const waitingInputTask = createTask({ status: "waiting_input" });
   const processingPromptTask = createTask({ status: "processing", current_step: "generate_output", intent: { name: "agent_loop", arguments: {} } });
   const processingLoopTask = createTask({ status: "processing", current_step: "agent_loop", intent: { name: "agent_loop", arguments: {} } });
   const mapperSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskPage.mapper.ts"), "utf8");
   const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");
+  const taskServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskPage.service.ts"), "utf8");
   const taskDetailPanelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
 
+  assert.equal(canTaskAcceptSteering(confirmingIntentTask), false);
   assert.equal(canTaskAcceptSteering(waitingAuthTask), true);
   assert.equal(canTaskAcceptSteering(waitingInputTask), false);
   assert.equal(canTaskAcceptSteering(processingPromptTask), false);
   assert.equal(canTaskAcceptSteering(processingLoopTask), true);
+  assert.equal(getTaskRunwayTone(confirmingIntentTask.status), "holding");
+  assert.equal(getTaskRunwayTone(waitingAuthTask.status), "holding");
+  assert.equal(getTaskRunwayTone(processingPromptTask.status), "departure");
+  assert.deepEqual(
+    getTaskPrimaryActions(confirmingIntentTask, createDetail({ approval_request: null, security_summary: { latest_restore_point: null, pending_authorizations: 0, risk_level: "yellow", security_status: "normal" }, task: confirmingIntentTask })).map((action) => action.action),
+    ["cancel", "open-safety"],
+  );
   assert.equal(getTaskPrimaryActions(waitingAuthTask, createDetail({ approval_request: null, security_summary: { latest_restore_point: null, pending_authorizations: 0, risk_level: "yellow", security_status: "normal" }, task: waitingAuthTask })).at(-1)?.label, "安全详情");
   assert.deepEqual(
     getTaskPrimaryActions(waitingInputTask, createDetail({ approval_request: null, security_summary: { latest_restore_point: null, pending_authorizations: 0, risk_level: "yellow", security_status: "normal" }, task: waitingInputTask })).map((action) => action.action),
     ["cancel", "open-safety"],
   );
+  assert.match(mapperSource, /title: "等待确认"/);
+  assert.match(taskServiceSource, /等待确认当前处理方式后继续执行。/);
   assert.doesNotMatch(mapperSource, /当前任务还在等待补充输入，如需修改或补充，请到悬浮球继续处理。/);
+  assert.match(taskPageSource, /getTaskRunwayTone\(item\.task\.status\) === "departure"/);
+  assert.match(taskPageSource, /getTaskRunwayTone\(item\.task\.status\) === "holding"/);
+  assert.doesNotMatch(taskPageSource, /item\.task\.status === "confirming_intent" \|\| item\.task\.status === "processing"/);
   assert.match(taskPageSource, /onSteerTask=\{handleSteerTask\}/);
-  assert.match(taskDetailPanelSource, /const canSteerTask = canTaskAcceptSteering\(task\)/);
+  assert.match(taskDetailPanelSource, /const canSteerTask = task \? canTaskAcceptSteering\(task\) : false;/);
+  assert.match(taskDetailPanelSource, /当前任务仍在等待确认处理方式；确认后才会开放正式 `agent\.task\.steer` 追加要求。/);
+  assert.match(taskDetailPanelSource, /当前任务还在等待确认处理方式，确认后才能继续追加要求。/);
   assert.match(taskDetailPanelSource, /placeholder=\{steeringPlaceholder\}/);
 });
 
@@ -2552,6 +2862,7 @@ test("note source config prefers hydrated unix task sources over legacy workspac
   });
 
   try {
+    const syncedTaskSources: string[][] = [];
     const { loadNoteSourceConfig } = loadNoteSourceServiceModule(
       {
         getTaskInspectorConfig: async () => ({
@@ -2559,18 +2870,28 @@ test("note source config prefers hydrated unix task sources over legacy workspac
         }),
       },
       {
-        invoke: async (command) => {
-          assert.equal(command, "desktop_get_runtime_defaults");
-          return {
-            workspace_path: "/Users/runtime/CialloClaw/workspace",
-            task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
-          };
+        invoke: async (command, args) => {
+          if (command === "desktop_get_runtime_defaults") {
+            return {
+              workspace_path: "/Users/runtime/CialloClaw/workspace",
+              task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+            };
+          }
+
+          if (command === "desktop_sync_settings_snapshot") {
+            const settings = args?.settings as { task_automation?: { task_sources?: string[] } } | undefined;
+            syncedTaskSources.push(settings?.task_automation?.task_sources ?? []);
+            return undefined;
+          }
+
+          throw new Error(`unexpected desktop command: ${command}`);
         },
       },
     );
 
     const config = await loadNoteSourceConfig();
     assert.deepEqual(config.task_sources, ["/Users/runtime/CialloClaw/workspace/todos"]);
+    assert.deepEqual(syncedTaskSources, [["/Users/runtime/CialloClaw/workspace/todos"]]);
   } finally {
     if (originalWindow === undefined) {
       Reflect.deleteProperty(globalThis, "window");
@@ -2678,6 +2999,68 @@ test("note source config keeps remote task sources when cached settings are expl
   }
 });
 
+test("note source config syncs resolved task sources into the desktop host cache", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+  const syncedTaskSources: string[][] = [];
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    const { loadNoteSourceConfig } = loadNoteSourceServiceModule(
+      {
+        getTaskInspectorConfig: async () => ({
+          task_sources: ["workspace/review"],
+        }),
+      },
+      {
+        invoke: async (command, args) => {
+          if (command === "desktop_get_runtime_defaults") {
+            return {
+              workspace_path: "/Users/runtime/CialloClaw/workspace",
+              task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+            };
+          }
+
+          if (command === "desktop_sync_settings_snapshot") {
+            const settings = args?.settings as { task_automation?: { task_sources?: string[] } } | undefined;
+            syncedTaskSources.push(settings?.task_automation?.task_sources ?? []);
+            return undefined;
+          }
+
+          throw new Error(`unexpected desktop command: ${command}`);
+        },
+      },
+    );
+
+    const config = await loadNoteSourceConfig();
+    assert.deepEqual(config.task_sources, ["workspace/review"]);
+    assert.deepEqual(syncedTaskSources, [["workspace/review"]]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
 test("note source config surfaces rpc transport failures with the localized retry copy", async () => {
   const originalWindow = globalThis.window;
   const storage = new Map<string, string>();
@@ -2716,6 +3099,68 @@ test("note source config surfaces rpc transport failures with the localized retr
   }
 });
 
+test("note source config falls back to cached task sources when the backend rejects a missing default source", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    const syncedTaskSources: string[][] = [];
+    const { loadNoteSourceConfig } = loadNoteSourceServiceModule(
+      {
+        getTaskInspectorConfig: async () => {
+          throw new Error("task inspection source not found: /Users/runtime/CialloClaw/workspace/todos");
+        },
+      },
+      {
+        invoke: async (command, args) => {
+          if (command === "desktop_get_runtime_defaults") {
+            return {
+              workspace_path: "/Users/runtime/CialloClaw/workspace",
+              task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+            };
+          }
+
+          if (command === "desktop_sync_settings_snapshot") {
+            const settings = args?.settings as { task_automation?: { task_sources?: string[] } } | undefined;
+            syncedTaskSources.push(settings?.task_automation?.task_sources ?? []);
+            return undefined;
+          }
+
+          throw new Error(`unexpected desktop command: ${command}`);
+        },
+      },
+    );
+
+    const config = await loadNoteSourceConfig();
+    assert.deepEqual(config.task_sources, ["/Users/runtime/CialloClaw/workspace/todos"]);
+    assert.deepEqual(syncedTaskSources, [["/Users/runtime/CialloClaw/workspace/todos"]]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
 test("note source config prefers cached task sources when the backend returns an empty list", async () => {
   const originalWindow = globalThis.window;
   const storage = new Map<string, string>();
@@ -2739,6 +3184,7 @@ test("note source config prefers cached task sources when the backend returns an
   });
 
   try {
+    const syncedTaskSources: string[][] = [];
     const { loadNoteSourceConfig } = loadNoteSourceServiceModule(
       {
         getTaskInspectorConfig: async () => ({
@@ -2746,15 +3192,301 @@ test("note source config prefers cached task sources when the backend returns an
         }),
       },
       {
-        invoke: async () => ({
-          workspace_path: "/Users/runtime/CialloClaw/workspace",
-          task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
-        }),
+        invoke: async (command, args) => {
+          if (command === "desktop_get_runtime_defaults") {
+            return {
+              workspace_path: "/Users/runtime/CialloClaw/workspace",
+              task_sources: ["/Users/runtime/CialloClaw/workspace/todos"],
+            };
+          }
+
+          if (command === "desktop_sync_settings_snapshot") {
+            const settings = args?.settings as { task_automation?: { task_sources?: string[] } } | undefined;
+            syncedTaskSources.push(settings?.task_automation?.task_sources ?? []);
+            return undefined;
+          }
+
+          throw new Error(`unexpected desktop command: ${command}`);
+        },
       },
     );
 
     const config = await loadNoteSourceConfig();
     assert.deepEqual(config.task_sources, ["/Users/runtime/CialloClaw/workspace/todos"]);
+    assert.deepEqual(syncedTaskSources, [["/Users/runtime/CialloClaw/workspace/todos"]]);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("note source snapshot and index retry with runtime defaults after stale source path failures", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const staleSource = "C:/Users/33721/AppData/Local/CialloClaw/workspace/todos";
+  const runtimeSource = "D:/runtime/CialloClaw/workspace/todos";
+  const syncedTaskSources: string[][] = [];
+  const snapshotCalls: string[][] = [];
+  const indexCalls: string[][] = [];
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem(
+      "cialloclaw.settings",
+      JSON.stringify({
+        settings: {
+          task_automation: {
+            task_sources: [staleSource],
+          },
+        },
+      }),
+    );
+
+    const { loadNoteSourceIndex, loadNoteSourceSnapshot } = loadNoteSourceServiceModule(
+      undefined,
+      {
+        invoke: async (command, args) => {
+          if (command === "desktop_get_runtime_defaults") {
+            return {
+              workspace_path: "D:/runtime/CialloClaw/workspace",
+              task_sources: [runtimeSource],
+            };
+          }
+
+          if (command === "desktop_sync_settings_snapshot") {
+            const settings = args?.settings as { task_automation?: { task_sources?: string[] } } | undefined;
+            syncedTaskSources.push(settings?.task_automation?.task_sources ?? []);
+            return undefined;
+          }
+
+          if (command === "desktop_load_source_notes") {
+            const sources = (args?.sources as string[] | undefined) ?? [];
+            snapshotCalls.push(sources);
+            if (sources[0] === staleSource) {
+              throw new Error(`task inspection source not found: ${staleSource}`);
+            }
+
+            return {
+              default_source_root: runtimeSource,
+              notes: [
+                {
+                  content: "Runtime note",
+                  file_name: "notes.md",
+                  modified_at_ms: 123,
+                  path: `${runtimeSource}/notes.md`,
+                  source_root: runtimeSource,
+                  title: "notes",
+                },
+              ],
+              source_roots: sources,
+            };
+          }
+
+          if (command === "desktop_load_source_note_index") {
+            const sources = (args?.sources as string[] | undefined) ?? [];
+            indexCalls.push(sources);
+            if (sources[0] === staleSource) {
+              throw new Error(`task inspection source not found: ${staleSource}`);
+            }
+
+            return {
+              default_source_root: runtimeSource,
+              notes: [
+                {
+                  file_name: "notes.md",
+                  modified_at_ms: 123,
+                  path: `${runtimeSource}/notes.md`,
+                  size_bytes: 64,
+                  source_root: runtimeSource,
+                },
+              ],
+              source_roots: sources,
+            };
+          }
+
+          throw new Error(`unexpected desktop command: ${command}`);
+        },
+      },
+    );
+
+    const snapshot = await loadNoteSourceSnapshot([staleSource]);
+    const index = await loadNoteSourceIndex([staleSource]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.deepEqual(snapshotCalls, [[staleSource], [runtimeSource]]);
+    assert.deepEqual(indexCalls, [[staleSource], [runtimeSource]]);
+    assert.equal(snapshot.defaultSourceRoot, runtimeSource);
+    assert.deepEqual(snapshot.sourceRoots, [runtimeSource]);
+    assert.equal(snapshot.notes[0]?.path, `${runtimeSource}/notes.md`);
+    assert.equal(index.defaultSourceRoot, runtimeSource);
+    assert.deepEqual(index.sourceRoots, [runtimeSource]);
+    assert.equal(index.notes[0]?.sourceRoot, runtimeSource);
+
+    const savedSettings = JSON.parse(localStorage.getItem("cialloclaw.settings") ?? "{}") as {
+      settings?: { task_automation?: { task_sources?: string[] } };
+    };
+    assert.deepEqual(savedSettings.settings?.task_automation?.task_sources, [runtimeSource]);
+    assert.equal(
+      syncedTaskSources.some((sources) => JSON.stringify(sources) === JSON.stringify([runtimeSource])),
+      true,
+    );
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("note source create, save, and inspection retry with runtime defaults after stale source path failures", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const staleSource = "C:/Users/33721/AppData/Local/CialloClaw/workspace/todos";
+  const runtimeSource = "D:/runtime/CialloClaw/workspace/todos";
+  const createCalls: string[][] = [];
+  const saveCalls: string[][] = [];
+  const inspectionCalls: string[][] = [];
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    localStorage.setItem(
+      "cialloclaw.settings",
+      JSON.stringify({
+        settings: {
+          task_automation: {
+            task_sources: [staleSource],
+          },
+        },
+      }),
+    );
+
+    const { createNoteSource, runNoteSourceInspection, saveNoteSource } = loadNoteSourceServiceModule(
+      {
+        runTaskInspector: async (params) => {
+          const request = params as { reason: string; target_sources: string[] };
+          inspectionCalls.push(request.target_sources);
+          if (request.target_sources[0] === staleSource) {
+            throw new Error(`task inspection source not found: ${staleSource}`);
+          }
+
+          return {
+            accepted_sources: request.target_sources,
+            ok: true,
+            reason: request.reason,
+          };
+        },
+      },
+      {
+        invoke: async (command, args) => {
+          if (command === "desktop_get_runtime_defaults") {
+            return {
+              workspace_path: "D:/runtime/CialloClaw/workspace",
+              task_sources: [runtimeSource],
+            };
+          }
+
+          if (command === "desktop_sync_settings_snapshot") {
+            return undefined;
+          }
+
+          if (command === "desktop_create_source_note") {
+            const sources = (args?.sources as string[] | undefined) ?? [];
+            createCalls.push(sources);
+            if (sources[0] === staleSource) {
+              throw new Error(`task inspection source not found: ${staleSource}`);
+            }
+
+            return {
+              content: args?.content,
+              file_name: "notes.md",
+              modified_at_ms: 456,
+              path: `${runtimeSource}/notes.md`,
+              source_root: runtimeSource,
+              title: "notes",
+            };
+          }
+
+          if (command === "desktop_save_source_note") {
+            const sources = (args?.sources as string[] | undefined) ?? [];
+            saveCalls.push(sources);
+            if (sources[0] === staleSource) {
+              throw new Error(`task inspection source not found: ${staleSource}`);
+            }
+
+            return {
+              content: args?.content,
+              file_name: "notes.md",
+              modified_at_ms: 789,
+              path: args?.path,
+              source_root: runtimeSource,
+              title: "notes",
+            };
+          }
+
+          throw new Error(`unexpected desktop command: ${command}`);
+        },
+      },
+    );
+
+    const createdNote = await createNoteSource([staleSource], "New note");
+    const savedNote = await saveNoteSource([staleSource], `${runtimeSource}/notes.md`, "Updated note");
+    const inspectionResult = await runNoteSourceInspection([staleSource], "manual refresh");
+
+    assert.deepEqual(createCalls, [[staleSource], [runtimeSource]]);
+    assert.deepEqual(saveCalls, [[staleSource], [runtimeSource]]);
+    assert.deepEqual(inspectionCalls, [[staleSource], [runtimeSource]]);
+    assert.equal(createdNote.sourceRoot, runtimeSource);
+    assert.equal(createdNote.content, "New note");
+    assert.equal(savedNote.path, `${runtimeSource}/notes.md`);
+    assert.equal(savedNote.content, "Updated note");
+    assert.deepEqual(inspectionResult, {
+      accepted_sources: [runtimeSource],
+      ok: true,
+      reason: "manual refresh",
+    });
+
+    const savedSettings = JSON.parse(localStorage.getItem("cialloclaw.settings") ?? "{}") as {
+      settings?: { task_automation?: { task_sources?: string[] } };
+    };
+    assert.deepEqual(savedSettings.settings?.task_automation?.task_sources, [runtimeSource]);
   } finally {
     if (originalWindow === undefined) {
       Reflect.deleteProperty(globalThis, "window");
@@ -3068,8 +3800,9 @@ test("dashboard settings mutation persists rpc-effective settings into the local
 test("control panel workspace section opens the trusted runtime directory instead of editing draft paths", () => {
   const controlPanelAppSource = readFileSync(resolve(desktopRoot, "src/features/control-panel/ControlPanelApp.tsx"), "utf8");
   assert.match(controlPanelAppSource, /loadDesktopRuntimeDefaultsSnapshot/);
-  assert.match(controlPanelAppSource, /openDesktopLocalPath/);
+  assert.match(controlPanelAppSource, /openDesktopRuntimeWorkspaceDirectory/);
   assert.match(controlPanelAppSource, /const handleOpenCurrentWorkspaceDirectory = async \(\) =>/);
+  assert.match(controlPanelAppSource, /await openDesktopRuntimeWorkspaceDirectory\(\);/);
   assert.match(controlPanelAppSource, /runtimeWorkspacePathLabel/);
   assert.match(controlPanelAppSource, /打开当前目录/);
   assert.doesNotMatch(controlPanelAppSource, /value=\{draft\.settings\.general\.download\.workspace_path\}/);
@@ -5199,6 +5932,30 @@ test("task output helpers normalize open actions from existing rpc contracts", a
   );
 });
 
+test("task delivery navigation helpers keep dashboard result-page hrefs stable", async () => {
+  await withDesktopAliasRuntime((requireFn) => {
+    const navigationModule = requireFn(resolve(desktopRoot, "src/features/dashboard/tasks/taskDeliveryNavigation.ts")) as {
+      isDashboardTaskDeliveryHref: (url: string) => boolean;
+      resolveDashboardTaskDeliveryRouteHref: (taskId: string) => string;
+      resolveDashboardTaskDeliveryRoutePath: (taskId: string) => string;
+    };
+
+    assert.equal(
+      navigationModule.resolveDashboardTaskDeliveryRoutePath("task result/001"),
+      "/tasks/delivery/task%20result%2F001",
+    );
+    assert.equal(
+      navigationModule.resolveDashboardTaskDeliveryRouteHref("task result/001"),
+      "./dashboard.html#/tasks/delivery/task%20result%2F001",
+    );
+    assert.equal(
+      navigationModule.isDashboardTaskDeliveryHref("./dashboard.html#/tasks/delivery/task%20result%2F001"),
+      true,
+    );
+    assert.equal(navigationModule.isDashboardTaskDeliveryHref("https://example.test/result"), false);
+  });
+});
+
 test("task output service exposes artifact list and open flows through formal RPC payloads", async () => {
   await withDesktopAliasRuntime(
     async (requireFn) => {
@@ -5479,6 +6236,66 @@ test("task output execution delegates task-detail routing through the shared cal
   assert.equal(feedback, "已在仪表盘中打开任务详情。");
 });
 
+test("task output execution routes dashboard result pages through the formal delivery window path", async () => {
+  const openedWindowLabels: string[] = [];
+  const emittedRequests: Array<{ eventName: string; label: string; payload: unknown }> = [];
+  const outputService = loadTaskOutputServiceModule(
+    undefined,
+    {
+      openOrFocusDesktopWindow: async (label) => {
+        openedWindowLabels.push(label);
+        return label;
+      },
+    },
+    {
+      getCurrentWindow: () => ({
+        label: "shell-ball",
+        emit: () => Promise.resolve(),
+        emitTo: (label, eventName, payload) => {
+          emittedRequests.push({ eventName, label, payload });
+          return Promise.resolve();
+        },
+      }),
+    },
+  );
+
+  const feedback = await outputService.performTaskOpenExecution({
+    mode: "open_url",
+    taskId: "task_dashboard_001",
+    path: null,
+    url: "./dashboard.html#/tasks/delivery/task_dashboard_001",
+    feedback: "已打开结果页。",
+  });
+
+  assert.deepEqual(openedWindowLabels, ["dashboard"]);
+  assert.equal(feedback, "已打开结果页。");
+  assert.equal(emittedRequests.length, 1);
+  assert.equal(emittedRequests[0]?.label, "dashboard");
+  assert.match(emittedRequests[0]?.eventName ?? "", /task-delivery-open/);
+  assert.equal((emittedRequests[0]?.payload as { task_id?: string } | undefined)?.task_id, "task_dashboard_001");
+});
+
+test("task output execution delegates dashboard result pages through the shared callback when provided", async () => {
+  const outputService = loadTaskOutputServiceModule();
+  const openedTaskIds: string[] = [];
+
+  const feedback = await outputService.performTaskOpenExecution({
+    mode: "open_url",
+    taskId: "task_dashboard_001",
+    path: null,
+    url: "./dashboard.html#/tasks/delivery/task_dashboard_001",
+    feedback: "已打开结果页。",
+  }, {
+    onOpenTaskDelivery: ({ taskId }) => {
+      openedTaskIds.push(taskId);
+      return "已在仪表盘中打开结果页。";
+    },
+  });
+
+  assert.deepEqual(openedTaskIds, ["task_dashboard_001"]);
+  assert.equal(feedback, "已在仪表盘中打开结果页。");
+});
+
 test("note resource execution delegates task-detail routing through the shared callback", async () => {
   const noteService = loadNotePageServiceModule();
   const openedTaskIds: string[] = [];
@@ -5501,6 +6318,7 @@ test("note resource execution delegates task-detail routing through the shared c
 });
 
 test("task workspace routes formal delivery through a dedicated page and keeps list refresh task-updated aware", () => {
+  const dashboardRootSource = readFileSync(resolve(desktopRoot, "src/app/dashboard/DashboardRoot.tsx"), "utf8");
   const tasksPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TasksPage.tsx"), "utf8");
   const taskPageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskPage.tsx"), "utf8");
   const taskDeliverySource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/TaskDeliveryPage.tsx"), "utf8");
@@ -5557,11 +6375,16 @@ test("task workspace routes formal delivery through a dedicated page and keeps l
 
   assert.match(taskDeliveryNavigationSource, /dashboardTaskDeliveryRoutePattern = "delivery\/:taskId"/);
   assert.match(taskDeliveryNavigationSource, /encodeURIComponent\(taskId\)/);
+  assert.match(taskDeliveryNavigationSource, /dashboardTaskDeliveryNavigationEvent/);
+  assert.match(taskDeliveryNavigationSource, /requestDashboardTaskDeliveryOpen/);
   assert.doesNotMatch(taskOutputSource, /isRpcChannelUnavailable/);
   assert.doesNotMatch(taskOutputSource, /logRpcMockFallback/);
   assert.match(taskOutputSource, /isAllowedTaskOpenUrl/);
   assert.match(taskOutputSource, /onOpenTaskDetail/);
+  assert.match(taskOutputSource, /requestDashboardTaskDeliveryOpen/);
   assert.match(taskDetailNavigationSource, /requestDashboardTaskDetailOpen/);
+  assert.match(dashboardRootSource, /dashboardTaskDeliveryNavigationEvent/);
+  assert.match(dashboardRootSource, /navigateToDashboardTaskDelivery/);
 });
 
 test("dashboard task-detail routing deduplicates retry request ids and accepts tasks outside loaded buckets", () => {
@@ -5936,8 +6759,28 @@ test("note page no longer guesses source-note paths from duplicated titles", () 
   const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
 
   assert.match(notePageSource, /function resolveNoteItemSourceNotePath\(/);
+  assert.match(notePageSource, /function buildSourceNotePathLookup\(sourceNotes: SourceNoteDocument\[\]\)/);
+  assert.match(notePageSource, /registerSourceNoteLookupKey\(lookup, `workspace\/\$\{relativePath\}`, note\);/);
   assert.doesNotMatch(notePageSource, /sourceNotesByTitle\.get\(item\.item\.title/);
   assert.match(notePageSource, /return null;/);
+});
+
+test("note page disambiguates duplicated relative source-note paths within the same lookup key instead of dropping them", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /type SourceNotePathLookup = Map<string, SourceNoteDocument\[\]>;/);
+  assert.match(notePageSource, /function resolveAmbiguousSourceNoteCandidate\(/);
+  assert.match(notePageSource, /const candidates = getSourceNoteLookupCandidates\(lookup, key\);/);
+  assert.match(notePageSource, /return resolveAmbiguousSourceNoteCandidate\(item, candidates, sourceNoteBlocksByPath\) \?\? null;/);
+  assert.match(notePageSource, /const sourceNoteBlocksByPath = useMemo\(\s*\(\) => new Map\(sourceNotes\.map\(\(note\) => \[note\.path, parseSourceNoteEditorBlocks\(note\)\]\)\),/);
+});
+
+test("note page keeps scanning related resources after null source-path misses", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /\.map\(\(resource\) => resolveSourceNoteLookupMatch\(item, sourceNotesByPath, sourceNoteBlocksByPath, resource\.path\)\)/);
+  assert.match(notePageSource, /\.find\(\(note\): note is SourceNoteDocument => note !== null\)/);
+  assert.doesNotMatch(notePageSource, /\.find\(\(note\) => note !== undefined\)/);
 });
 
 test("note service no longer invents related resources from title keywords", () => {
@@ -6272,6 +7115,714 @@ test("note rpc service keeps transport failures visible instead of switching to 
   );
 });
 
+test("note conversion and confirming-intent surfaces use direct task handoff wording instead of stale confirm copy", () => {
+  const noteActionBarSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NoteActionBar.tsx"), "utf8");
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+  const noteServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/notePage.service.ts"), "utf8");
+  const taskMapperSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/taskPage.mapper.ts"), "utf8");
+  const voiceFieldSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/components/DashboardVoiceField.tsx"), "utf8");
+  const homeServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts"), "utf8");
+
+  assert.match(noteActionBarSource, /会按这条便签生成正式任务并跳转到任务页。/);
+  assert.doesNotMatch(noteActionBarSource, /会直接生成任务并跳转到任务页。/);
+  assert.match(notePageSource, /function getNoteConvertSuccessFeedback\(status: Task\["status"\]\)/);
+  assert.match(notePageSource, /已按这条便签生成任务，正在打开任务详情。/);
+  assert.doesNotMatch(notePageSource, /等待你确认处理方式。/);
+  assert.match(notePageSource, /后续还需要处理授权。/);
+  assert.match(noteServiceSource, /这条便签会按当前正文直接生成任务；如果还想补充路径、时间或说明，可以继续写在正文里后再转交给 Agent。/);
+  assert.doesNotMatch(noteServiceSource, /基础便签数据/);
+  assert.match(taskMapperSource, /todo: "便签转入"/);
+  assert.match(voiceFieldSource, /return "正在等待确认处理方式";/);
+  assert.doesNotMatch(voiceFieldSource, /已进入意图确认/);
+  assert.match(homeServiceSource, /actionLabel: "前往处理"/);
+  assert.match(homeServiceSource, /当前任务仍在等待确认处理方式/);
+  assert.doesNotMatch(homeServiceSource, /actionLabel: "确认继续"/);
+});
+
+test("note visible content strips hidden header metadata before rendering preview copy", () => {
+  const noteService = loadNotePageServiceModule();
+
+  assert.equal(
+    noteService.buildVisibleNoteText([
+      "created_at: 2026-05-07T13:41:26.242Z",
+      "updated_at: 2026-05-07T16:51:39.202Z",
+      "",
+      "今晚之前完成计算机作业",
+      "作业在 C:/workspace/homework",
+    ].join("\n")),
+    [
+      "今晚之前完成计算机作业",
+      "作业在 C:/workspace/homework",
+    ].join("\n"),
+  );
+  assert.equal(
+    noteService.buildVisibleNoteText([
+      "今晚之前完成计算机作业",
+      "updated_at: 2026-05-07T16:51:39.202Z",
+      "recurring_enabled: false",
+    ].join("\n"), { title: "今晚之前完成计算机作业" }),
+    "",
+  );
+  assert.equal(
+    noteService.buildVisibleNoteText([
+      "整理今天的会议纪要",
+      "updated_at: 2026-05-07T16:51:39.202Z",
+      "recurring_enabled: false",
+    ].join("\n")),
+    "整理今天的会议纪要",
+  );
+  assert.equal(noteService.buildVisibleNoteText("note: 只展示这一句"), "只展示这一句");
+});
+
+test("source note editor keeps a content-only input while preserving hidden markdown metadata", () => {
+  const sourceNoteEditor = loadSourceNoteEditorModule();
+  const seededDraft = {
+    ...sourceNoteEditor.createEmptySourceNoteEditorDraft("workspace/notes/tasks.md"),
+    agentSuggestion: "把问题拆成前端回归点。",
+    bucket: "upcoming" as const,
+    createdAt: "2026-04-20T09:00:00.000Z",
+    dueAt: "2026-05-01 18:30",
+    endedAt: "2026-04-22T12:00:00.000Z",
+    updatedAt: "2026-04-28T15:45:00.000Z",
+  };
+
+  const editedDraft = sourceNoteEditor.updateSourceNoteEditorDraftContent(
+    seededDraft,
+    "整理 PR365 的便签体验\n前端只让用户输入内容。\n其余元数据继续由系统维护。",
+  );
+
+  assert.equal(editedDraft.title, "整理 PR365 的便签体验");
+  assert.equal(editedDraft.noteText, "前端只让用户输入内容。\n其余元数据继续由系统维护。");
+  assert.equal(editedDraft.bucket, "upcoming");
+  assert.equal(editedDraft.dueAt, "2026-05-01 18:30");
+  assert.equal(editedDraft.agentSuggestion, "把问题拆成前端回归点。");
+  assert.equal(
+    sourceNoteEditor.formatSourceNoteEditorContent(editedDraft),
+    "整理 PR365 的便签体验\n前端只让用户输入内容。\n其余元数据继续由系统维护。",
+  );
+
+  const serialized = sourceNoteEditor.serializeSourceNoteEditorDraft(editedDraft, new Date("2026-04-30T08:00:00.000Z"));
+  assert.match(
+    serialized.blockContent,
+    /^- \[ \] 整理 PR365 的便签体验\nbucket: upcoming\ncreated_at: 2026-04-20T09:00:00.000Z\ndue: 2026-05-01 18:30\nagent: 把问题拆成前端回归点。\nended_at: 2026-04-22T12:00:00.000Z\nupdated_at: 2026-04-30T08:00:00.000Z\n\n前端只让用户输入内容。/,
+  );
+  assert.equal(serialized.normalizedDraft.title, "整理 PR365 的便签体验");
+  assert.equal(serialized.normalizedDraft.noteText, "前端只让用户输入内容。\n其余元数据继续由系统维护。");
+});
+
+test("source note editor keeps completed notes completed while the textarea is temporarily empty", () => {
+  const sourceNoteEditor = loadSourceNoteEditorModule();
+  const completedDraft = {
+    ...sourceNoteEditor.createEmptySourceNoteEditorDraft("workspace/notes/tasks.md"),
+    checked: true,
+    noteText: "旧正文",
+    title: "已完成便签",
+  };
+
+  const clearedDraft = sourceNoteEditor.updateSourceNoteEditorDraftContent(completedDraft, "");
+  assert.equal(clearedDraft.checked, true);
+  assert.equal(clearedDraft.title, "");
+  assert.equal(clearedDraft.noteText, "");
+
+  const replacedDraft = sourceNoteEditor.updateSourceNoteEditorDraftContent(
+    clearedDraft,
+    "重写后的标题\n重写后的正文",
+  );
+  assert.equal(replacedDraft.checked, true);
+  assert.equal(replacedDraft.title, "重写后的标题");
+  assert.equal(replacedDraft.noteText, "重写后的正文");
+});
+
+test("source note editor preserves an intentional blank line between the title and body", () => {
+  const sourceNoteEditor = loadSourceNoteEditorModule();
+  const draft = sourceNoteEditor.updateSourceNoteEditorDraftContent(
+    sourceNoteEditor.createEmptySourceNoteEditorDraft("workspace/notes/tasks.md"),
+    "标题\n\n第二段正文",
+  );
+
+  assert.equal(draft.title, "标题");
+  assert.equal(draft.noteText, "\n第二段正文");
+  assert.equal(
+    sourceNoteEditor.formatSourceNoteEditorContent(draft),
+    "标题\n\n第二段正文",
+  );
+});
+
+test("source note editor keeps matched markdown blocks content-only without leaking hidden metadata back from the item fallback", () => {
+  const sourceNoteEditor = loadSourceNoteEditorModule();
+  const draft = sourceNoteEditor.buildSourceNoteEditorDraftFromNote(
+    {
+      content: [
+        "- [ ] 不好",
+        "bucket: later",
+        "created_at: 2026-05-02T11:35:52.489Z",
+        "updated_at: 2026-05-02T11:35:52.489Z",
+      ].join("\n"),
+      fileName: "notes.md",
+      modifiedAtMs: null,
+      path: "workspace/notes/notes.md",
+      sourceRoot: "workspace/notes",
+      title: "notes",
+    },
+    {
+      experience: {
+        agentSuggestion: { detail: "", label: "" },
+        canConvertToTask: false,
+        detailStatus: "",
+        detailStatusTone: "normal",
+        effectiveScope: null,
+        endedAt: null,
+        isRecurringEnabled: false,
+        nextOccurrenceAt: null,
+        noteText: "created_at: 2026-05-02T11:35:52.489Z\n\nupdated_at: 2026-05-02T11:35:52.489Z",
+        noteType: "follow-up",
+        plannedAt: null,
+        prerequisite: null,
+        previewStatus: "",
+        recentInstanceStatus: null,
+        relatedResources: [],
+        repeatRule: null,
+        summaryLabel: "",
+        timeHint: "",
+        title: "",
+        typeLabel: "",
+      },
+      item: {
+        agent_suggestion: null,
+        bucket: "later",
+        due_at: null,
+        effective_scope: null,
+        item_id: "note_001",
+        next_occurrence_at: null,
+        note_text: "created_at: 2026-05-02T11:35:52.489Z\n\nupdated_at: 2026-05-02T11:35:52.489Z",
+        prerequisite: null,
+        recent_instance_status: null,
+        repeat_rule: null,
+        status: "pending",
+        title: "不好",
+      },
+      sourceNote: {
+        localOnly: false,
+        path: "workspace/notes/notes.md",
+        sourceLine: 1,
+        title: "不好",
+      },
+    },
+  );
+
+  assert.equal(draft.title, "不好");
+  assert.equal(draft.noteText, "");
+});
+
+test("source note editor strips backend-only metadata pollution from content-only note bodies", () => {
+  const sourceNoteEditor = loadSourceNoteEditorModule();
+
+  assert.equal(
+    sourceNoteEditor.sanitizeSourceNoteBodyText([
+      "完成计算机作业",
+      "created_at: 2026-05-07T18:37:21.131Z",
+      "updated_at: 2026-05-07T18:40:43.265Z",
+      "recurring_enabled: false",
+    ].join("\n"), { title: "完成计算机作业" }),
+    "",
+  );
+  assert.equal(
+    sourceNoteEditor.sanitizeSourceNoteBodyText([
+      "第一行正文",
+      "updated_at: 2026-05-07T18:40:43.265Z",
+      "recurring_enabled: false",
+    ].join("\n")),
+    "第一行正文",
+  );
+  assert.equal(
+    sourceNoteEditor.sanitizeSourceNoteBodyText([
+      "status: 这一行现在是正文",
+      "updated_at: 2026-05-07T18:40:43.265Z",
+    ].join("\n")),
+    "status: 这一行现在是正文",
+  );
+});
+
+test("source note editor keeps custom header metadata hidden from the content editor", () => {
+  const sourceNoteEditor = loadSourceNoteEditorModule();
+  const draft = sourceNoteEditor.buildSourceNoteEditorDraftFromNote(
+    {
+      content: [
+        "- [ ] 只显示正文",
+        "priority: p1",
+        "owner: desk-team",
+        "",
+        "真正给用户编辑的正文",
+      ].join("\n"),
+      fileName: "notes.md",
+      modifiedAtMs: null,
+      path: "workspace/notes/notes.md",
+      sourceRoot: "workspace/notes",
+      title: "notes",
+    },
+    {
+      experience: {
+        agentSuggestion: { detail: "", label: "" },
+        canConvertToTask: false,
+        detailStatus: "",
+        detailStatusTone: "normal",
+        effectiveScope: null,
+        endedAt: null,
+        isRecurringEnabled: false,
+        nextOccurrenceAt: null,
+        noteText: "priority: p1\nowner: desk-team\n\n真正给用户编辑的正文",
+        noteType: "follow-up",
+        plannedAt: null,
+        prerequisite: null,
+        previewStatus: "",
+        recentInstanceStatus: null,
+        relatedResources: [],
+        repeatRule: null,
+        summaryLabel: "",
+        timeHint: "",
+        title: "",
+        typeLabel: "",
+      },
+      item: {
+        agent_suggestion: null,
+        bucket: "later",
+        due_at: null,
+        effective_scope: null,
+        item_id: "note_002",
+        next_occurrence_at: null,
+        note_text: "priority: p1\nowner: desk-team\n\n真正给用户编辑的正文",
+        prerequisite: null,
+        recent_instance_status: null,
+        repeat_rule: null,
+        status: "pending",
+        title: "只显示正文",
+      },
+      sourceNote: {
+        localOnly: false,
+        path: "workspace/notes/notes.md",
+        sourceLine: 1,
+        title: "只显示正文",
+      },
+    },
+  );
+
+  assert.equal(draft.title, "只显示正文");
+  assert.equal(draft.noteText, "真正给用户编辑的正文");
+});
+
+test("source note editor strips pasted checklist markers from the title without changing hidden completion state", () => {
+  const sourceNoteEditor = loadSourceNoteEditorModule();
+  const completedDraft = {
+    ...sourceNoteEditor.createEmptySourceNoteEditorDraft("workspace/notes/tasks.md"),
+    checked: true,
+  };
+
+  const nextDraft = sourceNoteEditor.updateSourceNoteEditorDraftContent(
+    completedDraft,
+    "- [ ] 重写后的标题\n正文保持普通文本。",
+  );
+  assert.equal(nextDraft.checked, true);
+  assert.equal(nextDraft.title, "重写后的标题");
+  assert.equal(nextDraft.noteText, "正文保持普通文本。");
+});
+
+test("source note editor stops parsing hidden metadata after the body starts", () => {
+  const sourceNoteEditor = loadSourceNoteEditorModule();
+  const blocks = sourceNoteEditor.parseSourceNoteEditorBlocks({
+    content: [
+      "- [ ] 保留正文里的保留前缀",
+      "bucket: upcoming",
+      "status: waiting_review",
+      "",
+      "status: 这一行现在是正文",
+      "resource: https://example.com/as-body-text",
+      "note: 这一行也应继续留在正文里",
+    ].join("\n"),
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "workspace/notes/tasks.md",
+    sourceRoot: "workspace/notes",
+    title: "tasks",
+  });
+
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0]?.recentInstanceStatus, "waiting_review");
+  assert.deepEqual(blocks[0]?.extraMetadata, []);
+  assert.equal(
+    blocks[0]?.noteText,
+    "status: 这一行现在是正文\nresource: https://example.com/as-body-text\nnote: 这一行也应继续留在正文里",
+  );
+});
+
+test("source note schedule helpers round-trip hidden time metadata and derive the persisted bucket", () => {
+  const sourceNoteEditor = loadSourceNoteEditorModule();
+
+  assert.equal(sourceNoteEditor.formatSourceNoteScheduleInputValue("2026-05-07T20:30"), "2026-05-07T20:30");
+  assert.equal(sourceNoteEditor.serializeSourceNoteScheduleInputValue("2026-05-07T20:30"), new Date("2026-05-07T20:30").toISOString());
+  assert.equal(sourceNoteEditor.resolveSourceNoteDraftBucketForSchedule({ dueAt: "2026-05-07T20:30:00.000Z", repeatRule: "" }), "upcoming");
+  assert.equal(sourceNoteEditor.resolveSourceNoteDraftBucketForSchedule({ dueAt: "2026-05-07T20:30:00.000Z", repeatRule: "每周" }), "recurring_rule");
+  assert.equal(sourceNoteEditor.resolveSourceNoteDraftBucketForSchedule({ dueAt: "", repeatRule: "" }), "later");
+});
+
+test("source note editor removes the matched markdown block when a note record is deleted", () => {
+  const sourceNoteEditor = loadSourceNoteEditorModule();
+  const removal = sourceNoteEditor.removeSourceNoteEditorBlock(
+    {
+      content: [
+        "- [ ] 第一条",
+        "bucket: later",
+        "",
+        "- [x] 第二条",
+        "bucket: closed",
+        "ended_at: 2026-05-07T20:30:00.000Z",
+      ].join("\n"),
+      fileName: "notes.md",
+      modifiedAtMs: null,
+      path: "workspace/notes/notes.md",
+      sourceRoot: "workspace/notes",
+      title: "notes",
+    },
+    {
+      sourceLine: 1,
+      title: "第一条",
+    },
+  );
+
+  assert.equal(removal.removed, true);
+  assert.equal(
+    removal.content,
+    [
+      "- [x] 第二条",
+      "bucket: closed",
+      "ended_at: 2026-05-07T20:30:00.000Z",
+      "",
+    ].join("\n"),
+  );
+});
+
+test("note page resolves newly created source notes from the appended tail block instead of matching by mutable metadata", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /const createdBlocks = parseSourceNoteEditorBlocks\(savedNote\);/);
+  assert.match(notePageSource, /const createdBlock = createdBlocks\[createdBlocks\.length - 1\] \?\? null;/);
+  assert.doesNotMatch(notePageSource, /find\(\(block\) => block\.updatedAt === normalizedDraft\.updatedAt\)/);
+});
+
+test("note page prefers formal notepad items over local source fallback cards when matching a newly created source note", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /const formalCandidateIds = candidateIds\.filter\(\(itemId\) => \{/);
+  assert.match(notePageSource, /return item \? !item\.sourceNote\?\.localOnly : false;/);
+  assert.match(notePageSource, /const exactLineCandidate = formalCandidateIds\.find\(\(itemId\) => \{/);
+  assert.match(notePageSource, /const exactCandidate = formalCandidateIds\.find\(\(itemId\) => \{/);
+  assert.match(notePageSource, /return formalCandidateIds\.length === 1 \? formalCandidateIds\[0\] : null;/);
+});
+
+test("note page can pin a pending created source note before the formal bucket item finishes syncing", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /function findPreferredItemIdForSourceNote\(/);
+  assert.match(notePageSource, /const nextItemId = replacementItemId \?\? findPreferredItemIdForSourceNote\(/);
+  assert.match(notePageSource, /if \(nextItem\.sourceNote\?\.localOnly\) \{/);
+  assert.match(notePageSource, /showFeedback\("新便签已放到网格里，正在同步正式分组。"\);/);
+});
+
+test("note page upgrades canvas and selected source-note cards to their formal items once sync completes", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /function findFormalReplacementItemIdForSourceNoteEntry\(/);
+  assert.match(notePageSource, /if \(replacementItemId && \(selectedItem\?\.sourceNote\?\.localOnly \|\| !selectedItem\)\) \{/);
+  assert.match(notePageSource, /if \(replacementItemId && \(currentItem\?\.sourceNote\?\.localOnly \|\| !currentItem\) && !seenItemIds\.has\(replacementItemId\)\) \{/);
+  assert.match(notePageSource, /next\.push\(\{ \.\.\.entry, itemId: replacementItemId \}\);/);
+});
+
+test("note page syncs newly created source notes onto the board instead of auto-converting them into tasks", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /async function syncCreatedSourceNoteToBoard\(/);
+  assert.match(notePageSource, /pinNoteToCanvasRef\.current\(matchedItem\.item\.item_id\);/);
+  assert.match(notePageSource, /showFeedback\("新便签已同步到便签页，并放到了网格里。"\);/);
+  assert.doesNotMatch(notePageSource, /const outcome = await convertNoteToTask\(matchedItem\.item\.item_id, dataMode\);/);
+});
+
+test("source note studio removes direct metadata form inputs from the user-facing editor", () => {
+  const sourceNoteStudioSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/SourceNoteStudio.tsx"), "utf8");
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(sourceNoteStudioSource, /内容式便签编辑/);
+  assert.match(sourceNoteStudioSource, /第一行会作为标题/);
+  assert.match(sourceNoteStudioSource, /开始新便签/);
+  assert.match(sourceNoteStudioSource, /点击“保存便签”后/);
+  assert.match(sourceNoteStudioSource, /value=\{editorContent\}/);
+  assert.doesNotMatch(sourceNoteStudioSource, /formatSourceNoteEditorContent/);
+  assert.doesNotMatch(sourceNoteStudioSource, /updateSourceNoteEditorDraftContent/);
+  assert.match(notePageSource, /const \[sourceNoteEditorContent, setSourceNoteEditorContent\] = useState/);
+  assert.match(notePageSource, /const nextDraft = updateSourceNoteEditorDraftContent\(sourceNoteDraft, sourceNoteEditorContent\);/);
+  assert.match(notePageSource, /editorContent=\{sourceNoteEditorContent\}/);
+  assert.doesNotMatch(sourceNoteStudioSource, /<span>标题<\/span>/);
+  assert.doesNotMatch(sourceNoteStudioSource, /<span>分组<\/span>/);
+  assert.doesNotMatch(sourceNoteStudioSource, /<span>计划时间<\/span>/);
+  assert.doesNotMatch(sourceNoteStudioSource, /<span>Agent 建议<\/span>/);
+  assert.doesNotMatch(sourceNoteStudioSource, /写入分组/);
+  assert.doesNotMatch(sourceNoteStudioSource, /最近写回/);
+});
+
+test("note page deduplicates source-note fallback cards and canvas cards by source block identity", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /function buildSourceNoteBlockAliases\(/);
+  assert.match(notePageSource, /function resolveSourceNoteBlockAliases\(/);
+  assert.match(notePageSource, /resolveSourceNoteBlockAliases\(item, sourceNotesByPath, sourceNoteBlocksByPath\)\.forEach\(\(alias\) => \{/);
+  assert.match(notePageSource, /resolveSourceNoteBlockAliases\(item, sourceNotesByPath, sourceNoteBlocksByPath\)\.some\(\(alias\) => representedSourceNoteBlocks\.has\(alias\)\)/);
+  assert.match(notePageSource, /const targetAliases = targetItem \? resolveSourceNoteBlockAliases\(targetItem, sourceNotesByPath, sourceNoteBlocksByPath\) : \[\];/);
+  assert.match(notePageSource, /next\[replacementIndex\] = \{ \.\.\.next\[replacementIndex\], itemId \};/);
+});
+
+test("note page files overdue upcoming notes into the closed sidebar bucket without rewriting the formal bucket", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /function resolveRailBucketForItem\(/);
+  assert.match(notePageSource, /function resolveOverdueCanvasAutoReturnKeys\(/);
+  assert.match(notePageSource, /if \(displayedBucket === "upcoming" && item\.item\.status === "overdue"\) \{/);
+  assert.match(notePageSource, /return "closed";/);
+  assert.match(notePageSource, /nextGroups\[resolveRailBucketForItem\(item, displayedBucket\)\]\.push\(item\);/);
+  assert.match(notePageSource, /const activeOverdueKeys = new Set<string>\(\);/);
+  assert.match(notePageSource, /if \(railBucket !== displayedBucket\) \{\s*resolveOverdueCanvasAutoReturnKeys\(item, sourceNotesByPath, sourceNoteBlocksByPath\)\.forEach\(\(key\) => activeOverdueKeys\.add\(key\)\);/);
+  assert.match(notePageSource, /const autoReturnKeys = resolveOverdueCanvasAutoReturnKeys\(currentItem, sourceNotesByPath, sourceNoteBlocksByPath\);/);
+  assert.match(notePageSource, /if \(railBucket !== displayedBucket && autoReturnKeys\.some\(\(key\) => !overdueCanvasAutoReturnedKeysRef\.current\.has\(key\)\)\) \{/);
+  assert.match(notePageSource, /resolveOverdueCanvasAutoReturnKeys\(targetItem, sourceNotesByPath, sourceNoteBlocksByPath\)\.forEach\(\(key\) => \{\s*overdueCanvasAutoReturnedKeysRef\.current\.add\(key\);/);
+  assert.match(notePageSource, /if \(!removedForRailBucket && next\.length === 0 && current\.length > 0 && defaultBoardItemIds\.length > 0 && boardBounds\) \{/);
+});
+
+test("note page persists local board layout and overdue auto-return markers across refreshes", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /import \{ loadStoredValue, removeStoredValue, saveStoredValue \} from "@\/platform\/storage";/);
+  assert.match(notePageSource, /const NOTE_BOARD_STORAGE_KEY = "cialloclaw\.dashboard\.notes\.board";/);
+  assert.match(notePageSource, /const persistedBoardStateRef = useRef<PersistedNoteBoardState \| null>\(loadPersistedNoteBoardState\(\)\);/);
+  assert.match(notePageSource, /const \[boardStateHydrated, setBoardStateHydrated\] = useState\(\(\) => persistedBoardStateRef\.current === null\);/);
+  assert.match(notePageSource, /if \(boardStateHydrated \|\| !boardLayerSize \|\| !noteBucketsResolved\) \{/);
+  assert.match(notePageSource, /saveStoredValue<PersistedNoteBoardState>\(NOTE_BOARD_STORAGE_KEY, \{/);
+  assert.match(notePageSource, /overdueAutoReturnedKeys: \[\.\.\.overdueCanvasAutoReturnedKeysRef\.current\],/);
+  assert.match(notePageSource, /removeStoredValue\(NOTE_BOARD_STORAGE_KEY\);/);
+});
+
+test("note preview stacks assign increasing sidebar z-order so later cards cover earlier cards", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+  const notePreviewSectionSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NotePreviewSection.tsx"), "utf8");
+  const notePreviewCardSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NotePreviewCard.tsx"), "utf8");
+  const notePageStyleSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/notePage.css"), "utf8");
+
+  assert.match(notePreviewSectionSource, /stackOrder=\{stackCards && items\.length > 1 \? index \+ 1 : undefined\}/);
+  assert.match(notePageSource, /stackOrder=\{group\.items\.length > 1 \? index \+ 1 : undefined\}/);
+  assert.match(notePreviewCardSource, /"--note-stack-order": String\(stackOrder\)/);
+  assert.match(notePageStyleSource, /z-index: var\(--note-stack-order, 1\);/);
+});
+
+test("note page keeps markdown source blocks out of the rendered note buckets so new notes only show as formal cards", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.doesNotMatch(notePageSource, /buildSourceNoteFallbackItems/);
+  assert.doesNotMatch(notePageSource, /const sourceFallbackItemsByBucket = useMemo\(\(\) => \{/);
+  assert.match(notePageSource, /const upcomingItems = rpcUpcomingItems;/);
+  assert.match(notePageSource, /const laterItems = rpcLaterItems;/);
+  assert.match(notePageSource, /const recurringItems = rpcRecurringItems;/);
+  assert.match(notePageSource, /const closedItems = rpcClosedItems;/);
+  assert.match(notePageSource, /function isNoteItemRepresentedOnCanvas\(/);
+  assert.match(notePageSource, /const canvasRepresentedSourceNoteBlocks = useMemo\(\(\) => \{/);
+  assert.match(notePageSource, /resolveSourceNoteBlockAliases\(item, sourceNotesByPath, sourceNoteBlocksByPath\)\.some\(\(alias\) => canvasRepresentedSourceNoteBlocks\.has\(alias\)\)/);
+  assert.match(notePageSource, /const visibleUpcomingItems = useMemo\([\s\S]*!isNoteItemRepresentedOnCanvas\(item, canvasItemIdSet, canvasRepresentedSourceNoteBlocks, sourceNotesByPath, sourceNoteBlocksByPath\)/);
+  assert.match(notePageSource, /const visibleLaterItems = useMemo\([\s\S]*!isNoteItemRepresentedOnCanvas\(item, canvasItemIdSet, canvasRepresentedSourceNoteBlocks, sourceNotesByPath, sourceNoteBlocksByPath\)/);
+  assert.match(notePageSource, /const visibleRecurringItems = useMemo\([\s\S]*!isNoteItemRepresentedOnCanvas\(item, canvasItemIdSet, canvasRepresentedSourceNoteBlocks, sourceNotesByPath, sourceNoteBlocksByPath\)/);
+  assert.match(notePageSource, /const visibleClosedItems = useMemo\([\s\S]*!isNoteItemRepresentedOnCanvas\(item, canvasItemIdSet, canvasRepresentedSourceNoteBlocks, sourceNotesByPath, sourceNoteBlocksByPath\)/);
+  assert.match(notePageSource, /items=\{railUpcomingItems\}/);
+  assert.match(notePageSource, /items=\{railLaterItems\}/);
+  assert.match(notePageSource, /items=\{railRecurringItems\}/);
+  assert.match(notePageSource, /railUpcomingItems\.length/);
+  assert.match(notePageSource, /railLaterItems\.length/);
+  assert.match(notePageSource, /railRecurringItems\.length/);
+  assert.match(notePageSource, /railClosedItems\.length/);
+});
+
+test("note page writes full markdown state back after note actions and removes the source block on delete", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /function buildSourceNoteDraftFromFormalItem\(/);
+  assert.match(notePageSource, /sanitizeSourceNoteBodyText\(nextItem\.note_text, \{ title: nextItem\.title \}\)/);
+  assert.match(notePageSource, /async function persistSourceNoteMutationForItem\(/);
+  assert.match(notePageSource, /const nextSourceFile = removeSourceNoteEditorBlock\(context\.note, context\.draft\);/);
+  assert.match(notePageSource, /const nextDraft = buildSourceNoteDraftFromFormalItem\(context, nextItem\);/);
+  assert.match(notePageSource, /await saveNoteSource\(taskSourceRoots, context\.note\.path, nextSourceFile\.content\);/);
+  assert.match(notePageSource, /await persistSourceNoteMutationForItem\(\s*updatedItem,\s*outcome\.result\.notepad_item,\s*outcome\.result\.deleted_item_id \?\? null,\s*\);/);
+  assert.match(notePageSource, /appendSourceBucketSyncFailure\(/);
+});
+
+test("recurring rule edit stays inside the detail-page schedule editor instead of jumping to the source-note editor", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /if \(action === "edit"\) \{\s*if \(selectedItem\.item\.bucket === "recurring_rule"\) \{\s*startScheduleEditingForItem\(selectedItem\);/);
+});
+
+test("paused recurring rules persist a hidden markdown override and reapply it after inspection refreshes", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /key\) !== "recurring_enabled"/);
+  assert.match(notePageSource, /key: "recurring_enabled",\s*value: "false"/);
+  assert.match(notePageSource, /const displayRpcItems = useMemo\(\s*\(\) => rawRpcItems\.map\(\(item\) => applySourceNoteDisplayOverrides\(item, sourceNotesByPath, sourceNoteBlocksByPath\)\)/);
+  assert.match(notePageSource, /const recurringEnabledOverride = readSourceNoteRecurringEnabledOverride\(matchedBlock\);/);
+  assert.match(notePageSource, /isRecurringEnabled: false,/);
+  assert.match(notePageSource, /previewStatus: "规则已暂停",/);
+});
+
+test("note path display strips Windows extended prefixes without changing the underlying open path flow", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+  const noteDetailPanelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NoteDetailPanel.tsx"), "utf8");
+  const noteMapperSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/notePage.mapper.ts"), "utf8");
+
+  assert.match(noteMapperSource, /export function formatNoteDisplayPath\(value: string \| null \| undefined\)/);
+  assert.match(noteMapperSource, /value\.startsWith\("\\\\\\\\\?\\\\UNC\\\\"/);
+  assert.match(noteMapperSource, /value\.startsWith\("\\\\\\\\\?\\\\"/);
+  assert.match(noteDetailPanelSource, /formatNoteDisplayPath\(experience\.effectiveScope\)/);
+  assert.match(noteDetailPanelSource, /return formatNoteDisplayPath\(resource\.path\);/);
+  assert.match(notePageSource, /formatNoteDisplayPath\(primarySourceNote\.path\)/);
+  assert.match(notePageSource, /formatNoteDisplayPath\(resolvedSourceRoots\[0\]\)/);
+  assert.match(notePageSource, /resource\.url \?\? formatNoteDisplayPath\(resource\.path\)/);
+});
+
+test("note page keeps formal source-note buckets stable across inspection refreshes", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /const rememberedFormalBucketByAliasRef = useRef\(new Map<string, NotePreviewGroupKey>\(\)\);/);
+  assert.match(notePageSource, /const rawRpcItems = useMemo\(\s*\(\) => \[/);
+  assert.match(notePageSource, /updateRememberedFormalBucketForItem\(\s*rememberedFormalBucketByAliasRef\.current,\s*item,\s*item\.item\.bucket,/);
+  assert.match(notePageSource, /function resolveRememberedFormalBucket\(/);
+  assert.match(notePageSource, /const displayedBucket = resolveRememberedFormalBucket\(/);
+  assert.match(notePageSource, /if \(nextBucket === "later"\) \{\s*if \(options\.allowLaterReset\) \{\s*rememberedBucketByAlias\.delete\(alias\);/);
+  assert.match(notePageSource, /updateRememberedFormalBucketForItem\([\s\S]*allowLaterReset: true/);
+  assert.match(notePageSource, /nextGroups\[displayedBucket\]\.push\(item\);/);
+  assert.doesNotMatch(notePageSource, /bucket:\s*rememberedBucketByAlias\.get\(rememberedBucket\)/);
+});
+
+test("note sidebar keeps single preview cards compact instead of stretching to fill the whole bucket", () => {
+  const notePageStyleSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/notePage.css"), "utf8");
+
+  assert.match(notePageStyleSource, /\.note-preview-shell__list,[\s\S]*align-content: start;/);
+  assert.match(notePageStyleSource, /\.note-preview-card \{[\s\S]*align-self: start;/);
+});
+
+test.skip("note detail panel hides source scope and resource cards while keeping the action-bar open flow", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+  const noteDetailPanelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NoteDetailPanel.tsx"), "utf8");
+  const noteActionBarSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NoteActionBar.tsx"), "utf8");
+
+  assert.doesNotMatch(noteDetailPanelSource, /生效范围/);
+  assert.doesNotMatch(noteDetailPanelSource, /当前事项关联的入口/);
+  assert.doesNotMatch(noteDetailPanelSource, /note-detail-resource-list/);
+  assert.doesNotMatch(noteDetailPanelSource, /onResourceOpen/);
+  assert.doesNotMatch(notePageSource, /onResourceOpen=\{handleResourceOpen\}/);
+  assert.match(noteActionBarSource, /"open-resource"/);
+  assert.match(notePageSource, /if \(action === "open-resource"\)/);
+  assert.match(notePageSource, /void handleResourceOpen\(firstResource\.id\);/);
+});
+test("note detail panel surfaces scope, linked tasks, and related resources without losing the action-bar flow", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+  const noteDetailPanelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NoteDetailPanel.tsx"), "utf8");
+  const noteActionBarSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NoteActionBar.tsx"), "utf8");
+
+  assert.match(noteDetailPanelSource, /生效范围/);
+  assert.match(noteDetailPanelSource, /关联任务与资料/);
+  assert.match(noteDetailPanelSource, /note-detail-resource-list/);
+  assert.match(noteDetailPanelSource, /onOpenLinkedTask\?: \(\) => void;/);
+  assert.match(noteDetailPanelSource, /onOpenResource\?: \(resourceId: string\) => void;/);
+  assert.match(noteActionBarSource, /"open-linked-task"/);
+  assert.match(noteActionBarSource, /查看资料列表/);
+  assert.match(noteActionBarSource, /"open-resource"/);
+  assert.match(notePageSource, /const \[noteResourcePickerOpen, setNoteResourcePickerOpen\] = useState\(false\);/);
+  assert.match(notePageSource, /if \(action === "open-linked-task"\)/);
+  assert.match(notePageSource, /if \(action === "open-resource"\)/);
+  assert.match(notePageSource, /setNoteResourcePickerOpen\(true\);/);
+  assert.match(notePageSource, /noteResourcePickerOpen && selectedItem/);
+  assert.match(notePageSource, /onOpenResource=\{\(resourceId\) => \{/);
+});
+
+test("note detail schedule flow keeps time metadata outside the content-only editor via inline detail editing", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+  const noteDetailPanelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NoteDetailPanel.tsx"), "utf8");
+  const noteScheduleDialogPath = resolve(desktopRoot, "src/features/dashboard/notes/components/NoteScheduleDialog.tsx");
+
+  assert.match(notePageSource, /const \[noteScheduleEditing, setNoteScheduleEditing\] = useState\(false\);/);
+  assert.match(notePageSource, /function startScheduleEditingForItem\(item: NoteListItem\) \{/);
+  assert.match(notePageSource, /async function handleSaveNoteSchedule\(\) \{/);
+  assert.match(notePageSource, /resolveSourceNoteDraftBucketForSchedule/);
+  assert.match(notePageSource, /"notes_schedule_saved"/);
+  assert.doesNotMatch(notePageSource, /<NoteScheduleDialog/);
+  assert.match(noteDetailPanelSource, /scheduleEditing\?: boolean;/);
+  assert.match(noteDetailPanelSource, /onStartScheduleEdit\?: \(\) => void;/);
+  assert.match(noteDetailPanelSource, /scheduleActionLabel = "安排时间"/);
+  assert.match(noteDetailPanelSource, /note-detail-schedule-editor/);
+  assert.match(noteDetailPanelSource, /type="datetime-local"/);
+  assert.match(noteDetailPanelSource, /placeholder="例如：每周、每两周、每天、每月"/);
+  assert.match(noteDetailPanelSource, /保存安排/);
+  assert.match(noteDetailPanelSource, /直接在详情页里设置首次时间和重复规则；正文编辑器仍保持只写内容/);
+  assert.equal(existsSync(noteScheduleDialogPath), false);
+});
+test("recurring rule detail panel exposes a direct pause-resume button beside schedule editing instead of burying it in the footer action bar", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+  const noteDetailPanelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NoteDetailPanel.tsx"), "utf8");
+  const noteActionBarSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NoteActionBar.tsx"), "utf8");
+
+  assert.match(noteDetailPanelSource, /onToggleRecurring\?: \(\) => void;/);
+  assert.match(noteDetailPanelSource, /const isRecurringRule = item\.item\.bucket === "recurring_rule";/);
+  assert.match(noteDetailPanelSource, /const recurringToggleLabel = item\.experience\.isRecurringEnabled \? "暂停重复" : "开启重复";/);
+  assert.match(noteDetailPanelSource, /点击“开启重复”可立即恢复/);
+  assert.match(noteDetailPanelSource, /className="note-detail-card__action-row"/);
+  assert.match(noteDetailPanelSource, /onClick=\{onToggleRecurring\}/);
+  assert.match(notePageSource, /onToggleRecurring=\{selectedItem\.item\.bucket === "recurring_rule" \? \(\) => handleDetailAction\("toggle-recurring"\) : undefined\}/);
+  assert.doesNotMatch(noteActionBarSource, /label: item\.experience\.isRecurringEnabled \? "暂停重复" : "开启重复"/);
+  assert.doesNotMatch(noteActionBarSource, /label: "修改规则"/);
+});
+
+test("note board cards label footer time by start or next execution semantics", () => {
+  const noteMapper = loadNotePageMapperModule();
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.equal(
+    noteMapper.formatNoteBoardTimeHint({ bucket: "upcoming" }, { timeHint: "5/10 00:51" }),
+    "开始时间 5/10 00:51",
+  );
+  assert.equal(
+    noteMapper.formatNoteBoardTimeHint({ bucket: "later" }, { timeHint: "5/11 08:30" }),
+    "开始时间 5/11 08:30",
+  );
+  assert.equal(
+    noteMapper.formatNoteBoardTimeHint({ bucket: "recurring_rule" }, { timeHint: "5/10 00:51" }),
+    "下次执行 5/10 00:51",
+  );
+  assert.equal(
+    noteMapper.formatNoteBoardTimeHint({ bucket: "recurring_rule" }, { isRecurringEnabled: false, timeHint: "已暂停" }),
+    "重复已暂停",
+  );
+  assert.equal(
+    noteMapper.describeNotePreview({ bucket: "recurring_rule" }, { isRecurringEnabled: false, timeHint: "已暂停" }),
+    "重复规则 · 已暂停",
+  );
+  assert.equal(
+    noteMapper.formatNoteBoardTimeHint({ bucket: "closed" }, { timeHint: "5/12 18:20" }),
+    "结束时间 5/12 18:20",
+  );
+  assert.match(notePageSource, /formatNoteBoardTimeHint\(item\.item, item\.experience\)/);
+});
+
+test("note board cards hide duplicate preview copy when a note has no visible body content", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+  const notePageStyleSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/notePage.css"), "utf8");
+
+  assert.match(notePageSource, /const boardCardCopy = item\.experience\.noteText\.trim\(\);/);
+  assert.match(notePageSource, /const hasBoardCardCopy = boardCardCopy !== "";/);
+  assert.match(notePageSource, /!hasBoardCardCopy && "note-preview-page__board-card-title--spacious"/);
+  assert.match(notePageSource, /hasBoardCardCopy \? <p className="note-preview-page__board-card-copy">\{boardCardCopy\}<\/p> : null/);
+  assert.match(notePageStyleSource, /\.note-preview-page__board-card-title--spacious \{/);
+});
 test("note rpc service derives experience from protocol note data instead of mock fixtures", () => {
   const noteServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/notePage.service.ts"), "utf8");
 
@@ -6486,11 +8037,12 @@ test("dashboard home keeps module and recommendation failures local instead of b
       const data = await service.loadDashboardHomeData();
 
       assert.equal(data.stateGroups.length, 4);
-      assert.equal(data.loadWarnings.length, 2);
+      assert.equal(data.loadWarnings.length, 3);
       assert.match(data.loadWarnings[0], /便签摘要同步失败：notes module unavailable/);
       assert.match(data.loadWarnings[1], /建议流同步失败：recommendations unavailable/);
-      assert.equal(data.focusLine.headline, "首页总览已经连接到真实任务轨道。");
-      assert.equal(data.summonTemplates.length, 0);
+      assert.match(data.loadWarnings[2], /镜子概览同步失败：mirror overview unavailable/);
+      assert.equal(data.focusLine.headline, "当前整体风险等级为 低");
+      assert.equal(data.summonTemplates.length, 1);
       assert.equal(data.voiceSequences.length, 0);
     },
     {
@@ -6520,6 +8072,1124 @@ test("dashboard home keeps module and recommendation failures local instead of b
       }),
       getRecommendations: async () => {
         throw new Error("recommendations unavailable");
+      },
+      getMirrorOverview: async () => {
+        throw new Error("mirror overview unavailable");
+      },
+      listNotepad: async () => ({
+        items: [],
+        page: {
+          has_more: false,
+          limit: 12,
+          offset: 0,
+          total: 0,
+        },
+      }),
+    },
+  );
+});
+
+test("dashboard home prioritizes live overview summons and task-detail targets over recommendation-only fallback copy", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<{
+          stateMap: Record<string, { navigationTarget?: { kind: string; label: string; module: string; taskId?: string } }>;
+          summonTemplates: Array<{ message: string; nextStep?: string; reason: string; stateKey: string }>;
+        }>;
+      };
+
+      const data = await service.loadDashboardHomeData();
+
+      assert.ok(data.summonTemplates.length >= 1);
+      assert.equal(data.summonTemplates[0]?.message, "整理 Q3 复盘要点");
+      assert.equal(data.summonTemplates[0]?.nextStep, "打开任务详情");
+      assert.match(data.summonTemplates[0]?.reason ?? "", /刚生成了新的摘要草稿/);
+      assert.equal(data.summonTemplates[0]?.stateKey, "task_working");
+      assert.equal(data.stateMap.task_working?.navigationTarget?.kind, "task_detail");
+      assert.equal(data.stateMap.task_working?.navigationTarget?.taskId, "task_focus_001");
+    },
+    {
+      getDashboardModule: async (params: unknown) => {
+        const moduleName = (params as { module?: string }).module ?? "unknown";
+
+        if (moduleName === "tasks") {
+          return {
+            highlights: ["继续推进当前摘要任务"],
+            module: moduleName,
+            summary: {
+              blocked_tasks: 0,
+              focus_runtime_summary: {
+                active_steering_count: 0,
+                events_count: 1,
+                latest_event_type: null,
+                loop_stop_reason: null,
+                observation_signals: [],
+              },
+              focus_task_id: "task_focus_001",
+              processing_tasks: 1,
+              waiting_auth_tasks: 0,
+            },
+            tab: "focus",
+          };
+        }
+
+        return {
+          highlights: [],
+          module: moduleName,
+          summary: {},
+          tab: "overview",
+        };
+      },
+      getDashboardOverview: async () => ({
+        overview: {
+          focus_summary: {
+            current_step: "生成摘要",
+            next_action: "等待处理完成",
+            status: "processing",
+            task_id: "task_focus_001",
+            title: "整理 Q3 复盘要点",
+            updated_at: "2026-04-07T10:40:00+08:00",
+          },
+          high_value_signal: ["刚生成了新的摘要草稿。"],
+          quick_actions: ["打开任务详情"],
+          trust_summary: {
+            has_restore_point: true,
+            pending_authorizations: 0,
+            risk_level: "green",
+            workspace_path: "workspace",
+          },
+        },
+      }),
+      getRecommendations: async () => ({
+        cooldown_hit: false,
+        items: [],
+      }),
+      listNotepad: async () => ({
+        items: [],
+        page: {
+          has_more: false,
+          limit: 12,
+          offset: 0,
+          total: 0,
+        },
+      }),
+    },
+  );
+});
+
+test("dashboard home prioritizes overview and module signals before recommendation-only fallback copy", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<{
+          stateMap: Record<string, { navigationTarget?: { kind: string; label: string; module: string; taskId?: string } }>;
+          summonTemplates: Array<{ message: string; module: string; nextStep?: string; reason: string; stateKey: string }>;
+        }>;
+      };
+
+      const data = await service.loadDashboardHomeData();
+
+      assert.ok(data.summonTemplates.length >= 3);
+      assert.deepEqual(data.summonTemplates.slice(0, 3).map((item) => item.module), ["safety", "tasks", "memory"]);
+      assert.equal(data.summonTemplates[0]?.message, "当前有 2 项操作等待授权");
+      assert.equal(data.summonTemplates[1]?.nextStep, "打开任务详情");
+      assert.equal(data.stateMap.task_working?.navigationTarget?.kind, "task_detail");
+      assert.equal(data.stateMap.task_working?.navigationTarget?.taskId, "task_focus_001");
+    },
+    {
+      getDashboardModule: async (params: unknown) => {
+        const moduleName = (params as { module?: string }).module ?? "unknown";
+
+        if (moduleName === "tasks") {
+          return {
+            highlights: ["继续推进当前摘要任务"],
+            module: moduleName,
+            summary: {
+              blocked_tasks: 0,
+              focus_runtime_summary: {
+                active_steering_count: 0,
+                events_count: 1,
+                latest_event_type: null,
+                loop_stop_reason: null,
+                observation_signals: [],
+              },
+              focus_task_id: "task_focus_001",
+              processing_tasks: 1,
+              waiting_auth_tasks: 1,
+            },
+            tab: "focus",
+          };
+        }
+
+        if (moduleName === "notes") {
+          return {
+            highlights: ["两条便签接近执行窗口", "建议先整理今日提醒"],
+            module: moduleName,
+            summary: {
+              completed_tasks: 3,
+              exceptions: 1,
+            },
+            tab: "queue",
+          };
+        }
+
+        if (moduleName === "memory") {
+          return {
+            highlights: ["本周复盘已经形成初稿", "最近三次协作都提到了同一风险边界"],
+            module: moduleName,
+            summary: {},
+            tab: "overview",
+          };
+        }
+
+        if (moduleName === "safety") {
+          return {
+            highlights: ["建议先处理待授权操作，再继续推进其它任务。"],
+            module: moduleName,
+            summary: {},
+            tab: "guard",
+          };
+        }
+
+        return {
+          highlights: [],
+          module: moduleName,
+          summary: {},
+          tab: "overview",
+        };
+      },
+      getDashboardOverview: async () => ({
+        overview: {
+          focus_summary: {
+            current_step: "生成摘要",
+            next_action: "等待处理完成",
+            status: "processing",
+            task_id: "task_focus_001",
+            title: "整理 Q3 复盘要点",
+            updated_at: "2026-04-07T10:40:00+08:00",
+          },
+          high_value_signal: ["刚生成了新的摘要草稿。"],
+          quick_actions: ["打开任务详情"],
+          trust_summary: {
+            has_restore_point: true,
+            pending_authorizations: 2,
+            risk_level: "yellow",
+            workspace_path: "workspace",
+          },
+        },
+      }),
+      getRecommendations: async () => ({
+        cooldown_hit: false,
+        items: [
+          {
+            feedback_score: 0.8,
+            intent: { confidence: 0.8, name: "task_follow_up" },
+            recommendation_id: "rec_001",
+            text: "继续推进当前任务。",
+          },
+        ],
+      }),
+      getMirrorOverview: async () => ({
+        daily_summary: null,
+        history_summary: ["本周复盘已经形成初稿", "最近三次协作都提到了同一风险边界"],
+        memory_references: [],
+        profile: null,
+      }),
+      listNotepad: async (params: unknown) => {
+        const group = (params as { group?: string }).group;
+        if (group === "upcoming") {
+          return {
+            items: [
+              {
+                agent_suggestion: "先处理这个事项。",
+                bucket: "upcoming",
+                due_at: "2026-04-07T18:00:00+08:00",
+                item_id: "todo_home_001",
+                status: "due_today",
+                title: "重要客户邮件回复",
+                type: "note",
+              },
+            ],
+            page: {
+              has_more: false,
+              limit: 12,
+              offset: 0,
+              total: 1,
+            },
+          };
+        }
+
+        return {
+          items: [],
+          page: {
+            has_more: false,
+            limit: group === "closed" ? 24 : 12,
+            offset: 0,
+            total: 0,
+          },
+        };
+      },
+    },
+  );
+});
+
+test("dashboard home keeps urgent safety summons aligned with safety copy instead of global task signals", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<{
+          summonTemplates: Array<{ message: string; module: string; nextStep?: string; reason: string; stateKey: string }>;
+          stateMap: Record<string, { headline: string; navigationTarget?: { kind: string; label: string } }>;
+        }>;
+      };
+
+      const data = await service.loadDashboardHomeData();
+
+      const safetySummon = data.summonTemplates.find((item) => item.stateKey === "safety_alert");
+      assert.equal(safetySummon?.module, "safety");
+      assert.equal(safetySummon?.message, "当前有 1 项操作等待授权");
+      assert.equal(safetySummon?.reason, "建议先处理待授权操作，再继续推进其它任务。");
+      assert.equal(safetySummon?.nextStep, "处理待授权操作");
+      assert.equal(data.stateMap.safety_alert?.headline, "当前有 1 项操作等待授权");
+      assert.equal(data.stateMap.safety_alert?.navigationTarget?.kind, "module");
+      assert.equal(data.stateMap.safety_alert?.navigationTarget?.label, "处理待授权操作");
+    },
+    {
+      getDashboardModule: async (params: unknown) => {
+        const moduleName = (params as { module?: string }).module ?? "unknown";
+        return {
+          highlights: [],
+          module: moduleName,
+          summary: {},
+          tab: moduleName === "tasks" ? "focus" : "overview",
+        };
+      },
+      getDashboardOverview: async () => ({
+        overview: {
+          focus_summary: {
+            current_step: "生成摘要",
+            next_action: "等待处理完成",
+            status: "processing",
+            task_id: "task_focus_001",
+            title: "整理 Q3 复盘要点",
+            updated_at: "2026-04-07T10:40:00+08:00",
+          },
+          high_value_signal: ["刚生成了新的摘要草稿。"],
+          quick_actions: ["处理待授权操作", "打开任务详情"],
+          trust_summary: {
+            has_restore_point: true,
+            pending_authorizations: 1,
+            risk_level: "yellow",
+            workspace_path: "workspace",
+          },
+        },
+      }),
+      getRecommendations: async () => ({
+        cooldown_hit: false,
+        items: [],
+      }),
+      getMirrorOverview: async () => ({
+        daily_summary: null,
+        history_summary: [],
+        memory_references: [],
+        profile: null,
+      }),
+      listNotepad: async () => ({
+        items: [],
+        page: {
+          has_more: false,
+          limit: 12,
+          offset: 0,
+          total: 0,
+        },
+      }),
+    },
+  );
+});
+
+test("dashboard home reuses formal mirror profile fields for memory copy", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<{
+          stateMap: Record<string, { headline: string; subline: string; context?: Array<{ text: string }>; navigationTarget?: { kind: string; activeDetailKey?: string } }>;
+        }>;
+      };
+
+      const data = await service.loadDashboardHomeData();
+
+      assert.equal(data.stateMap.memory_summary?.headline, "用户画像");
+      assert.equal(data.stateMap.memory_summary?.subline, "工作风格：偏好即时结果回显");
+      assert.equal(data.stateMap.memory_summary?.context?.[0]?.text, "偏好交付：bubble");
+      assert.equal(data.stateMap.memory_summary?.context?.[1]?.text, "活跃时段：16-21h");
+      assert.equal(data.stateMap.memory_summary?.navigationTarget?.kind, "mirror_detail");
+      assert.equal(data.stateMap.memory_summary?.navigationTarget?.activeDetailKey, "profile");
+    },
+    {
+      getDashboardModule: async (params: unknown) => {
+        const moduleName = (params as { module?: string }).module ?? "unknown";
+
+        if (moduleName === "notes") {
+          return {
+            highlights: ["最近恢复点 rp_1777961976151255500 已可用于安全回显。", "最近审计动作：generate_text -> openai_responses:deepseek-v4-flas..."],
+            module: moduleName,
+            summary: {
+              completed_tasks: 2,
+              exceptions: 1,
+            },
+            tab: "queue",
+          };
+        }
+
+        if (moduleName === "memory") {
+          return {
+            highlights: ["最近恢复点 rp_1777961976151255500 已可用于安全回显。", "最近审计动作：generate_text -> openai_responses:deepseek-v4-flas..."],
+            module: moduleName,
+            summary: {},
+            tab: "overview",
+          };
+        }
+
+        return {
+          highlights: [],
+          module: moduleName,
+          summary: {},
+          tab: moduleName === "tasks" ? "focus" : "overview",
+        };
+      },
+      getDashboardOverview: async () => ({
+        overview: {
+          focus_summary: null,
+          high_value_signal: [],
+          quick_actions: [],
+          trust_summary: {
+            has_restore_point: true,
+            pending_authorizations: 0,
+            risk_level: "green",
+            workspace_path: "workspace",
+          },
+        },
+      }),
+      getRecommendations: async () => ({
+        cooldown_hit: false,
+        items: [],
+      }),
+      getMirrorOverview: async () => ({
+        daily_summary: null,
+        history_summary: ["这里是历史概要，不该覆盖用户画像文案。"],
+        memory_references: [],
+        profile: {
+          active_hours: "16-21h",
+          preferred_output: "bubble",
+          work_style: "偏好即时结果回显",
+        },
+      }),
+      listNotepad: async () => ({
+        items: [],
+        page: {
+          has_more: false,
+          limit: 12,
+          offset: 0,
+          total: 0,
+        },
+      }),
+    },
+  );
+});
+
+test("dashboard home keeps a low-priority safety summon available when the formal trust chain is green but recoverable", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<{
+          summonTemplates: Array<{ message: string; module: string; nextStep?: string; priority: string }>;
+        }>;
+      };
+
+      const data = await service.loadDashboardHomeData();
+
+      assert.equal(data.summonTemplates[0]?.module, "safety");
+      assert.equal(data.summonTemplates[0]?.message, "最近恢复点可用");
+      assert.equal(data.summonTemplates[0]?.nextStep, "查看安全详情");
+      assert.equal(data.summonTemplates[0]?.priority, "low");
+    },
+    {
+      getDashboardModule: async (params: unknown) => ({
+        highlights: [],
+        module: (params as { module?: string }).module ?? "unknown",
+        summary: {},
+        tab: "overview",
+      }),
+      getDashboardOverview: async () => ({
+        overview: {
+          focus_summary: null,
+          high_value_signal: [],
+          quick_actions: ["打开任务详情"],
+          trust_summary: {
+            has_restore_point: true,
+            pending_authorizations: 0,
+            risk_level: "green",
+            workspace_path: "workspace",
+          },
+        },
+      }),
+      getRecommendations: async () => ({
+        cooldown_hit: false,
+        items: [],
+      }),
+      getMirrorOverview: async () => ({
+        daily_summary: null,
+        history_summary: [],
+        memory_references: [],
+        profile: null,
+      }),
+      listNotepad: async () => ({
+        items: [],
+        page: {
+          has_more: false,
+          limit: 12,
+          offset: 0,
+          total: 0,
+        },
+      }),
+    },
+  );
+});
+
+test("dashboard home only uses quick actions for task summons that can truly deep-link to task detail", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<{
+          summonTemplates: Array<{ module: string; nextStep?: string; stateKey: string }>;
+        }>;
+      };
+
+      const data = await service.loadDashboardHomeData();
+
+      const taskSummon = data.summonTemplates.find((item) => item.stateKey === "task_working");
+      assert.equal(taskSummon?.module, "tasks");
+      assert.equal(taskSummon?.nextStep, "打开任务页");
+    },
+    {
+      getDashboardModule: async (params: unknown) => {
+        const moduleName = (params as { module?: string }).module ?? "unknown";
+        if (moduleName === "tasks") {
+          return {
+            highlights: ["继续推进当前摘要任务"],
+            module: moduleName,
+            summary: {
+              blocked_tasks: 0,
+              processing_tasks: 0,
+              waiting_auth_tasks: 0,
+            },
+            tab: "focus",
+          };
+        }
+
+        return {
+          highlights: [],
+          module: moduleName,
+          summary: {},
+          tab: "overview",
+        };
+      },
+      getDashboardOverview: async () => ({
+        overview: {
+          focus_summary: null,
+          high_value_signal: ["当前任务轨道已有新的系统摘要。"],
+          quick_actions: ["打开任务详情"],
+          trust_summary: {
+            has_restore_point: false,
+            pending_authorizations: 0,
+            risk_level: "green",
+            workspace_path: "workspace",
+          },
+        },
+      }),
+      getRecommendations: async () => ({
+        cooldown_hit: false,
+        items: [],
+      }),
+      getMirrorOverview: async () => ({
+        daily_summary: null,
+        history_summary: [],
+        memory_references: [],
+        profile: null,
+      }),
+      listNotepad: async () => ({
+        items: [],
+        page: {
+          has_more: false,
+          limit: 12,
+          offset: 0,
+          total: 0,
+        },
+      }),
+    },
+  );
+});
+
+test("dashboard home keeps task-detail CTA copy when the first quick action targets a different route", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<{
+          stateMap: Record<string, { navigationTarget?: { kind: string; label: string; taskId?: string } }>;
+          summonTemplates: Array<{ message: string; module: string; nextStep?: string; stateKey: string }>;
+        }>;
+      };
+
+      const data = await service.loadDashboardHomeData();
+
+      const taskSummon = data.summonTemplates.find((item) => item.stateKey === "task_working");
+      assert.equal(taskSummon?.module, "tasks");
+      assert.equal(taskSummon?.message, "整理 Q3 复盘要点");
+      assert.equal(taskSummon?.nextStep, "打开任务详情");
+      assert.equal(data.stateMap.task_working?.navigationTarget?.kind, "task_detail");
+      assert.equal(data.stateMap.task_working?.navigationTarget?.taskId, "task_focus_001");
+    },
+    {
+      getDashboardModule: async (params: unknown) => {
+        const moduleName = (params as { module?: string }).module ?? "unknown";
+
+        if (moduleName === "tasks") {
+          return {
+            highlights: ["继续推进当前摘要任务"],
+            module: moduleName,
+            summary: {
+              blocked_tasks: 0,
+              focus_runtime_summary: {
+                active_steering_count: 0,
+                events_count: 1,
+                latest_event_type: null,
+                loop_stop_reason: null,
+                observation_signals: [],
+              },
+              focus_task_id: "task_focus_001",
+              processing_tasks: 1,
+              waiting_auth_tasks: 1,
+            },
+            tab: "focus",
+          };
+        }
+
+        return {
+          highlights: [],
+          module: moduleName,
+          summary: {},
+          tab: "overview",
+        };
+      },
+      getDashboardOverview: async () => ({
+        overview: {
+          focus_summary: {
+            current_step: "生成摘要",
+            next_action: "等待处理完成",
+            status: "processing",
+            task_id: "task_focus_001",
+            title: "整理 Q3 复盘要点",
+            updated_at: "2026-04-07T10:40:00+08:00",
+          },
+          high_value_signal: ["当前有 1 项操作等待授权"],
+          quick_actions: ["处理待授权操作", "打开任务详情"],
+          trust_summary: {
+            has_restore_point: true,
+            pending_authorizations: 1,
+            risk_level: "yellow",
+            workspace_path: "workspace",
+          },
+        },
+      }),
+      getRecommendations: async () => ({
+        cooldown_hit: false,
+        items: [],
+      }),
+      getMirrorOverview: async () => ({
+        daily_summary: null,
+        history_summary: [],
+        memory_references: [],
+        profile: null,
+      }),
+      listNotepad: async () => ({
+        items: [],
+        page: {
+          has_more: false,
+          limit: 12,
+          offset: 0,
+          total: 0,
+        },
+      }),
+    },
+  );
+});
+
+test("dashboard home routes overview fallback signals to the inferred module instead of defaulting to tasks", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<{
+          summonTemplates: Array<{ message: string; module: string; nextStep?: string; stateKey: string }>;
+        }>;
+      };
+
+      const data = await service.loadDashboardHomeData();
+
+      assert.equal(data.summonTemplates[0]?.message, "镜子里新增了一条历史概要");
+      assert.equal(data.summonTemplates[0]?.module, "memory");
+      assert.equal(data.summonTemplates[0]?.stateKey, "memory_summary");
+      assert.equal(data.summonTemplates[0]?.nextStep, "打开镜子页");
+    },
+    {
+      getDashboardModule: async (params: unknown) => {
+        const moduleName = (params as { module?: string }).module ?? "unknown";
+        return {
+          highlights: moduleName === "memory" ? ["本周复盘已经形成初稿"] : [],
+          module: moduleName,
+          summary: {},
+          tab: "overview",
+        };
+      },
+      getDashboardOverview: async () => ({
+        overview: {
+          focus_summary: null,
+          high_value_signal: ["镜子里新增了一条历史概要"],
+          quick_actions: ["打开任务详情"],
+          trust_summary: {
+            has_restore_point: false,
+            pending_authorizations: 0,
+            risk_level: "green",
+            workspace_path: "workspace",
+          },
+        },
+      }),
+      getRecommendations: async () => ({
+        cooldown_hit: false,
+        items: [],
+      }),
+      getMirrorOverview: async () => ({
+        daily_summary: null,
+        history_summary: ["这里是最近一条历史概要。", "第二条历史概要。"],
+        memory_references: [],
+        profile: null,
+      }),
+      listNotepad: async () => ({
+        items: [],
+        page: {
+          has_more: false,
+          limit: 12,
+          offset: 0,
+          total: 0,
+        },
+      }),
+    },
+  );
+});
+
+test("dashboard home prefers formal mirror references over profile copy when both exist", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<{
+          stateMap: Record<string, { headline: string; subline: string; context?: Array<{ text: string }> }>;
+        }>;
+      };
+
+      const data = await service.loadDashboardHomeData();
+
+      assert.equal(data.stateMap.memory_habit?.headline, "近期被调用记忆");
+      assert.equal(data.stateMap.memory_habit?.subline, "本周战略复盘已被近期任务再次引用。");
+      assert.equal(data.stateMap.memory_habit?.context?.[0]?.text, "来源：近期长期记忆命中");
+      assert.equal(data.stateMap.memory_habit?.context?.[1]?.text, "近期任务再次命中这段长期记忆。");
+    },
+    {
+      getDashboardModule: async (params: unknown) => ({
+        highlights: [],
+        module: (params as { module?: string }).module ?? "unknown",
+        summary: {},
+        tab: "overview",
+      }),
+      getDashboardOverview: async () => ({
+        overview: {
+          focus_summary: null,
+          high_value_signal: [],
+          quick_actions: [],
+          trust_summary: {
+            has_restore_point: false,
+            pending_authorizations: 0,
+            risk_level: "green",
+            workspace_path: "workspace",
+          },
+        },
+      }),
+      getRecommendations: async () => ({
+        cooldown_hit: false,
+        items: [],
+      }),
+      getMirrorOverview: async () => ({
+        daily_summary: null,
+        history_summary: ["这里有历史概要，但不该覆盖近期记忆引用。"],
+        memory_references: [
+          {
+            memory_id: "memory_strategy_weekly",
+            reason: "近期任务再次命中这段长期记忆。",
+            summary: "本周战略复盘已被近期任务再次引用。",
+          },
+        ],
+        profile: {
+          active_hours: "16-21h",
+          preferred_output: "bubble",
+          work_style: "偏好即时结果回显",
+        },
+      }),
+      listNotepad: async () => ({
+        items: [],
+        page: {
+          has_more: false,
+          limit: 12,
+          offset: 0,
+          total: 0,
+        },
+      }),
+    },
+  );
+});
+
+test("dashboard home sanitizes mirror reference copy before surfacing it on the home orb", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<{
+          stateMap: Record<string, { subline: string; context?: Array<{ text: string }> }>;
+        }>;
+      };
+
+      const data = await service.loadDashboardHomeData();
+
+      assert.equal(data.stateMap.memory_habit?.subline, "任务完成，意图=agent_loop，输入=你知道我现在在么...");
+      assert.equal(data.stateMap.memory_habit?.context?.[0]?.text, "来源：近期长期记忆命中");
+      assert.equal(data.stateMap.memory_habit?.context?.[1]?.text, "这条长期记忆再次命中了当前协作。");
+    },
+    {
+      getDashboardModule: async (params: unknown) => ({
+        highlights: [],
+        module: (params as { module?: string }).module ?? "unknown",
+        summary: {},
+        tab: "overview",
+      }),
+      getDashboardOverview: async () => ({
+        overview: {
+          focus_summary: null,
+          high_value_signal: [],
+          quick_actions: [],
+          trust_summary: {
+            has_restore_point: false,
+            pending_authorizations: 0,
+            risk_level: "green",
+            workspace_path: "workspace",
+          },
+        },
+      }),
+      getRecommendations: async () => ({
+        cooldown_hit: false,
+        items: [],
+      }),
+      getMirrorOverview: async () => ({
+        daily_summary: null,
+        history_summary: [],
+        memory_references: [
+          {
+            memory_id: "memory_strategy_weekly",
+            reason: "这条长期记忆再次命中了当前协作。",
+            summary: " 任务完成，意图=agent_loop，输入=你知道我现在在么�... ",
+          },
+        ],
+        profile: null,
+      }),
+      listNotepad: async () => ({
+        items: [],
+        page: {
+          has_more: false,
+          limit: 12,
+          offset: 0,
+          total: 0,
+        },
+      }),
+    },
+  );
+});
+
+test("dashboard home rotates mirror summons across formal memory, profile, and history sections", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<{
+          summonTemplates: Array<{ module: string; message: string; nextStep?: string; expandedState?: { headline: string; navigationTarget?: { kind: string; activeDetailKey?: string } } }>;
+        }>;
+      };
+
+      const data = await service.loadDashboardHomeData();
+      const mirrorSummons = data.summonTemplates.filter((item) => item.module === "memory");
+
+      assert.deepEqual(
+        mirrorSummons.slice(0, 3).map((item) => item.expandedState?.headline),
+        ["近期被调用记忆", "用户画像", "历史概要"],
+      );
+      assert.deepEqual(
+        mirrorSummons.slice(0, 3).map((item) => item.expandedState?.navigationTarget?.activeDetailKey),
+        ["memory", "profile", "history"],
+      );
+      assert.equal(mirrorSummons[0]?.message, "近期被调用记忆");
+      assert.equal(mirrorSummons[1]?.message, "用户画像");
+      assert.equal(mirrorSummons[2]?.message, "历史概要");
+    },
+    {
+      getDashboardModule: async (params: unknown) => ({
+        highlights: [],
+        module: (params as { module?: string }).module ?? "unknown",
+        summary: {},
+        tab: "overview",
+      }),
+      getDashboardOverview: async () => ({
+        overview: {
+          focus_summary: null,
+          high_value_signal: [],
+          quick_actions: [],
+          trust_summary: {
+            has_restore_point: false,
+            pending_authorizations: 0,
+            risk_level: "green",
+            workspace_path: "workspace",
+          },
+        },
+      }),
+      getRecommendations: async () => ({
+        cooldown_hit: false,
+        items: [],
+      }),
+      getMirrorOverview: async () => ({
+        daily_summary: null,
+        history_summary: ["这里是最近一条历史概要。", "第二条历史概要。"],
+        memory_references: [
+          {
+            memory_id: "memory_strategy_weekly",
+            reason: "近期任务再次命中这段长期记忆。",
+            summary: "本周战略复盘已被近期任务再次引用。",
+          },
+        ],
+        profile: {
+          active_hours: "16-21h",
+          preferred_output: "bubble",
+          work_style: "偏好即时结果回显",
+        },
+      }),
+      listNotepad: async () => ({
+        items: [],
+        page: {
+          has_more: false,
+          limit: 12,
+          offset: 0,
+          total: 0,
+        },
+      }),
+    },
+  );
+});
+
+test("dashboard home keeps notes copy module-native and skips fake empty-note summons", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<{
+          stateMap: Record<string, { headline: string; subline: string; context?: Array<{ text: string }> }>;
+          summonTemplates: Array<{ module: string }>;
+        }>;
+      };
+
+      const data = await service.loadDashboardHomeData();
+
+      assert.equal(data.stateMap.notes_scheduled?.headline, "这里还没有可协作的事项");
+      assert.equal(data.stateMap.notes_scheduled?.subline, "当前例外项 1 条，建议优先整理最接近执行窗口的事项。");
+      assert.equal(data.stateMap.notes_scheduled?.context?.[0]?.text, "暂无便签");
+      assert.equal(data.summonTemplates.some((item) => item.module === "notes"), false);
+    },
+    {
+      getDashboardModule: async (params: unknown) => {
+        const moduleName = (params as { module?: string }).module ?? "unknown";
+
+        if (moduleName === "notes") {
+          return {
+            highlights: ["最近恢复点 rp_1777961976151255500 已可用于安全回显。", "最近审计动作：generate_text -> openai_responses:deepseek-v4-flas..."],
+            module: moduleName,
+            summary: {
+              completed_tasks: 2,
+              exceptions: 1,
+            },
+            tab: "queue",
+          };
+        }
+
+        return {
+          highlights: [],
+          module: moduleName,
+          summary: {},
+          tab: moduleName === "tasks" ? "focus" : "overview",
+        };
+      },
+      getDashboardOverview: async () => ({
+        overview: {
+          focus_summary: null,
+          high_value_signal: [],
+          quick_actions: [],
+          trust_summary: {
+            has_restore_point: true,
+            pending_authorizations: 0,
+            risk_level: "green",
+            workspace_path: "workspace",
+          },
+        },
+      }),
+      getRecommendations: async () => ({
+        cooldown_hit: false,
+        items: [],
+      }),
+      getMirrorOverview: async () => ({
+        daily_summary: null,
+        history_summary: [],
+        memory_references: [],
+        profile: null,
+      }),
+      listNotepad: async () => ({
+        items: [],
+        page: {
+          has_more: false,
+          limit: 12,
+          offset: 0,
+          total: 0,
+        },
+      }),
+    },
+  );
+});
+
+test("dashboard home does not promote closed-only notes into the active note summon path", async () => {
+  await withDesktopAliasRuntime(
+    async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        loadDashboardHomeData: () => Promise<{
+          stateMap: Record<string, { headline: string; subline: string }>;
+          summonTemplates: Array<{ module: string; message: string }>;
+        }>;
+      };
+
+      const data = await service.loadDashboardHomeData();
+
+      assert.equal(data.stateMap.notes_scheduled?.headline, "这里还没有可协作的事项");
+      assert.equal(data.summonTemplates.some((item) => item.module === "notes"), false);
+    },
+    {
+      getDashboardModule: async (params: unknown) => ({
+        highlights: [],
+        module: (params as { module?: string }).module ?? "unknown",
+        summary: {},
+        tab: "overview",
+      }),
+      getDashboardOverview: async () => ({
+        overview: {
+          focus_summary: null,
+          high_value_signal: [],
+          quick_actions: [],
+          trust_summary: {
+            has_restore_point: false,
+            pending_authorizations: 0,
+            risk_level: "green",
+            workspace_path: "workspace",
+          },
+        },
+      }),
+      getRecommendations: async () => ({
+        cooldown_hit: false,
+        items: [],
+      }),
+      getMirrorOverview: async () => ({
+        daily_summary: null,
+        history_summary: [],
+        memory_references: [],
+        profile: null,
+      }),
+      listNotepad: async (params: unknown) => {
+        const group = (params as { group?: string }).group;
+        if (group === "closed") {
+          return {
+            items: [
+              {
+                agent_suggestion: null,
+                bucket: "closed",
+                due_at: null,
+                item_id: "todo_closed_001",
+                status: "completed",
+                title: "历史已结束事项",
+                type: "archive",
+              },
+            ],
+            page: {
+              has_more: false,
+              limit: 24,
+              offset: 0,
+              total: 1,
+            },
+          };
+        }
+
+        return {
+          items: [],
+          page: {
+            has_more: false,
+            limit: group === "closed" ? 24 : 12,
+            offset: 0,
+            total: 0,
+          },
+        };
       },
     },
   );
@@ -6591,6 +9261,287 @@ test("mirror service no longer imports overview mock data into product runtime",
   assert.doesNotMatch(mirrorServiceSource, /getInitialMirrorOverviewData/);
 });
 
+test("source note editor keeps a content-only input while preserving hidden markdown metadata", () => {
+  const sourceNoteEditor = loadSourceNoteEditorModule();
+  const seededDraft = {
+    ...sourceNoteEditor.createEmptySourceNoteEditorDraft("workspace/notes/tasks.md"),
+    agentSuggestion: "把问题拆成前端回归点。",
+    bucket: "upcoming" as const,
+    createdAt: "2026-04-20T09:00:00.000Z",
+    dueAt: "2026-05-01 18:30",
+    endedAt: "2026-04-22T12:00:00.000Z",
+    updatedAt: "2026-04-28T15:45:00.000Z",
+  };
+
+  const editedDraft = sourceNoteEditor.updateSourceNoteEditorDraftContent(
+    seededDraft,
+    "整理 PR365 的便签体验\n前端只让用户输入内容。\n其余元数据继续由系统维护。",
+  );
+
+  assert.equal(editedDraft.title, "整理 PR365 的便签体验");
+  assert.equal(editedDraft.noteText, "前端只让用户输入内容。\n其余元数据继续由系统维护。");
+  assert.equal(editedDraft.bucket, "upcoming");
+  assert.equal(editedDraft.dueAt, "2026-05-01 18:30");
+  assert.equal(editedDraft.agentSuggestion, "把问题拆成前端回归点。");
+  assert.equal(
+    sourceNoteEditor.formatSourceNoteEditorContent(editedDraft),
+    "整理 PR365 的便签体验\n前端只让用户输入内容。\n其余元数据继续由系统维护。",
+  );
+
+  const serialized = sourceNoteEditor.serializeSourceNoteEditorDraft(editedDraft, new Date("2026-04-30T08:00:00.000Z"));
+  assert.match(
+    serialized.blockContent,
+    /^- \[ \] 整理 PR365 的便签体验\nbucket: upcoming\ncreated_at: 2026-04-20T09:00:00.000Z\ndue: 2026-05-01 18:30\nagent: 把问题拆成前端回归点。\nended_at: 2026-04-22T12:00:00.000Z\nupdated_at: 2026-04-30T08:00:00.000Z\n\n前端只让用户输入内容。/,
+  );
+  assert.equal(serialized.normalizedDraft.title, "整理 PR365 的便签体验");
+  assert.equal(serialized.normalizedDraft.noteText, "前端只让用户输入内容。\n其余元数据继续由系统维护。");
+});
+
+test("source note editor keeps completed notes completed while the textarea is temporarily empty", () => {
+  const sourceNoteEditor = loadSourceNoteEditorModule();
+  const completedDraft = {
+    ...sourceNoteEditor.createEmptySourceNoteEditorDraft("workspace/notes/tasks.md"),
+    checked: true,
+    noteText: "旧正文",
+    title: "已完成便签",
+  };
+
+  const clearedDraft = sourceNoteEditor.updateSourceNoteEditorDraftContent(completedDraft, "");
+  assert.equal(clearedDraft.checked, true);
+  assert.equal(clearedDraft.title, "");
+  assert.equal(clearedDraft.noteText, "");
+
+  const replacedDraft = sourceNoteEditor.updateSourceNoteEditorDraftContent(
+    clearedDraft,
+    "重写后的标题\n重写后的正文",
+  );
+  assert.equal(replacedDraft.checked, true);
+  assert.equal(replacedDraft.title, "重写后的标题");
+  assert.equal(replacedDraft.noteText, "重写后的正文");
+});
+
+test("source note editor preserves an intentional blank line between the title and body", () => {
+  const sourceNoteEditor = loadSourceNoteEditorModule();
+  const draft = sourceNoteEditor.updateSourceNoteEditorDraftContent(
+    sourceNoteEditor.createEmptySourceNoteEditorDraft("workspace/notes/tasks.md"),
+    "标题\n\n第二段正文",
+  );
+
+  assert.equal(draft.title, "标题");
+  assert.equal(draft.noteText, "\n第二段正文");
+  assert.equal(
+    sourceNoteEditor.formatSourceNoteEditorContent(draft),
+    "标题\n\n第二段正文",
+  );
+});
+
+test("source note editor keeps matched markdown blocks content-only without leaking hidden metadata back from the item fallback", () => {
+  const sourceNoteEditor = loadSourceNoteEditorModule();
+  const draft = sourceNoteEditor.buildSourceNoteEditorDraftFromNote(
+    {
+      content: [
+        "- [ ] 不好",
+        "bucket: later",
+        "created_at: 2026-05-02T11:35:52.489Z",
+        "updated_at: 2026-05-02T11:35:52.489Z",
+      ].join("\n"),
+      fileName: "notes.md",
+      modifiedAtMs: null,
+      path: "workspace/notes/notes.md",
+      sourceRoot: "workspace/notes",
+      title: "notes",
+    },
+    {
+      experience: {
+        agentSuggestion: { detail: "", label: "" },
+        canConvertToTask: false,
+        detailStatus: "",
+        detailStatusTone: "normal",
+        effectiveScope: null,
+        endedAt: null,
+        isRecurringEnabled: false,
+        nextOccurrenceAt: null,
+        noteText: "created_at: 2026-05-02T11:35:52.489Z\n\nupdated_at: 2026-05-02T11:35:52.489Z",
+        noteType: "follow-up",
+        plannedAt: null,
+        prerequisite: null,
+        previewStatus: "",
+        recentInstanceStatus: null,
+        relatedResources: [],
+        repeatRule: null,
+        summaryLabel: "",
+        timeHint: "",
+        title: "",
+        typeLabel: "",
+      },
+      item: {
+        agent_suggestion: null,
+        bucket: "later",
+        due_at: null,
+        effective_scope: null,
+        item_id: "note_001",
+        next_occurrence_at: null,
+        note_text: "created_at: 2026-05-02T11:35:52.489Z\n\nupdated_at: 2026-05-02T11:35:52.489Z",
+        prerequisite: null,
+        recent_instance_status: null,
+        repeat_rule: null,
+        status: "pending",
+        title: "不好",
+      },
+      sourceNote: {
+        localOnly: false,
+        path: "workspace/notes/notes.md",
+        sourceLine: 1,
+        title: "不好",
+      },
+    },
+  );
+
+  assert.equal(draft.title, "不好");
+  assert.equal(draft.noteText, "");
+});
+
+test("source note editor keeps custom header metadata hidden from the content editor", () => {
+  const sourceNoteEditor = loadSourceNoteEditorModule();
+  const draft = sourceNoteEditor.buildSourceNoteEditorDraftFromNote(
+    {
+      content: [
+        "- [ ] 只显示正文",
+        "priority: p1",
+        "owner: desk-team",
+        "",
+        "真正给用户编辑的正文",
+      ].join("\n"),
+      fileName: "notes.md",
+      modifiedAtMs: null,
+      path: "workspace/notes/notes.md",
+      sourceRoot: "workspace/notes",
+      title: "notes",
+    },
+    {
+      experience: {
+        agentSuggestion: { detail: "", label: "" },
+        canConvertToTask: false,
+        detailStatus: "",
+        detailStatusTone: "normal",
+        effectiveScope: null,
+        endedAt: null,
+        isRecurringEnabled: false,
+        nextOccurrenceAt: null,
+        noteText: "priority: p1\nowner: desk-team\n\n真正给用户编辑的正文",
+        noteType: "follow-up",
+        plannedAt: null,
+        prerequisite: null,
+        previewStatus: "",
+        recentInstanceStatus: null,
+        relatedResources: [],
+        repeatRule: null,
+        summaryLabel: "",
+        timeHint: "",
+        title: "",
+        typeLabel: "",
+      },
+      item: {
+        agent_suggestion: null,
+        bucket: "later",
+        due_at: null,
+        effective_scope: null,
+        item_id: "note_002",
+        next_occurrence_at: null,
+        note_text: "priority: p1\nowner: desk-team\n\n真正给用户编辑的正文",
+        prerequisite: null,
+        recent_instance_status: null,
+        repeat_rule: null,
+        status: "pending",
+        title: "只显示正文",
+      },
+      sourceNote: {
+        localOnly: false,
+        path: "workspace/notes/notes.md",
+        sourceLine: 1,
+        title: "只显示正文",
+      },
+    },
+  );
+
+  assert.equal(draft.title, "只显示正文");
+  assert.equal(draft.noteText, "真正给用户编辑的正文");
+});
+
+test("source note editor strips pasted checklist markers from the title without changing hidden completion state", () => {
+  const sourceNoteEditor = loadSourceNoteEditorModule();
+  const completedDraft = {
+    ...sourceNoteEditor.createEmptySourceNoteEditorDraft("workspace/notes/tasks.md"),
+    checked: true,
+  };
+
+  const nextDraft = sourceNoteEditor.updateSourceNoteEditorDraftContent(
+    completedDraft,
+    "- [ ] 重写后的标题\n正文保持普通文本。",
+  );
+  assert.equal(nextDraft.checked, true);
+  assert.equal(nextDraft.title, "重写后的标题");
+  assert.equal(nextDraft.noteText, "正文保持普通文本。");
+});
+
+test("source note editor stops parsing hidden metadata after the body starts", () => {
+  const sourceNoteEditor = loadSourceNoteEditorModule();
+  const blocks = sourceNoteEditor.parseSourceNoteEditorBlocks({
+    content: [
+      "- [ ] 保留正文里的保留前缀",
+      "bucket: upcoming",
+      "status: waiting_review",
+      "",
+      "status: 这一行现在是正文",
+      "resource: https://example.com/as-body-text",
+      "note: 这一行也应继续留在正文里",
+    ].join("\n"),
+    fileName: "tasks.md",
+    modifiedAtMs: null,
+    path: "workspace/notes/tasks.md",
+    sourceRoot: "workspace/notes",
+    title: "tasks",
+  });
+
+  assert.equal(blocks.length, 1);
+  assert.equal(blocks[0]?.recentInstanceStatus, "waiting_review");
+  assert.deepEqual(blocks[0]?.extraMetadata, []);
+  assert.equal(
+    blocks[0]?.noteText,
+    "status: 这一行现在是正文\nresource: https://example.com/as-body-text\nnote: 这一行也应继续留在正文里",
+  );
+});
+
+test("note page resolves newly created source notes from the appended tail block instead of matching by mutable metadata", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /const createdBlocks = parseSourceNoteEditorBlocks\(savedNote\);/);
+  assert.match(notePageSource, /const createdBlock = createdBlocks\[createdBlocks\.length - 1\] \?\? null;/);
+  assert.doesNotMatch(notePageSource, /find\(\(block\) => block\.updatedAt === normalizedDraft\.updatedAt\)/);
+});
+
+test("source note studio removes direct metadata form inputs from the user-facing editor", () => {
+  const sourceNoteStudioSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/SourceNoteStudio.tsx"), "utf8");
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(sourceNoteStudioSource, /内容式便签编辑/);
+  assert.match(sourceNoteStudioSource, /第一行会作为标题/);
+  assert.match(sourceNoteStudioSource, /开始新便签/);
+  assert.match(sourceNoteStudioSource, /点击“保存便签”后/);
+  assert.match(sourceNoteStudioSource, /value=\{editorContent\}/);
+  assert.doesNotMatch(sourceNoteStudioSource, /formatSourceNoteEditorContent/);
+  assert.doesNotMatch(sourceNoteStudioSource, /updateSourceNoteEditorDraftContent/);
+  assert.match(notePageSource, /const \[sourceNoteEditorContent, setSourceNoteEditorContent\] = useState/);
+  assert.match(notePageSource, /const nextDraft = updateSourceNoteEditorDraftContent\(sourceNoteDraft, sourceNoteEditorContent\);/);
+  assert.match(notePageSource, /editorContent=\{sourceNoteEditorContent\}/);
+  assert.doesNotMatch(sourceNoteStudioSource, /<span>标题<\/span>/);
+  assert.doesNotMatch(sourceNoteStudioSource, /<span>分组<\/span>/);
+  assert.doesNotMatch(sourceNoteStudioSource, /<span>计划时间<\/span>/);
+  assert.doesNotMatch(sourceNoteStudioSource, /<span>Agent 建议<\/span>/);
+  assert.doesNotMatch(sourceNoteStudioSource, /写入分组/);
+  assert.doesNotMatch(sourceNoteStudioSource, /最近写回/);
+});
+
 test("dashboard home rpc service keeps transport failures visible instead of switching to mock orbit data", async () => {
   const transportError = new Error("Named Pipe transport is not wired.");
 
@@ -6612,7 +9563,44 @@ test("dashboard home rpc service keeps transport failures visible instead of swi
     },
   );
 });
-test("TaskDetailPanel defers the security summary until formal detail arrives", () => {
+
+test("note page deduplicates source-note fallback cards and canvas cards by source block identity", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+
+  assert.match(notePageSource, /function buildSourceNoteBlockAliases\(/);
+  assert.match(notePageSource, /function resolveSourceNoteBlockAliases\(/);
+  assert.match(notePageSource, /resolveSourceNoteBlockAliases\(item, sourceNotesByPath, sourceNotesByTitle\)\.forEach\(\(alias\) => \{/);
+  assert.match(notePageSource, /resolveSourceNoteBlockAliases\(item, sourceNotesByPath, sourceNotesByTitle\)\.some\(\(alias\) => representedSourceNoteBlocks\.has\(alias\)\)/);
+  assert.match(notePageSource, /const targetAliases = targetItem \? resolveSourceNoteBlockAliases\(targetItem, sourceNotesByPath, sourceNotesByTitle\) : \[\];/);
+  assert.match(notePageSource, /next\[replacementIndex\] = \{ \.\.\.next\[replacementIndex\], itemId \};/);
+});
+
+test("note preview stacks assign increasing sidebar z-order so later cards cover earlier cards", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+  const notePreviewSectionSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NotePreviewSection.tsx"), "utf8");
+  const notePreviewCardSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NotePreviewCard.tsx"), "utf8");
+  const notePageStyleSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/notePage.css"), "utf8");
+
+  assert.match(notePreviewSectionSource, /stackOrder=\{stackCards && items\.length > 1 \? index \+ 1 : undefined\}/);
+  assert.match(notePageSource, /stackOrder=\{group\.items\.length > 1 \? index \+ 1 : undefined\}/);
+  assert.match(notePreviewCardSource, /"--note-stack-order": String\(stackOrder\)/);
+  assert.match(notePageStyleSource, /z-index: var\(--note-stack-order, 1\);/);
+});
+test("note detail panel hides source scope and resource cards while keeping the action-bar open flow", () => {
+  const notePageSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/NotePage.tsx"), "utf8");
+  const noteDetailPanelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NoteDetailPanel.tsx"), "utf8");
+  const noteActionBarSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/notes/components/NoteActionBar.tsx"), "utf8");
+
+  assert.doesNotMatch(noteDetailPanelSource, /生效范围/);
+  assert.doesNotMatch(noteDetailPanelSource, /当前事项关联的入口/);
+  assert.doesNotMatch(noteDetailPanelSource, /note-detail-resource-list/);
+  assert.doesNotMatch(noteDetailPanelSource, /onResourceOpen/);
+  assert.doesNotMatch(notePageSource, /onResourceOpen=\{handleResourceOpen\}/);
+  assert.match(noteActionBarSource, /"open-resource"/);
+  assert.match(notePageSource, /if \(action === "open-resource"\)/);
+  assert.match(notePageSource, /void handleResourceOpen\(firstResource\.id\);/);
+});
+test("TaskDetailPanel defers the entire fallback security summary until formal detail arrives", () => {
   const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
 
   assert.match(panelSource, /detailState !== "ready" \|\| detail === null/);

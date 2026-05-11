@@ -99,6 +99,57 @@ func TestRunMergesSteeringMessagesIntoLaterPlannerRounds(t *testing.T) {
 	}
 }
 
+func TestRunStopsWhenToolRequiresAuthorization(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	request.ToolDefinitions = []model.ToolDefinition{{Name: "page_read"}}
+	request.GenerateToolCalls = func(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+		return model.ToolCallResult{
+			RequestID: "req_auth_tool",
+			Provider:  "openai_responses",
+			ModelID:   "gpt-5.4",
+			ToolCalls: []model.ToolInvocation{{Name: "page_read", Arguments: map[string]any{"url": "https://example.com"}}},
+		}, nil
+	}
+	approvalCode := tools.ToolErrorCodeApprovalRequired
+	request.ExecuteTool = func(_ context.Context, call model.ToolInvocation, _ int) (string, tools.ToolCallRecord) {
+		return "Tool page_read failed with error: approval required", tools.ToolCallRecord{
+			ToolCallID: "tool_call_auth",
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			ToolName:   call.Name,
+			Status:     tools.ToolCallStatusFailed,
+			Input:      cloneMap(call.Arguments),
+			Output: map[string]any{
+				"approval_required": true,
+				"risk_level":        tools.RiskLevelYellow,
+				"reason":            "webpage_requires_approval",
+			},
+			ErrorCode: &approvalCode,
+		}
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected agent loop request to be handled")
+	}
+	if result.StopReason != StopReasonNeedAuthorization {
+		t.Fatalf("expected need_authorization stop reason, got %s", result.StopReason)
+	}
+	if len(result.ToolCalls) != 1 || result.ToolCalls[0].ToolName != "page_read" {
+		t.Fatalf("expected approval-blocked tool call to be preserved, got %+v", result.ToolCalls)
+	}
+	if len(result.Rounds) != 1 || result.Rounds[0].StopReason != StopReasonNeedAuthorization {
+		t.Fatalf("expected round to stop for authorization, got %+v", result.Rounds)
+	}
+	if !hasEventType(result.Events, "loop.round.completed") {
+		t.Fatalf("expected loop.round.completed event, got %+v", result.Events)
+	}
+}
+
 func TestRunCompactsHistoryBeforeLaterPlannerRounds(t *testing.T) {
 	runtime := NewRuntime()
 	plannerInputs := []string{}
@@ -663,7 +714,7 @@ func TestRunStopsWithNoSupportedToolsWhenPlannerCallsToolWithoutExecutor(t *test
 	}
 }
 
-func TestRunReturnsPlannerAnswerWhenExecutorMissingAndPlannerAlsoAnswers(t *testing.T) {
+func TestRunUsesFallbackWhenExecutorMissingAndPlannerAlsoCallsTool(t *testing.T) {
 	runtime := NewRuntime()
 	request := testRuntimeRequest()
 	request.ExecuteTool = nil
@@ -687,11 +738,11 @@ func TestRunReturnsPlannerAnswerWhenExecutorMissingAndPlannerAlsoAnswers(t *test
 	if !handled {
 		t.Fatal("expected request to be handled")
 	}
-	if result.OutputText != "You should nil-check the pointer before use." {
-		t.Fatalf("expected planner direct answer to win when executor is missing, got %+v", result)
+	if result.OutputText != request.FallbackOutput {
+		t.Fatalf("expected fallback output when planner calls tools without executor, got %+v", result)
 	}
-	if result.StopReason != StopReasonCompleted {
-		t.Fatalf("expected completed stop reason when planner already answered, got %s", result.StopReason)
+	if result.StopReason != StopReasonNoSupportedTools {
+		t.Fatalf("expected no_supported_tools stop reason when planner still calls tools without executor, got %s", result.StopReason)
 	}
 }
 
@@ -736,7 +787,7 @@ func TestRunStopsWithNoSupportedToolsOnLastDisallowedToolRound(t *testing.T) {
 	}
 }
 
-func TestRunReturnsPlannerAnswerWhenAllChosenToolsAreDisallowed(t *testing.T) {
+func TestRunUsesFallbackWhenAllChosenToolsAreDisallowed(t *testing.T) {
 	runtime := NewRuntime()
 	request := testRuntimeRequest()
 	request.ToolDefinitions = []model.ToolDefinition{{Name: "read_file"}}
@@ -769,33 +820,33 @@ func TestRunReturnsPlannerAnswerWhenAllChosenToolsAreDisallowed(t *testing.T) {
 	if !handled {
 		t.Fatal("expected request to be handled")
 	}
-	if result.OutputText != "Here is what to change: nil-check the pointer before use." {
-		t.Fatalf("expected planner answer to be preserved when all chosen tools are disallowed, got %+v", result)
+	if result.OutputText != request.FallbackOutput {
+		t.Fatalf("expected fallback output when all chosen tools are disallowed, got %+v", result)
 	}
-	if result.StopReason != StopReasonCompleted {
-		t.Fatalf("expected completed stop reason when planner already answered, got %s", result.StopReason)
+	if result.StopReason != StopReasonNoSupportedTools {
+		t.Fatalf("expected no_supported_tools stop reason when all chosen tools are disallowed, got %s", result.StopReason)
 	}
 }
 
-func TestRunPreservesPlannerAnswerAcrossToolRoundFallback(t *testing.T) {
+func TestRunUsesFallbackWhenToolRoundOnlyHasPlannerChatter(t *testing.T) {
 	runtime := NewRuntime()
 	request := testRuntimeRequest()
 	request.MaxTurns = 1
 	request.GenerateToolCalls = func(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
 		return model.ToolCallResult{
-			RequestID:  "req_tool_round_with_answer",
+			RequestID:  "req_tool_round_with_chatter",
 			Provider:   "openai_responses",
 			ModelID:    "gpt-5.4",
-			OutputText: "Here is what to change: nil-check the pointer before use.",
+			OutputText: "I will inspect the file before answering.",
 			ToolCalls:  []model.ToolInvocation{{Name: "read_file", Arguments: map[string]any{"path": "notes/source.txt"}}},
 		}, nil
 	}
 	request.ExecuteTool = func(_ context.Context, call model.ToolInvocation, round int) (string, tools.ToolCallRecord) {
 		return "Observed " + call.Name, tools.ToolCallRecord{
-			ToolCallID: "tool_call_round_with_answer",
+			ToolCallID: "tool_call_round_with_chatter",
 			TaskID:     request.TaskID,
 			RunID:      request.RunID,
-			StepID:     "step_loop_tool_round_with_answer",
+			StepID:     "step_loop_tool_round_with_chatter",
 			ToolName:   call.Name,
 			Status:     tools.ToolCallStatusSucceeded,
 			Output:     map[string]any{"loop_round": round},
@@ -809,15 +860,55 @@ func TestRunPreservesPlannerAnswerAcrossToolRoundFallback(t *testing.T) {
 	if !handled {
 		t.Fatal("expected request to be handled")
 	}
-	if result.StopReason != StopReasonCompleted {
-		t.Fatalf("expected completed stop reason when last tool round already includes a usable answer, got %s", result.StopReason)
+	if result.StopReason != StopReasonMaxIterations {
+		t.Fatalf("expected max_iterations_reached when tool-round chatter cannot finish the loop, got %s", result.StopReason)
 	}
-	if result.OutputText != "Here is what to change: nil-check the pointer before use." {
-		t.Fatalf("expected best-effort planner answer to survive fallback, got %+v", result)
+	if result.OutputText != request.FallbackOutput {
+		t.Fatalf("expected fallback output instead of tool-round planner chatter, got %+v", result)
 	}
 }
 
-func TestRunPreservesPriorPlannerAnswerWhenFinalRoundIsEmpty(t *testing.T) {
+func TestRunUsesFallbackForToolRoundPlannerTextWithoutFinalRound(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	request.MaxTurns = 1
+	request.GenerateToolCalls = func(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+		return model.ToolCallResult{
+			RequestID:  "req_tool_round_with_planner_text",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "Use strings.TrimSpace before the nil check.",
+			ToolCalls:  []model.ToolInvocation{{Name: "read_file", Arguments: map[string]any{"path": "notes/source.txt"}}},
+		}, nil
+	}
+	request.ExecuteTool = func(_ context.Context, call model.ToolInvocation, round int) (string, tools.ToolCallRecord) {
+		return "Observed " + call.Name, tools.ToolCallRecord{
+			ToolCallID: "tool_call_round_with_planner_text",
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			StepID:     "step_loop_tool_round_with_planner_text",
+			ToolName:   call.Name,
+			Status:     tools.ToolCallStatusSucceeded,
+			Output:     map[string]any{"loop_round": round},
+		}
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if result.StopReason != StopReasonMaxIterations {
+		t.Fatalf("expected max_iterations_reached when tool-round planner text lacks a no-tool final round, got %s", result.StopReason)
+	}
+	if result.OutputText != request.FallbackOutput {
+		t.Fatalf("expected fallback output instead of tool-round planner text, got %+v", result)
+	}
+}
+
+func TestRunUsesFallbackWhenOnlyPriorToolRoundHadPlannerChatter(t *testing.T) {
 	runtime := NewRuntime()
 	request := testRuntimeRequest()
 	plannerCalls := 0
@@ -829,7 +920,7 @@ func TestRunPreservesPriorPlannerAnswerWhenFinalRoundIsEmpty(t *testing.T) {
 				RequestID:  "req_tool_round_answer_then_empty_1",
 				Provider:   "openai_responses",
 				ModelID:    "gpt-5.4",
-				OutputText: "Here is the likely fix: nil-check the pointer before use.",
+				OutputText: "I will inspect the file before answering.",
 				ToolCalls:  []model.ToolInvocation{{Name: "read_file", Arguments: map[string]any{"path": "notes/source.txt"}}},
 			}, nil
 		default:
@@ -860,11 +951,62 @@ func TestRunPreservesPriorPlannerAnswerWhenFinalRoundIsEmpty(t *testing.T) {
 	if !handled {
 		t.Fatal("expected request to be handled")
 	}
-	if result.OutputText != "Here is the likely fix: nil-check the pointer before use." {
-		t.Fatalf("expected prior planner answer to survive empty final round, got %+v", result)
+	if result.OutputText != request.FallbackOutput {
+		t.Fatalf("expected fallback output when only a prior tool round had planner text, got %+v", result)
 	}
-	if result.StopReason != StopReasonCompleted {
-		t.Fatalf("expected completed stop reason when prior planner answer is preserved, got %s", result.StopReason)
+	if result.StopReason != StopReasonNeedUserInput {
+		t.Fatalf("expected need_user_input when final round has no answer, got %s", result.StopReason)
+	}
+}
+
+func TestRunUsesFallbackWhenPriorToolRoundHadPlannerText(t *testing.T) {
+	runtime := NewRuntime()
+	request := testRuntimeRequest()
+	plannerCalls := 0
+	request.GenerateToolCalls = func(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+		plannerCalls++
+		switch plannerCalls {
+		case 1:
+			return model.ToolCallResult{
+				RequestID:  "req_tool_round_answer_then_empty_1",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "Use strings.TrimSpace before the nil check.",
+				ToolCalls:  []model.ToolInvocation{{Name: "read_file", Arguments: map[string]any{"path": "notes/source.txt"}}},
+			}, nil
+		default:
+			return model.ToolCallResult{
+				RequestID:  "req_tool_round_answer_then_empty_2",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "",
+			}, nil
+		}
+	}
+	request.ExecuteTool = func(_ context.Context, call model.ToolInvocation, round int) (string, tools.ToolCallRecord) {
+		return "Observed " + call.Name, tools.ToolCallRecord{
+			ToolCallID: "tool_call_round_answer_then_empty",
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			StepID:     "step_loop_tool_round_answer_then_empty",
+			ToolName:   call.Name,
+			Status:     tools.ToolCallStatusSucceeded,
+			Output:     map[string]any{"loop_round": round},
+		}
+	}
+
+	result, handled, err := runtime.Run(context.Background(), request)
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected request to be handled")
+	}
+	if result.OutputText != request.FallbackOutput {
+		t.Fatalf("expected fallback output when only a prior tool round had planner text, got %+v", result)
+	}
+	if result.StopReason != StopReasonNeedUserInput {
+		t.Fatalf("expected need_user_input when final round has no answer, got %s", result.StopReason)
 	}
 }
 
@@ -1625,10 +1767,11 @@ func TestRunRetriesTimedOutToolUpToConfiguredBudget(t *testing.T) {
 	request.ToolRetryBudget = 2
 	request.GenerateToolCalls = func(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
 		return model.ToolCallResult{
-			RequestID: "req_tool_retry",
-			Provider:  "openai_responses",
-			ModelID:   "gpt-5.4",
-			ToolCalls: []model.ToolInvocation{{Name: "read_file", Arguments: map[string]any{"path": "notes/retry.txt"}}},
+			RequestID:  "req_tool_retry",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "I will inspect the retry file first.",
+			ToolCalls:  []model.ToolInvocation{{Name: "read_file", Arguments: map[string]any{"path": "notes/retry.txt"}}},
 		}, nil
 	}
 	attempts := 0
@@ -1676,10 +1819,11 @@ func TestRunDoesNotRetryNonTimeoutToolFailures(t *testing.T) {
 	request.ToolRetryBudget = 2
 	request.GenerateToolCalls = func(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
 		return model.ToolCallResult{
-			RequestID: "req_tool_failure",
-			Provider:  "openai_responses",
-			ModelID:   "gpt-5.4",
-			ToolCalls: []model.ToolInvocation{{Name: "read_file", Arguments: map[string]any{"path": "notes/fail.txt"}}},
+			RequestID:  "req_tool_failure",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "I will inspect the failing file first.",
+			ToolCalls:  []model.ToolInvocation{{Name: "read_file", Arguments: map[string]any{"path": "notes/fail.txt"}}},
 		}, nil
 	}
 	attempts := 0
@@ -1720,6 +1864,9 @@ func TestRunDoesNotRetryNonTimeoutToolFailures(t *testing.T) {
 	if result.StopReason != StopReasonMaxIterations {
 		t.Fatalf("expected single-round failure path to end with max_iterations_reached, got %+v", result.StopReason)
 	}
+	if result.OutputText != request.FallbackOutput {
+		t.Fatalf("expected fallback output after max-turn tool failure, got %+v", result)
+	}
 }
 
 func TestRunStopsAfterRepeatedToolChoices(t *testing.T) {
@@ -1728,10 +1875,11 @@ func TestRunStopsAfterRepeatedToolChoices(t *testing.T) {
 	request.RepeatedToolBudget = 1
 	request.GenerateToolCalls = func(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
 		return model.ToolCallResult{
-			RequestID: "req_dead_loop",
-			Provider:  "openai_responses",
-			ModelID:   "gpt-5.4",
-			ToolCalls: []model.ToolInvocation{{Name: "list_dir", Arguments: map[string]any{"path": "notes"}}},
+			RequestID:  "req_dead_loop",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "I will list the notes directory first.",
+			ToolCalls:  []model.ToolInvocation{{Name: "list_dir", Arguments: map[string]any{"path": "notes"}}},
 		}, nil
 	}
 	request.ExecuteTool = func(_ context.Context, call model.ToolInvocation, round int) (string, tools.ToolCallRecord) {
@@ -1761,6 +1909,9 @@ func TestRunStopsAfterRepeatedToolChoices(t *testing.T) {
 	}
 	if !hasEventType(result.Events, "loop.failed") {
 		t.Fatalf("expected loop.failed event in %+v", result.Events)
+	}
+	if result.OutputText != request.FallbackOutput {
+		t.Fatalf("expected fallback output after repeated tool choices, got %+v", result)
 	}
 }
 

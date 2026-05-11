@@ -4,13 +4,14 @@ import (
 	"strings"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
-// agentLoopCapabilityCatalog is the single source of truth for the current
-// bounded agent loop tool surface. The planner prompt and runtime allowlist both
-// derive from this catalog so the model cannot be shown one capability set while
-// the executor silently accepts another.
+// agentLoopCapabilityCatalog is the single source of truth for the bounded
+// agent-loop tool surface. The planner prompt and runtime allowlist both derive
+// from this catalog so the model cannot see one capability set while the
+// executor silently accepts another.
 var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 	{
 		Name:      "read_file",
@@ -46,6 +47,38 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 				"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 50},
 			},
 			"required":             []string{"path"},
+			"additionalProperties": false,
+		},
+	},
+	{
+		Name:                   "browser_attach_current",
+		RequiresCurrentBrowser: true,
+		UseWhen:                "需要附着当前真实浏览器标签页，并确认当前页面 URL 或标题",
+		AvoidWhen:              "当前任务并不依赖用户真实浏览器，或上下文里没有受支持浏览器线索",
+		Constraints: []string{
+			"仅附着本地已开启调试端口的 Chrome/Edge",
+			"执行层会自动注入附着线索",
+			"不会隐式导航或交互页面",
+		},
+		InputSchema: map[string]any{
+			"type":                 "object",
+			"properties":           map[string]any{},
+			"additionalProperties": false,
+		},
+	},
+	{
+		Name:                   "browser_snapshot",
+		RequiresCurrentBrowser: true,
+		UseWhen:                "需要读取当前真实浏览器页的可见文本、标题和结构化摘要",
+		AvoidWhen:              "用户已经提供明确 URL，并且只需要离线读取页面而不关心真实浏览器状态",
+		Constraints: []string{
+			"仅适用于当前真实浏览器标签页",
+			"执行层会自动注入附着线索",
+			"不会主动导航页面",
+		},
+		InputSchema: map[string]any{
+			"type":                 "object",
+			"properties":           map[string]any{},
 			"additionalProperties": false,
 		},
 	},
@@ -87,26 +120,52 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 			"additionalProperties": false,
 		},
 	},
+	{
+		Name:      "structured_dom",
+		UseWhen:   "需要快速了解页面的标题层级、链接、按钮和输入框结构",
+		AvoidWhen: "用户只需要通读正文，或只需要确认某个关键词是否出现",
+		Constraints: []string{
+			"页面结构读取可能触发审批",
+			"一次只提取一个绝对 URL 的结构摘要",
+			"不会执行页面交互",
+		},
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"url": map[string]any{"type": "string", "description": "Absolute URL to inspect."},
+			},
+			"required":             []string{"url"},
+			"additionalProperties": false,
+		},
+	},
 }
 
 type agentLoopCapabilitySpec struct {
-	Name        string
-	UseWhen     string
-	AvoidWhen   string
-	Constraints []string
-	InputSchema map[string]any
+	Name                   string
+	RequiresCurrentBrowser bool
+	UseWhen                string
+	AvoidWhen              string
+	Constraints            []string
+	InputSchema            map[string]any
 }
 
 // agentLoopToolDefinitions resolves the runtime-visible planner tools from the
 // shared catalog and the live registry. Missing registry entries are skipped so
 // partially wired environments never advertise tools that cannot execute.
 func (s *Service) agentLoopToolDefinitions() []model.ToolDefinition {
+	return s.agentLoopToolDefinitionsForSnapshot(taskcontext.TaskContextSnapshot{})
+}
+
+func (s *Service) agentLoopToolDefinitionsForSnapshot(snapshot taskcontext.TaskContextSnapshot) []model.ToolDefinition {
 	if s == nil || s.tools == nil {
 		return nil
 	}
 
 	definitions := make([]model.ToolDefinition, 0, len(agentLoopCapabilityCatalog))
 	for _, capability := range agentLoopCapabilityCatalog {
+		if !capability.allowedForSnapshot(snapshot) {
+			continue
+		}
 		metadata, ok := s.agentLoopToolMetadata(capability.Name)
 		if !ok {
 			continue
@@ -117,18 +176,20 @@ func (s *Service) agentLoopToolDefinitions() []model.ToolDefinition {
 }
 
 // isAllowedAgentLoopTool keeps the execution guard aligned with the planner
-// catalog and the live registry. This prevents hallucinated or unregistered tool
-// names from slipping past the allowlist even when they resemble supported tools.
+// catalog and the live registry. This prevents hallucinated or unregistered
+// tool names from slipping past the allowlist.
 func (s *Service) isAllowedAgentLoopTool(name string) bool {
+	return s.isAllowedAgentLoopToolForSnapshot(name, taskcontext.TaskContextSnapshot{})
+}
+
+func (s *Service) isAllowedAgentLoopToolForSnapshot(name string, snapshot taskcontext.TaskContextSnapshot) bool {
 	if s == nil || s.tools == nil {
 		return false
 	}
-
 	capability, ok := agentLoopCapabilityByName(name)
-	if !ok {
+	if !ok || !capability.allowedForSnapshot(snapshot) {
 		return false
 	}
-
 	_, ok = s.agentLoopToolMetadata(capability.Name)
 	return ok
 }
@@ -139,6 +200,14 @@ func (s *Service) agentLoopToolMetadata(name string) (tools.ToolMetadata, bool) 
 		return tools.ToolMetadata{}, false
 	}
 	return tool.Metadata(), true
+}
+
+func resolveAgentLoopToolInput(toolName string, arguments map[string]any, snapshot taskcontext.TaskContextSnapshot) (map[string]any, bool) {
+	trimmedName := strings.TrimSpace(toolName)
+	if browserInput, ok := resolveBrowserToolInput(trimmedName, arguments, snapshot); ok {
+		return browserInput, true
+	}
+	return resolveDirectToolInput(trimmedName, arguments, snapshot)
 }
 
 func agentLoopCapabilityByName(name string) (agentLoopCapabilitySpec, bool) {
@@ -186,4 +255,21 @@ func joinCapabilityConstraints(values []string) string {
 		cleaned = append(cleaned, trimmed)
 	}
 	return strings.Join(cleaned, ", ")
+}
+
+func (c agentLoopCapabilitySpec) allowedForSnapshot(snapshot taskcontext.TaskContextSnapshot) bool {
+	if !c.RequiresCurrentBrowser {
+		return true
+	}
+	browserKind := strings.ToLower(strings.TrimSpace(snapshot.BrowserKind))
+	if browserKind != "chrome" && browserKind != "edge" {
+		return false
+	}
+	if strings.TrimSpace(snapshot.PageURL) != "" {
+		return true
+	}
+	if strings.TrimSpace(snapshot.PageTitle) != "" {
+		return true
+	}
+	return strings.TrimSpace(snapshot.WindowTitle) != ""
 }

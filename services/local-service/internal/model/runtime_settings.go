@@ -1,8 +1,9 @@
 package model
 
 import (
-	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 	"strings"
+
+	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 )
 
 // CanonicalProviderName normalizes persisted settings aliases into the runtime
