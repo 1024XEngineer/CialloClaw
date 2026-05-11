@@ -13,6 +13,7 @@ import { DashboardEntranceOrb } from "@/features/dashboard/home/components/Dashb
 import { DashboardEventOrb } from "@/features/dashboard/home/components/DashboardEventOrb";
 import { DashboardEventPanel } from "@/features/dashboard/home/components/DashboardEventPanel";
 import { DashboardOrbitRings } from "@/features/dashboard/home/components/DashboardOrbitRings";
+import { useDashboardEscapeHandler } from "@/features/dashboard/shared/dashboardEscapeCoordinator";
 import { resolveDashboardModuleRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { buildDesktopOnboardingPresentation } from "@/features/onboarding/onboardingGeometry";
 import { setDesktopOnboardingPresentation } from "@/features/onboarding/onboardingService";
@@ -85,7 +86,7 @@ function pickNextSummonIndex(
 
 function buildSummonTemplateSignature(templates: Array<Omit<DashboardHomeSummonEvent, "id">>) {
   const buildNavigationTargetSignature = (
-    target: DashboardHomeData["stateMap"][DashboardHomeEventStateKey]["navigationTarget"] | undefined,
+    target: NonNullable<DashboardHomeSummonEvent["expandedState"]>["navigationTarget"] | undefined,
   ) => {
     if (!target) {
       return "";
@@ -233,6 +234,11 @@ export function DashboardHome({
     };
   }, [data.summonTemplates.length, scheduleSummon, summonTemplateSignature]);
 
+  useDashboardEscapeHandler({
+    enabled: activeStateKey !== null || Boolean(activeExpandedState),
+    handleEscape: closeActiveOverlay,
+    priority: 200,
+  });
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;

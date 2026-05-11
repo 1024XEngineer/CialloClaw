@@ -59,6 +59,12 @@ pub fn open_local_path(raw_path: &str, roots: &LocalPathRoots) -> Result<(), Str
     open_with_system_handler(&target)
 }
 
+/// Opens an external web url through the operating system's default browser.
+pub fn open_external_url(raw_url: &str) -> Result<(), String> {
+    let target = normalize_external_url(raw_url)?;
+    open_url_with_system_handler(&target)
+}
+
 /// Reveals a local file in the system file manager, or opens the directory
 /// directly when the target already points at a folder.
 pub fn reveal_local_path(raw_path: &str, roots: &LocalPathRoots) -> Result<(), String> {
@@ -220,10 +226,58 @@ fn ensure_path_within_allowed_roots(target: &Path, roots: &LocalPathRoots) -> Re
     ))
 }
 
+fn normalize_external_url(raw_url: &str) -> Result<String, String> {
+    let trimmed = raw_url.trim();
+    if trimmed.is_empty() {
+        return Err("external url is empty".to_string());
+    }
+
+    let Some((scheme, remainder)) = trimmed.split_once(':') else {
+        return Err("external url is missing a scheme".to_string());
+    };
+
+    if !scheme.eq_ignore_ascii_case("https") && !scheme.eq_ignore_ascii_case("http") {
+        return Err("external url must use http or https".to_string());
+    }
+
+    if !remainder.starts_with("//") {
+        return Err("external url must include // after the scheme".to_string());
+    }
+
+    if trimmed.chars().any(char::is_whitespace) {
+        return Err("external url must not contain whitespace".to_string());
+    }
+
+    Ok(trimmed.to_string())
+}
+
 #[cfg(windows)]
 fn open_with_system_handler(target: &Path) -> Result<(), String> {
     let operation = encode_wide(OsStr::new("open"));
     let target_wide = encode_wide(target.as_os_str());
+    let result = unsafe {
+        ShellExecuteW(
+            None,
+            PCWSTR(operation.as_ptr()),
+            PCWSTR(target_wide.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR::null(),
+            SW_SHOWNORMAL,
+        )
+    };
+
+    let code = result.0 as isize;
+    if code <= 32 {
+        return Err(format!("shell open failed with code {code}"));
+    }
+
+    Ok(())
+}
+
+#[cfg(windows)]
+fn open_url_with_system_handler(target: &str) -> Result<(), String> {
+    let operation = encode_wide(OsStr::new("open"));
+    let target_wide = encode_wide(OsStr::new(target));
     let result = unsafe {
         ShellExecuteW(
             None,
@@ -276,6 +330,11 @@ fn reveal_with_system_handler(target: &Path) -> Result<(), String> {
     )
 }
 
+#[cfg(target_os = "macos")]
+fn open_url_with_system_handler(target: &str) -> Result<(), String> {
+    run_platform_string_command("open", &[target], &format!("open external url {target}"))
+}
+
 #[cfg(all(not(windows), not(target_os = "macos")))]
 fn open_with_system_handler(target: &Path) -> Result<(), String> {
     run_platform_command(
@@ -295,8 +354,27 @@ fn reveal_with_system_handler(target: &Path) -> Result<(), String> {
     )
 }
 
+#[cfg(all(not(windows), not(target_os = "macos")))]
+fn open_url_with_system_handler(target: &str) -> Result<(), String> {
+    run_platform_string_command("xdg-open", &[target], &format!("open external url {target}"))
+}
+
 #[cfg(windows)]
 fn run_platform_command(program: &str, args: &[&str], description: &str) -> Result<(), String> {
+    let status = Command::new(program)
+        .args(args)
+        .status()
+        .map_err(|error| format!("failed to {description}: {error}"))?;
+
+    if !status.success() {
+        return Err(format!("failed to {description}: exit status {status}"));
+    }
+
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn run_platform_string_command(program: &str, args: &[&str], description: &str) -> Result<(), String> {
     let status = Command::new(program)
         .args(args)
         .status()
@@ -326,8 +404,8 @@ fn run_platform_command(program: &str, args: &[&Path], description: &str) -> Res
 #[cfg(test)]
 mod tests {
     use super::{
-        open_trusted_directory, prepare_trusted_directory_target, resolve_existing_local_path,
-        resolve_path_candidate, LocalPathRoots,
+        normalize_external_url, open_trusted_directory, prepare_trusted_directory_target,
+        resolve_existing_local_path, resolve_path_candidate, LocalPathRoots,
     };
     use std::env;
     use std::fs;
@@ -337,6 +415,22 @@ mod tests {
     #[test]
     fn resolve_path_candidate_rejects_empty_input() {
         assert!(resolve_path_candidate("   ", &LocalPathRoots::new(None, None, None)).is_err());
+    }
+
+    #[test]
+    fn normalize_external_url_accepts_uppercase_http_schemes() {
+        let normalized = normalize_external_url("HTTPS://example.com/path")
+            .expect("uppercase https scheme should pass validation");
+
+        assert_eq!(normalized, "HTTPS://example.com/path");
+    }
+
+    #[test]
+    fn normalize_external_url_rejects_schemes_without_double_slash() {
+        let error = normalize_external_url("https:example.com")
+            .expect_err("scheme without double slash should fail");
+
+        assert!(error.contains("include //"));
     }
 
     #[test]

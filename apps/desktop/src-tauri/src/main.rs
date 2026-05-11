@@ -901,6 +901,13 @@ async fn desktop_open_local_path(
 }
 
 #[tauri::command]
+async fn desktop_open_external_url(url: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || local_path::open_external_url(&url))
+        .await
+        .map_err(|error| format!("desktop external url open task failed: {error}"))?
+}
+
+#[tauri::command]
 async fn desktop_reveal_local_path(
     bridge_state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
     settings_snapshot_state: tauri::State<'_, Arc<DesktopSettingsSnapshotState>>,
@@ -3143,6 +3150,7 @@ fn main() {
             desktop_open_or_focus_onboarding,
             desktop_promote_onboarding,
             desktop_open_local_path,
+            desktop_open_external_url,
             desktop_reveal_local_path,
             desktop_open_runtime_data_path,
             desktop_open_runtime_workspace_path,

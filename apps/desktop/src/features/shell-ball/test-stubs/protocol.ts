@@ -483,6 +483,7 @@ export interface AgentTaskConfirmParams {
   task_id: string;
   confirmed: boolean;
   corrected_intent?: IntentPayload;
+  correction_text?: string;
 }
 
 export interface AgentTaskConfirmResult {
@@ -761,6 +762,10 @@ export interface AgentNotepadConvertToTaskParams {
 
 export interface AgentNotepadConvertToTaskResult {
   task: Task;
+  bubble_message: BubbleMessage | null;
+  delivery_result: DeliveryResult | null;
+  notepad_item: TodoItem;
+  refresh_groups: TodoBucket[];
 }
 
 export interface AgentNotepadUpdateParams {

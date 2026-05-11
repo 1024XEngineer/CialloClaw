@@ -87,7 +87,8 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 		UseWhen:   "需要读取某个网页的标题或主要可见文本",
 		AvoidWhen: "用户只需要确认关键词是否出现，而不需要通读页面内容",
 		Constraints: []string{
-			"网页读取可能触发审批",
+			"显式网页目标默认按低风险只读处理",
+			"仅 localhost 风格主机名、单标签主机名、本地域后缀，以及字面量回环/私网/link-local/CGNAT IP 仍可能触发审批",
 			"一次只读取一个绝对 URL",
 			"不会执行页面交互",
 		},
@@ -105,7 +106,8 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 		UseWhen:   "需要确认某个网页里是否出现某个关键词或短语",
 		AvoidWhen: "用户需要完整页面内容，或需要进一步浏览页面结构",
 		Constraints: []string{
-			"网页读取可能触发审批",
+			"显式网页目标默认按低风险只读处理",
+			"仅 localhost 风格主机名、单标签主机名、本地域后缀，以及字面量回环/私网/link-local/CGNAT IP 仍可能触发审批",
 			"一次只搜索一个绝对 URL",
 			"返回受限数量的关键词命中",
 		},
@@ -117,24 +119,6 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 				"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 20},
 			},
 			"required":             []string{"url", "query"},
-			"additionalProperties": false,
-		},
-	},
-	{
-		Name:      "structured_dom",
-		UseWhen:   "需要快速了解页面的标题层级、链接、按钮和输入框结构",
-		AvoidWhen: "用户只需要通读正文，或只需要确认某个关键词是否出现",
-		Constraints: []string{
-			"页面结构读取可能触发审批",
-			"一次只提取一个绝对 URL 的结构摘要",
-			"不会执行页面交互",
-		},
-		InputSchema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"url": map[string]any{"type": "string", "description": "Absolute URL to inspect."},
-			},
-			"required":             []string{"url"},
 			"additionalProperties": false,
 		},
 	},

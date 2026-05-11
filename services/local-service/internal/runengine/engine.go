@@ -2045,6 +2045,32 @@ func (e *Engine) LinkNotepadItemTask(itemID, taskID string) (map[string]any, boo
 	return normalizeNotepadItem(updated, e.now()), true
 }
 
+// UnlinkNotepadItemTask removes one task backlink from a claimed or already
+// linked note so orchestrator rollback paths can leave the note foundation
+// consistent when formal task creation fails after persistence.
+func (e *Engine) UnlinkNotepadItemTask(itemID, taskID string) (map[string]any, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	item, index, ok := e.findNotepadItem(itemID)
+	if !ok {
+		return nil, false
+	}
+
+	if stringValue(item, "linked_task_id", "") != strings.TrimSpace(taskID) {
+		return nil, false
+	}
+
+	updated := cloneMap(item)
+	delete(updated, "linked_task_id")
+	items := cloneMapSlice(e.notepadItems)
+	items[index] = updated
+	if err := e.replaceNotepadItemsLocked(items); err != nil {
+		return nil, false
+	}
+	return normalizeNotepadItem(updated, e.now()), true
+}
+
 func (e *Engine) UpdateNotepadItem(itemID, action string) (map[string]any, []string, string, bool, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

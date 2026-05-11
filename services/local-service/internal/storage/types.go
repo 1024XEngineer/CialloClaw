@@ -102,6 +102,7 @@ type TodoItemRecord struct {
 	TagsJSON             string
 	AgentSuggestion      string
 	NoteText             string
+	NoteTextOrigin       string
 	Prerequisite         string
 	PlannedAt            string
 	PreviousBucket       string
