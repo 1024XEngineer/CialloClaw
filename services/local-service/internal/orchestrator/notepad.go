@@ -83,9 +83,8 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 	}()
 
 	snapshot := notepadSnapshot(item)
-	confirmRequired := taskStartConfirmRequired(snapshot, nil, false)
-	suggestion := s.intent.Suggest(snapshot, nil, confirmRequired)
-	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion, confirmRequired)
+	suggestion := s.intent.Suggest(snapshot, nil, false)
+	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion, false)
 	suggestion.TaskTitle = notepadTaskTitle(snapshot, suggestion)
 	task := s.createNotepadTask(snapshot, suggestion)
 	updatedItem, ok := s.runEngine.LinkNotepadItemTask(itemID, task.TaskID)
@@ -97,11 +96,24 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 		return nil, linkErr
 	}
 	claimed = false
+	publishedTaskStart := false
+	if !suggestion.RequiresConfirm {
+		// Direct-execution note conversions must publish task ownership before
+		// queue/governance/execution starts so the shared RPC stream can attach
+		// live loop.* notifications to this request the same way task.start does.
+		s.publishTaskStart(task.TaskID, task.SessionID, requestTraceID(params))
+		publishedTaskStart = true
+	}
 	response, err := s.finishNotepadTask(snapshot, suggestion, task)
 	if err != nil {
+		if publishedTaskStart {
+			return nil, err
+		}
 		return nil, s.rollbackLinkedNotepadTask(itemID, task.TaskID, err)
 	}
-	s.publishTaskStart(task.TaskID, task.SessionID, requestTraceID(params))
+	if !publishedTaskStart {
+		s.publishTaskStart(task.TaskID, task.SessionID, requestTraceID(params))
+	}
 
 	response["notepad_item"] = s.runEngine.ProtocolNotepadItem(updatedItem)
 	response["refresh_groups"] = []string{stringValue(updatedItem, "bucket", "upcoming")}

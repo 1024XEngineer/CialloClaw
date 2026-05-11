@@ -2577,7 +2577,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户点击“交给 Agent 处理”时
-- **系统处理**：将事项按 `note_text / title` 升级为正式任务，并复用普通 free-text 任务入口的确认门槛；对带有 provenance 的当前事项，用户显式填写的 `note_text` 优先进入正式任务文本输入，title-only 事项回退到原始 `title`，不会把展示态补写文案当成正式执行输入；对于缺少 `note_text_origin` 的 legacy 持久化行，只要已存 `note_text` 非空，运行时会保守地继续按用户正文处理，避免在重载后静默丢掉真实输入；用户显式关联的路径型 `related_resources` 会进入正式任务文件上下文，系统派生的默认目录仍只保留为来源事项的展示与打开上下文
+- **系统处理**：将事项按 `note_text / title` 升级为正式任务，并复用普通 free-text 任务入口的意图与执行语义；对带有 provenance 的当前事项，用户显式填写的 `note_text` 优先进入正式任务文本输入，title-only 事项回退到原始 `title`，不会把展示态补写文案当成正式执行输入；对于缺少 `note_text_origin` 的 legacy 持久化行，只要已存 `note_text` 非空，运行时会保守地继续按用户正文处理，避免在重载后静默丢掉真实输入；用户显式关联的路径型 `related_resources` 会进入正式任务文件上下文，系统派生的默认目录仍只保留为来源事项的展示与打开上下文；若自由文本推断已足够明确，任务可直接进入执行并返回 `delivery_result`
 - **入参**：事项 ID、确认标记
 - **出参**：主任务入口返回对象、更新后的来源事项、建议刷新的事项分组
 
@@ -2623,7 +2623,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 ### agent.notepad.convert_to_task 出参示例
 
-以下示例展示最常见的确认分支响应：事项升级为正式任务后，先进入主链路的意图确认阶段，等待用户继续确认或修正处理方式。
+以下示例展示一条直接执行分支响应：事项升级为正式任务后，沿 free-text 主链路直接完成处理并返回正式交付结果。若意图后续需要补充或纠偏，仍可能进入确认分支。
 
 ```json
 {
@@ -2635,14 +2635,21 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
         "task_id": "task_401",
         "title": "处理：整理 Q3 复盘要点",
         "source_type": "todo",
-        "status": "confirming_intent",
-        "current_step": "intent_confirmation"
+        "status": "completed",
+        "current_step": "agent_loop"
       },
       "bubble_message": {
-        "type": "intent_confirm",
-        "text": "请确认你希望我如何处理当前内容。"
+        "type": "result",
+        "text": "结果已经生成，可直接查看。"
       },
-      "delivery_result": null,
+      "delivery_result": {
+        "type": "workspace_document",
+        "title": "处理结果",
+        "summary": "已生成正式文档，可继续打开查看。",
+        "payload": {
+          "path": "workspace/tasks/task_401/result.md"
+        }
+      },
       "notepad_item": {
         "item_id": "todo_001",
         "bucket": "upcoming",
