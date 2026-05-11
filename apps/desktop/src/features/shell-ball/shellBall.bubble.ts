@@ -4,6 +4,7 @@ export type {
   ShellBallBubbleDesktopMotionHint,
   ShellBallBubbleDesktopPresentationHint,
   ShellBallBubbleDesktopState,
+  ShellBallBubbleInlineRecommendationPresentationState,
   ShellBallBubbleItem,
   ShellBallBubbleRole,
   ShellBallRecommendationContext,

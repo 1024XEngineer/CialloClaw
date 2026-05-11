@@ -28,6 +28,19 @@ export type ShellBallBubbleInlineApprovalState = {
 };
 
 /**
+ * Inline recommendation presentation metadata stays shell-ball-local so the
+ * UI can surface demo-friendly labels, context summaries, and priority cues.
+ */
+export type ShellBallBubbleInlineRecommendationPresentationState = {
+  label: string;
+  copy: string;
+  reason: string;
+  summary: string;
+  priority: "high" | "medium" | "low";
+  priorityLabel: string;
+};
+
+/**
  * Inline recommendation metadata stays shell-ball-local until the user accepts
  * one suggestion and promotes it into the formal task pipeline.
  */
@@ -36,6 +49,7 @@ export type ShellBallBubbleInlineRecommendationState = {
   intent: IntentPayload;
   pageContext: PageContext;
   requestContext: ShellBallRecommendationContext;
+  presentation: ShellBallBubbleInlineRecommendationPresentationState;
 };
 
 export type ShellBallRecommendationContext = InputContext & {
@@ -93,6 +107,7 @@ function cloneShellBallBubbleInlineRecommendationState(
       ...(state.requestContext.error ? { error: { ...state.requestContext.error } } : {}),
       ...(state.requestContext.clipboard ? { clipboard: { ...state.requestContext.clipboard } } : {}),
     },
+    presentation: { ...state.presentation },
   };
 }
 

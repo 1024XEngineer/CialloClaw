@@ -52,21 +52,6 @@ type FloatingPetBubbleAnimation = {
   times: readonly number[];
 };
 
-type FloatingPetBubbleAnimation = {
-  animate:
-    | { opacity: number[]; scale: number[] }
-    | { opacity: number[]; scaleX: number[]; scaleY: number[] };
-  assetName: FloatingPetAssetName;
-  duration: number;
-  initial?:
-    | { opacity: number; scale: number }
-    | { opacity: number; scaleX: number; scaleY: number };
-  layout: FloatingPetLayerTransform;
-  repeat: number;
-  repeatType: undefined;
-  times: readonly number[];
-};
-
 const HAPPY_FACE_TIMES = [0, 10 / 120, 15 / 120, 105 / 120, 110 / 120, 1] as const;
 const HAPPY_FACE_CLOSED_EYE_ROTATE = [180, 180, 180, 180, 180, 180] as const;
 const BREATH_EYE_TIMES = [0, 30 / 300, 40 / 300, 50 / 300, 1] as const;

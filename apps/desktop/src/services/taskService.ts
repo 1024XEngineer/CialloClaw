@@ -251,6 +251,11 @@ export async function startTaskFromRecommendation(
       preferred: "bubble",
       fallback: "task_detail",
     },
+    // Roadshow recommendation acceptance should continue directly into the
+    // formal task path instead of asking for a second confirmation step.
+    options: {
+      confirm_required: false,
+    },
   });
   rememberConversationSessionFromTask(result.task);
   rememberConversationPageContextFromTask(result.task, pageContext);

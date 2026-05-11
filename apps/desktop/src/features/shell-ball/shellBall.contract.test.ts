@@ -8466,7 +8466,7 @@ test("shell-ball direct input does not expose task follow-up steering controls",
   assert.doesNotMatch(inputBarSource, /补充当前任务/);
 });
 
-test("shell-ball direct submit shows a detected-page status bubble before the task reply", async () => {
+test("shell-ball direct submit only shows the task reply", async () => {
   const reactRuntime = createImmediateShellBallReactRuntime();
 
   await withSourceModuleRuntime(
@@ -8658,14 +8658,8 @@ test("shell-ball direct submit shows a detected-page status bubble before the ta
       },
       {
         role: "agent",
-        text: "已识别当前网页：OpenAI Docs\nhttps://platform.openai.com/docs/overview",
-        turnPhase: 1,
-        type: "status",
-      },
-      {
-        role: "agent",
         text: "我会先总结这个网页的重点内容。",
-        turnPhase: 2,
+        turnPhase: 1,
         type: "result",
       },
     ],
@@ -9164,11 +9158,53 @@ test("shell-ball recommendation acceptance promotes the suggestion into a formal
   assert.match(coordinatorSource, /const result = await startTaskFromRecommendation\(recommendationText, \{/);
   assert.equal(coordinatorSource.includes("intent: inlineRecommendation.intent,"), false);
   assert.match(coordinatorSource, /submitShellBallRecommendationFeedback\(inlineRecommendation\.recommendationId, "positive"\);/);
-  assert.match(bubbleMessageSource, /Not now/);
-  assert.match(bubbleMessageSource, /Try this/);
+  assert.match(bubbleMessageSource, /暂不/);
+  assert.match(bubbleMessageSource, /就用这个/);
   assert.match(taskServiceSource, /request_meta: createRequestMeta\("recommendation_click"\)/);
   assert.match(taskServiceSource, /trigger: "recommendation_click"/);
   assert.equal(taskServiceSource.includes("...(context.intent ? { intent: context.intent } : {})"), false);
+});
+
+test("shell-ball mock recommendation reasons stay user-facing for primary click context", () => {
+  const servicePath = resolve(desktopRoot, "src/services/mockRecommendationService.ts");
+
+  withSourceModuleRuntime(servicePath, {}, (moduleExports) => {
+    const buildMockRecommendationPresentation = moduleExports.buildMockRecommendationPresentation as (input: {
+      scene: "idle";
+      context: {
+        app_name?: string;
+        last_action?: string;
+        page_title?: string;
+      };
+      index: number;
+    }) => {
+      copy: string;
+      reason: string;
+      label: string;
+      summary: string;
+      priority: string;
+      priorityLabel: string;
+    };
+
+    const presentation = buildMockRecommendationPresentation({
+      scene: "idle",
+      index: 0,
+      context: {
+        app_name: "desktop",
+        last_action: "primary_click",
+        page_title: "Shell Ball",
+      },
+    });
+
+    assert.match(presentation.copy, /我先|我已|当前|补上下文/);
+    assert.doesNotMatch(presentation.copy, /primary_click/);
+    assert.equal(presentation.copy.includes("\n"), false);
+    assert.equal(presentation.summary.includes("\n"), false);
+    assert.equal(presentation.reason.includes("\n"), false);
+    const recommendationCopy = presentation.copy.replace(/\s+/g, " ").trim();
+    assert.equal(recommendationCopy.includes("\n"), false);
+    assert.ok((recommendationCopy.match(/[。！？]/g) ?? []).length <= 2);
+  });
 });
 
 test("shell-ball primary recommendation flow stays backend-driven when an error scene returns no recommendations", () => {

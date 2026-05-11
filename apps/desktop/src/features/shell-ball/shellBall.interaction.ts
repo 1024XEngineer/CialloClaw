@@ -80,10 +80,6 @@ export function getShellBallInputBarMode(state: ShellBallVisualState): ShellBall
     case "hover_input":
     case "confirming_intent":
       return "interactive";
-    // Intent confirmation keeps the draft field editable so the user can send
-    // a clarifying follow-up without leaving the current shell-ball flow.
-    case "confirming_intent":
-      return "interactive";
     case "voice_listening":
     case "voice_locked":
       return "hidden";

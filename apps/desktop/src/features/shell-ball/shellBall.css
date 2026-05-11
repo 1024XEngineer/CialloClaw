@@ -527,7 +527,6 @@ body[data-app-window="shell-ball"],
   word-break: break-word;
 }
 
-<<<<<<< HEAD
 .shell-ball-bubble-message__intent-confirm-header {
   align-items: center;
   display: flex;
@@ -555,7 +554,8 @@ body[data-app-window="shell-ball"],
   line-height: 1;
   padding: 0.22rem 0.42rem;
   text-transform: uppercase;
-=======
+}
+
 .shell-ball-bubble-message__text--collapsed {
   display: -webkit-box;
   overflow: hidden;
@@ -571,7 +571,6 @@ body[data-app-window="shell-ball"],
   letter-spacing: 0.02em;
   line-height: 1.4;
   margin: 0 0 0.42rem;
->>>>>>> upstream/main
 }
 
 .shell-ball-bubble-message__loading {
@@ -852,7 +851,6 @@ body[data-app-window="shell-ball"],
   margin-top: 0.48rem;
 }
 
-<<<<<<< HEAD
 .shell-ball-bubble-message__recommendation-actions {
   display: flex;
   gap: 0.34rem;
@@ -861,11 +859,8 @@ body[data-app-window="shell-ball"],
 }
 
 .shell-ball-bubble-message__approval-action,
-.shell-ball-bubble-message__recommendation-action {
-=======
-.shell-ball-bubble-message__approval-action,
+.shell-ball-bubble-message__recommendation-action,
 .shell-ball-bubble-message__intent-action {
->>>>>>> upstream/main
   align-items: center;
   appearance: none;
   border: 1px solid rgba(132, 118, 99, 0.18);
@@ -889,21 +884,15 @@ body[data-app-window="shell-ball"],
 }
 
 .shell-ball-bubble-message__approval-action:hover:not(:disabled),
-<<<<<<< HEAD
-.shell-ball-bubble-message__recommendation-action:hover:not(:disabled) {
-=======
+.shell-ball-bubble-message__recommendation-action:hover:not(:disabled),
 .shell-ball-bubble-message__intent-action:hover:not(:disabled) {
->>>>>>> upstream/main
   color: var(--shell-ball-ink);
   transform: translateY(-1px);
 }
 
 .shell-ball-bubble-message__approval-action:focus-visible,
-<<<<<<< HEAD
-.shell-ball-bubble-message__recommendation-action:focus-visible {
-=======
+.shell-ball-bubble-message__recommendation-action:focus-visible,
 .shell-ball-bubble-message__intent-action:focus-visible {
->>>>>>> upstream/main
   box-shadow:
     0 0 0 2px rgba(255, 251, 244, 0.92),
     0 0 0 4px rgba(106, 145, 200, 0.22);
@@ -911,14 +900,88 @@ body[data-app-window="shell-ball"],
 }
 
 .shell-ball-bubble-message__approval-action:disabled,
-<<<<<<< HEAD
-.shell-ball-bubble-message__recommendation-action:disabled {
-=======
+.shell-ball-bubble-message__recommendation-action:disabled,
 .shell-ball-bubble-message__intent-action:disabled {
->>>>>>> upstream/main
   cursor: progress;
   opacity: 0.72;
   transform: none;
+}
+
+.shell-ball-bubble-message__recommendation-card {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(247, 241, 231, 0.92)),
+    rgba(255, 255, 255, 0.9);
+  border: 1px solid rgba(106, 145, 200, 0.16);
+  border-radius: 0.82rem;
+  box-shadow: 0 12px 28px rgba(60, 77, 108, 0.08);
+  display: grid;
+  gap: 0.32rem;
+  margin: 0 0 0.52rem;
+  padding: 0.62rem 0.66rem;
+}
+
+.shell-ball-bubble-message__recommendation-card[data-priority="high"] {
+  border-color: rgba(106, 145, 200, 0.24);
+}
+
+.shell-ball-bubble-message__recommendation-card[data-priority="medium"] {
+  border-color: rgba(137, 132, 118, 0.16);
+}
+
+.shell-ball-bubble-message__recommendation-card[data-priority="low"] {
+  border-color: rgba(132, 118, 99, 0.12);
+}
+
+.shell-ball-bubble-message__recommendation-card-header {
+  align-items: center;
+  display: flex;
+  gap: 0.42rem;
+  justify-content: space-between;
+}
+
+.shell-ball-bubble-message__recommendation-label {
+  color: rgba(59, 88, 124, 0.96);
+  font-family: var(--font-mono);
+  font-size: 0.56rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.shell-ball-bubble-message__recommendation-priority {
+  background: rgba(106, 145, 200, 0.12);
+  border: 1px solid rgba(106, 145, 200, 0.18);
+  border-radius: 999px;
+  color: rgba(59, 88, 124, 0.88);
+  font-family: var(--font-mono);
+  font-size: 0.48rem;
+  letter-spacing: 0.08em;
+  line-height: 1;
+  padding: 0.18rem 0.4rem;
+  text-transform: uppercase;
+}
+
+.shell-ball-bubble-message__recommendation-summary {
+  color: rgba(96, 103, 113, 0.88);
+  font-size: 0.56rem;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.shell-ball-bubble-message__recommendation-reason {
+  color: rgba(59, 88, 124, 0.94);
+  font-size: 0.64rem;
+  font-weight: 600;
+  line-height: 1.46;
+  margin: 0;
+}
+
+.shell-ball-bubble-message__recommendation-copy {
+  color: rgba(59, 88, 124, 0.94);
+  font-size: 0.62rem;
+  font-weight: 600;
+  line-height: 1.5;
+  margin: 0;
 }
 
 .shell-ball-bubble-message__approval-action--allow {
@@ -939,46 +1002,34 @@ body[data-app-window="shell-ball"],
   background: rgba(193, 141, 70, 0.2);
 }
 
-<<<<<<< HEAD
-.shell-ball-bubble-message__recommendation-action--accept {
-=======
+.shell-ball-bubble-message__recommendation-action--accept,
 .shell-ball-bubble-message__intent-action--confirm {
->>>>>>> upstream/main
   background: rgba(106, 145, 200, 0.14);
   border-color: rgba(106, 145, 200, 0.26);
 }
 
-<<<<<<< HEAD
-.shell-ball-bubble-message__recommendation-action--accept:hover:not(:disabled) {
-  background: rgba(106, 145, 200, 0.22);
-}
-
-.shell-ball-bubble-message__recommendation-action--ignore {
-=======
+.shell-ball-bubble-message__recommendation-action--accept:hover:not(:disabled),
 .shell-ball-bubble-message__intent-action--confirm:hover:not(:disabled) {
   background: rgba(106, 145, 200, 0.22);
 }
 
+.shell-ball-bubble-message__recommendation-action--ignore,
 .shell-ball-bubble-message__intent-action--cancel {
   background: rgba(193, 141, 70, 0.14);
   border-color: rgba(193, 141, 70, 0.22);
 }
 
+.shell-ball-bubble-message__recommendation-action--ignore:hover:not(:disabled),
 .shell-ball-bubble-message__intent-action--cancel:hover:not(:disabled) {
   background: rgba(193, 141, 70, 0.2);
 }
 
 .shell-ball-bubble-message__intent-action--modify {
->>>>>>> upstream/main
   background: rgba(255, 255, 255, 0.62);
   border-color: rgba(132, 118, 99, 0.14);
 }
 
-<<<<<<< HEAD
-.shell-ball-bubble-message__recommendation-action--ignore:hover:not(:disabled) {
-=======
 .shell-ball-bubble-message__intent-action--modify:hover:not(:disabled) {
->>>>>>> upstream/main
   background: rgba(255, 255, 255, 0.86);
 }
 

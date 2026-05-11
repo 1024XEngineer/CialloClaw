@@ -16,6 +16,10 @@ type ShellBallBubbleMessageProps = {
 
 const useIsomorphicLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
+function normalizeShellBallRecommendationCopy(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
 /**
  * Renders one near-field bubble while keeping approval and intent-confirmation
  * actions local to the shell-ball presentation layer.
@@ -40,6 +44,7 @@ export function ShellBallBubbleMessage({
   const showLoadingState = item.desktop.presentationHint === "loading";
   const inlineApproval = item.role === "agent" ? item.desktop.inlineApproval : undefined;
   const inlineRecommendation = item.role === "agent" ? item.desktop.inlineRecommendation : undefined;
+  const recommendationPresentation = inlineRecommendation?.presentation;
   const [isCollapsible, setIsCollapsible] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const inlineApprovalBusy = inlineApproval?.status === "submitting";
@@ -55,6 +60,10 @@ export function ShellBallBubbleMessage({
   const denyApprovalLabel = inlineApprovalBusy && inlineApproval?.pendingDecision === "deny_once" ? "Denying..." : "Deny";
   const loadingText = bubbleText.trim() === "" ? "正在思考..." : bubbleText;
   const collapsedContent = showLoadingState ? loadingText : bubbleText;
+  const recommendationCopy =
+    inlineRecommendation !== undefined && recommendationPresentation !== undefined
+      ? normalizeShellBallRecommendationCopy(recommendationPresentation.copy)
+      : "";
 
   const syncCollapsedState = useCallback(() => {
     const measure = measureRef.current;
@@ -139,6 +148,24 @@ export function ShellBallBubbleMessage({
           <p ref={measureRef} className="shell-ball-bubble-message__measure shell-ball-bubble-message__text" aria-hidden="true">
             {collapsedContent}
           </p>
+          {inlineRecommendation !== undefined && recommendationPresentation !== undefined ? (
+            <div
+              className="shell-ball-bubble-message__recommendation-card"
+              data-priority={recommendationPresentation.priority}
+            >
+              <div className="shell-ball-bubble-message__recommendation-card-header">
+                <span className="shell-ball-bubble-message__recommendation-label">
+                  {recommendationPresentation.label}
+                </span>
+                <span className="shell-ball-bubble-message__recommendation-priority">
+                  {recommendationPresentation.priorityLabel}
+                </span>
+              </div>
+              {recommendationCopy !== "" ? (
+                <p className="shell-ball-bubble-message__recommendation-copy">{recommendationCopy}</p>
+              ) : null}
+            </div>
+          ) : null}
           {collapsed && isCollapsible ? (
             <p className="shell-ball-bubble-message__text shell-ball-bubble-message__text--collapsed">{collapsedContent}</p>
           ) : showLoadingState ? (
@@ -202,24 +229,24 @@ export function ShellBallBubbleMessage({
               className="shell-ball-bubble-message__recommendation-action shell-ball-bubble-message__recommendation-action--ignore"
               data-bubble-action="ignore_recommendation"
               data-bubble-id={bubbleId}
-              aria-label="Dismiss recommendation"
+              aria-label="暂不采用"
               onClick={() => {
                 onIgnoreRecommendation?.(bubbleId);
               }}
             >
-              Not now
+              暂不
             </button>
             <button
               type="button"
               className="shell-ball-bubble-message__recommendation-action shell-ball-bubble-message__recommendation-action--accept"
               data-bubble-action="accept_recommendation"
               data-bubble-id={bubbleId}
-              aria-label="Accept recommendation"
+              aria-label="采用推荐"
               onClick={() => {
                 onAcceptRecommendation?.(bubbleId);
               }}
             >
-              Try this
+              就用这个
             </button>
           </div>
         ) : shouldShowIntentConfirmAction ? (
@@ -229,12 +256,12 @@ export function ShellBallBubbleMessage({
               className="shell-ball-bubble-message__approval-action shell-ball-bubble-message__approval-action--allow"
               data-bubble-action="confirm_intent"
               data-bubble-id={bubbleId}
-              aria-label="Confirm intent"
+              aria-label="确认继续"
               onClick={() => {
                 onConfirmIntent?.(taskId);
               }}
             >
-              OK
+              确认继续
             </button>
           </div>
         ) : null}
