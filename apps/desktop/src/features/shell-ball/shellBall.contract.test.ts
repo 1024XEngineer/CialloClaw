@@ -8666,7 +8666,7 @@ test("shell-ball app routes fresh clipboard prompts through the formal text subm
   assert.match(submitSource, /export async function submitShellBallInput/);
   assert.match(submitSource, /trigger: input\.trigger/);
   assert.match(submitSource, /inputMode: input\.inputMode/);
-  assert.match(submitSource, /includeForegroundBrowserPageContext: true/);
+  assert.doesNotMatch(submitSource, /includeForegroundBrowserPageContext: true/);
   assert.match(syncSource, /clipboardSnapshot: "desktop-shell-ball:clipboard-snapshot"/);
 });
 
