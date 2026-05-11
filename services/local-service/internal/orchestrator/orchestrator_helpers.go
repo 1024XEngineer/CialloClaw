@@ -115,22 +115,9 @@ func notepadResourcePaths(item map[string]any) []string {
 			continue
 		}
 
-		resourceType := firstNonEmptyString(
-			stringValue(resource, "resource_type", ""),
-			stringValue(resource, "type", ""),
-		)
-		switch resourceType {
-		case "file", "folder", "directory":
+		switch notepadResourceTargetKind(resource) {
+		case "file", "folder":
 			paths = append(paths, path)
-		case "":
-			switch strings.TrimSpace(stringValue(resource, "target_kind", "")) {
-			case "file", "folder":
-				paths = append(paths, path)
-			}
-		default:
-			if strings.TrimSpace(stringValue(resource, "target_kind", "")) == "folder" {
-				paths = append(paths, path)
-			}
 		}
 	}
 
@@ -138,6 +125,29 @@ func notepadResourcePaths(item map[string]any) []string {
 		return nil
 	}
 	return paths
+}
+
+func notepadResourceTargetKind(resource map[string]any) string {
+	if targetKind := strings.TrimSpace(stringValue(resource, "target_kind", "")); targetKind != "" {
+		return targetKind
+	}
+	switch strings.TrimSpace(stringValue(resource, "open_action", "")) {
+	case "open_file":
+		return "file"
+	case "reveal_in_folder":
+		return "folder"
+	}
+	switch strings.TrimSpace(firstNonEmptyString(
+		stringValue(resource, "resource_type", ""),
+		stringValue(resource, "type", ""),
+	)) {
+	case "file":
+		return "file"
+	case "folder", "directory":
+		return "folder"
+	default:
+		return ""
+	}
 }
 
 func relatedResourceMaps(rawValue any) []map[string]any {

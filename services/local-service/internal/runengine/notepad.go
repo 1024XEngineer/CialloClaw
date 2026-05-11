@@ -341,13 +341,13 @@ func deriveNotepadNoteText(item map[string]any) string {
 }
 
 func deriveNotepadNoteTextOrigin(item map[string]any) string {
+	if strings.TrimSpace(stringValue(item, "note_text", "")) == "" {
+		return "derived_default"
+	}
 	if origin := strings.TrimSpace(stringValue(item, "note_text_origin", "")); origin != "" {
 		return origin
 	}
-	if strings.TrimSpace(stringValue(item, "note_text", "")) != "" {
-		return "user_provided"
-	}
-	return "derived_default"
+	return "user_provided"
 }
 
 func deriveSyntheticNotepadNoteText(title, suggestion string) string {
