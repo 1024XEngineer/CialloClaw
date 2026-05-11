@@ -13,14 +13,23 @@ const (
 	ReplyLanguageEnglish = "en-US"
 )
 
-var englishSignalWords = map[string]struct{}{
+var englishEvidenceWords = map[string]struct{}{
+	"a":         {},
+	"add":       {},
 	"answer":    {},
 	"browser":   {},
+	"build":     {},
 	"can":       {},
 	"checklist": {},
+	"copy":      {},
 	"could":     {},
+	"create":    {},
 	"cleanup":   {},
 	"continue":  {},
+	"delete":    {},
+	"deploy":    {},
+	"doc":       {},
+	"docs":      {},
 	"edit":      {},
 	"english":   {},
 	"error":     {},
@@ -28,27 +37,41 @@ var englishSignalWords = map[string]struct{}{
 	"file":      {},
 	"files":     {},
 	"fix":       {},
+	"folder":    {},
+	"good":      {},
 	"hello":     {},
 	"help":      {},
 	"hey":       {},
 	"hi":        {},
 	"how":       {},
+	"i":         {},
 	"inspect":   {},
+	"install":   {},
 	"issue":     {},
 	"lgtm":      {},
+	"list":      {},
+	"logs":      {},
+	"make":      {},
+	"morning":   {},
+	"move":      {},
 	"need":      {},
 	"note":      {},
 	"notes":     {},
+	"open":      {},
 	"page":      {},
 	"please":    {},
 	"proceed":   {},
 	"project":   {},
 	"read":      {},
 	"readme":    {},
+	"remove":    {},
+	"rename":    {},
 	"release":   {},
 	"review":    {},
 	"rewrite":   {},
 	"rollout":   {},
+	"run":       {},
+	"search":    {},
 	"summarise": {},
 	"summarize": {},
 	"task":      {},
@@ -59,6 +82,8 @@ var englishSignalWords = map[string]struct{}{
 	"thx":       {},
 	"this":      {},
 	"translate": {},
+	"update":    {},
+	"utils":     {},
 	"what":      {},
 	"why":       {},
 	"workspace": {},
@@ -92,6 +117,25 @@ var englishSignalTextNormalizer = strings.NewReplacer(
 	"\u2014", "-",
 )
 
+var englishWordSuffixes = []string{
+	"able",
+	"al",
+	"ed",
+	"er",
+	"ful",
+	"ible",
+	"ing",
+	"ise",
+	"ize",
+	"less",
+	"ly",
+	"ment",
+	"ness",
+	"ous",
+	"sion",
+	"tion",
+}
+
 // PreferredReplyLanguage infers the reply language from the current user-facing
 // text only. The heuristic intentionally stays conservative: it upgrades to
 // English only for English-only inputs so Chinese-first behavior remains stable
@@ -106,9 +150,8 @@ func PreferredReplyLanguage(text string) string {
 
 // IsEnglishOnlyText reports whether one input is composed like an English-only
 // request. The heuristic stays intentionally conservative: it still rejects Han
-// text and non-ASCII letters, but it now also requires at least one explicit
-// English signal word so arbitrary ASCII-only text does not silently flip the
-// whole reply path to English.
+// text and non-ASCII letters, but it now accepts broader plain-English command
+// phrases instead of relying on one fixed phrase whitelist.
 func IsEnglishOnlyText(text string) bool {
 	trimmed := strings.TrimSpace(normalizeEnglishSignalText(text))
 	if trimmed == "" {
@@ -144,7 +187,7 @@ func IsEnglishOnlyText(text string) bool {
 	if containsEnglishSignalPhrase(strings.Join(tokens, " ")) {
 		return true
 	}
-	return containsEnglishSignalWord(tokens)
+	return hasEnglishWordEvidence(tokens)
 }
 
 func containsEnglishSignalPhrase(phrase string) bool {
@@ -155,9 +198,27 @@ func containsEnglishSignalPhrase(phrase string) bool {
 	return ok
 }
 
-func containsEnglishSignalWord(tokens []string) bool {
+func hasEnglishWordEvidence(tokens []string) bool {
 	for _, token := range tokens {
-		if _, ok := englishSignalWords[token]; ok {
+		if isEnglishEvidenceToken(token) {
+			return true
+		}
+	}
+	return false
+}
+
+func isEnglishEvidenceToken(token string) bool {
+	if token == "" {
+		return false
+	}
+	if _, ok := englishEvidenceWords[token]; ok {
+		return true
+	}
+	if len(token) <= 3 {
+		return false
+	}
+	for _, suffix := range englishWordSuffixes {
+		if strings.HasSuffix(token, suffix) && len(token) > len(suffix)+1 {
 			return true
 		}
 	}
