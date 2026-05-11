@@ -2772,8 +2772,8 @@ func TestServiceNotepadConvertToTaskUsesRuntimeItemWithoutClosingTodo(t *testing
 	if record.Snapshot.Text != "Finish the computer homework before tonight and use the materials in workspace/homework." {
 		t.Fatalf("expected notepad note_text to drive task snapshot text, got %+v", record.Snapshot)
 	}
-	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "workspace/homework" {
-		t.Fatalf("expected explicit path resources to enter task snapshot, got %+v", record.Snapshot.Files)
+	if len(record.Snapshot.Files) != 0 {
+		t.Fatalf("expected explicit directory resources to stay out of task snapshot files, got %+v", record.Snapshot.Files)
 	}
 	deliveryResult, ok := result["delivery_result"].(map[string]any)
 	if !ok {
@@ -2966,7 +2966,7 @@ func TestServiceNotepadConvertToTaskKeepsLegacyPersistedFallbacksOutOfSnapshot(t
 	}
 }
 
-func TestServiceNotepadConvertToTaskCarriesLegacyPathResourcesIntoSnapshotFiles(t *testing.T) {
+func TestServiceNotepadConvertToTaskKeepsLegacyDirectoryResourcesOutOfSnapshotFiles(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Converted legacy-resource notepad task finished.")
 	service.runEngine.ReplaceNotepadItems([]map[string]any{{
 		"item_id":   "todo_legacy_resources",
@@ -2996,8 +2996,8 @@ func TestServiceNotepadConvertToTaskCarriesLegacyPathResourcesIntoSnapshotFiles(
 	if !ok {
 		t.Fatal("expected converted task to remain available in runtime")
 	}
-	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "workspace/legacy-review" {
-		t.Fatalf("expected legacy path resources to enter task snapshot, got %+v", record.Snapshot.Files)
+	if len(record.Snapshot.Files) != 0 {
+		t.Fatalf("expected legacy directory resources to stay out of task snapshot files, got %+v", record.Snapshot.Files)
 	}
 }
 
@@ -3154,13 +3154,13 @@ func TestServiceNotepadConvertToTaskDedupesExplicitSnapshotPaths(t *testing.T) {
 	if !ok {
 		t.Fatal("expected converted task to remain available in runtime")
 	}
-	expected := []string{"workspace/notes/source.md", "workspace/research"}
+	expected := []string{"workspace/notes/source.md"}
 	if !reflect.DeepEqual(record.Snapshot.Files, expected) {
-		t.Fatalf("expected explicit notepad paths to be deduped like other task entries, got %+v", record.Snapshot.Files)
+		t.Fatalf("expected explicit notepad file paths to be deduped like other task entries, got %+v", record.Snapshot.Files)
 	}
 }
 
-func TestServiceNotepadConvertToTaskKeepsLegacyUserFallbackDirectoryAttachments(t *testing.T) {
+func TestServiceNotepadConvertToTaskKeepsDirectoryAttachmentsOutOfSnapshotFiles(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Converted explicit fallback attachment task finished.")
 	todoStore := storage.NewInMemoryTodoStore()
 	if err := todoStore.ReplaceTodoState(context.Background(), []storage.TodoItemRecord{{
@@ -3192,8 +3192,8 @@ func TestServiceNotepadConvertToTaskKeepsLegacyUserFallbackDirectoryAttachments(
 	if !ok {
 		t.Fatal("expected converted task to remain available in runtime")
 	}
-	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "workspace/templates" {
-		t.Fatalf("expected explicit fallback-like attachment to stay in task snapshot, got %+v", record.Snapshot.Files)
+	if len(record.Snapshot.Files) != 0 {
+		t.Fatalf("expected directory attachments to stay out of task snapshot files, got %+v", record.Snapshot.Files)
 	}
 }
 
@@ -3247,7 +3247,7 @@ func TestServiceNotepadConvertToTaskPublishesRequestTraceID(t *testing.T) {
 	}
 }
 
-func TestServiceNotepadConvertToTaskKeepsPublishedTaskAfterStartFailure(t *testing.T) {
+func TestServiceNotepadConvertToTaskKeepsPublishedTaskLinkedAfterExecutionFailure(t *testing.T) {
 	service, _ := newTestServiceWithExecutionPrechecker(t, "Converted rollback note finished.", failingRiskPrechecker{
 		err: errors.New("risk precheck unavailable"),
 	})
@@ -3307,15 +3307,18 @@ func TestServiceNotepadConvertToTaskKeepsPublishedTaskAfterStartFailure(t *testi
 	if !ok {
 		t.Fatalf("expected published task %s to remain queryable after start failure", taskID)
 	}
-	if record.Status != "failed" || record.CurrentStep != "task_start_failed" {
-		t.Fatalf("expected published task to be collapsed into task_start_failed, got %+v", record)
+	if record.Status != "failed" {
+		t.Fatalf("expected published task to remain queryable as failed, got %+v", record)
+	}
+	if record.CurrentStep == "" {
+		t.Fatalf("expected published failed task to keep a terminal step, got %+v", record)
 	}
 	item, ok := service.runEngine.NotepadItem("todo_governance_failure")
 	if !ok {
-		t.Fatal("expected notepad item to remain available after rollback")
+		t.Fatal("expected notepad item to remain available after execution failure")
 	}
-	if linkedTaskID := stringValue(item, "linked_task_id", ""); linkedTaskID != "" {
-		t.Fatalf("expected rollback to clear stale linked_task_id after failure, got %+v", item)
+	if linkedTaskID := stringValue(item, "linked_task_id", ""); linkedTaskID != taskID {
+		t.Fatalf("expected source item to keep the published failed task link, got %+v", item)
 	}
 }
 
