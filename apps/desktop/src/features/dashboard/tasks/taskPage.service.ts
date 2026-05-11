@@ -112,11 +112,11 @@ function getTaskBlockedReason(task: Task, detail?: AgentTaskDetailGetResult) {
 
 function getTaskEndedSummary(task: Task, detail?: AgentTaskDetailGetResult) {
   if (task.status === "completed") {
-    return "任务已完成，可查看正式交付、成果区与安全摘要。";
+    return "任务已完成。";
   }
 
   if (task.status === "cancelled") {
-    return "任务已取消，当前轨迹与结果摘要仍保留在详情中。";
+    return "任务已取消。";
   }
 
   if (task.status === "failed" || task.status === "ended_unfinished") {
