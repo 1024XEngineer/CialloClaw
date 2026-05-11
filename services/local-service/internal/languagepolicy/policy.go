@@ -62,6 +62,16 @@ var englishSignalWords = map[string]struct{}{
 	"write":     {},
 }
 
+var englishSignalPhrases = map[string]struct{}{
+	"done":        {},
+	"go ahead":    {},
+	"looks good":  {},
+	"ok":          {},
+	"okay":        {},
+	"sounds good": {},
+	"sure":        {},
+}
+
 // PreferredReplyLanguage infers the reply language from the current user-facing
 // text only. The heuristic intentionally stays conservative: it upgrades to
 // English only for English-only inputs so Chinese-first behavior remains stable
@@ -110,7 +120,19 @@ func IsEnglishOnlyText(text string) bool {
 		return false
 	}
 
-	return containsEnglishSignalWord(asciiWordTokens(trimmed))
+	tokens := asciiWordTokens(trimmed)
+	if containsEnglishSignalPhrase(strings.Join(tokens, " ")) {
+		return true
+	}
+	return containsEnglishSignalWord(tokens)
+}
+
+func containsEnglishSignalPhrase(phrase string) bool {
+	if phrase == "" {
+		return false
+	}
+	_, ok := englishSignalPhrases[phrase]
+	return ok
 }
 
 func containsEnglishSignalWord(tokens []string) bool {

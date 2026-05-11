@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/languagepolicy"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
@@ -265,6 +266,24 @@ func TestBuildPlannerInputUsesEnglishPolicyForCommonEnglishPhrase(t *testing.T) 
 	}
 	if strings.Contains(plannerInput, "用户上下文：") {
 		t.Fatalf("expected common english phrase to avoid chinese planner headings, got %q", plannerInput)
+	}
+}
+
+func TestBuildPlannerInputUsesExplicitReplyLanguageWithChineseMemoryContext(t *testing.T) {
+	plannerInput, _ := buildPlannerInputForLanguage(
+		"Input:\nreview the diff\n\n历史记忆参考数据:\n```json\n[{\"summary\":\"项目 alpha 历史偏好\"}]\n```",
+		languagepolicy.ReplyLanguageEnglish,
+		nil,
+		nil,
+		0,
+		0,
+	)
+
+	if !strings.Contains(plannerInput, "Use English for this request unless the user explicitly asks for another language.") {
+		t.Fatalf("expected explicit english reply language to keep english planner prompt, got %q", plannerInput)
+	}
+	if strings.Contains(plannerInput, "默认使用中文回答") {
+		t.Fatalf("expected explicit english reply language to avoid chinese planner prompt, got %q", plannerInput)
 	}
 }
 

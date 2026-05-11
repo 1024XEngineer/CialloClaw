@@ -111,6 +111,7 @@ type Request struct {
 	AttemptIndex       int
 	SegmentKind        string
 	InputText          string
+	ReplyLanguage      string
 	ResultTitle        string
 	FallbackOutput     string
 	ToolDefinitions    []model.ToolDefinition
@@ -216,7 +217,7 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 				}))
 			}
 		}
-		plannerInput, compactedHistory := buildPlannerInput(activeInputText, history, availableToolDefinitions, request.CompressChars, request.KeepRecent)
+		plannerInput, compactedHistory := buildPlannerInputForLanguage(activeInputText, request.ReplyLanguage, history, availableToolDefinitions, request.CompressChars, request.KeepRecent)
 		round := PersistedRound{
 			StepID:        fmt.Sprintf("step_loop_%02d", turn+1),
 			RunID:         request.RunID,
@@ -339,7 +340,7 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 						return Result{}, true, err
 					}
 				}
-				activeInputText = appendCapabilityReminderInput(activeInputText, availableToolDefinitions)
+				activeInputText = appendCapabilityReminderInputForLanguage(activeInputText, availableToolDefinitions, request.ReplyLanguage)
 				// Retry this heuristic only once. Repeated denials after an explicit
 				// reminder should return to the caller so the loop stays observable.
 				events = appendEvent(events, request, newEventForRound(round, "loop.retrying", map[string]any{
@@ -552,7 +553,7 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 							return Result{}, true, err
 						}
 					}
-					activeInputText = appendCapabilityReminderInput(activeInputText, availableToolDefinitions)
+					activeInputText = appendCapabilityReminderInputForLanguage(activeInputText, availableToolDefinitions, request.ReplyLanguage)
 					events = appendEvent(events, request, newEventForRound(round, "loop.retrying", map[string]any{
 						"attempt_index": round.AttemptIndex,
 						"segment_kind":  round.SegmentKind,
@@ -660,8 +661,12 @@ func isAgentLoopIntent(taskIntent map[string]any) bool {
 }
 
 func buildPlannerInput(inputText string, history []string, toolDefinitions []model.ToolDefinition, compressChars, keepRecent int) (string, []string) {
+	return buildPlannerInputForLanguage(inputText, "", history, toolDefinitions, compressChars, keepRecent)
+}
+
+func buildPlannerInputForLanguage(inputText, replyLanguage string, history []string, toolDefinitions []model.ToolDefinition, compressChars, keepRecent int) (string, []string) {
 	compressedHistory := compactHistory(history, compressChars, keepRecent)
-	english := languagepolicy.PreferredReplyLanguage(inputText) == languagepolicy.ReplyLanguageEnglish
+	english := effectiveReplyLanguage(replyLanguage, inputText) == languagepolicy.ReplyLanguageEnglish
 	sections := plannerInstructionSections(english)
 	if capabilityLines := buildToolCapabilityLines(toolDefinitions, english); len(capabilityLines) > 0 {
 		sections = append(sections, "", plannerCapabilityHeading(english))
@@ -1338,15 +1343,26 @@ func stripCapabilityRoleLeadIn(normalized string) string {
 }
 
 func appendCapabilityReminderInput(inputText string, toolDefinitions []model.ToolDefinition) string {
+	return appendCapabilityReminderInputForLanguage(inputText, toolDefinitions, "")
+}
+
+func appendCapabilityReminderInputForLanguage(inputText string, toolDefinitions []model.ToolDefinition, replyLanguage string) string {
 	// Append the reminder to the original user input so the next planner round
 	// keeps the task context while restating the bounded tool surface.
-	english := languagepolicy.PreferredReplyLanguage(inputText) == languagepolicy.ReplyLanguageEnglish
+	english := effectiveReplyLanguage(replyLanguage, inputText) == languagepolicy.ReplyLanguageEnglish
 	sections := capabilityReminderSections(inputText, english)
 	if capabilityLines := buildToolCapabilityLines(toolDefinitions, english); len(capabilityLines) > 0 {
 		sections = append(sections, plannerCapabilityHeading(english))
 		sections = append(sections, capabilityLines...)
 	}
 	return strings.TrimSpace(strings.Join(sections, "\n"))
+}
+
+func effectiveReplyLanguage(replyLanguage, inputText string) string {
+	if trimmed := strings.TrimSpace(replyLanguage); trimmed != "" {
+		return trimmed
+	}
+	return languagepolicy.PreferredReplyLanguage(inputText)
 }
 
 func capabilityReminderSections(inputText string, english bool) []string {

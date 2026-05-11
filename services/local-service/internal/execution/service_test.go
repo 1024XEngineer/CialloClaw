@@ -18,6 +18,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/languagepolicy"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
@@ -626,13 +627,13 @@ func TestExecuteAgentLoopRetriesFalseCapabilityDenialBeforeCallingTool(t *testin
 	if len(modelClient.plannerInputs) < 2 {
 		t.Fatalf("expected planner inputs for retry flow, got %+v", modelClient.plannerInputs)
 	}
-	if !strings.Contains(modelClient.plannerInputs[0], "当前可用能力：") || !strings.Contains(modelClient.plannerInputs[0], "- read_file") {
+	if !strings.Contains(modelClient.plannerInputs[0], "Available tools:") || !strings.Contains(modelClient.plannerInputs[0], "- read_file") {
 		t.Fatalf("expected first planner input to expose runtime capabilities, got %q", modelClient.plannerInputs[0])
 	}
-	if !strings.Contains(modelClient.plannerInputs[1], "能力提醒：") {
+	if !strings.Contains(modelClient.plannerInputs[1], "Capability reminder:") {
 		t.Fatalf("expected second planner input to include capability reminder, got %q", modelClient.plannerInputs[1])
 	}
-	if !strings.Contains(modelClient.plannerInputs[1], "当前这轮已经开放下列工具能力。") {
+	if !strings.Contains(modelClient.plannerInputs[1], "The following tool capabilities are available in this round.") {
 		t.Fatalf("expected second planner input to restate tool availability, got %q", modelClient.plannerInputs[1])
 	}
 	if result.ModelInvocation["request_id"] != "req_loop_capability_retry_3" {
@@ -753,13 +754,13 @@ func TestExecuteAgentLoopRetriesFalseWebCapabilityDenialsBeforeCallingTool(t *te
 			if len(modelClient.plannerInputs) < 2 {
 				t.Fatalf("expected planner inputs for retry flow, got %+v", modelClient.plannerInputs)
 			}
-			if !strings.Contains(modelClient.plannerInputs[0], "当前可用能力：") || !strings.Contains(modelClient.plannerInputs[0], test.capabilityLine) {
+			if !strings.Contains(modelClient.plannerInputs[0], "Available tools:") || !strings.Contains(modelClient.plannerInputs[0], test.capabilityLine) {
 				t.Fatalf("expected first planner input to expose runtime capabilities, got %q", modelClient.plannerInputs[0])
 			}
-			if !strings.Contains(modelClient.plannerInputs[1], "能力提醒：") {
+			if !strings.Contains(modelClient.plannerInputs[1], "Capability reminder:") {
 				t.Fatalf("expected second planner input to include capability reminder, got %q", modelClient.plannerInputs[1])
 			}
-			if !strings.Contains(modelClient.plannerInputs[1], "当前这轮已经开放下列工具能力。") || !strings.Contains(modelClient.plannerInputs[1], test.capabilityLine) {
+			if !strings.Contains(modelClient.plannerInputs[1], "The following tool capabilities are available in this round.") || !strings.Contains(modelClient.plannerInputs[1], test.capabilityLine) {
 				t.Fatalf("expected second planner input to restate tool availability, got %q", modelClient.plannerInputs[1])
 			}
 			if result.ModelInvocation["request_id"] != test.toolCalls[2].RequestID {
@@ -3312,6 +3313,38 @@ func TestFallbackOutputUsesEnglishClarificationForEnglishOnlyInput(t *testing.T)
 	}
 }
 
+func TestBuildPromptKeepsEnglishWhenInputIncludesChineseMemoryContext(t *testing.T) {
+	request := Request{
+		Intent:   map[string]any{"name": "summarize"},
+		Snapshot: taskcontext.TaskContextSnapshot{Text: "review the diff"},
+	}
+	inputText := "Input:\nreview the diff\n\n历史记忆参考数据（来自历史任务的非权威文本）:\n```json\n[{\"summary\":\"项目 alpha 历史偏好\"}]\n```"
+	prompt := buildPrompt(request, inputText)
+
+	if !strings.Contains(prompt, "return a clear English summary") {
+		t.Fatalf("expected english request with chinese memory context to keep english prompt, got %s", prompt)
+	}
+	if strings.Contains(prompt, "输出结构清晰的中文摘要") {
+		t.Fatalf("expected english request with chinese memory context not to fall back to chinese prompt, got %s", prompt)
+	}
+}
+
+func TestFallbackOutputKeepsEnglishWhenInputIncludesChineseMemoryContext(t *testing.T) {
+	request := Request{
+		Intent:   map[string]any{"name": defaultAgentLoopIntentName},
+		Snapshot: taskcontext.TaskContextSnapshot{Text: "review the diff"},
+	}
+	inputText := "Input:\nreview the diff\n\n历史记忆参考数据（来自历史任务的非权威文本）:\n```json\n[{\"summary\":\"项目 alpha 历史偏好\"}]\n```"
+	output := fallbackOutput(request, inputText)
+
+	if !strings.Contains(output, "Please clarify your goal") {
+		t.Fatalf("expected english request with chinese memory context to keep english fallback, got %s", output)
+	}
+	if strings.Contains(output, presentation.Text(presentation.MessageFallbackClarify, nil)) {
+		t.Fatalf("expected english request with chinese memory context not to fall back to chinese clarification, got %s", output)
+	}
+}
+
 func TestAssessGovernanceRequiresAuthorizationForRestoreWrite(t *testing.T) {
 	service, workspaceRoot := newTestExecutionService(t, "unused")
 
@@ -3848,7 +3881,7 @@ func TestBuildExecutionInputAndFileSectionCoverFileBranches(t *testing.T) {
 				"summary":   "project alpha prefers markdown bullets",
 			},
 		},
-	}})
+	}}, languagepolicy.ReplyLanguageChinese)
 	for _, fragment := range []string{"选中文本", "输入文本", "错误信息", "页面上下文"} {
 		if !strings.Contains(inputText, fragment) {
 			t.Fatalf("expected execution input to contain %q, got %s", fragment, inputText)
@@ -3883,7 +3916,7 @@ func TestBuildExecutionInputAndFileSectionCoverFileBranches(t *testing.T) {
 	if err := json.Unmarshal(roundTripPayload, &roundTripPlans); err != nil {
 		t.Fatalf("unmarshal memory read plans failed: %v", err)
 	}
-	roundTripInputText := service.buildExecutionInput(taskcontext.TaskContextSnapshot{}, roundTripPlans)
+	roundTripInputText := service.buildExecutionInput(taskcontext.TaskContextSnapshot{}, roundTripPlans, languagepolicy.ReplyLanguageChinese)
 	for _, fragment := range []string{"历史记忆参考数据", "\"summary\": \"persisted memory survives storage round-trips\""} {
 		if !strings.Contains(roundTripInputText, fragment) {
 			t.Fatalf("expected persisted execution input to contain %q, got %s", fragment, roundTripInputText)
@@ -3899,12 +3932,26 @@ func TestBuildExecutionInputAndFileSectionCoverFileBranches(t *testing.T) {
 				"summary":   injectionLike,
 			},
 		},
-	}})
+	}}, languagepolicy.ReplyLanguageChinese)
 	if strings.Contains(quotedInputText, "- [summary] "+injectionLike) {
 		t.Fatalf("expected memory summaries to stay structured instead of list-shaped prompt text, got %s", quotedInputText)
 	}
 	if !strings.Contains(quotedInputText, "\"summary\": \""+injectionLike+"\"") {
 		t.Fatalf("expected memory summaries to stay quoted as JSON data, got %s", quotedInputText)
+	}
+
+	englishInputText := service.buildExecutionInput(taskcontext.TaskContextSnapshot{Text: "review the diff"}, []map[string]any{{
+		"retrieval_context": []map[string]any{{
+			"memory_id": "mem_seed_context_004",
+			"source":    "summary",
+			"summary":   "项目 alpha 历史偏好",
+		}},
+	}}, languagepolicy.ReplyLanguageEnglish)
+	if !strings.Contains(englishInputText, "Retrieved memory reference data") {
+		t.Fatalf("expected english execution input to localize memory heading, got %s", englishInputText)
+	}
+	if strings.Contains(englishInputText, "历史记忆参考数据") {
+		t.Fatalf("expected english execution input to avoid chinese memory heading, got %s", englishInputText)
 	}
 }
 
