@@ -2,7 +2,7 @@ import { Menu as MenuIcon } from "lucide-react";
 import type { AnchorProps, MenuProps } from "antd";
 import { Anchor, Drawer, Menu } from "antd";
 import "antd/dist/reset.css";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { MarkdownRenderer } from "@/components/MarkdownRenderer";
 import { docsSidebar, getDocsPage } from "@/content/site";
@@ -36,12 +36,21 @@ export function DocsPage() {
   }, [entry.outline]);
 
   const scrollToHeading = (href: string) => {
-    const id = href.replace(/^#/, "");
-    const target = docsScrollRef.current?.querySelector<HTMLElement>(`#${id}`);
+    const rawId = href.replace(/^#/, "");
+    const id = decodeURIComponent(rawId);
+    const target = docsScrollRef.current?.querySelector<HTMLElement>(`#${CSS.escape(id)}`);
     if (!target) return;
     target.scrollIntoView({ behavior: "smooth", block: "start" });
-    window.history.replaceState(null, "", `${location.pathname}#${id}`);
+    window.history.replaceState(null, "", `${location.pathname}#${encodeURIComponent(id)}`);
   };
+
+  useEffect(() => {
+    if (!location.hash) return;
+    const frame = window.requestAnimationFrame(() => {
+      scrollToHeading(location.hash);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [location.hash, location.pathname]);
 
   return (
     <>

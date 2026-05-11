@@ -3,12 +3,19 @@ export type DocsOutlineItem = {
   title: string;
 };
 
+export type DocsSearchSection = {
+  id: string;
+  title: string;
+  text: string;
+};
+
 export type ParsedDocsPage = {
   path: string;
   title: string;
   summary: string;
   markdown: string;
   outline: DocsOutlineItem[];
+  searchableSections: DocsSearchSection[];
 };
 
 const DOCS_PATH_MAP: Record<string, string> = {
@@ -43,6 +50,52 @@ function extractSummary(lines: string[]) {
   return "";
 }
 
+function markdownToPlainText(markdown: string) {
+  return markdown
+    .replace(/```[\s\S]*?```/g, (block) => block.replace(/```\w*\n?|```/g, " "))
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/!\[[^\]]*\]\(([^)]+)\)/g, "")
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, "$1")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/^>\s?/gm, "")
+    .replace(/^[-*+]\s+/gm, "")
+    .replace(/^\d+\.\s+/gm, "")
+    .replace(/^\|\s*[:-]+[-|\s:]*\|?\s*$/gm, "")
+    .replace(/\|/g, " ")
+    .replace(/[*_~]/g, "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\n{2,}/g, "\n")
+    .trim();
+}
+
+function extractSearchableSections(pageTitle: string, lines: string[]) {
+  const sections: DocsSearchSection[] = [];
+  let currentTitle = pageTitle;
+  let currentLines: string[] = [];
+  let currentId = createHeadingId(pageTitle);
+
+  const pushSection = () => {
+    const text = markdownToPlainText(currentLines.join("\n"));
+    if (!text) return;
+    sections.push({ id: currentId, title: currentTitle, text });
+  };
+
+  for (const line of lines) {
+    const h2 = line.match(/^##\s+(.+)$/);
+    if (h2) {
+      pushSection();
+      currentTitle = h2[1].trim();
+      currentId = createHeadingId(currentTitle);
+      currentLines = [line];
+      continue;
+    }
+    currentLines.push(line);
+  }
+
+  pushSection();
+  return sections;
+}
+
 export function parseDocsMarkdown(document: string): ParsedDocsPage[] {
   const lines = document.replace(/\r\n/g, "\n").trim().split("\n");
   const pages: ParsedDocsPage[] = [];
@@ -57,6 +110,7 @@ export function parseDocsMarkdown(document: string): ParsedDocsPage[] {
       .map((line) => line.match(/^##\s+(.+)$/)?.[1] ?? null)
       .filter((value): value is string => Boolean(value))
       .map((title) => ({ id: createHeadingId(title), title }));
+    const searchableSections = extractSearchableSections(currentTitle, currentLines);
 
     pages.push({
       path: DOCS_PATH_MAP[currentTitle] ?? `/docs/${createHeadingId(currentTitle)}`,
@@ -64,6 +118,7 @@ export function parseDocsMarkdown(document: string): ParsedDocsPage[] {
       summary: extractSummary(currentLines),
       markdown,
       outline,
+      searchableSections,
     });
   };
 

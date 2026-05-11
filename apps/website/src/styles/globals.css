@@ -38,6 +38,17 @@
 
 * {
   box-sizing: border-box;
+  cursor: default;
+}
+
+a,
+button,
+input,
+textarea,
+select,
+label,
+[role="button"] {
+  cursor: default;
 }
 
 html {

@@ -30,8 +30,8 @@ export function HomePage() {
   );
   const heroActions = useMemo(
     () => [
-      { label: "下载", href: "/docs/overview/versions" },
-      { label: "使用教程", href: "/docs/overview" },
+      { label: "下载", href: "/docs/quick-start#下载与启动" },
+      { label: "使用教程", href: "/docs/quick-start#配置模型" },
     ],
     [],
   );
@@ -138,7 +138,7 @@ export function HomePage() {
             initial={{ opacity: 0, y: 28 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.74, ease: [0.22, 1, 0.36, 1] }}
-            className="cc-home-hero-title font-display text-[6rem] leading-[0.98] tracking-[-0.05em] text-[color:var(--cc-ink)]"
+            className="cc-home-hero-title cursor-default font-display text-[6rem] leading-[0.98] tracking-[-0.05em] text-[color:var(--cc-ink)]"
           >
             CialloClaw
           </motion.h1>
@@ -146,7 +146,7 @@ export function HomePage() {
             initial={{ opacity: 0, y: 22 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.74, delay: 0.12, ease: [0.22, 1, 0.36, 1] }}
-            className="cc-home-hero-subtitle mt-4 max-w-[760px] text-[2rem] leading-[1.6] text-[color:var(--cc-ink-soft)]"
+            className="cc-home-hero-subtitle mt-4 max-w-[760px] cursor-default text-[2rem] leading-[1.6] text-[color:var(--cc-ink-soft)]"
           >
             桌面悬浮球 Agent，你的专属桌宠助理
           </motion.p>

@@ -1,0 +1,80 @@
+- generic:
+  - generic:
+    - generic:
+      - banner:
+        - generic:
+          - generic:
+            - link:
+              - /url: /
+              - img
+              - generic: CialloClaw
+            - generic:
+              - generic:
+                - generic:
+                  - img
+                  - searchbox
+          - button:
+            - img
+      - main:
+        - generic:
+          - complementary:
+            - generic:
+              - paragraph: 文档导航
+              - menu:
+                - text: 文档
+                - group:
+                  - menuitem:
+                    - generic: CialloClaw 是什么？
+                  - menuitem:
+                    - generic: 快速上手
+                  - menuitem:
+                    - generic: 初认工作台
+                  - menuitem:
+                    - generic: 使用场景
+                  - menuitem:
+                    - generic: 安全与隐私
+                  - menuitem:
+                    - generic: 常见问题
+          - main:
+            - generic:
+              - paragraph: Docs
+              - heading [level=1]: CialloClaw 是什么？
+            - article:
+              - paragraph: CialloClaw 是一款常驻桌面的 Agent 助手。
+              - paragraph: 它会以悬浮球的形式停留在桌面边缘，在你阅读网页、处理文件、查看报错或整理任务时，帮你理解内容、生成草稿、分析文件和推进下一步。
+              - paragraph: 你可以把它理解成：
+              - blockquote:
+                - paragraph: 一只在桌面上随时待命的小助手。需要时叫它，不需要时它安静待着。
+              - paragraph
+              - paragraph: CialloClaw 的特点：
+              - list:
+                - listitem:
+                  - strong: 桌面常驻
+                  - text: ：通过悬浮球随时唤起
+                - listitem:
+                  - strong: 轻量协作
+                  - text: ：不用打开复杂界面，也能直接提问
+                - listitem:
+                  - strong: 上下文感知
+                  - text: ：可以结合当前页面、选中文本或文件理解需求
+                - listitem:
+                  - strong: 低打扰
+                  - text: ：默认安静待机，需要时再出现
+                - listitem:
+                  - strong: 可确认
+                  - text: ：关键操作会先询问你
+                - listitem:
+                  - strong: 开源免费
+                  - text: ：项目代码公开，欢迎使用和参与贡献
+  - dialog [ref=e61]:
+    - generic [ref=e62]:
+      - generic [ref=e64]:
+        - img [ref=e65]
+        - combobox [expanded] [active] [ref=e68]
+      - generic [ref=e69]:
+        - generic [ref=e70]: ↑ ↓ to navigate
+        - generic [ref=e71]: enter to select
+        - generic [ref=e72]: esc to close
+    - button "Close" [ref=e73] [cursor=pointer]:
+      - img [ref=e74]
+      - generic [ref=e77]: Close

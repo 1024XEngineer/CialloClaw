@@ -34,6 +34,11 @@ export type DocsPageEntry = {
   title: string;
   summary: string;
   markdown: string;
+  searchableSections: Array<{
+    id: string;
+    title: string;
+    text: string;
+  }>;
   outline: Array<{
     id: string;
     title: string;
@@ -48,7 +53,7 @@ export const siteNav: SiteNavItem[] = [
 
 export const homeActions: HomeAction[] = [
   { label: "网页版", href: "/", primary: true },
-  { label: "下载", href: "/docs/quick-start" },
+  { label: "下载", href: "/docs/quick-start#%E4%B8%8B%E8%BD%BD%E4%B8%8E%E5%90%AF%E5%8A%A8" },
   { label: "使用教程", href: "/docs/quick-start" },
 ];
 

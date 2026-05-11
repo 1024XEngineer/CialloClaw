@@ -1,4 +1,4 @@
-import { ChevronDown, FileText, Github, Languages, Menu } from "lucide-react";
+import { Github, Languages, Menu } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { SearchBar } from "@/components/SearchBar";
@@ -71,25 +71,9 @@ export function PillNav({ activeHref, className, isHome = false }: PillNavProps)
         </div>
 
         <nav className="hidden shrink-0 items-center gap-5 xl:flex">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button type="button" className={navTriggerClassName(activeHref.startsWith("/docs"))}>
-                <span className="font-bold">文档</span>
-                <ChevronDown className="h-4 w-4" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem asChild>
-                <Link to="/docs/what-is">
-                  <FileText className="mr-2 h-4 w-4" />
-                  <span>使用教程</span>
-                </Link>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <Link to="/docs/quick-start">版本与下载</Link>
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <Link to="/docs/what-is" className={navTriggerClassName(activeHref.startsWith("/docs"))}>
+            <span>文档</span>
+          </Link>
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -98,10 +82,10 @@ export function PillNav({ activeHref, className, isHome = false }: PillNavProps)
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuCheckboxItem checked={language === "zh"} onCheckedChange={() => setLanguage("zh")}>
+              <DropdownMenuCheckboxItem className="font-bold" checked={language === "zh"} onCheckedChange={() => setLanguage("zh")}>
                 中文
               </DropdownMenuCheckboxItem>
-              <DropdownMenuCheckboxItem checked={language === "en"} onCheckedChange={() => setLanguage("en")}>
+              <DropdownMenuCheckboxItem className="font-bold" checked={language === "en"} onCheckedChange={() => setLanguage("en")}>
                 English
               </DropdownMenuCheckboxItem>
             </DropdownMenuContent>
@@ -162,6 +146,7 @@ function navTriggerClassName(isActive: boolean) {
     isActive ? "text-[color:var(--cc-ink)]" : "text-[color:var(--cc-ink-soft)] hover:text-[color:var(--cc-ink)]",
   );
 }
+
 
 function navIconTriggerClassName() {
   return "inline-flex h-10 w-10 items-center justify-center rounded-full border border-[color:var(--cc-line)] bg-[color:var(--cc-surface)] text-[color:var(--cc-ink-soft)] backdrop-blur-md outline-none transition hover:bg-[color:var(--cc-surface-strong)] hover:text-[color:var(--cc-ink)] focus:outline-none focus-visible:outline-none focus-visible:ring-0 active:outline-none";

@@ -1,0 +1,9 @@
+[   11589ms] [ERROR] `DialogContent` requires a `DialogTitle` for the component to be accessible for screen reader users.
+
+If you want to hide the `DialogTitle`, you can wrap it with our VisuallyHidden component.
+
+For more information, see https://radix-ui.com/primitives/docs/components/dialog @ http://127.0.0.1:4187/assets/index-CLEDOuEf.js:4821
+[   11590ms] [WARNING] Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}. @ http://127.0.0.1:4187/assets/index-CLEDOuEf.js:217
+[   51679ms] SyntaxError: Failed to execute 'querySelector' on 'Element': '#%E5%B7%A5%E4%BD%9C%E5%8F%B0%E7%99%BD%E5%B1%8F%E4%BA%86%E6%80%8E%E4%B9%88%E5%8A%9E' is not a valid selector.
+    at l (http://127.0.0.1:4187/assets/index-CLEDOuEf.js:948:1114)
+    at http://127.0.0.1:4187/assets/index-CLEDOuEf.js:948:1337

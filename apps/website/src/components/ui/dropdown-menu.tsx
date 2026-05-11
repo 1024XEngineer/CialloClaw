@@ -17,7 +17,7 @@ export const DropdownMenuContent = forwardRef<
       ref={ref}
       sideOffset={sideOffset}
       className={cn(
-        "z-[80] min-w-[9rem] translate-x-2 overflow-hidden rounded-2xl border p-2 shadow-[0_24px_80px_rgba(0,0,0,0.24)] backdrop-blur-[12px] outline-none",
+        "z-[80] min-w-[9rem] translate-x-2 overflow-hidden rounded-2xl border p-2 shadow-[0_14px_32px_rgba(0,0,0,0.16)] backdrop-blur-[12px] outline-none",
         className,
       )}
       style={{ borderColor: "var(--cc-line)", background: "var(--cc-surface-popover)", color: "var(--cc-ink)", ["--tw-backdrop-blur" as string]: "blur(12px)" }}

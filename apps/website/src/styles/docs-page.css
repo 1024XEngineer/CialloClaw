@@ -1,4 +1,19 @@
 .docs-page {
+  --docs-outline-text: var(--cc-ink-soft);
+  --docs-outline-text-active: color-mix(in srgb, var(--cc-ink) 82%, #7b8fff);
+  --docs-outline-ball: color-mix(in srgb, var(--cc-ink) 34%, #7b8fff);
+}
+
+:root[data-theme="dark"] .docs-page {
+  --docs-outline-text: rgba(255, 255, 255, 0.78);
+  --docs-outline-text-active: #ffffff;
+  --docs-outline-ball: rgba(255, 255, 255, 0.92);
+}
+
+.docs-page {
+  --docs-outline-text: var(--cc-ink-soft);
+  --docs-outline-text-active: color-mix(in srgb, var(--cc-ink) 82%, #7b8fff);
+  --docs-outline-ball: color-mix(in srgb, var(--cc-ink) 34%, #7b8fff);
   height: 100%;
   align-items: start;
   min-height: 0;
@@ -6,6 +21,16 @@
   overflow-x: hidden;
   scrollbar-width: none;
   -ms-overflow-style: none;
+}
+
+:root[data-theme="dark"] .docs-page {
+  --docs-outline-text: rgba(255, 255, 255, 0.82);
+  --docs-outline-text-active: #ffffff;
+  --docs-outline-ball: rgba(255, 255, 255, 0.94);
+}
+
+:root[data-theme="dark"] :where(.css-dev-only-do-not-override-tql0nm).ant-anchor-wrapper .ant-anchor .ant-anchor-link-title {
+  color: var(--cc-ink-soft);
 }
 
 .docs-page::-webkit-scrollbar {
@@ -309,14 +334,21 @@
 }
 
 .docs-page__anchor.ant-anchor .ant-anchor-link-title {
-  color: var(--cc-ink-muted);
+  color: var(--docs-outline-text);
   font-size: 13px;
   transition: color 0.2s ease;
 }
 
+.docs-page__anchor.ant-anchor .ant-anchor-link-title a,
+.docs-page__anchor.ant-anchor .ant-anchor-link-title[href] {
+  color: inherit;
+}
+
 .docs-page__anchor.ant-anchor .ant-anchor-link-active > .ant-anchor-link-title,
-.docs-page__anchor.ant-anchor .ant-anchor-link-title:hover {
-  color: #1677ff;
+.docs-page__anchor.ant-anchor .ant-anchor-link-title:hover,
+.docs-page__anchor.ant-anchor .ant-anchor-link-active > .ant-anchor-link-title a,
+.docs-page__anchor.ant-anchor .ant-anchor-link-title:hover a {
+  color: var(--docs-outline-text-active);
 }
 
 .docs-page__anchor.ant-anchor .ant-anchor-ink::before {
@@ -324,7 +356,7 @@
 }
 
 .docs-page__anchor.ant-anchor .ant-anchor-ink-ball {
-  border-color: #1677ff;
+  border-color: var(--docs-outline-ball);
 }
 
 @media (max-width: 1023px) {

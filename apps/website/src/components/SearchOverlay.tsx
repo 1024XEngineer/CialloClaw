@@ -1,5 +1,5 @@
 import { FileText } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Command,
@@ -17,35 +17,95 @@ type SearchOverlayProps = {
   onClose: () => void;
 };
 
+type SearchResult = {
+  key: string;
+  pageTitle: string;
+  pagePath: string;
+  anchorId: string;
+  sectionTitle: string;
+  snippet: string;
+  matchIndex: number;
+  score: number;
+};
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function createSnippet(text: string, query: string) {
+  const normalizedText = text.toLowerCase();
+  const normalizedQuery = query.toLowerCase();
+  const matchIndex = normalizedText.indexOf(normalizedQuery);
+  if (matchIndex === -1) {
+    return { snippet: text.slice(0, 80), matchIndex: -1 };
+  }
+
+  const snippetStart = Math.max(0, matchIndex - 18);
+  const snippetEnd = Math.min(text.length, matchIndex + query.length + 30);
+  const prefix = snippetStart > 0 ? "..." : "";
+  const suffix = snippetEnd < text.length ? "..." : "";
+  return {
+    snippet: `${prefix}${text.slice(snippetStart, snippetEnd)}${suffix}`,
+    matchIndex,
+  };
+}
+
+function renderHighlightedSnippet(snippet: string, query: string) {
+  if (!query) return snippet;
+  const pattern = new RegExp(`(${escapeRegExp(query)})`, "giu");
+  return snippet.split(pattern).map((part, index) =>
+    pattern.test(part) ? (
+      <mark key={`${part}-${index}`} className="rounded bg-[color:rgba(109,184,255,0.24)] px-0.5 text-[color:var(--cc-ink)]">
+        {part}
+      </mark>
+    ) : (
+      <Fragment key={`${part}-${index}`}>{part}</Fragment>
+    ),
+  );
+}
+
 export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
   const navigate = useNavigate();
   const [query, setQuery] = useState("");
 
   const normalizedQuery = query.trim().toLowerCase();
-  const results = useMemo(() => {
+  const results = useMemo<SearchResult[]>(() => {
     if (!normalizedQuery) {
       return [];
     }
 
     return docsPages
-      .map((page) => {
-        const haystack = [page.title, page.summary, ...page.outline.map((section) => section.title), page.markdown]
-          .join("\n")
-          .toLowerCase();
+      .flatMap((page) => {
+        return page.searchableSections
+          .map((section) => {
+            const haystack = [page.title, page.summary, section.title, section.text].join("\n");
+            const normalizedHaystack = haystack.toLowerCase();
+            if (!normalizedHaystack.includes(normalizedQuery)) {
+              return null;
+            }
 
-        const score =
-          (page.title.toLowerCase().includes(normalizedQuery) ? 4 : 0) +
-          (page.summary.toLowerCase().includes(normalizedQuery) ? 2 : 0) +
-          (haystack.includes(normalizedQuery) ? 1 : 0);
+            const { snippet, matchIndex } = createSnippet(section.text, normalizedQuery);
+            const score =
+              (page.title.toLowerCase().includes(normalizedQuery) ? 6 : 0) +
+              (section.title.toLowerCase().includes(normalizedQuery) ? 4 : 0) +
+              (page.summary.toLowerCase().includes(normalizedQuery) ? 2 : 0) +
+              (matchIndex >= 0 ? Math.max(0, 1000 - matchIndex) / 1000 : 0);
 
-        return {
-          page,
-          score,
-        };
+            return {
+              key: `${page.path}#${section.id}`,
+              pageTitle: page.title,
+              pagePath: page.path,
+              anchorId: section.id,
+              sectionTitle: section.title,
+              snippet,
+              matchIndex,
+              score,
+            } satisfies SearchResult;
+          })
+          .filter((entry): entry is SearchResult => entry !== null);
       })
-      .filter((entry) => entry.score > 0)
-      .sort((left, right) => right.score - left.score || left.page.title.localeCompare(right.page.title))
-          .slice(0, 12);
+      .sort((left, right) => right.score - left.score || left.pageTitle.localeCompare(right.pageTitle))
+      .slice(0, 12);
   }, [normalizedQuery]);
 
   useEffect(() => {
@@ -83,22 +143,23 @@ export function SearchOverlay({ open, onClose }: SearchOverlayProps) {
           />
 
           {normalizedQuery ? (
-            <CommandList className="overflow-hidden px-2 pb-2">
+            <CommandList className="px-2 pb-2 [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
               {results.length > 0 ? (
-                results.map(({ page }) => (
+                results.map((result) => (
                   <CommandItem
-                    key={page.path}
-                    value={`${page.title} ${page.summary}`}
+                    key={result.key}
+                    value={`${result.pageTitle} ${result.sectionTitle} ${result.snippet}`}
                     onSelect={() => {
-                      navigate(page.path);
+                      navigate(`${result.pagePath}#${result.anchorId}`);
                       onClose();
                     }}
-                    className="mx-1 my-1 rounded-xl px-3 py-3 data-[selected=true]:bg-[color:var(--cc-surface)] data-[selected=true]:text-[color:var(--cc-ink)]"
+                    className="mx-1 my-1 rounded-xl border border-transparent px-3 py-3 transition-colors hover:border-[color:var(--cc-line-strong)] hover:bg-[color:var(--cc-surface-strong)] hover:shadow-[0_10px_24px_rgba(20,32,60,0.12)] data-[selected=true]:border-[color:var(--cc-line-strong)] data-[selected=true]:bg-[color:var(--cc-surface-strong)] data-[selected=true]:text-[color:var(--cc-ink)]"
                   >
                     <FileText />
                     <div className="flex min-w-0 flex-1 flex-col">
-                      <span className="truncate text-sm font-semibold text-[color:var(--cc-ink)]">{page.title}</span>
-                      <span className="truncate text-xs text-[color:var(--cc-ink-soft)]">{page.summary}</span>
+                      <span className="truncate text-sm font-semibold text-[color:var(--cc-ink)]">{result.pageTitle}</span>
+                      <span className="truncate text-xs text-[color:var(--cc-ink-muted)]">{result.sectionTitle}</span>
+                      <span className="line-clamp-2 text-xs text-[color:var(--cc-ink)]/78">{renderHighlightedSnippet(result.snippet, query)}</span>
                     </div>
                   </CommandItem>
                 ))

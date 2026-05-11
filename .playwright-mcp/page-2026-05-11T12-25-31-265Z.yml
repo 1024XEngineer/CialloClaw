@@ -1,0 +1,98 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]:
+        - link "CialloClaw logo CialloClaw" [ref=e7] [cursor=pointer]:
+          - /url: /
+          - img "CialloClaw logo" [ref=e8]
+          - generic [ref=e9]: CialloClaw
+        - generic [ref=e12]:
+          - img
+          - searchbox "搜索" [ref=e13]
+      - button [ref=e14] [cursor=pointer]:
+        - img [ref=e15]
+  - main [ref=e16]:
+    - generic [ref=e17]:
+      - complementary [ref=e18]:
+        - generic [ref=e19]:
+          - paragraph [ref=e20]: 文档导航
+          - menu [ref=e21]:
+            - text: 文档
+            - group [ref=e22]:
+              - menuitem "CialloClaw 是什么？" [ref=e23] [cursor=pointer]:
+                - generic [ref=e24]: CialloClaw 是什么？
+              - menuitem "快速上手" [ref=e25] [cursor=pointer]:
+                - generic [ref=e26]: 快速上手
+              - menuitem "初认工作台" [ref=e27] [cursor=pointer]:
+                - generic [ref=e28]: 初认工作台
+              - menuitem "使用场景" [ref=e29] [cursor=pointer]:
+                - generic [ref=e30]: 使用场景
+              - menuitem "安全与隐私" [ref=e31] [cursor=pointer]:
+                - generic [ref=e32]: 安全与隐私
+              - menuitem "常见问题" [ref=e33] [cursor=pointer]:
+                - generic [ref=e34]: 常见问题
+      - main [ref=e35]:
+        - generic [ref=e36]:
+          - paragraph [ref=e37]: Docs
+          - heading "常见问题" [level=1] [ref=e86]
+        - article [ref=e39]:
+          - heading "工作台白屏了怎么办？" [level=2] [ref=e87]
+          - paragraph [ref=e40]: 在工作台窗口内右键，选择刷新。
+          - paragraph [ref=e41]: 如果仍然无法恢复，可以退出 CialloClaw 后重新启动。
+          - separator [ref=e88]
+          - paragraph [ref=e42]
+          - heading "悬浮球不见了怎么办？" [level=2] [ref=e89]
+          - paragraph [ref=e45]: 可能是悬浮球贴到了屏幕边缘。
+          - paragraph [ref=e46]:
+            - text: 你可以先在屏幕四周找一找。
+            - text: 也可以在系统托盘中右键 CialloClaw 图标，点击：
+          - code [ref=e91]: 显示悬浮球
+          - separator [ref=e92]
+          - paragraph [ref=e93]
+          - heading "输入后没有回复怎么办？" [level=2] [ref=e94]
+          - paragraph [ref=e95]: 请先检查：
+          - code [ref=e97]: 模型是否已配置 测试连接是否成功 网络是否正常
+          - paragraph [ref=e98]: 如果你使用的是先行版，还需要确认第一个终端中的服务仍在运行：
+          - code [ref=e100]: pnpm dev:service
+          - separator [ref=e101]
+          - paragraph [ref=e102]
+          - heading "语音不能用怎么办？" [level=2] [ref=e103]
+          - paragraph [ref=e104]: 请检查：
+          - code [ref=e106]: 系统是否允许 CialloClaw 使用麦克风 当前设备是否有可用麦克风 模型配置是否正常
+          - separator [ref=e107]
+          - paragraph [ref=e108]
+          - heading "先行版启动失败怎么办？" [level=2] [ref=e109]
+          - paragraph [ref=e110]: 可以按顺序检查：
+          - code [ref=e112]: 是否已安装 pnpm 是否已安装 Rust / Tauri 开发环境 是否在项目根目录执行命令 pnpm install 是否成功 第一个终端是否保持运行 第二个终端命令是否输入完整
+          - separator [ref=e113]
+          - paragraph [ref=e114]
+          - heading "最新版和先行版有什么区别？" [level=2] [ref=e115]
+          - paragraph [ref=e116]:
+            - strong [ref=e117]: 最新版
+            - text: 更稳定，适合普通用户。
+          - paragraph [ref=e118]:
+            - strong [ref=e119]: 先行版
+            - text: 更新更快，适合开发者和早期体验用户，可能会遇到未完成或不稳定的功能。
+          - separator [ref=e120]
+          - paragraph [ref=e121]
+          - heading "CialloClaw 是免费的吗？" [level=2] [ref=e122]
+          - paragraph [ref=e123]: CialloClaw 本身开源免费。
+          - paragraph [ref=e124]: 如果你使用第三方模型服务，可能会产生模型调用费用。具体费用取决于你配置的模型和服务提供方。
+      - complementary [ref=e125]:
+        - generic [ref=e126]:
+          - paragraph [ref=e127]: 本页大纲
+          - generic [ref=e129]:
+            - link "工作台白屏了怎么办？" [ref=e132] [cursor=pointer]:
+              - /url: "#工作台白屏了怎么办"
+            - link "悬浮球不见了怎么办？" [ref=e134] [cursor=pointer]:
+              - /url: "#悬浮球不见了怎么办"
+            - link "输入后没有回复怎么办？" [ref=e136] [cursor=pointer]:
+              - /url: "#输入后没有回复怎么办"
+            - link "语音不能用怎么办？" [ref=e138] [cursor=pointer]:
+              - /url: "#语音不能用怎么办"
+            - link "先行版启动失败怎么办？" [ref=e140] [cursor=pointer]:
+              - /url: "#先行版启动失败怎么办"
+            - link "最新版和先行版有什么区别？" [ref=e142] [cursor=pointer]:
+              - /url: "#最新版和先行版有什么区别"
+            - link "CialloClaw 是免费的吗？" [ref=e144] [cursor=pointer]:
+              - /url: "#cialloclaw-是免费的吗"

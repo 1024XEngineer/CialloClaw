@@ -42,7 +42,7 @@ const ActionButtonShell = styled.div`
   }
 
   html[data-theme="dark"] & a {
-    color: #7a7a7a;
+    color: rgb(123, 138, 235);
   }
 
   a::before {

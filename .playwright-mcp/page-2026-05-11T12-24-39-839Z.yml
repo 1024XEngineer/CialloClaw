@@ -1,0 +1,64 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]:
+        - link "CialloClaw logo CialloClaw" [ref=e7] [cursor=pointer]:
+          - /url: /
+          - img "CialloClaw logo" [ref=e8]
+          - generic [ref=e9]: CialloClaw
+        - generic [ref=e12]:
+          - img
+          - searchbox "搜索" [ref=e13]
+      - button [ref=e14] [cursor=pointer]:
+        - img [ref=e15]
+  - main [ref=e16]:
+    - generic [ref=e17]:
+      - complementary [ref=e18]:
+        - generic [ref=e19]:
+          - paragraph [ref=e20]: 文档导航
+          - menu [ref=e21]:
+            - text: 文档
+            - group [ref=e22]:
+              - menuitem "CialloClaw 是什么？" [ref=e23] [cursor=pointer]:
+                - generic [ref=e24]: CialloClaw 是什么？
+              - menuitem "快速上手" [ref=e25] [cursor=pointer]:
+                - generic [ref=e26]: 快速上手
+              - menuitem "初认工作台" [ref=e27] [cursor=pointer]:
+                - generic [ref=e28]: 初认工作台
+              - menuitem "使用场景" [ref=e29] [cursor=pointer]:
+                - generic [ref=e30]: 使用场景
+              - menuitem "安全与隐私" [ref=e31] [cursor=pointer]:
+                - generic [ref=e32]: 安全与隐私
+              - menuitem "常见问题" [ref=e33] [cursor=pointer]:
+                - generic [ref=e34]: 常见问题
+      - main [ref=e35]:
+        - generic [ref=e36]:
+          - paragraph [ref=e37]: Docs
+          - heading "CialloClaw 是什么？" [level=1] [ref=e38]
+        - article [ref=e39]:
+          - paragraph [ref=e40]: CialloClaw 是一款常驻桌面的 Agent 助手。
+          - paragraph [ref=e41]: 它会以悬浮球的形式停留在桌面边缘，在你阅读网页、处理文件、查看报错或整理任务时，帮你理解内容、生成草稿、分析文件和推进下一步。
+          - paragraph [ref=e42]: 你可以把它理解成：
+          - blockquote [ref=e43]:
+            - paragraph [ref=e44]: 一只在桌面上随时待命的小助手。需要时叫它，不需要时它安静待着。
+          - paragraph [ref=e45]
+          - paragraph [ref=e46]: CialloClaw 的特点：
+          - list [ref=e47]:
+            - listitem [ref=e48]:
+              - strong [ref=e49]: 桌面常驻
+              - text: ：通过悬浮球随时唤起
+            - listitem [ref=e50]:
+              - strong [ref=e51]: 轻量协作
+              - text: ：不用打开复杂界面，也能直接提问
+            - listitem [ref=e52]:
+              - strong [ref=e53]: 上下文感知
+              - text: ：可以结合当前页面、选中文本或文件理解需求
+            - listitem [ref=e54]:
+              - strong [ref=e55]: 低打扰
+              - text: ：默认安静待机，需要时再出现
+            - listitem [ref=e56]:
+              - strong [ref=e57]: 可确认
+              - text: ：关键操作会先询问你
+            - listitem [ref=e58]:
+              - strong [ref=e59]: 开源免费
+              - text: ：项目代码公开，欢迎使用和参与贡献
