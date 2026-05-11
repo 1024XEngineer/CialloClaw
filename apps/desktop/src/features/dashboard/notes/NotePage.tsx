@@ -29,7 +29,7 @@ import {
   saveNoteSource,
 } from "./noteSource.service";
 import { convertNoteToTask, loadNoteBucket, performNoteResourceOpenExecution, resolveNoteResourceOpenExecutionPlan, updateNote, type NotePageDataMode } from "./notePage.service";
-import { isDashboardTaskDeliveryHref, navigateToDashboardTaskDelivery } from "../tasks/taskDeliveryNavigation";
+import { isDashboardTaskDeliveryHref, navigateToDashboardTaskDelivery, readDashboardTaskDeliveryTaskId } from "../tasks/taskDeliveryNavigation";
 import {
   buildSourceNoteEditorDraftFromNote,
   createEmptySourceNoteEditorDraft,
@@ -1810,8 +1810,9 @@ export function NotePage() {
         return plan.feedback;
       },
       onOpenResultPage: ({ taskId, url }) => {
-        if (taskId && isDashboardTaskDeliveryHref(url)) {
-          navigateToDashboardTaskDelivery(navigate, taskId);
+        const deliveryTaskId = taskId ?? readDashboardTaskDeliveryTaskId(url);
+        if (deliveryTaskId && isDashboardTaskDeliveryHref(url)) {
+          navigateToDashboardTaskDelivery(navigate, deliveryTaskId);
           return plan.feedback;
         }
 

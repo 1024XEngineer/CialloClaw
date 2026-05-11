@@ -5967,6 +5967,7 @@ test("task delivery navigation helpers keep dashboard result-page hrefs stable",
   await withDesktopAliasRuntime((requireFn) => {
     const navigationModule = requireFn(resolve(desktopRoot, "src/features/dashboard/tasks/taskDeliveryNavigation.ts")) as {
       isDashboardTaskDeliveryHref: (url: string) => boolean;
+      readDashboardTaskDeliveryTaskId: (url: string) => string | null;
       resolveDashboardTaskDeliveryRouteHref: (taskId: string) => string;
       resolveDashboardTaskDeliveryRoutePath: (taskId: string) => string;
     };
@@ -5983,7 +5984,12 @@ test("task delivery navigation helpers keep dashboard result-page hrefs stable",
       navigationModule.isDashboardTaskDeliveryHref("./dashboard.html#/tasks/delivery/task%20result%2F001"),
       true,
     );
+    assert.equal(
+      navigationModule.readDashboardTaskDeliveryTaskId("./dashboard.html#/tasks/delivery/task%20result%2F001"),
+      "task result/001",
+    );
     assert.equal(navigationModule.isDashboardTaskDeliveryHref("https://example.test/result"), false);
+    assert.equal(navigationModule.readDashboardTaskDeliveryTaskId("https://example.test/result"), null);
   });
 });
 
@@ -6368,6 +6374,29 @@ test("note result-page execution accepts dashboard delivery hrefs and delegates 
   });
 
   assert.deepEqual(openedTaskIds, ["task_dashboard_001"]);
+  assert.equal(feedback, "已在仪表盘中打开结果页。");
+});
+
+test("note result-page execution recovers task ids from dashboard delivery hrefs when payload task_id is missing", async () => {
+  const noteService = loadNotePageServiceModule();
+  const openedTaskIds: string[] = [];
+
+  const feedback = await noteService.performNoteResourceOpenExecution({
+    mode: "open_result_page",
+    feedback: "已打开 Result page。",
+    path: null,
+    taskId: null,
+    url: "./dashboard.html#/tasks/delivery/task_dashboard_002",
+  }, {
+    onOpenResultPage: ({ taskId }: { taskId: string | null; url: string; plan: unknown }) => {
+      if (taskId) {
+        openedTaskIds.push(taskId);
+      }
+      return "已在仪表盘中打开结果页。";
+    },
+  });
+
+  assert.deepEqual(openedTaskIds, ["task_dashboard_002"]);
   assert.equal(feedback, "已在仪表盘中打开结果页。");
 });
 
