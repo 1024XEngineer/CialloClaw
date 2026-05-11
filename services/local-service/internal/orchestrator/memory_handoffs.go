@@ -223,7 +223,7 @@ func clarificationBubbleText(suggestionIntent map[string]any, snapshot taskconte
 	}
 
 	trimmedSummary := truncateText(summary, 72)
-	if languagepolicy.PreferredReplyLanguage(memoryQueryFromSnapshot(snapshot)) == languagepolicy.ReplyLanguageEnglish {
+	if clarificationReplyLanguage(snapshot) == languagepolicy.ReplyLanguageEnglish {
 		return fmt.Sprintf("Based on your earlier context (%s), %s", trimmedSummary, clarificationFollowUpPrompt(suggestionIntent, true))
 	}
 
@@ -231,14 +231,14 @@ func clarificationBubbleText(suggestionIntent map[string]any, snapshot taskconte
 }
 
 func clarificationBaseText(suggestionIntent map[string]any, snapshot taskcontext.TaskContextSnapshot) string {
-	if languagepolicy.PreferredReplyLanguage(memoryQueryFromSnapshot(snapshot)) == languagepolicy.ReplyLanguageEnglish {
+	if clarificationReplyLanguage(snapshot) == languagepolicy.ReplyLanguageEnglish {
 		return clarificationFollowUpPrompt(suggestionIntent, true)
 	}
 	return clarificationFollowUpPrompt(suggestionIntent, false)
 }
 
 func initialClarificationPrompt(snapshot taskcontext.TaskContextSnapshot, startFlow bool) string {
-	if languagepolicy.PreferredReplyLanguage(memoryQueryFromSnapshot(snapshot)) == languagepolicy.ReplyLanguageEnglish {
+	if clarificationReplyLanguage(snapshot) == languagepolicy.ReplyLanguageEnglish {
 		if startFlow {
 			return "I am not sure how you want me to handle this yet. Please confirm the goal first."
 		}
@@ -248,6 +248,14 @@ func initialClarificationPrompt(snapshot taskcontext.TaskContextSnapshot, startF
 		return "我还不确定你想如何处理当前对象，请先确认。"
 	}
 	return "我还不确定你想如何处理这段内容，请确认目标。"
+}
+
+func clarificationReplyLanguage(snapshot taskcontext.TaskContextSnapshot) string {
+	preferredInput := firstNonEmptyString(snapshot.Text, snapshot.ErrorText)
+	if preferredInput == "" {
+		preferredInput = firstNonEmptyString(snapshot.SelectionText, memoryQueryFromSnapshot(snapshot))
+	}
+	return languagepolicy.PreferredReplyLanguage(preferredInput)
 }
 
 func clarificationFollowUpPrompt(taskIntent map[string]any, english bool) string {

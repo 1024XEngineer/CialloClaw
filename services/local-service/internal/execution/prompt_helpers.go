@@ -139,14 +139,14 @@ func clarificationFallbackText(replyLanguage string) string {
 }
 
 // preferredReplyLanguageForRequest keeps language selection anchored to the raw
-// user input instead of the fully assembled execution input. This prevents
-// retrieved memory snippets from flipping an otherwise English request back to
-// the Chinese default path.
+// user instruction before it considers the operated-on object text. This keeps
+// English commands like "translate this" from falling back to Chinese just
+// because the selected content itself is non-English.
 func preferredReplyLanguageForRequest(request Request, inputText string) string {
 	if trimmed := strings.TrimSpace(request.ReplyLanguage); trimmed != "" {
 		return trimmed
 	}
-	for _, candidate := range []string{request.Snapshot.SelectionText, request.Snapshot.Text, request.Snapshot.ErrorText} {
+	for _, candidate := range []string{request.Snapshot.Text, request.Snapshot.ErrorText, request.Snapshot.SelectionText} {
 		trimmed := strings.TrimSpace(candidate)
 		if trimmed != "" {
 			return languagepolicy.PreferredReplyLanguage(trimmed)

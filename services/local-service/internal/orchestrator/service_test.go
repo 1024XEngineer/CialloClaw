@@ -1439,6 +1439,50 @@ func TestServiceSubmitInputRespectsExplicitConfirmationForFreeText(t *testing.T)
 	}
 }
 
+func TestServiceSubmitInputPrefersEnglishInstructionOverNonEnglishSelection(t *testing.T) {
+	service := newTestService()
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_confirm_english_selection",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text",
+			"text": "translate this",
+		},
+		"context": map[string]any{
+			"selection": map[string]any{
+				"text": "你好世界",
+			},
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	startBubble := result["bubble_message"].(map[string]any)
+	if text := stringValue(startBubble, "text", ""); !strings.Contains(text, "what would you like me to do next?") {
+		t.Fatalf("expected english clarification bubble even with non-english selection, got %+v", startBubble)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	confirmResult, err := service.ConfirmTask(map[string]any{
+		"task_id":   taskID,
+		"confirmed": false,
+	})
+	if err != nil {
+		t.Fatalf("confirm task failed: %v", err)
+	}
+
+	confirmBubble := confirmResult["bubble_message"].(map[string]any)
+	if text := stringValue(confirmBubble, "text", ""); !strings.Contains(text, "That is not the right handling path.") {
+		t.Fatalf("expected english confirm clarification even with non-english selection, got %+v", confirmBubble)
+	}
+}
+
 func TestServiceSubmitInputRoutesClearCommandToAgentLoopWithoutForcedConfirmation(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "Translated note ready.")
 

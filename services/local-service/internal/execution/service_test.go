@@ -3345,6 +3345,24 @@ func TestFallbackOutputKeepsEnglishWhenInputIncludesChineseMemoryContext(t *test
 	}
 }
 
+func TestBuildPromptPrefersEnglishInstructionOverNonEnglishSelection(t *testing.T) {
+	request := Request{
+		Intent: map[string]any{"name": "translate", "arguments": map[string]any{"target_language": "English"}},
+		Snapshot: taskcontext.TaskContextSnapshot{
+			Text:          "translate this",
+			SelectionText: "你好世界",
+		},
+	}
+	prompt := buildPrompt(request, "Selected text:\n你好世界\n\nInput:\ntranslate this")
+
+	if !strings.Contains(prompt, "Translate the following content into English") {
+		t.Fatalf("expected english instruction to win over non-english selection, got %s", prompt)
+	}
+	if strings.Contains(prompt, "请将以下内容翻译成") {
+		t.Fatalf("expected non-english selection not to force chinese prompt, got %s", prompt)
+	}
+}
+
 func TestAssessGovernanceRequiresAuthorizationForRestoreWrite(t *testing.T) {
 	service, workspaceRoot := newTestExecutionService(t, "unused")
 
@@ -3852,6 +3870,10 @@ func TestBuildExecutionInputAndFileSectionCoverFileBranches(t *testing.T) {
 	if !strings.Contains(section, "worker file content") {
 		t.Fatalf("expected file content section, got %s", section)
 	}
+	englishSection := service.fileSectionForLanguage("notes/demo.txt", languagepolicy.ReplyLanguageEnglish)
+	if !strings.Contains(englishSection, "File notes/demo.txt contents:") {
+		t.Fatalf("expected english file content section, got %s", englishSection)
+	}
 	legacySection := service.fileSection("notes/legacy.txt")
 	if !strings.Contains(legacySection, "修复执行输入乱码") || strings.ContainsRune(legacySection, '\uFFFD') {
 		t.Fatalf("expected decoded legacy file section, got %s", legacySection)
@@ -3860,9 +3882,16 @@ func TestBuildExecutionInputAndFileSectionCoverFileBranches(t *testing.T) {
 	if !strings.Contains(missingSection, "读取失败") {
 		t.Fatalf("expected missing file section, got %s", missingSection)
 	}
+	englishMissingSection := service.fileSectionForLanguage("notes/missing.txt", languagepolicy.ReplyLanguageEnglish)
+	if !strings.Contains(englishMissingSection, "Read failed") {
+		t.Fatalf("expected english missing file section, got %s", englishMissingSection)
+	}
 	service.fileSystem = nil
 	if section := service.fileSection("notes/demo.txt"); section != "文件: notes/demo.txt" {
 		t.Fatalf("expected no-filesystem branch, got %s", section)
+	}
+	if section := service.fileSectionForLanguage("notes/demo.txt", languagepolicy.ReplyLanguageEnglish); section != "File: notes/demo.txt" {
+		t.Fatalf("expected english no-filesystem branch, got %s", section)
 	}
 	service, _ = newTestExecutionService(t, "unused")
 	inputText := service.buildExecutionInput(taskcontext.TaskContextSnapshot{
@@ -3952,6 +3981,26 @@ func TestBuildExecutionInputAndFileSectionCoverFileBranches(t *testing.T) {
 	}
 	if strings.Contains(englishInputText, "历史记忆参考数据") {
 		t.Fatalf("expected english execution input to avoid chinese memory heading, got %s", englishInputText)
+	}
+
+	englishSelectionInputText := service.buildExecutionInput(taskcontext.TaskContextSnapshot{
+		SelectionText: "你好世界",
+		Text:          "translate this",
+		ErrorText:     "permission denied",
+		Files:         []string{"notes/demo.txt"},
+		PageTitle:     "Page",
+		PageURL:       "https://example.com",
+		AppName:       "Desktop",
+	}, nil, languagepolicy.ReplyLanguageEnglish)
+	for _, fragment := range []string{"Selected text", "Input text", "Error message", "Page context", "Application", "File: notes/demo.txt", "Read failed:"} {
+		if !strings.Contains(englishSelectionInputText, fragment) {
+			t.Fatalf("expected english execution input to contain %q, got %s", fragment, englishSelectionInputText)
+		}
+	}
+	for _, fragment := range []string{"选中文本", "输入文本", "错误信息", "页面上下文", "文件 notes/demo.txt 内容"} {
+		if strings.Contains(englishSelectionInputText, fragment) {
+			t.Fatalf("expected english execution input to avoid chinese fragment %q, got %s", fragment, englishSelectionInputText)
+		}
 	}
 }
 

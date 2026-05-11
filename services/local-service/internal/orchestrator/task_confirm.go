@@ -117,7 +117,7 @@ func confirmationAcceptedText(snapshot taskcontext.TaskContextSnapshot) string {
 }
 
 func isEnglishClarificationSnapshot(snapshot taskcontext.TaskContextSnapshot) bool {
-	return languagepolicy.PreferredReplyLanguage(memoryQueryFromSnapshot(snapshot)) == languagepolicy.ReplyLanguageEnglish
+	return clarificationReplyLanguage(snapshot) == languagepolicy.ReplyLanguageEnglish
 }
 
 func rejectedIntentClarificationText(snapshot taskcontext.TaskContextSnapshot) string {

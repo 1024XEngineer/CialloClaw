@@ -1934,26 +1934,21 @@ func toolBubbleText(toolName string, result *tools.ToolExecutionResult) string {
 func (s *Service) buildExecutionInput(snapshot taskcontext.TaskContextSnapshot, memoryReadPlans []map[string]any, replyLanguage string) string {
 	sections := make([]string, 0, 7)
 	if snapshot.SelectionText != "" {
-		sections = append(sections, "选中文本:\n"+strings.TrimSpace(snapshot.SelectionText))
+		sections = append(sections, executionContextSection(replyLanguage, "选中文本", "Selected text", snapshot.SelectionText))
 	}
 	if snapshot.Text != "" {
-		sections = append(sections, "输入文本:\n"+strings.TrimSpace(snapshot.Text))
+		sections = append(sections, executionContextSection(replyLanguage, "输入文本", "Input text", snapshot.Text))
 	}
 	if snapshot.ErrorText != "" {
-		sections = append(sections, "错误信息:\n"+strings.TrimSpace(snapshot.ErrorText))
+		sections = append(sections, executionContextSection(replyLanguage, "错误信息", "Error message", snapshot.ErrorText))
 	}
 	if len(snapshot.Files) > 0 {
 		for _, filePath := range snapshot.Files {
-			sections = append(sections, s.fileSection(filePath))
+			sections = append(sections, s.fileSectionForLanguage(filePath, replyLanguage))
 		}
 	}
 	if snapshot.PageTitle != "" || snapshot.PageURL != "" || snapshot.AppName != "" {
-		sections = append(sections, fmt.Sprintf(
-			"页面上下文:\n标题: %s\nURL: %s\n应用: %s",
-			strings.TrimSpace(snapshot.PageTitle),
-			strings.TrimSpace(snapshot.PageURL),
-			strings.TrimSpace(snapshot.AppName),
-		))
+		sections = append(sections, pageContextSection(snapshot, replyLanguage))
 	}
 	if memorySection := memorySectionFromReadPlans(memoryReadPlans, replyLanguage); memorySection != "" {
 		sections = append(sections, memorySection)
@@ -1965,6 +1960,31 @@ func (s *Service) buildExecutionInput(snapshot taskcontext.TaskContextSnapshot, 
 		return "无可用输入"
 	}
 	return strings.Join(sections, "\n\n")
+}
+
+func executionContextSection(replyLanguage, chineseLabel, englishLabel, text string) string {
+	label := chineseLabel
+	if replyLanguage == languagepolicy.ReplyLanguageEnglish {
+		label = englishLabel
+	}
+	return label + ":\n" + strings.TrimSpace(text)
+}
+
+func pageContextSection(snapshot taskcontext.TaskContextSnapshot, replyLanguage string) string {
+	if replyLanguage == languagepolicy.ReplyLanguageEnglish {
+		return fmt.Sprintf(
+			"Page context:\nTitle: %s\nURL: %s\nApplication: %s",
+			strings.TrimSpace(snapshot.PageTitle),
+			strings.TrimSpace(snapshot.PageURL),
+			strings.TrimSpace(snapshot.AppName),
+		)
+	}
+	return fmt.Sprintf(
+		"页面上下文:\n标题: %s\nURL: %s\n应用: %s",
+		strings.TrimSpace(snapshot.PageTitle),
+		strings.TrimSpace(snapshot.PageURL),
+		strings.TrimSpace(snapshot.AppName),
+	)
 }
 
 // memorySectionFromReadPlans keeps retrieved memory available to the model as
@@ -2048,29 +2068,51 @@ func retrievalContextItems(plan map[string]any) []map[string]any {
 }
 
 func (s *Service) fileSection(filePath string) string {
+	return s.fileSectionForLanguage(filePath, languagepolicy.ReplyLanguageChinese)
+}
+
+func (s *Service) fileSectionForLanguage(filePath, replyLanguage string) string {
 	trimmedPath := strings.TrimSpace(filePath)
 	if trimmedPath == "" {
+		if replyLanguage == languagepolicy.ReplyLanguageEnglish {
+			return "File: <empty>"
+		}
 		return "文件: <empty>"
 	}
 	if s.fileSystem == nil {
+		if replyLanguage == languagepolicy.ReplyLanguageEnglish {
+			return fmt.Sprintf("File: %s", trimmedPath)
+		}
 		return fmt.Sprintf("文件: %s", trimmedPath)
 	}
 
 	workspacePath := workspaceFSPath(trimmedPath)
 	if workspacePath == "" {
+		if replyLanguage == languagepolicy.ReplyLanguageEnglish {
+			return fmt.Sprintf("File: %s", trimmedPath)
+		}
 		return fmt.Sprintf("文件: %s", trimmedPath)
 	}
 
 	content, err := s.fileSystem.ReadFile(workspacePath)
 	if err != nil {
+		if replyLanguage == languagepolicy.ReplyLanguageEnglish {
+			return fmt.Sprintf("File: %s\nRead failed: %v", trimmedPath, err)
+		}
 		return fmt.Sprintf("文件: %s\n读取失败: %v", trimmedPath, err)
 	}
 
 	decoded, err := textdecode.Decode(content)
 	if err != nil {
+		if replyLanguage == languagepolicy.ReplyLanguageEnglish {
+			return fmt.Sprintf("File: %s\nFile encoding could not be safely detected. Convert it to UTF-8, UTF-16 BOM, or GB18030 and try again.", trimmedPath)
+		}
 		return fmt.Sprintf("文件: %s\n%s", trimmedPath, textdecode.UnsupportedEncodingUserMessage)
 	}
 
+	if replyLanguage == languagepolicy.ReplyLanguageEnglish {
+		return fmt.Sprintf("File %s contents:\n%s", trimmedPath, truncateText(decoded.Text, 1600))
+	}
 	return fmt.Sprintf("文件 %s 内容:\n%s", trimmedPath, truncateText(decoded.Text, 1600))
 }
 
