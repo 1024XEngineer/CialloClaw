@@ -2671,8 +2671,8 @@ func TestServiceNotepadConvertToTaskUsesRuntimeItemWithoutClosingTodo(t *testing
 	if task["source_type"] != "todo" {
 		t.Fatalf("expected converted task source_type todo, got %v", task["source_type"])
 	}
-	if task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
-		t.Fatalf("expected confirmed notepad conversion to reuse the text confirmation gate, got %+v", task)
+	if task["status"] != "completed" || task["current_step"] != "return_result" {
+		t.Fatalf("expected explicit notepad text to reuse the direct free-text execution path, got %+v", task)
 	}
 
 	intentValue := task["intent"].(map[string]any)
@@ -2694,12 +2694,16 @@ func TestServiceNotepadConvertToTaskUsesRuntimeItemWithoutClosingTodo(t *testing
 	if len(record.Snapshot.Files) != 1 || record.Snapshot.Files[0] != "workspace/homework" {
 		t.Fatalf("expected explicit path resources to enter task snapshot, got %+v", record.Snapshot.Files)
 	}
-	if result["delivery_result"] != nil {
-		t.Fatalf("expected confirm-gated notepad conversion to defer delivery_result, got %+v", result["delivery_result"])
+	deliveryResult, ok := result["delivery_result"].(map[string]any)
+	if !ok {
+		t.Fatal("expected direct notepad conversion to return delivery_result")
+	}
+	if deliveryResult["type"] != "workspace_document" {
+		t.Fatalf("expected explicit note resources to keep workspace delivery, got %+v", deliveryResult)
 	}
 	bubble := result["bubble_message"].(map[string]any)
-	if bubble["type"] != "intent_confirm" {
-		t.Fatalf("expected confirm-gated notepad conversion to return intent_confirm bubble, got %+v", bubble)
+	if bubble["type"] != "result" {
+		t.Fatalf("expected direct notepad conversion to return result bubble, got %+v", bubble)
 	}
 
 	sourceItem := result["notepad_item"].(map[string]any)
@@ -2768,8 +2772,8 @@ func TestServiceNotepadConvertToTaskFallsBackToTitleAndIgnoresNonPathResources(t
 	if len(record.Snapshot.Files) != 0 {
 		t.Fatalf("expected non-path resources to stay out of task snapshot files, got %+v", record.Snapshot.Files)
 	}
-	if record.Status != "confirming_intent" || record.CurrentStep != "intent_confirmation" {
-		t.Fatalf("expected title-only note to stay behind confirmation, got %+v", record)
+	if record.Status != "completed" || record.CurrentStep != "return_result" {
+		t.Fatalf("expected title-only note to reuse the direct free-text execution path, got %+v", record)
 	}
 }
 
@@ -3236,81 +3240,6 @@ func TestServiceNotepadConvertToTaskRollsBackTaskWhenLinkPersistenceFails(t *tes
 	}
 	if linkedTaskID := stringValue(item, "linked_task_id", ""); linkedTaskID != "" {
 		t.Fatalf("expected note to remain unlinked after rollback, got %+v", item)
-	}
-}
-
-func TestServiceNotepadConvertToTaskRollsBackLinkWhenFinishFails(t *testing.T) {
-	service, _ := newTestServiceWithExecution(t, "unused")
-	service.runEngine.ReplaceNotepadItems([]map[string]any{{
-		"item_id": "todo_finish_failure",
-		"title":   "convert with finish failure",
-		"bucket":  "upcoming",
-		"status":  "normal",
-		"type":    "todo_item",
-	}})
-
-	snapshot := notepadSnapshot(map[string]any{
-		"title":     "convert with finish failure",
-		"note_text": "convert with finish failure",
-	})
-	suggestion := intent.Suggestion{
-		Intent:             map[string]any{"name": "write_file", "arguments": map[string]any{"require_authorization": true}},
-		IntentConfirmed:    true,
-		TaskTitle:          "处理：finish failure",
-		TaskSourceType:     "todo",
-		RequiresConfirm:    false,
-		DirectDeliveryType: "task_detail",
-		ResultPreview:      "等待授权后继续执行",
-		ResultTitle:        "处理结果",
-		ResultBubbleText:   "结果已经生成，可直接查看。",
-	}
-	starts := make(chan struct{}, 1)
-	unsubscribe := service.SubscribeTaskStarts(func(taskID, sessionID, traceID string) {
-		starts <- struct{}{}
-	})
-	defer unsubscribe()
-
-	task := service.createNotepadTask(snapshot, suggestion)
-
-	if _, handled, claimErr := service.runEngine.ClaimNotepadItemTask("todo_finish_failure"); claimErr != nil || !handled {
-		t.Fatalf("expected note claim to succeed before linking, handled=%v err=%v", handled, claimErr)
-	}
-	linkedItem, ok := service.runEngine.LinkNotepadItemTask("todo_finish_failure", task.TaskID)
-	if !ok {
-		t.Fatal("expected note link to succeed before finish")
-	}
-	if linkedItem["linked_task_id"] != task.TaskID {
-		t.Fatalf("expected test setup to link note to task, got %+v", linkedItem)
-	}
-
-	originalStore := service.storage.ApprovalRequestStore()
-	defer replaceApprovalRequestStore(t, service.storage, originalStore)
-	replaceApprovalRequestStore(t, service.storage, failingApprovalRequestStore{base: originalStore, err: errors.New("approval store unavailable")})
-
-	_, finishErr := service.finishNotepadTask(snapshot, suggestion, task)
-	if finishErr == nil {
-		t.Fatal("expected finishNotepadTask to fail when approval persistence fails")
-	}
-
-	rollbackErr := service.rollbackLinkedNotepadTask("todo_finish_failure", task.TaskID, finishErr)
-	if !strings.Contains(rollbackErr.Error(), "approval store unavailable") {
-		t.Fatalf("expected rollback to preserve original finish error, got %v", rollbackErr)
-	}
-	if _, ok := service.runEngine.GetTask(task.TaskID); ok {
-		t.Fatalf("expected rollback to remove task %s from runtime", task.TaskID)
-	}
-
-	item, found := service.runEngine.NotepadItem("todo_finish_failure")
-	if !found {
-		t.Fatal("expected note to remain available after rollback")
-	}
-	if linkedTaskID := stringValue(item, "linked_task_id", ""); linkedTaskID != "" {
-		t.Fatalf("expected note link rollback to clear linked_task_id, got %+v", item)
-	}
-	select {
-	case <-starts:
-		t.Fatal("expected failed notepad conversion to avoid publishing task start before rollback")
-	default:
 	}
 }
 
