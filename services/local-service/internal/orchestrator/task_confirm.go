@@ -36,20 +36,20 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		} else {
 			return nil, ErrTaskNotFound
 		}
-		return map[string]any{
-			"task":            taskMap(updatedTask),
-			"bubble_message":  bubble,
-			"delivery_result": nil,
-		}, nil
+		response, err := buildTaskEntryResponse(&updatedTask, bubble, nil)
+		if err != nil {
+			return nil, err
+		}
+		return response.Map(), nil
 	}
 	if strings.TrimSpace(stringValue(intentValue, "name", "")) == "" {
 		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleConfirmMissingIntent, nil), task.UpdatedAt.Format(dateTimeLayout))
 		if updatedTask, ok := s.runEngine.SetPresentation(task.TaskID, bubble, nil, nil); ok {
-			return map[string]any{
-				"task":            taskMap(updatedTask),
-				"bubble_message":  bubble,
-				"delivery_result": nil,
-			}, nil
+			response, err := buildTaskEntryResponse(&updatedTask, bubble, nil)
+			if err != nil {
+				return nil, err
+			}
+			return response.Map(), nil
 		}
 		return nil, ErrTaskNotFound
 	}
@@ -64,18 +64,18 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	if queuedTask, queueBubble, queued, queueErr := s.queueTaskIfSessionBusy(updatedTask); queueErr != nil {
 		return nil, queueErr
 	} else if queued {
-		return map[string]any{
-			"task":            taskMap(queuedTask),
-			"bubble_message":  queueBubble,
-			"delivery_result": nil,
-		}, nil
+		response, err := buildTaskEntryResponse(&queuedTask, queueBubble, nil)
+		if err != nil {
+			return nil, err
+		}
+		return response.Map(), nil
 	}
 	governedTask, governedResponse, handled, governanceErr := s.handleTaskGovernanceDecision(updatedTask, intentValue)
 	if governanceErr != nil {
 		return nil, governanceErr
 	}
 	if handled {
-		return governedResponse, nil
+		return governedResponse.Map(), nil
 	}
 	updatedTask = governedTask
 
@@ -90,11 +90,11 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		return nil, err
 	}
 
-	return map[string]any{
-		"task":            taskMap(updatedTask),
-		"bubble_message":  resultBubble,
-		"delivery_result": optionalFormalDeliveryResult(deliveryResult),
-	}, nil
+	response, err := buildTaskEntryResponse(&updatedTask, resultBubble, deliveryResult)
+	if err != nil {
+		return nil, err
+	}
+	return response.Map(), nil
 }
 
 func (s *Service) revertTaskToIntentConfirmation(task runengine.TaskRecord) (runengine.TaskRecord, error) {

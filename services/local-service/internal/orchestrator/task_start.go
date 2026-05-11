@@ -21,14 +21,10 @@ func (s *Service) StartTask(request StartTaskRequest) (TaskEntryResponse, error)
 // directly to the orchestrator so hot task-entry requests do not bounce through
 // an extra typed-request-to-map conversion after boundary validation.
 func (s *Service) StartTaskFromParams(params map[string]any) (TaskEntryResponse, error) {
-	response, err := s.startTask(params)
-	if err != nil {
-		return TaskEntryResponse{}, err
-	}
-	return newTaskEntryResponse(response)
+	return s.startTask(params)
 }
 
-func (s *Service) startTask(params map[string]any) (map[string]any, error) {
+func (s *Service) startTask(params map[string]any) (TaskEntryResponse, error) {
 	flow := s.prepareStartTaskFlow(params)
 	if response, handled, err := s.maybeContinueStartTask(&flow); err != nil || handled {
 		return response, err
@@ -75,7 +71,7 @@ func (s *Service) prepareStartTaskFlow(params map[string]any) taskEntryFlow {
 	}
 }
 
-func (s *Service) maybeContinueStartTask(flow *taskEntryFlow) (map[string]any, bool, error) {
+func (s *Service) maybeContinueStartTask(flow *taskEntryFlow) (TaskEntryResponse, bool, error) {
 	response, handled, resolvedSessionID, err := s.maybeContinueExistingTask(flow.Params, flow.Snapshot, flow.ExplicitIntent, taskContinuationOptions{
 		ConfirmRequired:      flow.ConfirmRequired,
 		ForceConfirmRequired: flow.ForceConfirmRequired,
@@ -86,10 +82,10 @@ func (s *Service) maybeContinueStartTask(flow *taskEntryFlow) (map[string]any, b
 	if strings.TrimSpace(resolvedSessionID) != "" {
 		flow.Params = withResolvedSessionID(flow.Params, resolvedSessionID)
 	}
-	return nil, false, nil
+	return TaskEntryResponse{}, false, nil
 }
 
-func (s *Service) maybeHandleExplicitScreenStart(flow taskEntryFlow) (map[string]any, bool, error) {
+func (s *Service) maybeHandleExplicitScreenStart(flow taskEntryFlow) (TaskEntryResponse, bool, error) {
 	return s.handleScreenAnalyzeStart(flow.Params, flow.Snapshot, flow.ExplicitIntent)
 }
 
@@ -105,7 +101,7 @@ func (s *Service) suggestStartTaskIntent(flow taskEntryFlow) intent.Suggestion {
 	return s.normalizeSuggestedIntentForAvailability(flow.Snapshot, suggestion, fallbackConfirmRequired)
 }
 
-func (s *Service) maybeHandleSuggestedScreenStart(flow taskEntryFlow) (map[string]any, bool, error) {
+func (s *Service) maybeHandleSuggestedScreenStart(flow taskEntryFlow) (TaskEntryResponse, bool, error) {
 	return s.handleScreenAnalyzeSuggestion(flow.Params, flow.Snapshot, flow.Suggestion)
 }
 
@@ -140,22 +136,22 @@ func (s *Service) createTaskFromEntryFlow(flow taskEntryFlow) runengine.TaskReco
 	return task
 }
 
-func (s *Service) finishStartTask(flow taskEntryFlow, task runengine.TaskRecord) (map[string]any, error) {
+func (s *Service) finishStartTask(flow taskEntryFlow, task runengine.TaskRecord) (TaskEntryResponse, error) {
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(flow.Suggestion.RequiresConfirm), bubbleTextForStart(flow.Suggestion), task.StartedAt.Format(dateTimeLayout))
 	if flow.Suggestion.RequiresConfirm {
 		task = s.persistTaskPresentation(task, bubble)
-		return buildTaskEntryResponse(task, bubble, nil), nil
+		return buildTaskEntryResponse(&task, bubble, nil)
 	}
 
 	if queuedTask, queueBubble, queued, queueErr := s.queueTaskIfSessionBusy(task); queueErr != nil {
-		return nil, queueErr
+		return TaskEntryResponse{}, queueErr
 	} else if queued {
-		return buildTaskEntryResponse(queuedTask, queueBubble, nil), nil
+		return buildTaskEntryResponse(&queuedTask, queueBubble, nil)
 	}
 
 	governedTask, governedResponse, handled, governanceErr := s.handleTaskGovernanceDecision(task, flow.Suggestion.Intent)
 	if governanceErr != nil {
-		return nil, governanceErr
+		return TaskEntryResponse{}, governanceErr
 	}
 	if handled {
 		return governedResponse, nil
@@ -166,9 +162,9 @@ func (s *Service) finishStartTask(flow taskEntryFlow, task runengine.TaskRecord)
 	var execErr error
 	task, bubble, deliveryResult, _, execErr = s.executeTask(task, flow.Snapshot, flow.Suggestion.Intent)
 	if execErr != nil {
-		return nil, execErr
+		return TaskEntryResponse{}, execErr
 	}
-	return buildTaskEntryResponse(task, bubble, deliveryResult), nil
+	return buildTaskEntryResponse(&task, bubble, deliveryResult)
 }
 
 // taskStartConfirmRequired keeps confirmation as an explicit pre-execution gate.

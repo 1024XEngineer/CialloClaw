@@ -81,15 +81,15 @@ func (s *Service) assessTaskGovernance(task runengine.TaskRecord, taskIntent map
 	})
 }
 
-func (s *Service) handleTaskGovernanceDecision(task runengine.TaskRecord, taskIntent map[string]any) (runengine.TaskRecord, map[string]any, bool, error) {
+func (s *Service) handleTaskGovernanceDecision(task runengine.TaskRecord, taskIntent map[string]any) (runengine.TaskRecord, TaskEntryResponse, bool, error) {
 	assessment, ok, err := s.assessTaskGovernance(task, taskIntent)
 	if err != nil {
-		return task, nil, false, err
+		return task, TaskEntryResponse{}, false, err
 	}
 	if !ok {
 		assessment, ok = s.fallbackGovernanceAssessment(task, taskIntent)
 		if !ok {
-			return task, nil, false, nil
+			return task, TaskEntryResponse{}, false, nil
 		}
 	}
 	if assessment.Deny {
@@ -97,7 +97,7 @@ func (s *Service) handleTaskGovernanceDecision(task runengine.TaskRecord, taskIn
 		return blockedTask, response, true, blockErr
 	}
 	if !assessment.ApprovalRequired {
-		return task, nil, false, nil
+		return task, TaskEntryResponse{}, false, nil
 	}
 	pendingExecution := s.applyGovernanceAssessment(s.buildPendingExecution(task, taskIntent), assessment)
 	approvalRequest := buildApprovalRequest(task.TaskID, taskIntent, assessment)
@@ -110,16 +110,16 @@ func (s *Service) handleTaskGovernanceDecision(task runengine.TaskRecord, taskIn
 		updatedTask, changed = s.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble)
 	}
 	if !changed {
-		return task, nil, false, ErrTaskNotFound
+		return task, TaskEntryResponse{}, false, ErrTaskNotFound
 	}
 	if err := s.persistApprovalRequestState(updatedTask.TaskID, approvalRequest, assessment.ImpactScope); err != nil {
-		return task, nil, false, err
+		return task, TaskEntryResponse{}, false, err
 	}
-	return updatedTask, map[string]any{
-		"task":            taskMap(updatedTask),
-		"bubble_message":  bubble,
-		"delivery_result": nil,
-	}, true, nil
+	response, err := buildTaskEntryResponse(&updatedTask, bubble, nil)
+	if err != nil {
+		return task, TaskEntryResponse{}, false, err
+	}
+	return updatedTask, response, true, nil
 }
 
 func (s *Service) maybePauseForRuntimeApproval(task runengine.TaskRecord, taskIntent map[string]any, result execution.Result) (runengine.TaskRecord, map[string]any, bool, error) {
@@ -276,7 +276,7 @@ func (s *Service) fallbackGovernanceAssessment(task runengine.TaskRecord, taskIn
 	}, true
 }
 
-func (s *Service) blockTaskByAssessment(task runengine.TaskRecord, assessment execution.GovernanceAssessment) (map[string]any, runengine.TaskRecord, error) {
+func (s *Service) blockTaskByAssessment(task runengine.TaskRecord, assessment execution.GovernanceAssessment) (TaskEntryResponse, runengine.TaskRecord, error) {
 	bubbleText := governanceInterceptionBubble(assessment)
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", bubbleText, task.UpdatedAt.Format(dateTimeLayout))
 	updatedTask := runengine.TaskRecord{}
@@ -287,16 +287,15 @@ func (s *Service) blockTaskByAssessment(task runengine.TaskRecord, assessment ex
 		updatedTask, ok = s.runEngine.BlockTaskByPolicy(task.TaskID, assessment.RiskLevel, bubbleText, assessment.ImpactScope, bubble)
 	}
 	if !ok {
-		return nil, task, ErrTaskNotFound
+		return TaskEntryResponse{}, task, ErrTaskNotFound
 	}
 	auditRecord := s.writeGovernanceAuditRecord(updatedTask.TaskID, updatedTask.RunID, "risk", "intercept_operation", bubbleText, impactScopeTarget(assessment.ImpactScope, assessment.TargetObject), "denied")
 	updatedTask = s.appendAuditData(updatedTask, compactAuditRecords(auditRecord), nil)
-	return map[string]any{
-		"task":            taskMap(updatedTask),
-		"bubble_message":  bubble,
-		"delivery_result": nil,
-		"impact_scope":    cloneMap(assessment.ImpactScope),
-	}, updatedTask, nil
+	response, err := buildTaskEntryResponse(&updatedTask, bubble, nil)
+	if err != nil {
+		return TaskEntryResponse{}, task, err
+	}
+	return response, updatedTask, nil
 }
 
 func (s *Service) writeGovernanceAuditRecord(taskID, runID, auditType, action, summary, target, result string) map[string]any {

@@ -6318,6 +6318,84 @@ func TestServiceTaskDetailGetDropsStaleApprovalAnchorOutsideWaitingAuth(t *testi
 	}
 }
 
+func TestServiceTaskDetailGetDerivesInterceptedStatusFromAuthorizationDecision(t *testing.T) {
+	service := newTestService()
+
+	startResult, err := startTaskForTest(service, StartTaskRequest{SessionID: "sess_detail_intercepted", Source: "floating_ball", Trigger: "hover_text_input", Input: TaskStartInput{Type: "text", Text: "intercepted task detail inference"}, Intent: map[string]any{
+		"name": "write_file",
+		"arguments": map[string]any{
+			"require_authorization": true,
+		},
+	}})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	if _, err := service.SecurityRespond(map[string]any{
+		"task_id":       taskID,
+		"approval_id":   activeApprovalIDForTask(t, service, taskID),
+		"decision":      "deny_once",
+		"remember_rule": false,
+	}); err != nil {
+		t.Fatalf("security respond failed: %v", err)
+	}
+
+	mutateRuntimeTask(t, service.runEngine, taskID, func(runtimeRecord *runengine.TaskRecord) {
+		delete(runtimeRecord.SecuritySummary, "security_status")
+	})
+
+	detailResult, err := taskDetailGetForTest(service, TaskDetailGetRequest{TaskID: taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	if detailResult["security_summary"].(map[string]any)["security_status"] != "intercepted" {
+		t.Fatalf("expected intercepted status from denied authorization, got %+v", detailResult["security_summary"])
+	}
+}
+
+func TestServiceTaskDetailGetDerivesRecoverableStatusFromRestorePoint(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "recoverable detail inference")
+	if service.storage == nil {
+		t.Fatal("expected storage service to be wired")
+	}
+
+	taskID := "task_detail_recoverable"
+	err := service.storage.TaskRunStore().SaveTaskRun(context.Background(), storage.TaskRunRecord{
+		TaskID:      taskID,
+		SessionID:   "sess_detail_recoverable",
+		RunID:       "run_detail_recoverable",
+		Title:       "recoverable detail inference",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		CurrentStep: "deliver_result",
+		RiskLevel:   "yellow",
+		StartedAt:   time.Date(2026, 4, 16, 10, 0, 0, 0, time.UTC),
+		UpdatedAt:   time.Date(2026, 4, 16, 10, 5, 0, 0, time.UTC),
+		FinishedAt:  timePointer(time.Date(2026, 4, 16, 10, 6, 0, 0, time.UTC)),
+		SecuritySummary: map[string]any{
+			"latest_restore_point": map[string]any{
+				"recovery_point_id": "rp_detail_recoverable",
+				"task_id":           taskID,
+				"summary":           "recoverable detail inference",
+				"created_at":        "2026-04-16T10:06:00Z",
+				"objects":           []string{"workspace/recoverable.md"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("save task run failed: %v", err)
+	}
+
+	detailResult, err := taskDetailGetForTest(service, TaskDetailGetRequest{TaskID: taskID})
+	if err != nil {
+		t.Fatalf("task detail get failed: %v", err)
+	}
+	if detailResult["security_summary"].(map[string]any)["security_status"] != "recoverable" {
+		t.Fatalf("expected recoverable status from latest restore point, got %+v", detailResult["security_summary"])
+	}
+}
+
 func TestServiceTaskDetailGetDropsApprovalAnchorWithMismatchedTaskID(t *testing.T) {
 	service := newTestService()
 

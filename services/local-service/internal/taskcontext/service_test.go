@@ -16,7 +16,7 @@ func TestServiceCaptureNormalizesNestedContext(t *testing.T) {
 			},
 			"page": map[string]any{
 				"title":        " Editor ",
-				"url":          " https://example.com/doc ",
+				"url":          " https://user:pass@example.com/doc?tab=1#focus ",
 				"app_name":     " desktop ",
 				"browser_kind": " chrome ",
 				"process_path": " C:/Program Files/Google/Chrome/Application/chrome.exe ",
@@ -80,7 +80,7 @@ func TestServiceCapturePrefersInputPageContextAndFlatFallbackSignals(t *testing.
 			"text": "看看当前屏幕上哪里出错了",
 			"page_context": map[string]any{
 				"title":        " Build Pipeline ",
-				"url":          " https://example.com/build ",
+				"url":          " https://example.com/build?job=42#logs ",
 				"app_name":     " Chrome ",
 				"browser_kind": " edge ",
 				"process_path": " C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe ",

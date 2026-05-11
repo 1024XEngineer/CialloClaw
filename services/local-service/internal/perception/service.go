@@ -9,6 +9,7 @@ import (
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/urlutil"
 )
 
 const (
@@ -66,7 +67,7 @@ func CaptureContextSignals(source, scene string, context map[string]any) SignalS
 		Source:            firstNonEmpty(strings.TrimSpace(source), stringValue(context, "source")),
 		Scene:             firstNonEmpty(strings.TrimSpace(scene), stringValue(context, "scene")),
 		PageTitle:         firstNonEmpty(stringValue(context, "page_title"), stringValue(page, "title")),
-		PageURL:           firstNonEmpty(stringValue(context, "page_url"), stringValue(page, "url")),
+		PageURL:           urlutil.SanitizeContextURL(firstNonEmpty(stringValue(context, "page_url"), stringValue(page, "url"))),
 		AppName:           firstNonEmpty(stringValue(context, "app_name"), stringValue(page, "app_name")),
 		WindowTitle:       firstNonEmpty(stringValue(context, "window_title"), stringValue(page, "window_title"), stringValue(screen, "window_title")),
 		VisibleText:       firstNonEmpty(stringValue(context, "visible_text"), stringValue(page, "visible_text"), stringValue(screen, "visible_text")),

@@ -19,15 +19,26 @@ func (s *Service) persistTaskPresentation(task runengine.TaskRecord, bubble map[
 
 // buildTaskEntryResponse centralizes the protocol-facing result shape shared
 // by agent.input.submit and agent.task.start. Business branches should return
-// task state and delivery objects, not hand-build response maps.
-func buildTaskEntryResponse(task runengine.TaskRecord, bubble map[string]any, deliveryResult map[string]any) map[string]any {
-	response := map[string]any{
-		"task":            taskMap(task),
-		"bubble_message":  bubble,
-		"delivery_result": nil,
+// task state and delivery objects, not hand-build protocol maps first.
+func buildTaskEntryResponse(task *runengine.TaskRecord, bubble map[string]any, deliveryResult map[string]any) (TaskEntryResponse, error) {
+	response := TaskEntryResponse{}
+	if task != nil {
+		taskDTO := taskDTOFromRecord(*task)
+		response.Task = &taskDTO
+	}
+	if len(bubble) > 0 {
+		bubbleDTO, err := bubbleMessageDTOFromMap(bubble)
+		if err != nil {
+			return TaskEntryResponse{}, err
+		}
+		response.BubbleMessage = &bubbleDTO
 	}
 	if len(deliveryResult) > 0 {
-		response["delivery_result"] = deliveryResult
+		deliveryDTO, err := deliveryResultDTOFromMap(deliveryResult)
+		if err != nil {
+			return TaskEntryResponse{}, err
+		}
+		response.DeliveryResult = &deliveryDTO
 	}
-	return response
+	return response, nil
 }

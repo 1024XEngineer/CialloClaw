@@ -36,9 +36,9 @@ type screenAnalyzeCandidateIntentArguments struct {
 	TargetObject    string `json:"target_object"`
 }
 
-func (s *Service) handleScreenAnalyzeStart(params map[string]any, snapshot taskcontext.TaskContextSnapshot, explicitIntent map[string]any) (map[string]any, bool, error) {
+func (s *Service) handleScreenAnalyzeStart(params map[string]any, snapshot taskcontext.TaskContextSnapshot, explicitIntent map[string]any) (TaskEntryResponse, bool, error) {
 	if stringValue(explicitIntent, "name", "") != "screen_analyze" || s.executor == nil || !s.executor.ScreenCapabilitySnapshot().Available {
-		return nil, false, nil
+		return TaskEntryResponse{}, false, nil
 	}
 	resolvedIntent := s.resolveScreenAnalyzeIntent(snapshot, explicitIntent)
 	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
@@ -57,38 +57,32 @@ func (s *Service) handleScreenAnalyzeStart(params map[string]any, snapshot taskc
 		Snapshot:          snapshot,
 	})
 	if queuedTask, queueBubble, queued, queueErr := s.queueTaskIfSessionBusy(task); queueErr != nil {
-		return nil, false, queueErr
+		return TaskEntryResponse{}, false, queueErr
 	} else if queued {
-		return map[string]any{
-			"task":            taskMap(queuedTask),
-			"bubble_message":  queueBubble,
-			"delivery_result": nil,
-		}, true, nil
+		response, err := buildTaskEntryResponse(&queuedTask, queueBubble, nil)
+		return response, true, err
 	}
 	approvalState, err := s.buildScreenAnalysisApprovalState(task)
 	if err != nil {
-		return nil, false, err
+		return TaskEntryResponse{}, false, err
 	}
 	approvalRequest := approvalState.approvalRequestMap()
 	pendingExecution := approvalState.pendingExecutionMap()
 	bubble := approvalState.bubbleMessageMap()
 	updatedTask, ok := s.runEngine.MarkWaitingApprovalWithPlan(task.TaskID, approvalRequest, pendingExecution, bubble)
 	if !ok {
-		return nil, false, ErrTaskNotFound
+		return TaskEntryResponse{}, false, ErrTaskNotFound
 	}
 	if err := s.persistApprovalRequestState(updatedTask.TaskID, approvalRequest, approvalState.PendingExecution.ImpactScope.mapValue()); err != nil {
-		return nil, false, err
+		return TaskEntryResponse{}, false, err
 	}
-	return map[string]any{
-		"task":            taskMap(updatedTask),
-		"bubble_message":  bubble,
-		"delivery_result": nil,
-	}, true, nil
+	response, err := buildTaskEntryResponse(&updatedTask, bubble, nil)
+	return response, true, err
 }
 
-func (s *Service) handleScreenAnalyzeSuggestion(params map[string]any, snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) (map[string]any, bool, error) {
+func (s *Service) handleScreenAnalyzeSuggestion(params map[string]any, snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) (TaskEntryResponse, bool, error) {
 	if stringValue(suggestion.Intent, "name", "") != "screen_analyze" || suggestion.RequiresConfirm {
-		return nil, false, nil
+		return TaskEntryResponse{}, false, nil
 	}
 	return s.handleScreenAnalyzeStart(params, snapshot, suggestion.Intent)
 }
