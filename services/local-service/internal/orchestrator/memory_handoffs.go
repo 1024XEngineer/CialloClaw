@@ -330,10 +330,6 @@ func clarificationBubbleTextForLanguage(suggestionIntent map[string]any, hits []
 	return fmt.Sprintf("结合你之前提到的内容（%s），%s", trimmedSummary, clarificationFollowUpPrompt(suggestionIntent, false))
 }
 
-func clarificationBaseText(suggestionIntent map[string]any, snapshot taskcontext.TaskContextSnapshot) string {
-	return clarificationBaseTextForLanguage(suggestionIntent, clarificationReplyLanguage(snapshot))
-}
-
 func clarificationBaseTextForLanguage(suggestionIntent map[string]any, replyLanguage string) string {
 	if replyLanguage == languagepolicy.ReplyLanguageEnglish {
 		return clarificationFollowUpPrompt(suggestionIntent, true)
