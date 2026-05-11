@@ -122,6 +122,150 @@ func TestServiceStartTaskTitleRefreshDoesNotOverridePrimaryTokenMetadata(t *test
 	t.Fatalf("expected title refresh to preserve primary token metadata, got %+v", record)
 }
 
+func TestServiceSubmitInputUsesGeneratedTaskTitleFromFullContext(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			if isTaskTitleGenerationRequest(request) {
+				return model.GenerateTextResponse{
+					OutputText: `{"title":"牛顿第一定律学习计划"}`,
+					RequestID:  "req_submit_title",
+					Provider:   "openai",
+					ModelID:    "gpt-title",
+					Usage:      model.TokenUsage{InputTokens: 14, OutputTokens: 5, TotalTokens: 19},
+					LatencyMS:  37,
+				}, nil
+			}
+			return model.GenerateTextResponse{OutputText: "先整理相关资料并给出学习摘要。"}, nil
+		},
+	})
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_submit_generated_title",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "现在我想复习高中物理，请帮我搜索相关资料，先给我总结牛顿第一定律相关内容",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		record, ok := service.runEngine.GetTask(taskID)
+		if ok && record.Title == "牛顿第一定律学习计划" && hasTaskTitleAuditRecord(record.AuditRecords) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	record, _ := service.runEngine.GetTask(taskID)
+	t.Fatalf("expected submit input to schedule async task title refinement, got %+v", record)
+}
+
+func TestServiceConfirmTaskUsesGeneratedTaskTitleAfterConfirmation(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			if isTaskTitleGenerationRequest(request) {
+				return model.GenerateTextResponse{
+					OutputText: `{"title":"发布复盘风险跟进"}`,
+					RequestID:  "req_confirm_title",
+					Provider:   "openai",
+					ModelID:    "gpt-title",
+					Usage:      model.TokenUsage{InputTokens: 12, OutputTokens: 4, TotalTokens: 16},
+					LatencyMS:  42,
+				}, nil
+			}
+			return model.GenerateTextResponse{OutputText: "执行结果"}, nil
+		},
+	})
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_confirm_generated_title",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"options":    map[string]any{"confirm_required": true},
+		"input": map[string]any{
+			"type": "text",
+			"text": "请帮我整理这次发布复盘，并补齐风险项和后续跟进安排",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	if _, err := service.ConfirmTask(map[string]any{
+		"task_id":   taskID,
+		"confirmed": true,
+	}); err != nil {
+		t.Fatalf("confirm task failed: %v", err)
+	}
+
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		record, ok := service.runEngine.GetTask(taskID)
+		if ok && record.Title == "发布复盘风险跟进" && hasTaskTitleAuditRecord(record.AuditRecords) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	record, _ := service.runEngine.GetTask(taskID)
+	t.Fatalf("expected confirm task to schedule async task title refinement, got %+v", record)
+}
+
+func TestServiceNotepadConvertToTaskUsesGeneratedTaskTitleFromFullContext(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			if isTaskTitleGenerationRequest(request) {
+				return model.GenerateTextResponse{
+					OutputText: `{"title":"作业材料整理计划"}`,
+					RequestID:  "req_notepad_title",
+					Provider:   "openai",
+					ModelID:    "gpt-title",
+					Usage:      model.TokenUsage{InputTokens: 11, OutputTokens: 4, TotalTokens: 15},
+					LatencyMS:  35,
+				}, nil
+			}
+			return model.GenerateTextResponse{OutputText: "Converted notepad task finished."}, nil
+		},
+	})
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+	service.runEngine.ReplaceNotepadItems([]map[string]any{{
+		"item_id":          "todo_generated_title",
+		"title":            "translate the meeting notes",
+		"bucket":           "upcoming",
+		"status":           "normal",
+		"type":             "todo_item",
+		"note_text":        "Finish the computer homework before tonight and use the materials in workspace/homework.",
+		"agent_suggestion": "translate into English",
+	}})
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   "todo_generated_title",
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		record, ok := service.runEngine.GetTask(taskID)
+		if ok && record.Title == "作业材料整理计划" && hasTaskTitleAuditRecord(record.AuditRecords) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	record, _ := service.runEngine.GetTask(taskID)
+	t.Fatalf("expected notepad conversion to schedule async task title refinement, got %+v", record)
+}
+
 func hasTaskTitleAuditRecord(records []map[string]any) bool {
 	for _, record := range records {
 		if stringValue(record, "action", "") == "title.generate" {

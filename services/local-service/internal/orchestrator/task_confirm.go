@@ -115,6 +115,7 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		return nil, ErrTaskNotFound
 	}
 	executionSnapshot := snapshotFromTask(updatedTask)
+	s.refreshTitleAfterGovernance(updatedTask, executionSnapshot, intentValue)
 
 	updatedTask, resultBubble, deliveryResult, _, err := s.executeTask(updatedTask, executionSnapshot, intentValue)
 	if err != nil {

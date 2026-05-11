@@ -130,6 +130,7 @@ func (s *Service) finishInputSubmit(flow taskEntryFlow, task runengine.TaskRecor
 	}
 
 	task = governedTask
+	s.refreshTitleAfterGovernance(task, flow.Snapshot, flow.Suggestion.Intent)
 	deliveryResult := map[string]any(nil)
 	var execErr error
 	task, bubble, deliveryResult, _, execErr = s.executeTask(task, flow.Snapshot, flow.Suggestion.Intent)
