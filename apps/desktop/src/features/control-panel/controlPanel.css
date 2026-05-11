@@ -1,18 +1,18 @@
 .control-panel-shell {
-  --cp-bg: #f3f0e8;
-  --cp-bg-soft: #f7f5ef;
-  --cp-surface: rgba(255, 255, 255, 0.92);
-  --cp-surface-strong: rgba(255, 255, 255, 0.97);
-  --cp-surface-muted: rgba(248, 246, 240, 0.88);
-  --cp-surface-muted-strong: rgba(248, 245, 238, 0.92);
-  --cp-border: rgba(92, 78, 59, 0.12);
-  --cp-border-strong: rgba(92, 78, 59, 0.18);
-  --cp-border-soft: rgba(92, 78, 59, 0.08);
-  --cp-ink: #282623;
-  --cp-copy: #67625a;
-  --cp-muted: #91897e;
+  --cp-bg: var(--cc-cream-2);
+  --cp-bg-soft: var(--cc-cream-1);
+  --cp-surface: var(--cc-paper);
+  --cp-surface-strong: var(--cc-paper-strong);
+  --cp-surface-muted: var(--cc-paper-soft);
+  --cp-surface-muted-strong: var(--cc-glass-strong);
+  --cp-border: var(--cc-line);
+  --cp-border-strong: var(--cc-line-strong);
+  --cp-border-soft: rgba(126, 101, 76, 0.08);
+  --cp-ink: var(--cc-ink);
+  --cp-copy: var(--cc-ink-soft);
+  --cp-muted: var(--cc-ink-muted);
   --cp-placeholder: rgba(103, 98, 90, 0.62);
-  --cp-accent: #c97b35;
+  --cp-accent: var(--cc-honey);
   --cp-accent-soft: rgba(201, 123, 53, 0.14);
   --cp-accent-strong: #a95e21;
   --cp-accent-outline: rgba(201, 123, 53, 0.32);
@@ -47,8 +47,10 @@
   --cp-choice-track-shadow: 0 0 0 1px rgba(0, 0, 0, 0.06);
   --cp-choice-ink: rgba(51, 65, 85, 1);
   --cp-choice-selected: #ffffff;
-  --cp-tooltip-surface: rgba(255, 251, 246, 0.98);
+  --cp-tooltip-surface: rgba(255, 252, 248, 0.94);
   --cp-tooltip-ink: #15120f;
+  --cp-tooltip-copy: rgba(116, 103, 91, 0.74);
+  --cp-action-bar-surface: rgba(255, 252, 248, 0.96);
   --cp-slider-track: rgba(224, 218, 208, 0.94);
   --cp-slider-range: linear-gradient(90deg, rgba(169, 94, 33, 0.92), rgba(201, 123, 53, 0.88));
   --cp-slider-thumb: #ffffff;
@@ -60,13 +62,11 @@
   --cp-shadow: 0 24px 48px -42px rgba(71, 54, 34, 0.28);
   --cp-card-shadow: 0 20px 34px -30px rgba(71, 54, 34, 0.14);
   background:
-    radial-gradient(circle at top left, rgba(255, 255, 255, 0.94), transparent 18%),
-    radial-gradient(circle at 85% 12%, rgba(244, 215, 188, 0.34), transparent 18%),
-    linear-gradient(180deg, #f7f4ed 0%, #f2efe7 100%);
+    var(--cc-page-bg);
   color: var(--cp-ink);
   color-scheme: light;
   display: grid;
-  font-family: "Aptos", "Segoe UI Variable Text", "Trebuchet MS", sans-serif;
+  font-family: var(--cc-font-ui);
   grid-template-rows: auto minmax(0, 1fr);
   height: 100vh;
   min-height: 100vh;
@@ -86,7 +86,7 @@
   --cp-ink: #f7efe7;
   --cp-copy: #d8cdc2;
   --cp-muted: #af9f92;
-  --cp-placeholder: rgba(216, 205, 194, 0.56);
+  --cp-placeholder: rgba(216, 205, 194, 0.72);
   --cp-accent: #ff9f43;
   --cp-accent-soft: rgba(255, 159, 67, 0.2);
   --cp-accent-strong: #ffb76a;
@@ -122,8 +122,10 @@
   --cp-choice-track-shadow: 0 0 0 1px rgba(255, 241, 228, 0.08);
   --cp-choice-ink: #f7efe7;
   --cp-choice-selected: rgba(61, 47, 42, 0.98);
-  --cp-tooltip-surface: rgba(255, 248, 240, 0.98);
-  --cp-tooltip-ink: #15120f;
+  --cp-tooltip-surface: rgba(59, 45, 40, 0.98);
+  --cp-tooltip-ink: #f7efe7;
+  --cp-tooltip-copy: rgba(247, 239, 231, 0.9);
+  --cp-action-bar-surface: rgba(38, 30, 27, 0.96);
   --cp-slider-track: rgba(74, 58, 52, 0.92);
   --cp-slider-range: linear-gradient(90deg, rgba(255, 183, 106, 0.98), rgba(255, 159, 67, 0.9));
   --cp-slider-thumb: #fff1e4;
@@ -355,43 +357,51 @@
 }
 
 .control-panel-shell__help-trigger {
-  background: linear-gradient(180deg, rgba(201, 123, 53, 0.22), rgba(201, 123, 53, 0.1));
-  border-color: rgba(169, 94, 33, 0.34);
+  background: color-mix(in srgb, var(--cp-accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--cp-accent) 18%, transparent);
   border-radius: 999px;
-  box-shadow: 0 10px 16px -14px rgba(133, 78, 26, 0.58);
-  color: var(--cp-accent-strong);
+  box-shadow: none;
+  color: color-mix(in srgb, var(--cp-accent-strong) 62%, var(--cp-muted) 38%);
   display: inline-flex;
   flex: 0 0 auto;
-  height: 1.62rem;
+  height: 1.38rem;
   justify-content: center;
   padding: 0;
-  width: 1.62rem;
+  opacity: 0.72;
+  width: 1.38rem;
 }
 
 .control-panel-shell__help-trigger svg {
-  height: 0.98rem;
-  width: 0.98rem;
+  height: 0.82rem;
+  width: 0.82rem;
 }
 
 .control-panel-shell__help-trigger:hover {
-  background: linear-gradient(180deg, rgba(201, 123, 53, 0.3), rgba(201, 123, 53, 0.16));
-  border-color: rgba(169, 94, 33, 0.46);
-  box-shadow: 0 14px 20px -14px rgba(133, 78, 26, 0.64);
-  color: var(--cp-ink);
+  background: color-mix(in srgb, var(--cp-accent) 15%, transparent);
+  border-color: color-mix(in srgb, var(--cp-accent) 24%, transparent);
+  color: color-mix(in srgb, var(--cp-accent-strong) 70%, var(--cp-muted) 30%);
+  opacity: 0.9;
 }
 
 .control-panel-shell__tooltip {
   max-width: 18rem;
-  border-radius: 12px;
-  background: rgba(255, 251, 246, 0.98) !important;
-  color: #15120f !important;
-  border: 1px solid rgba(72, 57, 42, 0.18);
-  box-shadow: 0 18px 36px -20px rgba(30, 24, 20, 0.42);
-  font-size: 0.88rem;
-  font-weight: 600;
-  line-height: 1.5;
-  padding: 0.65rem 0.8rem;
+  border-radius: 14px;
+  background: rgba(255, 252, 248, 0.96) !important;
+  color: rgba(116, 103, 91, 0.92) !important;
+  border: 1px solid rgba(126, 101, 76, 0.16);
+  box-shadow: 0 18px 38px -28px rgba(71, 54, 34, 0.32);
+  font-size: 0.82rem;
+  font-weight: 500;
+  line-height: 1.58;
+  padding: 0.56rem 0.72rem;
   text-wrap: pretty;
+}
+
+body[data-control-panel-appearance="dark"] .control-panel-shell__tooltip {
+  background: rgba(59, 45, 40, 0.98) !important;
+  color: rgba(247, 239, 231, 0.9) !important;
+  border-color: rgba(255, 241, 228, 0.16);
+  box-shadow: 0 18px 42px -26px rgba(0, 0, 0, 0.5);
 }
 
 .control-panel-shell__tooltip * {
@@ -629,6 +639,38 @@
   width: 100%;
 }
 
+.control-panel-shell__path-stack {
+  display: grid;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.control-panel-shell__path-value {
+  background: color-mix(in srgb, var(--cp-paper-soft) 72%, white 28%);
+  border: 1px solid color-mix(in srgb, var(--cp-line) 78%, white 22%);
+  border-radius: 1rem;
+  color: var(--cp-copy);
+  display: block;
+  font-family: "Consolas", "SFMono-Regular", monospace;
+  font-size: 0.84rem;
+  line-height: 1.6;
+  margin: 0;
+  overflow-wrap: anywhere;
+  padding: 0.8rem 0.95rem;
+  word-break: break-word;
+}
+
+.control-panel-shell__path-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  justify-content: flex-end;
+}
+
+.control-panel-shell__path-feedback {
+  text-align: right;
+}
+
 .control-panel-shell__about-actions {
   display: flex;
   flex-wrap: wrap;
@@ -636,14 +678,48 @@
 }
 
 .control-panel-shell__about-button {
+  border: 1px solid var(--cp-border-strong);
+  box-shadow: var(--cp-card-shadow);
+  font-weight: 600;
   min-height: 2.65rem;
+  transition:
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 180ms ease;
+}
+
+.control-panel-shell__about-button:not(:disabled):hover,
+.control-panel-shell__about-button:not(:disabled):focus-visible {
+  border-color: var(--cp-accent-outline);
+  box-shadow:
+    var(--cp-card-shadow),
+    0 0 0 1px var(--cp-accent-outline-soft);
+}
+
+.control-panel-shell__about-button:not(:disabled):active {
+  transform: translateY(1px);
+}
+
+.control-panel-shell__about-button:disabled {
+  opacity: 0.58;
 }
 
 .control-panel-shell__about-link {
   color: var(--cp-copy);
-  font-family: "Consolas", "SFMono-Regular", monospace;
+  font-family: var(--font-mono);
   font-size: 0.84rem;
   word-break: break-all;
+}
+
+.control-panel-shell__about-note {
+  color: var(--cp-copy);
+  line-height: 1.65;
+  margin: 0;
+}
+
+.control-panel-shell__about-confirm {
+  display: grid;
+  gap: 0.85rem;
 }
 
 .control-panel-shell__feedback-grid {
@@ -714,7 +790,7 @@
 
 .control-panel-shell__feedback-link-copy {
   color: var(--cp-copy);
-  font-family: "Consolas", "SFMono-Regular", monospace;
+  font-family: var(--font-mono);
   font-size: 0.8rem;
   word-break: break-all;
 }
@@ -856,6 +932,7 @@
 
 .control-panel-shell :where(.control-panel-shell__input input::placeholder) {
   color: var(--cp-placeholder);
+  opacity: 1;
 }
 
 .control-panel-shell :where(.control-panel-shell__textarea) {
@@ -871,40 +948,40 @@
   display: flex;
   flex-wrap: wrap;
   background: var(--cp-choice-track);
-  border-radius: 0.75rem;
+  border-radius: 0.68rem;
   box-shadow: var(--cp-choice-track-shadow);
-  padding: 0.25rem;
-  width: min(100%, 18rem);
+  padding: 0.18rem;
+  width: min(100%, 15.5rem);
 }
 
 .control-panel-shell__choice-group--wide {
-  width: min(100%, 24rem);
+  width: min(100%, 18.2rem);
 }
 
 .control-panel-shell__choice-option {
   appearance: none;
   background: transparent;
   border: 0;
-  border-radius: 0.55rem;
+  border-radius: 0.5rem;
   color: var(--cp-choice-ink);
   cursor: pointer;
   display: flex;
   flex: 1 1 0;
   justify-content: center;
-  min-height: 2.7rem;
+  min-height: 2.22rem;
   padding: 0;
   transition: all 0.15s ease-in-out;
 }
 
 .control-panel-shell__choice-label {
   align-items: center;
-  border-radius: 0.55rem;
+  border-radius: 0.5rem;
   display: flex;
-  font-size: 0.95rem;
+  font-size: 0.84rem;
   font-weight: 500;
   justify-content: center;
-  min-height: 2.3rem;
-  padding: 0 0.8rem;
+  min-height: 1.92rem;
+  padding: 0 0.62rem;
   text-align: center;
   transition: inherit;
   white-space: nowrap;
@@ -985,7 +1062,11 @@
 
 .control-panel-shell__action-bar {
   align-items: center;
+  background: var(--cp-action-bar-surface);
+  border: 1px solid var(--cp-border-soft);
+  border-radius: 1.75rem;
   bottom: 0;
+  box-shadow: 0 18px 48px -34px rgba(71, 54, 34, 0.32);
   display: grid;
   gap: 1rem;
   grid-template-columns: minmax(0, 1fr) auto;

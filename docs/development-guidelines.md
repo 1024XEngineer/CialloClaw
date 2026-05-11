@@ -109,8 +109,9 @@
 
 - `rpc/`：接口接入层
 - `orchestrator/`：任务编排
-- `context/`：Context Manager
+- `taskcontext/`：task-facing context capture service
 - `intent/`：入口判断、澄清与规划
+- `presentation/`：后端展示文案语义键与渲染
 - `memory/`：记忆管理
 - `delivery/`：正式交付
 - `governance/`：治理与反馈
@@ -443,8 +444,8 @@ JSON-RPC 方法集合是前后端唯一正式调用入口。
 
 开发与发布必须遵守以下分发约束：
 
-- 桌面壳通过 Tauri Windows 安装包分发。
-- 后端 Harness 通过随桌面壳分发的 Go sidecar 提供。
+- 桌面壳通过 Tauri Windows 安装包分发，当前默认产出 `nsis` 与 `msi` 两类 Windows 安装器。
+- 后端 Harness 通过随桌面壳分发的 Go sidecar 提供，sidecar 二进制通过 Tauri `externalBin` 纳入安装包。
 - 浏览器自动化、媒体处理、LSP 必须以独立 worker / sidecar 二进制或 Node runtime 组件方式分发。
 - 数据目录必须按 Workspace、SQLite、Artifact、Stronghold 分目录管理。
 - 升级必须支持安装包升级、worker 独立升级，以及失败时回滚到上一个稳定版本。

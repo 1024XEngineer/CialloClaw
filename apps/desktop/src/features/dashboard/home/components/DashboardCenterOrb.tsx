@@ -211,6 +211,7 @@ export function DashboardCenterOrb({ activeColor, onDragOffset, onLongPress, vis
       >
         <div className="dashboard-orbit-center__shell">
           <ShellBallMascot
+            floatingBallSize="large"
             motionConfig={motionConfig}
             onPressEnd={() => false}
             onPressMove={() => {}}

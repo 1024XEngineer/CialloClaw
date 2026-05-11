@@ -591,6 +591,7 @@ function MirrorMemoryDetail({
 }) {
   const conversationSummary = buildMirrorConversationSummary(conversations);
   const memorySettings = settingsSnapshot.settings.memory;
+  const settingsSnapshotUsesWarningBaseline = settingsSnapshot.rpcContext.warnings.length > 0;
   const [settingsActionKey, setSettingsActionKey] = useState<string | null>(null);
   const [settingsFeedback, setSettingsFeedback] = useState<string | null>(null);
   // Current mirror references do not carry task identifiers, so local conversation
@@ -740,7 +741,7 @@ function MirrorMemoryDetail({
         <div className="mirror-page__profile-local-note">
           <BookMarked className="mirror-page__memory-icon" />
           <p className="mirror-page__summary-copy">
-            这里展示 `agent.settings.get` 或本地设置回退快照中的镜子记忆策略；已登记到真源的开关会直接写回 `agent.settings.update`。
+            这里展示 `agent.settings.get` 返回的镜子记忆策略；已登记到真源的开关会直接写回 `agent.settings.update`。
           </p>
         </div>
         {settingsFeedback ? <div className="mirror-page__profile-local-note mirror-page__settings-feedback">{settingsFeedback}</div> : null}
@@ -831,14 +832,16 @@ function MirrorMemoryDetail({
             <div className="mirror-page__stage-card-top">
               <div>
                 <p className="mirror-page__micro-label">设置来源</p>
-                <p className="mirror-page__stage-headline">{settingsSnapshot.source === "rpc" ? "settings.get" : "local fallback"}</p>
+                <p className="mirror-page__stage-headline">{settingsSnapshotUsesWarningBaseline ? "本地回退快照" : "settings.get"}</p>
               </div>
-              <StatusBadge tone={settingsSnapshot.source === "rpc" ? "green" : "yellow"}>{settingsSnapshot.source}</StatusBadge>
+              <StatusBadge tone={settingsSnapshotUsesWarningBaseline ? "yellow" : "green"}>{settingsSnapshot.source}</StatusBadge>
             </div>
             <p className="mirror-page__summary-copy">
               {settingsSnapshot.rpcContext.serverTime
                 ? `服务端快照时间：${settingsSnapshot.rpcContext.serverTime}`
-                : "当前展示的是本地设置回退快照。"}
+                : settingsSnapshotUsesWarningBaseline
+                  ? "当前展示的是本地缓存的 settings 快照，用于在 settings.get 失败时维持页面可读性。"
+                  : "当前展示的是正式 settings 快照。"}
             </p>
             {settingsSnapshot.rpcContext.warnings.length > 0 ? (
               <div className="mirror-page__conversation-actions">

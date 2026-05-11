@@ -3,6 +3,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path"
@@ -157,7 +158,7 @@ func (e *ToolExecutor) ExecuteToolWithContext(ctx context.Context, execCtx *Tool
 	duration := normalizeDuration(time.Since(start))
 
 	if execErr != nil || errors.Is(callCtx.Err(), context.DeadlineExceeded) {
-		finalErr, status := e.normalizeExecutionError(callCtx, execErr)
+		status, finalErr := e.normalizeExecutionError(callCtx, execErr)
 		result := e.buildErrorExecutionResult(ctx, metadata, name, toolResult, duration, record, status, finalErr)
 		return result, finalErr
 	}
@@ -226,14 +227,14 @@ func (e *ToolExecutor) resolveTimeout(tool Tool) time.Duration {
 	return time.Duration(DefaultTimeoutSec) * time.Second
 }
 
-func (e *ToolExecutor) normalizeExecutionError(ctx context.Context, execErr error) (error, ToolCallStatus) {
+func (e *ToolExecutor) normalizeExecutionError(ctx context.Context, execErr error) (ToolCallStatus, error) {
 	if errors.Is(execErr, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return fmt.Errorf("%w: %v", ErrToolExecutionTimeout, context.DeadlineExceeded), ToolCallStatusTimeout
+		return ToolCallStatusTimeout, fmt.Errorf("%w: %v", ErrToolExecutionTimeout, context.DeadlineExceeded)
 	}
 	if execErr == nil {
 		execErr = ErrToolExecutionFailed
 	}
-	return errors.Join(ErrToolExecutionFailed, execErr), ToolCallStatusFailed
+	return ToolCallStatusFailed, errors.Join(ErrToolExecutionFailed, execErr)
 }
 
 func (e *ToolExecutor) buildErrorExecutionResult(ctx context.Context, metadata ToolMetadata, name string, toolResult *ToolResult, duration time.Duration, record ToolCallRecord, status ToolCallStatus, err error) *ToolExecutionResult {
@@ -331,13 +332,24 @@ func approvalBypassAllowed(execCtx *ToolExecuteContext, toolName string, prechec
 	}
 	target := strings.TrimSpace(precheckInput.Workspace.TargetPath)
 	if target == "" {
+		if toolName == "browser_tabs_list" {
+			target = browserAttachKind(precheckInput.Input)
+		}
+	}
+	if target == "" {
 		target = strings.TrimSpace(precheckInput.Workspace.WorkspacePath)
 	}
 	if target == "" {
 		return false
 	}
 	workspaceRoot := strings.TrimSpace(precheckInput.Workspace.WorkspacePath)
-	return normalizeApprovalTarget(execCtx.ApprovedTargetObject, workspaceRoot) == normalizeApprovalTarget(target, workspaceRoot)
+	if normalizeApprovalTarget(execCtx.ApprovedTargetObject, workspaceRoot) != normalizeApprovalTarget(target, workspaceRoot) {
+		return false
+	}
+	if len(execCtx.ApprovedToolInput) == 0 {
+		return true
+	}
+	return sameApprovedToolInput(execCtx.ApprovedToolInput, precheckInput.Input)
 }
 
 func normalizeApprovalTarget(target, workspaceRoot string) string {
@@ -358,6 +370,18 @@ func normalizeApprovalTarget(target, workspaceRoot string) string {
 		return "."
 	}
 	return strings.Trim(path.Clean(normalized), "/")
+}
+
+// sameApprovedToolInput compares the exact approved payload with the replayed
+// tool input. Runtime agent-loop approvals persist the blocked tool input so a
+// later allow_once decision only bypasses governance for the same payload.
+func sameApprovedToolInput(approved, current map[string]any) bool {
+	approvedJSON, approvedErr := json.Marshal(approved)
+	currentJSON, currentErr := json.Marshal(current)
+	if approvedErr != nil || currentErr != nil {
+		return false
+	}
+	return string(approvedJSON) == string(currentJSON)
 }
 
 func normalizeDuration(duration time.Duration) time.Duration {

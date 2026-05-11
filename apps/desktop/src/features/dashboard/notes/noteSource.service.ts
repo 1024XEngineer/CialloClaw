@@ -14,9 +14,15 @@ import {
   type DesktopSourceNoteIndexSnapshot,
   type DesktopSourceNoteSnapshot,
 } from "@/platform/desktopSourceNotes";
+import { syncDesktopSettingsSnapshot } from "@/platform/desktopSettingsSnapshot";
 import { isRpcChannelUnavailable } from "@/rpc/fallback";
 import { getTaskInspectorConfig, runTaskInspector } from "@/rpc/methods";
-import { loadSettings } from "@/services/settingsService";
+import {
+  hydrateDesktopRuntimeDefaults,
+  loadSettings,
+  saveSettingsAndSyncDesktopSnapshot,
+  toProtocolSettingsSnapshot,
+} from "@/services/settingsService";
 import type {
   SourceNoteDocument,
   SourceNoteIndexEntry,
@@ -25,6 +31,7 @@ import type {
 } from "./notePage.types";
 
 const NOTE_SOURCE_TIMEOUT_MS = 10_000;
+const LEGACY_TASK_SOURCE_PLACEHOLDERS = new Set(["workspace/todos"]);
 
 function createRequestMeta(scope: string): RequestMeta {
   return {
@@ -79,29 +86,134 @@ function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
   ]);
 }
 
-function loadCachedTaskSources() {
-  return loadSettings().settings.task_automation.task_sources
+function normalizeSourceEntry(source: string) {
+  return source.trim().replaceAll("\\", "/").toLowerCase();
+}
+
+function normalizeTaskSources(taskSources: string[]) {
+  return taskSources
     .map((source) => source.trim())
-    .filter(Boolean);
+    .filter((source) => source.length > 0);
 }
 
-function isAbsoluteWindowsPath(value: string) {
-  return /^[a-zA-Z]:[\\/]/.test(value) || /^\\\\/.test(value);
+function isAbsoluteLocalTaskSource(source: string) {
+  const trimmed = source.trim();
+  return /^(?:[a-z]:[\\/]|\\\\|\/)/i.test(trimmed);
 }
 
-function shouldPreferCachedTaskSources(remoteTaskSources: string[], cachedTaskSources: string[]) {
-  if (cachedTaskSources.length === 0) {
+function isRecoverableTaskSourceError(error: unknown) {
+  if (!(error instanceof Error)) {
     return false;
   }
 
-  if (remoteTaskSources.length === 0) {
-    return true;
+  const normalizedMessage = error.message.trim().toLowerCase();
+  return normalizedMessage.includes("task inspection source not found")
+    || normalizedMessage.includes("inspection_source_not_found")
+    || normalizedMessage.includes("task inspection source unreadable");
+}
+
+function buildCachedTaskInspectorConfig(): AgentTaskInspectorConfigGetResult {
+  const taskAutomation = loadSettings().settings.task_automation;
+  return {
+    task_sources: taskAutomation.task_sources,
+    inspection_interval: taskAutomation.inspection_interval,
+    inspect_on_file_change: taskAutomation.inspect_on_file_change,
+    inspect_on_startup: taskAutomation.inspect_on_startup,
+    remind_before_deadline: taskAutomation.remind_before_deadline,
+    remind_when_stale: taskAutomation.remind_when_stale,
+  };
+}
+
+function resolvePreferredTaskSources(remoteTaskSources: string[]) {
+  const cachedTaskSources = normalizeTaskSources(loadSettings().settings.task_automation.task_sources);
+
+  if (cachedTaskSources.length === 0 || !cachedTaskSources.every(isAbsoluteLocalTaskSource)) {
+    return remoteTaskSources;
   }
 
-  const remoteRequiresWorkspaceRoot = remoteTaskSources.every((source) => /^workspace(?:[\\/]|$)/i.test(source.trim()));
-  const cachedUsesAbsolutePaths = cachedTaskSources.some((source) => isAbsoluteWindowsPath(source));
+  if (remoteTaskSources.length === 0) {
+    return cachedTaskSources;
+  }
 
-  return remoteRequiresWorkspaceRoot && cachedUsesAbsolutePaths;
+  const usesLegacyPlaceholderOnly = remoteTaskSources.every((source) =>
+    LEGACY_TASK_SOURCE_PLACEHOLDERS.has(normalizeSourceEntry(source)),
+  );
+
+  return usesLegacyPlaceholderOnly ? cachedTaskSources : remoteTaskSources;
+}
+
+async function syncSourceNoteSettingsSnapshot(taskSources: string[]) {
+  const currentSettings = loadSettings();
+
+  await syncDesktopSettingsSnapshot(
+    toProtocolSettingsSnapshot({
+      ...currentSettings.settings,
+      task_automation: {
+        ...currentSettings.settings.task_automation,
+        task_sources: taskSources,
+      },
+    }),
+  );
+}
+
+function areEquivalentTaskSources(left: string[], right: string[]) {
+  const normalizedLeft = normalizeTaskSources(left).map(normalizeSourceEntry);
+  const normalizedRight = normalizeTaskSources(right).map(normalizeSourceEntry);
+  if (normalizedLeft.length !== normalizedRight.length) {
+    return false;
+  }
+
+  return normalizedLeft.every((source, index) => source === normalizedRight[index]);
+}
+
+async function persistResolvedTaskSources(taskSources: string[]) {
+  const normalizedTaskSources = normalizeTaskSources(taskSources);
+  if (normalizedTaskSources.length === 0) {
+    return;
+  }
+
+  const currentSettings = loadSettings();
+  if (areEquivalentTaskSources(currentSettings.settings.task_automation.task_sources, normalizedTaskSources)) {
+    await syncSourceNoteSettingsSnapshot(normalizedTaskSources);
+    return;
+  }
+
+  await saveSettingsAndSyncDesktopSnapshot({
+    settings: {
+      ...currentSettings.settings,
+      task_automation: {
+        ...currentSettings.settings.task_automation,
+        task_sources: normalizedTaskSources,
+      },
+    },
+  });
+}
+
+async function resolveRuntimeDefaultTaskSources() {
+  const runtimeDefaults = await hydrateDesktopRuntimeDefaults();
+  return normalizeTaskSources(runtimeDefaults?.task_sources ?? []);
+}
+
+async function withRecoveredTaskSources<T>(
+  taskSources: string[],
+  operation: (nextTaskSources: string[]) => Promise<T>,
+) {
+  const normalizedTaskSources = normalizeTaskSources(taskSources);
+  try {
+    return await operation(normalizedTaskSources);
+  } catch (error) {
+    if (!isRecoverableTaskSourceError(error)) {
+      throw error;
+    }
+
+    const runtimeTaskSources = await resolveRuntimeDefaultTaskSources();
+    if (runtimeTaskSources.length === 0 || areEquivalentTaskSources(runtimeTaskSources, normalizedTaskSources)) {
+      throw error;
+    }
+
+    await persistResolvedTaskSources(runtimeTaskSources);
+    return operation(runtimeTaskSources);
+  }
 }
 
 /**
@@ -115,27 +227,32 @@ export function areDesktopSourceNotesAvailable() {
  * Loads the current task-source configuration used by the note inspector.
  */
 export async function loadNoteSourceConfig(): Promise<AgentTaskInspectorConfigGetResult> {
+  await hydrateDesktopRuntimeDefaults();
   try {
-    const remoteConfig = await withTimeout(
+    const config = await withTimeout(
       getTaskInspectorConfig({ request_meta: createRequestMeta("note_source_config") }),
       "任务来源配置加载",
     );
-    const cachedTaskSources = loadCachedTaskSources();
+    const resolvedTaskSources = resolvePreferredTaskSources(config.task_sources);
+    await persistResolvedTaskSources(resolvedTaskSources);
 
-    // The notes page should honor the persisted task-source list shown in the
-    // desktop settings snapshot when the backend still falls back to the
-    // workspace-relative default.
-    if (shouldPreferCachedTaskSources(remoteConfig.task_sources, cachedTaskSources)) {
-      return {
-        ...remoteConfig,
-        task_sources: cachedTaskSources,
-      };
-    }
-
-    return remoteConfig;
+    return {
+      ...config,
+      task_sources: resolvedTaskSources,
+    };
   } catch (error) {
     if (isRpcChannelUnavailable(error)) {
       throw new Error("当前无法读取任务来源配置，请稍后重试。");
+    }
+
+    if (isRecoverableTaskSourceError(error)) {
+      const cachedConfig = buildCachedTaskInspectorConfig();
+      const resolvedTaskSources = resolvePreferredTaskSources(cachedConfig.task_sources);
+      await persistResolvedTaskSources(resolvedTaskSources);
+      return {
+        ...cachedConfig,
+        task_sources: resolvedTaskSources,
+      };
     }
 
     throw error;
@@ -152,9 +269,9 @@ export async function loadNoteSourceSnapshot(taskSources: string[]): Promise<Sou
     throw new Error("当前运行环境不支持桌面端 markdown 便签桥接。");
   }
 
-  return mapSourceNoteSnapshot(
-    await withTimeout(loadDesktopSourceNotes(taskSources), "markdown 便签加载"),
-  );
+  return withRecoveredTaskSources(taskSources, async (nextTaskSources) => mapSourceNoteSnapshot(
+    await withTimeout(loadDesktopSourceNotes(nextTaskSources), "markdown 便签加载"),
+  ));
 }
 
 /**
@@ -168,9 +285,9 @@ export async function loadNoteSourceIndex(taskSources: string[]): Promise<Source
     throw new Error("当前运行环境不支持桌面端 markdown 便签桥接。");
   }
 
-  return mapSourceNoteIndexSnapshot(
-    await withTimeout(loadDesktopSourceNoteIndex(taskSources), "markdown 便签索引加载"),
-  );
+  return withRecoveredTaskSources(taskSources, async (nextTaskSources) => mapSourceNoteIndexSnapshot(
+    await withTimeout(loadDesktopSourceNoteIndex(nextTaskSources), "markdown 便签索引加载"),
+  ));
 }
 
 /**
@@ -187,9 +304,9 @@ export async function createNoteSource(
     throw new Error("当前运行环境不支持桌面端 markdown 便签桥接。");
   }
 
-  return mapSourceNoteDocument(
-    await withTimeout(createDesktopSourceNote(taskSources, content), "markdown 便签创建"),
-  );
+  return withRecoveredTaskSources(taskSources, async (nextTaskSources) => mapSourceNoteDocument(
+    await withTimeout(createDesktopSourceNote(nextTaskSources, content), "markdown 便签创建"),
+  ));
 }
 
 /**
@@ -208,9 +325,9 @@ export async function saveNoteSource(
     throw new Error("当前运行环境不支持桌面端 markdown 便签桥接。");
   }
 
-  return mapSourceNoteDocument(
-    await withTimeout(saveDesktopSourceNote(taskSources, path, content), "markdown 便签保存"),
-  );
+  return withRecoveredTaskSources(taskSources, async (nextTaskSources) => mapSourceNoteDocument(
+    await withTimeout(saveDesktopSourceNote(nextTaskSources, path, content), "markdown 便签保存"),
+  ));
 }
 
 /**
@@ -225,14 +342,14 @@ export async function runNoteSourceInspection(
   reason: string,
 ): Promise<AgentTaskInspectorRunResult> {
   try {
-    return await withTimeout(
+    return await withRecoveredTaskSources(taskSources, (nextTaskSources) => withTimeout(
       runTaskInspector({
         request_meta: createRequestMeta("note_source_inspection"),
         reason,
-        target_sources: taskSources,
+        target_sources: nextTaskSources,
       }),
       "便签巡检",
-    );
+    ));
   } catch (error) {
     if (isRpcChannelUnavailable(error)) {
       throw new Error("当前无法执行便签巡检，请稍后重试。");

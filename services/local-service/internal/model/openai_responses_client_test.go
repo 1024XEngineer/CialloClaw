@@ -1,4 +1,3 @@
-// 该测试文件验证模型接入层行为。
 package model
 
 import (
@@ -14,7 +13,6 @@ import (
 	"time"
 )
 
-// TestNewOpenAIResponsesClientRequiresAPIKey 验证NewOpenAIResponsesClientRequiresAPIKey。
 func TestNewOpenAIResponsesClientRequiresAPIKey(t *testing.T) {
 	_, err := NewOpenAIResponsesClient(OpenAIResponsesClientConfig{
 		Endpoint: "https://api.openai.com/v1/responses",
@@ -25,7 +23,6 @@ func TestNewOpenAIResponsesClientRequiresAPIKey(t *testing.T) {
 	}
 }
 
-// TestNewOpenAIResponsesClientRequiresEndpoint 验证NewOpenAIResponsesClientRequiresEndpoint。
 func TestNewOpenAIResponsesClientRequiresEndpoint(t *testing.T) {
 	_, err := NewOpenAIResponsesClient(OpenAIResponsesClientConfig{
 		APIKey:  "test-key",
@@ -36,7 +33,6 @@ func TestNewOpenAIResponsesClientRequiresEndpoint(t *testing.T) {
 	}
 }
 
-// TestNewOpenAIResponsesClientRequiresModelID 验证NewOpenAIResponsesClientRequiresModelID。
 func TestNewOpenAIResponsesClientRequiresModelID(t *testing.T) {
 	_, err := NewOpenAIResponsesClient(OpenAIResponsesClientConfig{
 		APIKey:   "test-key",
@@ -47,7 +43,6 @@ func TestNewOpenAIResponsesClientRequiresModelID(t *testing.T) {
 	}
 }
 
-// TestNewOpenAIResponsesClientUsesProvidedConfig 验证NewOpenAIResponsesClientUsesProvidedConfig。
 func TestNewOpenAIResponsesClientUsesProvidedConfig(t *testing.T) {
 	customHTTPClient := &http.Client{}
 	client, err := NewOpenAIResponsesClient(OpenAIResponsesClientConfig{
@@ -82,7 +77,6 @@ func TestNewOpenAIResponsesClientUsesProvidedConfig(t *testing.T) {
 	}
 }
 
-// TestNewOpenAIResponsesClientUsesDefaultHTTPClient 验证NewOpenAIResponsesClientUsesDefaultHTTPClient。
 func TestNewOpenAIResponsesClientUsesDefaultHTTPClient(t *testing.T) {
 	client, err := NewOpenAIResponsesClient(OpenAIResponsesClientConfig{
 		APIKey:   "test-key",
@@ -106,7 +100,6 @@ func TestNewOpenAIResponsesClientUsesDefaultHTTPClient(t *testing.T) {
 	}
 }
 
-// TestNewOpenAIResponsesClientPreservesExistingHTTPClientTimeout 验证NewOpenAIResponsesClientPreservesExistingHTTPClientTimeout。
 func TestNewOpenAIResponsesClientPreservesExistingHTTPClientTimeout(t *testing.T) {
 	customHTTPClient := &http.Client{Timeout: 2 * time.Second}
 	client, err := NewOpenAIResponsesClient(OpenAIResponsesClientConfig{
@@ -125,7 +118,6 @@ func TestNewOpenAIResponsesClientPreservesExistingHTTPClientTimeout(t *testing.T
 	}
 }
 
-// TestGenerateTextSuccess 验证GenerateTextSuccess。
 func TestGenerateTextSuccess(t *testing.T) {
 	type capturedRequest struct {
 		Model string `json:"model"`
@@ -228,7 +220,6 @@ func TestGenerateTextSuccess(t *testing.T) {
 	}
 }
 
-// TestGenerateTextFallsBackToOutputContent 验证GenerateTextFallsBackToOutputContent。
 func TestGenerateTextFallsBackToOutputContent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -438,7 +429,6 @@ func TestGenerateToolCallsFallBackToChatCompletionsWhenResponsesRouteIsMissing(t
 	}
 }
 
-// TestGenerateTextReturnsHTTPStatusError 验证GenerateTextReturnsHTTPStatusError。
 func TestGenerateTextReturnsHTTPStatusError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
@@ -471,7 +461,6 @@ func TestGenerateTextReturnsHTTPStatusError(t *testing.T) {
 	}
 }
 
-// TestGenerateTextReturnsHTTPStatusErrorForNonJSONBody 验证GenerateTextReturnsHTTPStatusErrorForNonJSONBody。
 func TestGenerateTextReturnsHTTPStatusErrorForNonJSONBody(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -508,7 +497,6 @@ func TestGenerateTextReturnsHTTPStatusErrorForNonJSONBody(t *testing.T) {
 	}
 }
 
-// TestGenerateTextReturnsInvalidResponseError 验证GenerateTextReturnsInvalidResponseError。
 func TestGenerateTextReturnsInvalidResponseError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`not-json`))
@@ -531,7 +519,6 @@ func TestGenerateTextReturnsInvalidResponseError(t *testing.T) {
 	}
 }
 
-// TestGenerateTextReturnsTimeoutError 验证GenerateTextReturnsTimeoutError。
 func TestGenerateTextReturnsTimeoutError(t *testing.T) {
 	client, err := NewOpenAIResponsesClient(OpenAIResponsesClientConfig{
 		APIKey:   "test-key",
@@ -553,7 +540,6 @@ func TestGenerateTextReturnsTimeoutError(t *testing.T) {
 	}
 }
 
-// TestGenerateTextReturnsRequestError 验证GenerateTextReturnsRequestError。
 func TestGenerateTextReturnsRequestError(t *testing.T) {
 	client, err := NewOpenAIResponsesClient(OpenAIResponsesClientConfig{
 		APIKey:   "test-key",
@@ -582,7 +568,6 @@ func TestOpenAIHTTPStatusErrorUsesFallbackMessageWhenMessageMissing(t *testing.T
 	}
 }
 
-// TestGenerateTextRejectsEmptyInput 验证GenerateTextRejectsEmptyInput。
 func TestGenerateTextRejectsEmptyInput(t *testing.T) {
 	client, err := NewOpenAIResponsesClient(OpenAIResponsesClientConfig{
 		APIKey:   "test-key",
@@ -601,31 +586,28 @@ func TestGenerateTextRejectsEmptyInput(t *testing.T) {
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
-// RoundTrip 处理当前模块的相关逻辑。
+// RoundTrip adapts a function literal to http.RoundTripper for tests.
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return f(request)
 }
 
-// timeoutError 定义当前模块的数据结构。
 type timeoutError struct{}
 
-// Error 处理当前模块的相关逻辑。
+// Error returns the timeout test error message.
 func (timeoutError) Error() string {
 	return "timeout"
 }
 
-// Timeout 处理当前模块的相关逻辑。
+// Timeout reports that this test error represents a timeout.
 func (timeoutError) Timeout() bool {
 	return true
 }
 
-// Temporary 处理当前模块的相关逻辑。
+// Temporary reports that this test error is not temporary.
 func (timeoutError) Temporary() bool {
 	return false
 }
 
-// _ 定义当前模块的基础变量。
 var _ net.Error = timeoutError{}
 
-// _ 定义当前模块的基础变量。
 var _ = time.Second

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"path/filepath"
 	"strings"
@@ -16,7 +17,7 @@ const (
 	RiskLevelRed    = string(risksvc.RiskLevelRed)
 )
 
-// WorkspaceBoundaryInfo 描述当前工具调用涉及的工作区边界信息。
+// WorkspaceBoundaryInfo captures the workspace boundary state for one tool call.
 type WorkspaceBoundaryInfo struct {
 	WorkspacePath string `json:"workspace_path,omitempty"`
 	TargetPath    string `json:"target_path,omitempty"`
@@ -24,13 +25,15 @@ type WorkspaceBoundaryInfo struct {
 	Exists        *bool  `json:"exists,omitempty"`
 }
 
-// PlatformCapabilityInfo 预留平台能力信息，后续可继续扩展审批/检查点能力接线。
+// PlatformCapabilityInfo records the platform capabilities available to the
+// precheck stage.
 type PlatformCapabilityInfo struct {
 	Available                 bool `json:"available"`
 	SupportsWorkspaceBoundary bool `json:"supports_workspace_boundary"`
 }
 
-// RiskPrecheckInput 是风险预检查的最小输入。
+// RiskPrecheckInput is the minimal input required for one local governance
+// precheck.
 type RiskPrecheckInput struct {
 	Metadata  ToolMetadata           `json:"metadata"`
 	ToolName  string                 `json:"tool_name"`
@@ -39,7 +42,8 @@ type RiskPrecheckInput struct {
 	Platform  PlatformCapabilityInfo `json:"platform"`
 }
 
-// RiskPrecheckResult 是风险预检查的最小输出。
+// RiskPrecheckResult is the minimal output produced by one local governance
+// precheck.
 type RiskPrecheckResult struct {
 	RiskLevel          string         `json:"risk_level"`
 	ApprovalRequired   bool           `json:"approval_required"`
@@ -50,12 +54,13 @@ type RiskPrecheckResult struct {
 	ImpactScope        map[string]any `json:"impact_scope,omitempty"`
 }
 
-// RiskPrechecker 在执行前完成本地风险判定，不直接触发工具执行。
+// RiskPrechecker performs local governance classification before any tool
+// execution starts.
 type RiskPrechecker interface {
 	Precheck(ctx context.Context, input RiskPrecheckInput) (RiskPrecheckResult, error)
 }
 
-// DefaultRiskPrechecker 提供最小可用的默认策略。
+// DefaultRiskPrechecker provides the default bounded local governance policy.
 type DefaultRiskPrechecker struct {
 	service *risksvc.Service
 }
@@ -85,7 +90,8 @@ func (p DefaultRiskPrechecker) Precheck(_ context.Context, input RiskPrecheckInp
 	}, nil
 }
 
-// BuildRiskPrecheckInput 从执行上下文中提取风险判定所需的最小信息。
+// BuildRiskPrecheckInput extracts the minimum governance context from one tool
+// execution request.
 func BuildRiskPrecheckInput(metadata ToolMetadata, toolName string, execCtx *ToolExecuteContext, input map[string]any) RiskPrecheckInput {
 	precheckInput := RiskPrecheckInput{
 		Metadata: metadata,
@@ -142,12 +148,13 @@ func buildAssessmentInput(input RiskPrecheckInput) risksvc.AssessmentInput {
 		outOfWorkspace = !*input.Workspace.Within
 	}
 
-	impactScope := risksvc.ImpactScope{
-		OutOfWorkspace: outOfWorkspace,
-	}
+	impactScope := risksvc.ImpactScope{OutOfWorkspace: outOfWorkspace}
 	targetObject := input.Workspace.TargetPath
 	if isWebpageTool(input.ToolName) {
 		impactScope.Webpages = webpagesFromTarget(input.Workspace.TargetPath)
+		if browserKind := browserAttachKind(input.Input); browserKind != "" {
+			impactScope.Apps = []string{browserKind}
+		}
 	} else {
 		impactScope.Files = filesFromTarget(firstNonEmptyTarget(input.Workspace.TargetPath, input.Workspace.WorkspacePath))
 	}
@@ -175,7 +182,17 @@ func extractTargetPath(toolName string, input map[string]any) (string, bool) {
 			return value, true
 		}
 	}
-	if isWebpageTool(toolName) {
+	if toolName == "browser_navigate" {
+		if value, ok := input["url"].(string); ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value), true
+		}
+	}
+	if isAttachedBrowserTool(toolName) {
+		if value := browserAttachTargetForTool(toolName, input); value != "" {
+			return value, true
+		}
+	}
+	if isLegacyWebpageTool(toolName) {
 		if value, ok := input["url"].(string); ok && strings.TrimSpace(value) != "" {
 			return value, true
 		}
@@ -259,13 +276,95 @@ func webpagesFromTarget(target string) []string {
 	return []string{trimmed}
 }
 
+func browserAttachTarget(input map[string]any) string {
+	attach, ok := input["attach"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	target, ok := attach["target"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	if value, ok := target["url"].(string); ok && strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value)
+	}
+	if pageIndex, ok := browserAttachPageIndexValue(target["page_index"]); ok {
+		return fmt.Sprintf("browser_tab:%d", pageIndex)
+	}
+	if value, ok := target["title_contains"].(string); ok && strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value)
+	}
+	return ""
+}
+
+func browserAttachTargetForTool(toolName string, input map[string]any) string {
+	target := browserAttachTarget(input)
+	if target == "" {
+		return ""
+	}
+	if requiresStableBrowserTarget(toolName) && !isStableBrowserTarget(target) {
+		return ""
+	}
+	return target
+}
+
+func browserAttachKind(input map[string]any) string {
+	attach, ok := input["attach"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	value, _ := attach["browser_kind"].(string)
+	return strings.TrimSpace(value)
+}
+
+func browserAttachPageIndexValue(rawValue any) (int, bool) {
+	switch typed := rawValue.(type) {
+	case int:
+		if typed >= 0 {
+			return typed, true
+		}
+	case float64:
+		if typed >= 0 && typed == float64(int(typed)) {
+			return int(typed), true
+		}
+	}
+	return 0, false
+}
+
 func isWebpageTool(toolName string) bool {
-	switch toolName {
+	return isLegacyWebpageTool(toolName) || isAttachedBrowserTool(toolName)
+}
+
+func isLegacyWebpageTool(toolName string) bool {
+	switch strings.TrimSpace(toolName) {
 	case "page_read", "page_search", "page_interact", "structured_dom":
 		return true
 	default:
 		return false
 	}
+}
+
+func isAttachedBrowserTool(toolName string) bool {
+	switch strings.TrimSpace(toolName) {
+	case "browser_attach_current", "browser_snapshot", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact":
+		return true
+	default:
+		return false
+	}
+}
+
+func requiresStableBrowserTarget(toolName string) bool {
+	switch strings.TrimSpace(toolName) {
+	case "browser_navigate", "browser_tab_focus", "browser_interact":
+		return true
+	default:
+		return false
+	}
+}
+
+func isStableBrowserTarget(target string) bool {
+	trimmed := strings.TrimSpace(target)
+	return strings.HasPrefix(trimmed, "http://") || strings.HasPrefix(trimmed, "https://") || strings.HasPrefix(trimmed, "browser_tab:")
 }
 
 func withinWorkspacePath(workspacePath, targetPath string) *bool {

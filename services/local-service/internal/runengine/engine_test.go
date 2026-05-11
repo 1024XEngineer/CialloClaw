@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 )
 
@@ -18,12 +19,24 @@ type storageTestAdapter struct {
 
 type failingSettingsStore struct{}
 
+type staticSettingsStore struct {
+	snapshot map[string]any
+}
+
 func (failingSettingsStore) SaveSettingsSnapshot(context.Context, map[string]any) error {
 	return errors.New("settings snapshot write failed")
 }
 
 func (failingSettingsStore) LoadSettingsSnapshot(context.Context) (map[string]any, error) {
 	return nil, nil
+}
+
+func (s staticSettingsStore) SaveSettingsSnapshot(context.Context, map[string]any) error {
+	return nil
+}
+
+func (s staticSettingsStore) LoadSettingsSnapshot(context.Context) (map[string]any, error) {
+	return cloneMap(s.snapshot), nil
 }
 
 func (s storageTestAdapter) DatabasePath() string {
@@ -432,6 +445,33 @@ func TestEngineUpdateSettingsOnlyRequestsRestartWhenLanguageChanges(t *testing.T
 	}
 	if applyMode != "restart_required" || !needRestart {
 		t.Fatalf("expected changed language update to require restart, got applyMode=%s needRestart=%v updatedKeys=%+v", applyMode, needRestart, updatedKeys)
+	}
+}
+
+func TestEngineUpdateSettingsOnlyRequestsRestartWhenWorkspacePathChanges(t *testing.T) {
+	engine := NewEngine()
+	_, updatedKeys, applyMode, needRestart, err := engine.UpdateSettings(map[string]any{
+		"general": map[string]any{
+			"download": map[string]any{"workspace_path": "workspace"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("unchanged workspace path update returned error: %v", err)
+	}
+	if applyMode != "immediate" || needRestart {
+		t.Fatalf("expected unchanged workspace path update to stay immediate, got applyMode=%s needRestart=%v updatedKeys=%+v", applyMode, needRestart, updatedKeys)
+	}
+
+	_, updatedKeys, applyMode, needRestart, err = engine.UpdateSettings(map[string]any{
+		"general": map[string]any{
+			"download": map[string]any{"workspace_path": "workspace-next"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("changed workspace path update returned error: %v", err)
+	}
+	if applyMode != "restart_required" || !needRestart {
+		t.Fatalf("expected changed workspace path update to require restart, got applyMode=%s needRestart=%v updatedKeys=%+v", applyMode, needRestart, updatedKeys)
 	}
 }
 
@@ -853,6 +893,29 @@ func TestEngineControlTaskResumeSupportsHumanLoopBlockedTasks(t *testing.T) {
 	}
 }
 
+func TestEngineControlTaskResumePreservesPromptFallbackStep(t *testing.T) {
+	engine := NewEngine()
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_prompt_fallback_resume",
+		Title:       "agent loop prompt fallback",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "agent_loop"},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+	})
+	if _, err := engine.ControlTask(task.TaskID, "pause", map[string]any{"task_id": task.TaskID, "type": "status", "text": "paused"}); err != nil {
+		t.Fatalf("expected pause to succeed, got %v", err)
+	}
+	resumed, err := engine.ControlTask(task.TaskID, "resume", map[string]any{"task_id": task.TaskID, "type": "status", "text": "resumed"})
+	if err != nil {
+		t.Fatalf("expected resume to succeed, got %v", err)
+	}
+	if resumed.Status != "processing" || resumed.CurrentStep != "generate_output" {
+		t.Fatalf("expected prompt fallback resume to preserve generate_output, got %+v", resumed)
+	}
+}
+
 func TestEngineCompleteTaskClearsPendingHumanLoopPayload(t *testing.T) {
 	engine := NewEngine()
 	task := engine.CreateTask(CreateTaskInput{
@@ -1050,22 +1113,130 @@ func TestEngineApplyRecoveryOutcomeSetsTerminalAndNonTerminalStatus(t *testing.T
 	}
 }
 
-// TestEngineDefaultsUseWorkspaceRelativePaths verifies defaults never write
-// platform-specific drive paths.
+// TestEngineDefaultsUseWorkspaceRelativePaths verifies defaults resolve from the
+// canonical runtime root instead of repo-relative placeholders.
 func TestEngineDefaultsUseWorkspaceRelativePaths(t *testing.T) {
+	runtimeRoot := filepath.Join(t.TempDir(), "runtime-root")
+	t.Setenv("CIALLOCLAW_RUNTIME_ROOT", runtimeRoot)
 	engine := NewEngine()
 
 	settings := engine.Settings()
 	general := settings["general"].(map[string]any)
 	download := general["download"].(map[string]any)
-	if download["workspace_path"] != "workspace" {
-		t.Fatalf("expected workspace_path default to be workspace, got %v", download["workspace_path"])
+	expectedWorkspaceRoot := filepath.ToSlash(filepath.Join(runtimeRoot, "workspace"))
+	if download["workspace_path"] != expectedWorkspaceRoot {
+		t.Fatalf("expected workspace_path default to be %q, got %v", expectedWorkspaceRoot, download["workspace_path"])
 	}
 
 	inspector := engine.InspectorConfig()
 	taskSources := inspector["task_sources"].([]string)
-	if len(taskSources) != 1 || taskSources[0] != "workspace/todos" {
-		t.Fatalf("expected task_sources to default to workspace/todos, got %v", taskSources)
+	expectedTaskSource := filepath.ToSlash(filepath.Join(runtimeRoot, "workspace", "todos"))
+	if len(taskSources) != 1 || taskSources[0] != expectedTaskSource {
+		t.Fatalf("expected task_sources to default to %q, got %v", expectedTaskSource, taskSources)
+	}
+}
+
+func TestEngineWithSettingsStoreMigratesLegacyWorkspaceDefaults(t *testing.T) {
+	runtimeRoot := filepath.Join(t.TempDir(), "runtime-root")
+	t.Setenv("CIALLOCLAW_RUNTIME_ROOT", runtimeRoot)
+	engine := NewEngine()
+	if err := engine.WithSettingsStore(staticSettingsStore{snapshot: map[string]any{
+		"general": map[string]any{
+			"download": map[string]any{"workspace_path": "workspace"},
+		},
+		"task_automation": map[string]any{
+			"task_sources": []string{"workspace/todos", "workspace/review"},
+		},
+	}}); err != nil {
+		t.Fatalf("WithSettingsStore returned error: %v", err)
+	}
+	settings := engine.Settings()
+	general := settings["general"].(map[string]any)
+	download := general["download"].(map[string]any)
+	expectedWorkspaceRoot := filepath.ToSlash(filepath.Join(runtimeRoot, "workspace"))
+	if download["workspace_path"] != expectedWorkspaceRoot {
+		t.Fatalf("expected legacy workspace_path to migrate to %q, got %v", expectedWorkspaceRoot, download["workspace_path"])
+	}
+	taskAutomation := settings["task_automation"].(map[string]any)
+	if !reflect.DeepEqual(taskAutomation["task_sources"], []string{
+		filepath.ToSlash(filepath.Join(runtimeRoot, "workspace", "todos")),
+		filepath.ToSlash(filepath.Join(runtimeRoot, "workspace", "review")),
+	}) {
+		t.Fatalf("expected legacy task_sources to migrate under runtime workspace, got %+v", taskAutomation)
+	}
+	if got := serviceconfig.DefaultWorkspaceRoot(); got != filepath.Join(runtimeRoot, "workspace") {
+		t.Fatalf("expected config default workspace root to honor runtime override, got %q", got)
+	}
+}
+
+func TestEngineWithSettingsStoreRejectsWorkspaceEscapesOutsideRuntimeRoot(t *testing.T) {
+	runtimeRoot := filepath.Join(t.TempDir(), "runtime-root")
+	t.Setenv("CIALLOCLAW_RUNTIME_ROOT", runtimeRoot)
+	engine := NewEngine()
+	if err := engine.WithSettingsStore(staticSettingsStore{snapshot: map[string]any{
+		"general": map[string]any{
+			"download": map[string]any{"workspace_path": "../outside"},
+		},
+		"task_automation": map[string]any{
+			"task_sources": []string{"../outside", "workspace/todos"},
+		},
+	}}); err != nil {
+		t.Fatalf("WithSettingsStore returned error: %v", err)
+	}
+	settings := engine.Settings()
+	general := settings["general"].(map[string]any)
+	download := general["download"].(map[string]any)
+	expectedWorkspaceRoot := filepath.ToSlash(filepath.Join(runtimeRoot, "workspace"))
+	if download["workspace_path"] != expectedWorkspaceRoot {
+		t.Fatalf("expected unsafe workspace_path to reset to %q, got %v", expectedWorkspaceRoot, download["workspace_path"])
+	}
+	taskAutomation := settings["task_automation"].(map[string]any)
+	if !reflect.DeepEqual(taskAutomation["task_sources"], []string{filepath.ToSlash(filepath.Join(runtimeRoot, "workspace", "todos"))}) {
+		t.Fatalf("expected unsafe task_sources to be dropped during migration, got %+v", taskAutomation)
+	}
+}
+
+func TestEngineWithSettingsStorePreservesWindowsAbsolutePathsAcrossHosts(t *testing.T) {
+	runtimeRoot := filepath.Join(t.TempDir(), "runtime-root")
+	t.Setenv("CIALLOCLAW_RUNTIME_ROOT", runtimeRoot)
+	engine := NewEngine()
+	if err := engine.WithSettingsStore(staticSettingsStore{snapshot: map[string]any{
+		"general": map[string]any{
+			"download": map[string]any{"workspace_path": "D:/legacy-workspace"},
+		},
+		"task_automation": map[string]any{
+			"task_sources": []string{"D:/legacy-workspace/todos"},
+		},
+	}}); err != nil {
+		t.Fatalf("WithSettingsStore returned error: %v", err)
+	}
+	settings := engine.Settings()
+	general := settings["general"].(map[string]any)
+	download := general["download"].(map[string]any)
+	if download["workspace_path"] != "D:/legacy-workspace" {
+		t.Fatalf("expected windows-style absolute workspace path to stay absolute, got %v", download["workspace_path"])
+	}
+	taskAutomation := settings["task_automation"].(map[string]any)
+	if !reflect.DeepEqual(taskAutomation["task_sources"], []string{"D:/legacy-workspace/todos"}) {
+		t.Fatalf("expected windows-style absolute task source to stay absolute, got %+v", taskAutomation)
+	}
+	if migratedWorkspace, _ := migrateWorkspaceRootSetting("D:/legacy-workspace"); migratedWorkspace != "D:/legacy-workspace" {
+		t.Fatalf("expected windows-style absolute workspace path to stay absolute during migration, got %q", migratedWorkspace)
+	}
+	if migratedSource, _ := migrateTaskSourceSetting("D:/legacy-workspace/todos"); migratedSource != "D:/legacy-workspace/todos" {
+		t.Fatalf("expected windows-style absolute task source to stay absolute during migration, got %q", migratedSource)
+	}
+	if isSafeRuntimeRelativePath("D:/legacy-workspace") {
+		t.Fatal("expected windows-style absolute path to be rejected as runtime-relative")
+	}
+	if isSafeRuntimeRelativePath("D:relative") {
+		t.Fatal("expected drive-prefixed relative path to be rejected as runtime-relative")
+	}
+	if migratedWorkspace, changed := migrateWorkspaceRootSetting("D:relative"); !changed || migratedWorkspace != defaultSettingsWorkspaceRoot() {
+		t.Fatalf("expected drive-prefixed relative workspace path to reset to default runtime workspace, migrated=%q changed=%v", migratedWorkspace, changed)
+	}
+	if migrated, changed := migrateTaskSourceSetting("D:relative"); !changed || migrated != "" {
+		t.Fatalf("expected drive-prefixed relative source to be dropped during migration, migrated=%q changed=%v", migrated, changed)
 	}
 }
 
@@ -1555,6 +1726,87 @@ func TestEngineControlTaskRestartResetsFinishedOutputs(t *testing.T) {
 	}
 	if restartedAgain.ExecutionAttempt != 3 {
 		t.Fatalf("expected second restart to increment attempt to 3, got %d", restartedAgain.ExecutionAttempt)
+	}
+}
+
+func TestEnginePrepareRestartLeavesLiveTaskStableUntilCommit(t *testing.T) {
+	engine := NewEngine()
+	task := engine.CreateTask(CreateTaskInput{
+		SessionID:   "sess_prepare_restart",
+		Title:       "prepare restart task",
+		SourceType:  "hover_input",
+		Status:      "completed",
+		Intent:      map[string]any{"name": "agent_loop", "arguments": map[string]any{}},
+		CurrentStep: "return_result",
+		RiskLevel:   "green",
+	})
+	if _, ok := engine.SetPresentation(task.TaskID, nil, map[string]any{
+		"type":         "bubble",
+		"title":        "stable result",
+		"preview_text": "stable preview",
+		"payload":      map[string]any{"task_id": task.TaskID},
+	}, []map[string]any{{
+		"artifact_id": "art_prepare_restart",
+		"task_id":     task.TaskID,
+		"path":        "workspace/stable.md",
+	}}); !ok {
+		t.Fatal("expected stable presentation before restart")
+	}
+	if _, ok := engine.SetCitations(task.TaskID, []map[string]any{{
+		"citation_id": "cit_prepare_restart",
+		"task_id":     task.TaskID,
+		"label":       "stable citation",
+	}}); !ok {
+		t.Fatal("expected stable citations before restart")
+	}
+	if _, ok := engine.AppendAuditData(task.TaskID, []map[string]any{{
+		"audit_id": "audit_prepare_restart",
+		"task_id":  task.TaskID,
+		"summary":  "stable audit",
+	}}, map[string]any{
+		"total_tokens":   36,
+		"estimated_cost": 0.12,
+	}); !ok {
+		t.Fatal("expected stable audit before restart")
+	}
+
+	previous, prepared, err := engine.PrepareRestart(task.TaskID, map[string]any{"task_id": task.TaskID, "type": "status"})
+	if err != nil {
+		t.Fatalf("prepare restart failed: %v", err)
+	}
+	if prepared.RunID == previous.RunID {
+		t.Fatalf("expected prepared restart to allocate a fresh run_id, got %s", prepared.RunID)
+	}
+	if prepared.ExecutionAttempt != previous.ExecutionAttempt+1 {
+		t.Fatalf("expected prepared restart to increment attempt, got before=%d after=%d", previous.ExecutionAttempt, prepared.ExecutionAttempt)
+	}
+	if prepared.DeliveryResult != nil || len(prepared.Artifacts) != 0 || len(prepared.Citations) != 0 || len(prepared.AuditRecords) != 0 {
+		t.Fatalf("expected prepared restart copy to clear formal outputs, got %+v", prepared)
+	}
+	if len(prepared.TokenUsage) != 0 {
+		t.Fatalf("expected prepared restart copy to clear token usage, got %+v", prepared.TokenUsage)
+	}
+	if len(prepared.Notifications) != 0 {
+		t.Fatalf("expected prepared restart copy to start with a clean notification queue, got %+v", prepared.Notifications)
+	}
+
+	liveTask, ok := engine.GetTask(task.TaskID)
+	if !ok {
+		t.Fatal("expected live task to remain readable")
+	}
+	if liveTask.RunID != previous.RunID || liveTask.ExecutionAttempt != previous.ExecutionAttempt {
+		t.Fatalf("expected live task identity to stay on previous attempt, got %+v", liveTask)
+	}
+	if liveTask.DeliveryResult == nil || len(liveTask.Artifacts) != 1 || len(liveTask.Citations) != 1 || len(liveTask.AuditRecords) != 1 {
+		t.Fatalf("expected live task to preserve finished outputs before commit, got %+v", liveTask)
+	}
+
+	processingTask, changed := engine.BeginPreparedExecution(prepared, "agent_loop", "restart committed")
+	if !changed {
+		t.Fatal("expected prepared restart execution to commit")
+	}
+	if processingTask.RunID != prepared.RunID || processingTask.ExecutionAttempt != prepared.ExecutionAttempt {
+		t.Fatalf("expected committed restart to preserve prepared identity, got %+v", processingTask)
 	}
 }
 

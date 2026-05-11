@@ -13,10 +13,10 @@ import type {
 import { controlTask, getTaskDetail, listTaskEvents, listTasks, steerTask } from "@/rpc/methods";
 import { isActiveApprovalRequest, isApprovalRequest, isArtifact, isAuditRecord, isAuthorizationRecord, isBinaryPendingAuthorizations, isCitation, isDeliveryResult, isMirrorReference, isRecoveryPoint, isTask, isTaskEvent, isTaskStep, normalizeArray, normalizeNullable } from "../shared/dashboardContractValidators";
 import { RISK_LEVELS, SECURITY_STATUSES, TASK_STEP_STATUSES } from "@/rpc/protocolEnumerations";
-import { getMockTaskBuckets, getMockTaskDetail, getTaskExperience, runMockTaskControl } from "./taskPage.mock";
+import { formatTaskSourceLabel, getTaskPreviewStatusLabel } from "./taskPage.mapper";
 import type { TaskBucketPageData, TaskBucketsData, TaskControlOutcome, TaskDetailData, TaskEventFilters, TaskEventPageData, TaskEventTimeRange, TaskExperience, TaskListItem } from "./taskPage.types";
 
-export type TaskPageDataMode = "rpc" | "mock";
+export type TaskPageDataMode = "rpc";
 
 const INITIAL_TASK_PAGE_LIMIT: Record<TaskListGroup, number> = {
   finished: 24,
@@ -46,79 +46,151 @@ async function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
   ]);
 }
 
-function createFallbackExperience(task: Task): TaskExperience {
+function getTaskPriority(task: Task): TaskExperience["priority"] {
+  if (task.risk_level === "red") {
+    return "critical";
+  }
+
+  if (task.risk_level === "yellow") {
+    return "high";
+  }
+
+  return "steady";
+}
+
+function getTaskPhase(task: Task) {
+  if (task.current_step.trim() !== "") {
+    return task.current_step.trim();
+  }
+
+  if (task.status === "processing") {
+    return "等待正式时间线返回当前步骤。";
+  }
+
+  return `当前状态：${getTaskPreviewStatusLabel(task.status)}`;
+}
+
+function getTaskWaitingReason(task: Task, detail?: AgentTaskDetailGetResult) {
+  if (task.status === "confirming_intent") {
+    return "等待确认当前处理方式后继续执行。";
+  }
+
+  if (task.status === "waiting_auth") {
+    const operationName = detail?.approval_request?.operation_name?.trim();
+    return operationName ? `等待你确认是否允许 ${operationName}。` : "等待授权确认后继续执行。";
+  }
+
+  if (task.status === "waiting_input") {
+    return "等待补充信息后继续执行。";
+  }
+
+  if (task.status === "paused") {
+    return "任务已暂停，恢复后会继续推进。";
+  }
+
+  return undefined;
+}
+
+function getTaskBlockedReason(task: Task, detail?: AgentTaskDetailGetResult) {
+  if (task.status !== "blocked" && task.status !== "failed") {
+    return undefined;
+  }
+
+  const runtimeSummary = detail?.runtime_summary;
+  const failureSummary = runtimeSummary?.latest_failure_summary?.trim();
+  if (failureSummary) {
+    return failureSummary;
+  }
+
+  const stopReason = runtimeSummary?.loop_stop_reason?.trim();
+  if (stopReason) {
+    return `最近一次停止原因：${stopReason}`;
+  }
+
+  return "当前任务遇到阻塞，需要先补齐条件或恢复后再继续。";
+}
+
+function getTaskEndedSummary(task: Task, detail?: AgentTaskDetailGetResult) {
+  if (task.status === "completed") {
+    return "任务已完成。";
+  }
+
+  if (task.status === "cancelled") {
+    return "任务已取消。";
+  }
+
+  if (task.status === "failed" || task.status === "ended_unfinished") {
+    return getTaskBlockedReason(task, detail) ?? "任务已结束但未完整收束，请先查看失败原因与恢复点。";
+  }
+
+  return undefined;
+}
+
+function getTaskNextAction(task: Task, detail?: AgentTaskDetailGetResult) {
+  const waitingReason = getTaskWaitingReason(task, detail);
+  if (waitingReason) {
+    return waitingReason;
+  }
+
+  if (task.status === "processing") {
+    return "等待正式时间线、交付结果或运行时通知继续推进。";
+  }
+
+  const blockedReason = getTaskBlockedReason(task, detail);
+  if (blockedReason) {
+    return blockedReason;
+  }
+
+  return getTaskEndedSummary(task, detail) ?? "查看正式交付或重新启动任务。";
+}
+
+function buildProtocolTaskExperience(task: Task, detail?: AgentTaskDetailGetResult): TaskExperience {
+  const waitingReason = getTaskWaitingReason(task, detail);
+  const blockedReason = getTaskBlockedReason(task, detail);
+  const endedSummary = getTaskEndedSummary(task, detail);
+  const nextAction = getTaskNextAction(task, detail);
+
   return {
-    acceptance: ["任务信息完整可读。", "当前状态与进度表达清晰。"],
+    acceptance: [],
     assistantState: {
-      hint: "这是从真实 task 数据推断出的默认说明，后续可以补更细的上下文。",
-      label: task.status === "processing" ? "正在思考" : task.finished_at ? "刚完成一步" : "待命",
+      hint: "当前面板只消费正式 task/detail 返回内容，不再复用 mock 任务说明。",
+      label: getTaskPreviewStatusLabel(task.status),
     },
-    background: "当前展示的是任务协议里的真实数据，补充说明采用了最小默认文案。",
-    constraints: ["保持协议字段原样。", "避免猜测未返回的信息。"],
+    background: "当前说明直接基于正式 task/detail 数据生成，只保留协议已返回的任务事实与本地展示性文案。",
+    constraints: ["不推断未返回的正式上下文。"],
     dueAt: null,
     goal: task.title,
-    nextAction: task.status === "processing" ? "继续沿着当前步骤推进。" : "等待下一次明确操作。",
-    noteDraft: "当前任务基于真实协议返回，页面补充说明使用默认占位文案。",
-    noteEntries: ["可在后续补充更具体的上下文摘要。"],
-    outputs: [
-      { id: `${task.task_id}_draft`, label: "当前草稿", content: "等待更多任务上下文后补齐。", tone: "draft" },
-      { id: `${task.task_id}_result`, label: "已生成结果", content: "结果区会优先展示当前任务已经返回的产出与交付入口。", tone: "result" },
-      { id: `${task.task_id}_editable`, label: "可继续编辑", content: "当前可先结合时间线与成果区继续查看已有上下文。", tone: "editable" },
-    ],
-    phase: `当前步骤：${task.current_step}`,
-    priority: task.risk_level === "red" ? "critical" : task.risk_level === "yellow" ? "high" : "steady",
-    progressHint: "真实任务数据已接入，页面补充文案为默认值。",
+    nextAction,
+    noteDraft: "当前笔记草稿仍保留在本地，不会替代正式任务与交付对象。",
+    noteEntries: [],
+    outputs: [],
+    phase: getTaskPhase(task),
+    priority: getTaskPriority(task),
+    progressHint: "当前页面说明来自正式 task/detail；更细上下文需等待后端返回。",
     quickContext: [
-      { id: `${task.task_id}_ctx_1`, label: "来源", content: `当前任务来自 ${task.source_type}。` },
-      { id: `${task.task_id}_ctx_2`, label: "风险等级", content: `当前风险等级为 ${task.risk_level}。` },
-      { id: `${task.task_id}_ctx_3`, label: "建议动作", content: "可以先查看时间线，再决定是否继续推进。" },
+      { id: `${task.task_id}_ctx_source`, label: "来源", content: formatTaskSourceLabel(task.source_type) },
+      { id: `${task.task_id}_ctx_status`, label: "当前状态", content: getTaskPreviewStatusLabel(task.status) },
+      { id: `${task.task_id}_ctx_risk`, label: "风险等级", content: task.risk_level },
     ],
-    recentConversation: ["当前任务使用的是协议返回的真实数据。"],
+    recentConversation: [],
     relatedFiles: [],
     stepTargets: {},
-    suggestedNext: "优先查看当前步骤与时间线，再决定下一步动作。",
+    suggestedNext: nextAction,
+    ...(endedSummary ? { endedSummary } : {}),
+    ...(waitingReason ? { waitingReason } : {}),
+    ...(blockedReason ? { blockedReason } : {}),
   };
 }
 
 function mapTasks(items: Task[]): TaskListItem[] {
   return items.map((task) => ({
-    experience: getTaskExperience(task.task_id) ?? createFallbackExperience(task),
+    experience: buildProtocolTaskExperience(task),
     task,
   }));
 }
 
 function getTaskListSortBy(group: TaskListGroup) {
   return group === "finished" ? "finished_at" : "updated_at";
-}
-
-function createFallbackTaskDetail(task: Task): AgentTaskDetailGetResult {
-  return {
-    approval_request: null,
-    audit_record: null,
-    artifacts: [],
-    authorization_record: null,
-    citations: [],
-    delivery_result: null,
-    mirror_references: [],
-    runtime_summary: {
-      active_steering_count: 0,
-      events_count: 0,
-      latest_failure_code: null,
-      latest_failure_category: null,
-      latest_failure_summary: null,
-      latest_event_type: null,
-      loop_stop_reason: null,
-      observation_signals: [],
-    },
-    security_summary: {
-      latest_restore_point: null,
-      pending_authorizations: 0,
-      risk_level: task.risk_level,
-      security_status: "normal",
-    },
-    task,
-    timeline: [],
-  };
 }
 
 function parseTaskEventPayload(event: TaskEvent): Record<string, unknown> | null {
@@ -317,16 +389,6 @@ export function normalizeTaskDetailResult(detail: AgentTaskDetailGetResult): Age
   };
 }
 
-export function buildFallbackTaskDetailData(item: TaskListItem): TaskDetailData {
-  return {
-    detailWarningMessage: null,
-    detail: createFallbackTaskDetail(item.task),
-    experience: item.experience,
-    source: "fallback",
-    task: item.task,
-  };
-}
-
 function recoverTaskDetailFromInvalidCollections(detail: AgentTaskDetailGetResult, error: unknown) {
   if (!(error instanceof Error)) {
     throw error;
@@ -398,31 +460,7 @@ export function normalizeTaskDetailData(detail: AgentTaskDetailGetResult) {
   }
 }
 
-function getMockTaskBucketPage(group: TaskListGroup, options?: { limit?: number; offset?: number }): TaskBucketPageData {
-  const limit = options?.limit ?? INITIAL_TASK_PAGE_LIMIT[group];
-  const offset = options?.offset ?? 0;
-  const buckets = getMockTaskBuckets();
-  const bucket = group === "unfinished" ? buckets.unfinished : buckets.finished;
-  const items = bucket.items.slice(offset, offset + limit);
-
-  return {
-    items,
-    page: {
-      has_more: offset + limit < bucket.items.length,
-      limit,
-      offset,
-      total: bucket.items.length,
-    },
-  };
-}
-
 export async function loadTaskBucketPage(group: TaskListGroup, options?: { limit?: number; offset?: number; source?: TaskPageDataMode }): Promise<TaskBucketPageData> {
-  const source = options?.source ?? "rpc";
-
-  if (source === "mock") {
-    return getMockTaskBucketPage(group, options);
-  }
-
   const limit = options?.limit ?? INITIAL_TASK_PAGE_LIMIT[group];
   const offset = options?.offset ?? 0;
   const result = await withTimeout(
@@ -443,14 +481,7 @@ export async function loadTaskBucketPage(group: TaskListGroup, options?: { limit
   };
 }
 
-export async function loadTaskEventPage(taskId: string, source: TaskPageDataMode = "rpc", filters: Partial<TaskEventFilters> = DEFAULT_TASK_EVENT_FILTERS, nowProvider: () => Date = () => new Date()): Promise<TaskEventPageData> {
-  if (source === "mock") {
-    return {
-      items: [],
-      page: { has_more: false, limit: 20, offset: 0, total: 0 },
-    };
-  }
-
+export async function loadTaskEventPage(taskId: string, _source: TaskPageDataMode = "rpc", filters: Partial<TaskEventFilters> = DEFAULT_TASK_EVENT_FILTERS, nowProvider: () => Date = () => new Date()): Promise<TaskEventPageData> {
   const normalizedFilters = sanitizeTaskEventFilters(filters);
   const params: AgentTaskEventsListParams = {
     limit: 20,
@@ -465,23 +496,10 @@ export async function loadTaskEventPage(taskId: string, source: TaskPageDataMode
   return normalizeTaskEventPage(await withTimeout(listTaskEvents(params), `task events ${taskId}`));
 }
 
-export async function steerTaskByMessage(taskId: string, message: string, source: TaskPageDataMode = "rpc") {
+export async function steerTaskByMessage(taskId: string, message: string, _source: TaskPageDataMode = "rpc") {
   const trimmed = message.trim();
   if (!trimmed) {
     throw new Error("补充要求不能为空");
-  }
-
-  if (source === "mock") {
-    return {
-      bubble_message: {
-        created_at: new Date().toISOString(),
-        level: "info",
-        task_id: taskId,
-        text: "已记录新的补充要求，后续执行会纳入该指令。",
-        type: "status",
-      },
-      task: getMockTaskDetail(taskId).detail.task,
-    };
   }
 
   const params: AgentTaskSteerParams = {
@@ -494,24 +512,19 @@ export async function steerTaskByMessage(taskId: string, message: string, source
 }
 
 export async function loadTaskBuckets(options?: { unfinishedLimit?: number; finishedLimit?: number; source?: TaskPageDataMode }): Promise<TaskBucketsData> {
-  const source = options?.source ?? "rpc";
   const [unfinishedResult, finishedResult] = await Promise.all([
-    loadTaskBucketPage("unfinished", { limit: options?.unfinishedLimit, source }),
-    loadTaskBucketPage("finished", { limit: options?.finishedLimit, source }),
+    loadTaskBucketPage("unfinished", { limit: options?.unfinishedLimit, source: "rpc" }),
+    loadTaskBucketPage("finished", { limit: options?.finishedLimit, source: "rpc" }),
   ]);
 
   return {
     finished: finishedResult,
-    source,
+    source: "rpc",
     unfinished: unfinishedResult,
   };
 }
 
-export async function loadTaskDetailData(taskId: string, source: TaskPageDataMode = "rpc"): Promise<TaskDetailData> {
-  if (source === "mock") {
-    return getMockTaskDetail(taskId);
-  }
-
+export async function loadTaskDetailData(taskId: string, _source: TaskPageDataMode = "rpc"): Promise<TaskDetailData> {
   const normalized = normalizeTaskDetailData(
     await withTimeout(
       getTaskDetail({
@@ -525,7 +538,7 @@ export async function loadTaskDetailData(taskId: string, source: TaskPageDataMod
   return {
     detailWarningMessage: normalized.detailWarningMessage,
     detail: normalized.detail,
-    experience: getTaskExperience(taskId) ?? createFallbackExperience(normalized.detail.task),
+    experience: buildProtocolTaskExperience(normalized.detail.task, normalized.detail),
     source: "rpc",
     task: normalized.detail.task,
   };
@@ -538,12 +551,8 @@ export async function controlTaskByAction(taskId: string, action: TaskControlAct
     task_id: taskId,
   };
 
-  if (source === "mock") {
-    return runMockTaskControl(taskId, action);
-  }
-
   return {
     result: await withTimeout(controlTask(params), `task control ${action}`),
-    source: "rpc",
+    source,
   };
 }

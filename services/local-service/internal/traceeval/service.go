@@ -9,8 +9,9 @@ import (
 	"strings"
 	"time"
 
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -28,7 +29,7 @@ type CaptureInput struct {
 	TaskID          string
 	RunID           string
 	IntentName      string
-	Snapshot        contextsvc.TaskContextSnapshot
+	Snapshot        taskcontext.TaskContextSnapshot
 	OutputText      string
 	DeliveryResult  map[string]any
 	Artifacts       []map[string]any
@@ -516,8 +517,5 @@ func int64Value(values map[string]any, key string) int64 {
 
 func truncateText(value string, maxLength int) string {
 	value = strings.TrimSpace(value)
-	if len(value) <= maxLength {
-		return value
-	}
-	return value[:maxLength] + "..."
+	return textutil.TruncateGraphemes(value, maxLength)
 }

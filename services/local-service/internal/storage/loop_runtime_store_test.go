@@ -19,10 +19,13 @@ func TestInMemoryLoopRuntimeStoreSupportsStructuredQueries(t *testing.T) {
 	if err := store.SaveEvents(context.Background(), []EventRecord{{EventID: "evt_mem_001", RunID: "run_mem_001", TaskID: "task_mem_001", Type: "loop.completed", CreatedAt: "2026-04-21T10:00:03Z"}}); err != nil {
 		t.Fatalf("SaveEvents returned error: %v", err)
 	}
-	if err := store.SaveDeliveryResult(context.Background(), DeliveryResultRecord{DeliveryResultID: "delivery_mem_001", TaskID: "task_mem_001", Type: "bubble", Title: "result", CreatedAt: "2026-04-21T10:00:05Z"}); err != nil {
+	if err := store.SaveDeliveryResult(context.Background(), DeliveryResultRecord{DeliveryResultID: "delivery_mem_001", TaskID: "task_mem_001", RunID: "run_mem_001", Type: "bubble", Title: "result", CreatedAt: "2026-04-21T10:00:05Z"}); err != nil {
 		t.Fatalf("SaveDeliveryResult returned error: %v", err)
 	}
-	if err := store.ReplaceTaskCitations(context.Background(), "task_mem_001", []CitationRecord{{CitationID: "cit_mem_002", TaskID: "task_mem_001", OrderIndex: 2}, {CitationID: "cit_mem_001", TaskID: "task_mem_001", OrderIndex: 1}}); err != nil {
+	if err := store.SaveDeliveryResult(context.Background(), DeliveryResultRecord{DeliveryResultID: "delivery_mem_002", TaskID: "task_mem_001", RunID: "run_mem_002", Type: "bubble", Title: "result-2", CreatedAt: "2026-04-21T10:00:06Z"}); err != nil {
+		t.Fatalf("SaveDeliveryResult second run returned error: %v", err)
+	}
+	if err := store.ReplaceTaskCitations(context.Background(), "task_mem_001", []CitationRecord{{CitationID: "cit_mem_002", TaskID: "task_mem_001", RunID: "run_mem_002", OrderIndex: 2}, {CitationID: "cit_mem_001", TaskID: "task_mem_001", RunID: "run_mem_001", OrderIndex: 1}}); err != nil {
 		t.Fatalf("ReplaceTaskCitations returned error: %v", err)
 	}
 
@@ -30,17 +33,29 @@ func TestInMemoryLoopRuntimeStoreSupportsStructuredQueries(t *testing.T) {
 	if err != nil || runRecord.TaskID != "task_mem_001" || runRecord.SourceType != "hover_input" {
 		t.Fatalf("GetRun returned record=%+v err=%v", runRecord, err)
 	}
-	deliveryResults, total, err := store.ListDeliveryResults(context.Background(), "task_mem_001", 10, 0)
-	if err != nil || total != 1 || len(deliveryResults) != 1 {
+	deliveryResults, total, err := store.ListDeliveryResults(context.Background(), "task_mem_001", "", 10, 0)
+	if err != nil || total != 2 || len(deliveryResults) != 2 {
 		t.Fatalf("ListDeliveryResults returned total=%d items=%+v err=%v", total, deliveryResults, err)
 	}
-	latestDelivery, ok, err := store.GetLatestDeliveryResult(context.Background(), "task_mem_001")
-	if err != nil || !ok || latestDelivery.DeliveryResultID != "delivery_mem_001" {
+	filteredDelivery, filteredTotal, err := store.ListDeliveryResults(context.Background(), "task_mem_001", "run_mem_001", 10, 0)
+	if err != nil || filteredTotal != 1 || len(filteredDelivery) != 1 || filteredDelivery[0].DeliveryResultID != "delivery_mem_001" {
+		t.Fatalf("expected run-scoped in-memory delivery results, total=%d items=%+v err=%v", filteredTotal, filteredDelivery, err)
+	}
+	latestDelivery, ok, err := store.GetLatestDeliveryResult(context.Background(), "task_mem_001", "")
+	if err != nil || !ok || latestDelivery.DeliveryResultID != "delivery_mem_002" || latestDelivery.RunID != "run_mem_002" {
 		t.Fatalf("GetLatestDeliveryResult returned record=%+v ok=%v err=%v", latestDelivery, ok, err)
 	}
-	citations, err := store.ListTaskCitations(context.Background(), "task_mem_001")
+	latestDelivery, ok, err = store.GetLatestDeliveryResult(context.Background(), "task_mem_001", "run_mem_002")
+	if err != nil || !ok || latestDelivery.DeliveryResultID != "delivery_mem_002" {
+		t.Fatalf("expected run-scoped latest in-memory delivery result, record=%+v ok=%v err=%v", latestDelivery, ok, err)
+	}
+	citations, err := store.ListTaskCitations(context.Background(), "task_mem_001", "")
 	if err != nil || len(citations) != 2 || citations[0].CitationID != "cit_mem_001" {
 		t.Fatalf("ListTaskCitations returned %+v err=%v", citations, err)
+	}
+	citations, err = store.ListTaskCitations(context.Background(), "task_mem_001", "run_mem_001")
+	if err != nil || len(citations) != 1 || citations[0].CitationID != "cit_mem_001" {
+		t.Fatalf("expected run-scoped in-memory citations, citations=%+v err=%v", citations, err)
 	}
 	events, total, err := store.ListEvents(context.Background(), "task_mem_001", "run_mem_001", "loop.completed", "", "", 10, 0)
 	if err != nil || total != 1 || len(events) != 1 {
@@ -60,10 +75,13 @@ func TestSQLiteLoopRuntimeStoreStructuredQueries(t *testing.T) {
 	if err := store.SaveRun(context.Background(), RunRecord{RunID: "run_sql_001", TaskID: "task_sql_001", SessionID: "sess_sql_001", SourceType: "hover_input", Status: "completed", IntentName: "summarize", StartedAt: "2026-04-21T10:00:00Z", UpdatedAt: "2026-04-21T10:00:01Z", FinishedAt: "2026-04-21T10:00:02Z", StopReason: "completed"}); err != nil {
 		t.Fatalf("SaveRun returned error: %v", err)
 	}
-	if err := store.SaveDeliveryResult(context.Background(), DeliveryResultRecord{DeliveryResultID: "delivery_sql_001", TaskID: "task_sql_001", Type: "workspace_document", Title: "result", PayloadJSON: `{"task_id":"task_sql_001"}`, PreviewText: "preview", CreatedAt: "2026-04-21T10:00:03Z"}); err != nil {
+	if err := store.SaveDeliveryResult(context.Background(), DeliveryResultRecord{DeliveryResultID: "delivery_sql_001", TaskID: "task_sql_001", RunID: "run_sql_001", Type: "workspace_document", Title: "result", PayloadJSON: `{"task_id":"task_sql_001"}`, PreviewText: "preview", CreatedAt: "2026-04-21T10:00:03Z"}); err != nil {
 		t.Fatalf("SaveDeliveryResult returned error: %v", err)
 	}
-	if err := store.ReplaceTaskCitations(context.Background(), "task_sql_001", []CitationRecord{{CitationID: "cit_sql_001", TaskID: "task_sql_001", OrderIndex: 0}}); err != nil {
+	if err := store.SaveDeliveryResult(context.Background(), DeliveryResultRecord{DeliveryResultID: "delivery_sql_002", TaskID: "task_sql_001", RunID: "run_sql_002", Type: "workspace_document", Title: "result-2", PayloadJSON: `{"task_id":"task_sql_001"}`, PreviewText: "preview-2", CreatedAt: "2026-04-21T10:00:04Z"}); err != nil {
+		t.Fatalf("SaveDeliveryResult second run returned error: %v", err)
+	}
+	if err := store.ReplaceTaskCitations(context.Background(), "task_sql_001", []CitationRecord{{CitationID: "cit_sql_001", TaskID: "task_sql_001", RunID: "run_sql_001", OrderIndex: 0}, {CitationID: "cit_sql_002", TaskID: "task_sql_001", RunID: "run_sql_002", OrderIndex: 1}}); err != nil {
 		t.Fatalf("ReplaceTaskCitations returned error: %v", err)
 	}
 	if err := store.SaveEvents(context.Background(), []EventRecord{{EventID: "evt_sql_001", RunID: "run_sql_001", TaskID: "task_sql_001", Type: "loop.completed", CreatedAt: "2026-04-21T10:00:04Z"}, {EventID: "evt_sql_002", RunID: "run_sql_001", TaskID: "task_sql_001", Type: "loop.started", CreatedAt: "2026-04-21T10:00:02Z"}}); err != nil {
@@ -74,29 +92,39 @@ func TestSQLiteLoopRuntimeStoreStructuredQueries(t *testing.T) {
 	if err != nil || runRecord.StopReason != "completed" || runRecord.SourceType != "hover_input" {
 		t.Fatalf("GetRun returned record=%+v err=%v", runRecord, err)
 	}
-	deliveryResults, total, err := store.ListDeliveryResults(context.Background(), "task_sql_001", 10, 0)
-	if err != nil || total != 1 || len(deliveryResults) != 1 || deliveryResults[0].PreviewText != "preview" {
+	deliveryResults, total, err := store.ListDeliveryResults(context.Background(), "task_sql_001", "", 10, 0)
+	if err != nil || total != 2 || len(deliveryResults) != 2 || deliveryResults[0].PreviewText != "preview-2" {
 		t.Fatalf("ListDeliveryResults returned total=%d items=%+v err=%v", total, deliveryResults, err)
 	}
-	if emptyPage, total, err := store.ListDeliveryResults(context.Background(), "task_sql_001", 1, 9); err != nil || total != 1 || len(emptyPage) != 0 {
+	if filteredDelivery, total, err := store.ListDeliveryResults(context.Background(), "task_sql_001", "run_sql_001", 10, 0); err != nil || total != 1 || len(filteredDelivery) != 1 || filteredDelivery[0].DeliveryResultID != "delivery_sql_001" {
+		t.Fatalf("expected run-scoped sqlite delivery results, total=%d items=%+v err=%v", total, filteredDelivery, err)
+	}
+	if emptyPage, total, err := store.ListDeliveryResults(context.Background(), "task_sql_001", "run_sql_001", 1, 9); err != nil || total != 1 || len(emptyPage) != 0 {
 		t.Fatalf("expected empty paged delivery result slice, total=%d items=%+v err=%v", total, emptyPage, err)
 	}
-	latestDelivery, ok, err := store.GetLatestDeliveryResult(context.Background(), "task_sql_001")
-	if err != nil || !ok || latestDelivery.DeliveryResultID != "delivery_sql_001" {
+	latestDelivery, ok, err := store.GetLatestDeliveryResult(context.Background(), "task_sql_001", "")
+	if err != nil || !ok || latestDelivery.DeliveryResultID != "delivery_sql_002" || latestDelivery.RunID != "run_sql_002" {
 		t.Fatalf("GetLatestDeliveryResult returned record=%+v ok=%v err=%v", latestDelivery, ok, err)
 	}
-	if latestDelivery, ok, err := store.GetLatestDeliveryResult(context.Background(), "missing_task"); err != nil || ok || latestDelivery.DeliveryResultID != "" {
+	latestDelivery, ok, err = store.GetLatestDeliveryResult(context.Background(), "task_sql_001", "run_sql_001")
+	if err != nil || !ok || latestDelivery.DeliveryResultID != "delivery_sql_001" {
+		t.Fatalf("expected run-scoped sqlite latest delivery result, record=%+v ok=%v err=%v", latestDelivery, ok, err)
+	}
+	if latestDelivery, ok, err := store.GetLatestDeliveryResult(context.Background(), "missing_task", ""); err != nil || ok || latestDelivery.DeliveryResultID != "" {
 		t.Fatalf("expected missing task latest delivery query to return no record, record=%+v ok=%v err=%v", latestDelivery, ok, err)
 	}
-	citations, err := store.ListTaskCitations(context.Background(), "task_sql_001")
-	if err != nil || len(citations) != 1 || citations[0].CitationID != "cit_sql_001" {
+	citations, err := store.ListTaskCitations(context.Background(), "task_sql_001", "")
+	if err != nil || len(citations) != 2 || citations[0].CitationID != "cit_sql_001" {
 		t.Fatalf("ListTaskCitations returned %+v err=%v", citations, err)
 	}
-	if err := store.ReplaceTaskCitations(context.Background(), "task_sql_001", []CitationRecord{{CitationID: "cit_sql_002", TaskID: "task_sql_001", OrderIndex: 1}, {CitationID: "cit_sql_003", TaskID: "task_sql_001", OrderIndex: 0}}); err != nil {
+	if citations, err = store.ListTaskCitations(context.Background(), "task_sql_001", "run_sql_002"); err != nil || len(citations) != 1 || citations[0].CitationID != "cit_sql_002" {
+		t.Fatalf("expected run-scoped sqlite citations, citations=%+v err=%v", citations, err)
+	}
+	if err := store.ReplaceTaskCitations(context.Background(), "task_sql_001", []CitationRecord{{CitationID: "cit_sql_003", TaskID: "task_sql_001", RunID: "run_sql_002", OrderIndex: 1}, {CitationID: "cit_sql_004", TaskID: "task_sql_001", RunID: "run_sql_001", OrderIndex: 0}}); err != nil {
 		t.Fatalf("ReplaceTaskCitations second pass returned error: %v", err)
 	}
-	citations, err = store.ListTaskCitations(context.Background(), "task_sql_001")
-	if err != nil || len(citations) != 2 || citations[0].CitationID != "cit_sql_003" || citations[1].CitationID != "cit_sql_002" {
+	citations, err = store.ListTaskCitations(context.Background(), "task_sql_001", "")
+	if err != nil || len(citations) != 2 || citations[0].CitationID != "cit_sql_004" || citations[1].CitationID != "cit_sql_003" {
 		t.Fatalf("expected replaced citations to be sorted and old rows removed, got %+v err=%v", citations, err)
 	}
 	events, total, err := store.ListEvents(context.Background(), "task_sql_001", "run_sql_001", "loop.completed", "", "", 10, 0)
@@ -106,7 +134,13 @@ func TestSQLiteLoopRuntimeStoreStructuredQueries(t *testing.T) {
 	if emptyEvents, total, err := store.ListEvents(context.Background(), "task_sql_001", "run_sql_001", "loop.completed", "2026-04-21T10:00:05Z", "", 10, 0); err != nil || total != 0 || len(emptyEvents) != 0 {
 		t.Fatalf("expected filtered ListEvents to return empty slice, total=%d items=%+v err=%v", total, emptyEvents, err)
 	}
-	if emptyCitations, err := store.ListTaskCitations(context.Background(), "missing_task"); err != nil || len(emptyCitations) != 0 {
+	if err := store.SaveEvents(context.Background(), []EventRecord{{EventID: "evt_sql_003", RunID: "run_sql_001", TaskID: "task_sql_001", StepID: "step_sql_003", Type: "loop.partial", Level: "info", PayloadJSON: `{}`, CreatedAt: "2026-04-21T10:00:00.123Z"}}); err != nil {
+		t.Fatalf("SaveEvents nano event returned error: %v", err)
+	}
+	if filteredEvents, total, err := store.ListEvents(context.Background(), "task_sql_001", "", "", "2026-04-21T10:00:00Z", "2026-04-21T10:00:00.999Z", 10, 0); err != nil || total != 1 || len(filteredEvents) != 1 || filteredEvents[0].EventID != "evt_sql_003" {
+		t.Fatalf("expected same-second nano event to survive sqlite time filtering, total=%d items=%+v err=%v", total, filteredEvents, err)
+	}
+	if emptyCitations, err := store.ListTaskCitations(context.Background(), "missing_task", ""); err != nil || len(emptyCitations) != 0 {
 		t.Fatalf("expected missing task citations to return empty slice, citations=%+v err=%v", emptyCitations, err)
 	}
 	if err := store.initialize(context.Background()); err != nil {
@@ -132,11 +166,11 @@ func TestLoopRuntimeStoresCoverAdditionalPagingAndErrorBranches(t *testing.T) {
 	if err := inMemory.SaveDeliveryResult(context.Background(), DeliveryResultRecord{DeliveryResultID: "delivery_mem_b", TaskID: "task_mem_b", Type: "bubble", Title: "B", CreatedAt: "2026-04-21T10:00:06Z"}); err != nil {
 		t.Fatalf("SaveDeliveryResult returned error: %v", err)
 	}
-	results, total, err := inMemory.ListDeliveryResults(context.Background(), "", 0, 1)
+	results, total, err := inMemory.ListDeliveryResults(context.Background(), "", "", 0, 1)
 	if err != nil || total != 2 || len(results) != 1 || results[0].DeliveryResultID != "delivery_mem_a" {
 		t.Fatalf("expected unlimited in-memory delivery paging to return later page, total=%d items=%+v err=%v", total, results, err)
 	}
-	latest, ok, err := inMemory.GetLatestDeliveryResult(context.Background(), "missing_task")
+	latest, ok, err := inMemory.GetLatestDeliveryResult(context.Background(), "missing_task", "")
 	if err != nil || ok || latest.DeliveryResultID != "" {
 		t.Fatalf("expected missing in-memory latest delivery query to return no record, record=%+v ok=%v err=%v", latest, ok, err)
 	}
@@ -157,7 +191,7 @@ func TestLoopRuntimeStoresCoverAdditionalPagingAndErrorBranches(t *testing.T) {
 	if err := inMemory.ReplaceTaskCitations(context.Background(), "task_mem_a", nil); err != nil {
 		t.Fatalf("ReplaceTaskCitations returned error: %v", err)
 	}
-	if citations, err := inMemory.ListTaskCitations(context.Background(), "task_mem_a"); err != nil || len(citations) != 0 {
+	if citations, err := inMemory.ListTaskCitations(context.Background(), "task_mem_a", ""); err != nil || len(citations) != 0 {
 		t.Fatalf("expected empty citation replacement to clear in-memory citations, citations=%+v err=%v", citations, err)
 	}
 
@@ -177,7 +211,7 @@ func TestLoopRuntimeStoresCoverAdditionalPagingAndErrorBranches(t *testing.T) {
 	if _, err := sqliteStore.GetRun(context.Background(), "missing_run"); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("expected missing sqlite run to return sql.ErrNoRows, got %v", err)
 	}
-	if results, total, err := sqliteStore.ListDeliveryResults(context.Background(), "task_sql_extra", 0, 0); err != nil || total != 1 || len(results) != 1 {
+	if results, total, err := sqliteStore.ListDeliveryResults(context.Background(), "task_sql_extra", "", 0, 0); err != nil || total != 1 || len(results) != 1 {
 		t.Fatalf("expected sqlite delivery query without limit to return all rows, total=%d items=%+v err=%v", total, results, err)
 	}
 	if events, total, err := sqliteStore.ListEvents(context.Background(), "", "", "", "", "", 0, 0); err != nil || total != 1 || len(events) != 1 {
@@ -189,7 +223,7 @@ func TestLoopRuntimeStoresCoverAdditionalPagingAndErrorBranches(t *testing.T) {
 	if err := sqliteStore.ReplaceTaskCitations(context.Background(), "task_sql_extra", nil); err != nil {
 		t.Fatalf("expected empty sqlite citation replacement to succeed, got %v", err)
 	}
-	if citations, err := sqliteStore.ListTaskCitations(context.Background(), "task_sql_extra"); err != nil || len(citations) != 0 {
+	if citations, err := sqliteStore.ListTaskCitations(context.Background(), "task_sql_extra", ""); err != nil || len(citations) != 0 {
 		t.Fatalf("expected empty sqlite citation replacement to clear rows, citations=%+v err=%v", citations, err)
 	}
 	if err := sqliteStore.initialize(context.Background()); err != nil {
@@ -213,16 +247,16 @@ func TestLoopRuntimeStoresCoverAdditionalPagingAndErrorBranches(t *testing.T) {
 	if _, err := sqliteStore.GetRun(context.Background(), "run_sql_extra"); err == nil {
 		t.Fatal("expected GetRun on closed sqlite loop runtime store to fail")
 	}
-	if _, _, err := sqliteStore.ListDeliveryResults(context.Background(), "task_sql_extra", 10, 0); err == nil {
+	if _, _, err := sqliteStore.ListDeliveryResults(context.Background(), "task_sql_extra", "", 10, 0); err == nil {
 		t.Fatal("expected ListDeliveryResults on closed sqlite loop runtime store to fail")
 	}
 	if err := sqliteStore.ReplaceTaskCitations(context.Background(), "task_sql_extra", nil); err == nil {
 		t.Fatal("expected ReplaceTaskCitations on closed sqlite loop runtime store to fail")
 	}
-	if _, _, err := sqliteStore.GetLatestDeliveryResult(context.Background(), "task_sql_extra"); err == nil {
+	if _, _, err := sqliteStore.GetLatestDeliveryResult(context.Background(), "task_sql_extra", ""); err == nil {
 		t.Fatal("expected GetLatestDeliveryResult on closed sqlite loop runtime store to fail")
 	}
-	if _, err := sqliteStore.ListTaskCitations(context.Background(), "task_sql_extra"); err == nil {
+	if _, err := sqliteStore.ListTaskCitations(context.Background(), "task_sql_extra", ""); err == nil {
 		t.Fatal("expected ListTaskCitations on closed sqlite loop runtime store to fail")
 	}
 	if _, _, err := sqliteStore.ListEvents(context.Background(), "", "", "", "", "", 10, 0); err == nil {

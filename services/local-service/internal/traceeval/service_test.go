@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -20,7 +20,7 @@ func TestServiceCaptureBuildsTraceAndEvalRecords(t *testing.T) {
 		TaskID:     "task_trace",
 		RunID:      "run_trace",
 		IntentName: "agent_loop",
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			Text:      "please inspect this note",
 			PageTitle: "Release Dashboard",
 		},
@@ -93,7 +93,7 @@ func TestServiceCaptureEscalatesDoomLoopToHumanReview(t *testing.T) {
 		TaskID:     "task_loop",
 		RunID:      "run_loop",
 		IntentName: "agent_loop",
-		Snapshot:   contextsvc.TaskContextSnapshot{Text: "keep trying"},
+		Snapshot:   taskcontext.TaskContextSnapshot{Text: "keep trying"},
 		ToolCalls: []tools.ToolCallRecord{
 			{ToolName: "read_file", Input: map[string]any{"path": "workspace/a.md"}, Status: tools.ToolCallStatusFailed, ErrorCode: intPtr(1001), Output: map[string]any{"loop_round": 3}},
 			{ToolName: "read_file", Input: map[string]any{"path": "workspace/a.md"}, Status: tools.ToolCallStatusFailed, ErrorCode: intPtr(1001), Output: map[string]any{"loop_round": 3}},
@@ -141,7 +141,7 @@ func TestTraceEvalHelpersCoverErrorAndFilePriorityBranches(t *testing.T) {
 		TaskID:     "task_file",
 		RunID:      "run_file",
 		IntentName: "agent_loop",
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			Files:         []string{"workspace/specs/report.md"},
 			VisibleText:   "visible page text",
 			ClipboardText: "clipboard",
@@ -156,7 +156,7 @@ func TestTraceEvalHelpersCoverErrorAndFilePriorityBranches(t *testing.T) {
 	if buildInputSummary(input) != "workspace/specs/report.md" {
 		t.Fatalf("expected file input to outrank perception text, got %q", buildInputSummary(input))
 	}
-	textInput := CaptureInput{Snapshot: contextsvc.TaskContextSnapshot{SelectionText: "secret copied token", ClipboardText: "another secret"}}
+	textInput := CaptureInput{Snapshot: taskcontext.TaskContextSnapshot{SelectionText: "secret copied token", ClipboardText: "another secret"}}
 	textSummary := buildInputSummary(textInput)
 	if strings.Contains(textSummary, "secret copied token") || strings.Contains(textSummary, "another secret") {
 		t.Fatalf("expected hashed trace input summary instead of raw text, got %q", textSummary)
@@ -241,7 +241,7 @@ func TestTraceEvalHelperBranches(t *testing.T) {
 	if !isNoProgressFailure(tools.ToolCallRecord{Status: tools.ToolCallStatusTimeout}) {
 		t.Fatal("expected timeout to count as no-progress failure")
 	}
-	if got := truncateText("  hello world  ", 5); got != "hello..." {
+	if got := truncateText("  hello world  ", 5); got != "he..." {
 		t.Fatalf("unexpected truncateText output: %q", got)
 	}
 	if got := truncateText("  hi  ", 5); got != "hi" {
@@ -295,7 +295,7 @@ func TestTraceEvalAdditionalHelperBranches(t *testing.T) {
 	if mapValue(nil, "missing") == nil || stringValue(nil, "missing") != "" || intValue(map[string]any{"count": int64(3)}, "count") != 3 || int64Value(map[string]any{"count": int(3)}, "count") != 3 {
 		t.Fatal("expected primitive helpers to tolerate nil maps and mixed numeric types")
 	}
-	if truncateText("  hello world  ", 5) != "hello..." || truncateText(" hi ", 5) != "hi" {
+	if truncateText("  hello world  ", 5) != "he..." || truncateText(" hi ", 5) != "hi" {
 		t.Fatal("expected truncateText to trim and truncate appropriately")
 	}
 }

@@ -6,12 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	_ "modernc.org/sqlite"
 )
 
@@ -44,16 +42,12 @@ type SQLiteTaskRunStore struct {
 
 // NewSQLiteTaskRunStore opens and initializes the SQLite task/run store.
 func NewSQLiteTaskRunStore(databasePath string) (*SQLiteTaskRunStore, error) {
-	databasePath = strings.TrimSpace(databasePath)
-	if databasePath == "" {
-		return nil, ErrDatabasePathRequired
+	cleanedPath, err := prepareSQLiteDatabasePath(databasePath)
+	if err != nil {
+		return nil, err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(databasePath), 0o755); err != nil {
-		return nil, fmt.Errorf("prepare sqlite directory: %w", err)
-	}
-
-	db, err := sql.Open(sqliteDriverName, databasePath)
+	db, err := sql.Open(sqliteDriverName, cleanedPath)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
@@ -67,12 +61,12 @@ func NewSQLiteTaskRunStore(databasePath string) (*SQLiteTaskRunStore, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	taskStore, err := NewSQLiteTaskStore(databasePath)
+	taskStore, err := NewSQLiteTaskStore(cleanedPath)
 	if err != nil {
 		_ = store.Close()
 		return nil, err
 	}
-	stepStore, err := NewSQLiteTaskStepStore(databasePath)
+	stepStore, err := NewSQLiteTaskStepStore(cleanedPath)
 	if err != nil {
 		_ = taskStore.Close()
 		_ = store.Close()
@@ -255,18 +249,12 @@ func (s *SQLiteTaskRunStore) GetTaskRun(ctx context.Context, taskID string) (Tas
 func (s *SQLiteTaskRunStore) LoadLegacyTaskRuns(ctx context.Context, structuredTaskIDs []string) ([]TaskRunRecord, error) {
 	query := `SELECT record_json FROM task_runs`
 	args := make([]any, 0, len(structuredTaskIDs))
-	filteredTaskIDs := make([]string, 0, len(structuredTaskIDs))
-	for _, taskID := range structuredTaskIDs {
-		taskID = strings.TrimSpace(taskID)
-		if taskID == "" {
-			continue
-		}
-		filteredTaskIDs = append(filteredTaskIDs, taskID)
+	filteredTaskIDs := uniqueNonEmptyTaskIDs(structuredTaskIDs)
+	for _, taskID := range filteredTaskIDs {
 		args = append(args, taskID)
 	}
 	if len(filteredTaskIDs) > 0 {
-		placeholders := strings.TrimRight(strings.Repeat("?,", len(filteredTaskIDs)), ",")
-		query += ` WHERE task_id NOT IN (` + placeholders + `)`
+		query += ` WHERE task_id NOT IN (` + sqlitePlaceholders(len(filteredTaskIDs)) + `)`
 	}
 	query += ` ORDER BY started_at DESC, task_id DESC`
 
@@ -294,6 +282,85 @@ func (s *SQLiteTaskRunStore) LoadLegacyTaskRuns(ctx context.Context, structuredT
 	return records, nil
 }
 
+func (s *SQLiteTaskRunStore) LoadLegacyTaskRunsByTaskIDs(ctx context.Context, taskIDs []string) ([]TaskRunRecord, error) {
+	filteredTaskIDs := uniqueNonEmptyTaskIDs(taskIDs)
+	if len(filteredTaskIDs) == 0 {
+		return nil, nil
+	}
+	args := make([]any, 0, len(filteredTaskIDs))
+	for _, taskID := range filteredTaskIDs {
+		args = append(args, taskID)
+	}
+	query := `SELECT record_json
+		FROM task_runs
+		WHERE task_id IN (` + sqlitePlaceholders(len(filteredTaskIDs)) + `)
+		  AND task_id NOT IN (SELECT task_id FROM tasks)`
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("load legacy task runs by ids: %w", err)
+	}
+	defer rows.Close()
+
+	records := make([]TaskRunRecord, 0, len(filteredTaskIDs))
+	for rows.Next() {
+		var recordJSON string
+		if err := rows.Scan(&recordJSON); err != nil {
+			return nil, fmt.Errorf("scan legacy task run by ids row: %w", err)
+		}
+		record, err := unmarshalTaskRunRecord(recordJSON)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate legacy task run by ids rows: %w", err)
+	}
+	return records, nil
+}
+
+func (s *SQLiteTaskRunStore) ListLegacyTaskRunsForTaskList(ctx context.Context, statusGroup, sortBy, sortOrder string, limit, offset int) ([]TaskRunRecord, int, error) {
+	whereClause, whereArgs := sqliteTaskListStatusClause(statusGroup)
+	orderClause := sqliteTaskRunListOrderClause(sortBy, sortOrder)
+	query := `SELECT record_json
+		FROM task_runs
+		WHERE task_id NOT IN (SELECT task_id FROM tasks)` + strings.Replace(whereClause, " WHERE ", " AND ", 1) + `
+		ORDER BY ` + orderClause
+	countQuery := `SELECT COUNT(1)
+		FROM task_runs
+		WHERE task_id NOT IN (SELECT task_id FROM tasks)` + strings.Replace(whereClause, " WHERE ", " AND ", 1)
+	args := append([]any{}, whereArgs...)
+	if limit > 0 {
+		query += ` LIMIT ? OFFSET ?`
+		args = append(args, limit, offset)
+	}
+	var total int
+	if err := s.db.QueryRowContext(ctx, countQuery, whereArgs...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count legacy task-list rows: %w", err)
+	}
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list legacy task-list rows: %w", err)
+	}
+	defer rows.Close()
+	records := make([]TaskRunRecord, 0)
+	for rows.Next() {
+		var recordJSON string
+		if err := rows.Scan(&recordJSON); err != nil {
+			return nil, 0, fmt.Errorf("scan legacy task-list row: %w", err)
+		}
+		record, err := unmarshalTaskRunRecord(recordJSON)
+		if err != nil {
+			return nil, 0, err
+		}
+		records = append(records, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate legacy task-list rows: %w", err)
+	}
+	return records, total, nil
+}
+
 // Close closes the underlying SQLite connection.
 func (s *SQLiteTaskRunStore) Close() error {
 	if s.db == nil {
@@ -307,6 +374,21 @@ func (s *SQLiteTaskRunStore) Close() error {
 		err = errors.Join(err, closer.Close())
 	}
 	return err
+}
+
+func sqliteTaskRunListOrderClause(sortBy, sortOrder string) string {
+	column := "updated_at"
+	switch strings.TrimSpace(sortBy) {
+	case "started_at":
+		column = "started_at"
+	case "finished_at":
+		column = "finished_at"
+	}
+	direction := "DESC"
+	if strings.TrimSpace(sortOrder) == "asc" {
+		direction = "ASC"
+	}
+	return column + ` ` + direction + `, updated_at ` + direction + `, task_id ` + direction
 }
 
 func (s *SQLiteTaskRunStore) journalMode(ctx context.Context) (string, error) {
@@ -508,7 +590,7 @@ func cloneNotificationSnapshots(values []NotificationSnapshot) []NotificationSna
 	return result
 }
 
-func cloneContextSnapshot(snapshot contextsvc.TaskContextSnapshot) contextsvc.TaskContextSnapshot {
+func cloneContextSnapshot(snapshot taskcontext.TaskContextSnapshot) taskcontext.TaskContextSnapshot {
 	cloned := snapshot
 	if len(snapshot.Files) > 0 {
 		cloned.Files = append([]string(nil), snapshot.Files...)

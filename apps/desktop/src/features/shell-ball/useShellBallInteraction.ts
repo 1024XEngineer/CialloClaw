@@ -2,15 +2,11 @@
  * Shell-ball interaction state owns the floating hover input, voice capture, and
  * lightweight submission gestures that sit on top of the task-centric backend.
  */
-import type { AgentInputSubmitParams, AgentTaskStartParams, RequestMeta } from "@cialloclaw/protocol";
+import type { AgentTaskStartParams, RequestMeta } from "@cialloclaw/protocol";
 import { useLatest, useUnmount } from "ahooks";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PointerEvent } from "react";
-import {
-  submitTextInput,
-  createTextInputSubmitParams,
-  type SubmitTextInputClientContext,
-} from "../../services/agentInputService";
+import type { SubmitTextInputClientContext } from "../../services/agentInputService";
 import {
   createShellBallInteractionController,
   getShellBallInputBarMode,
@@ -30,10 +26,12 @@ import {
   getShellBallSpeechRecognitionLanguage,
   type ShellBallSpeechRecognition,
 } from "./shellBall.speech";
+import { submitShellBallInput } from "./shellBallSubmit";
 import { startTaskFromFiles } from "@/services/taskService";
-import { getCurrentConversationSessionId } from "@/services/conversationSessionService";
 import type { ShellBallInteractionEvent, ShellBallVisualState, ShellBallVoiceHintMode } from "./shellBall.types";
 import { useShellBallStore } from "../../stores/shellBallStore";
+
+export { createShellBallInputSubmitParams } from "./shellBallSubmit";
 
 type TimeoutHandle = ReturnType<typeof globalThis.setTimeout>;
 
@@ -53,6 +51,10 @@ function canStartShellBallVoiceEntry(state: ShellBallVisualState | undefined) {
   return state !== "confirming_intent" && state !== "voice_listening" && state !== "voice_locked";
 }
 
+function canOpenShellBallDashboardFromDoubleClick(state: ShellBallVisualState) {
+  return state === "idle" || state === "hover_input" || state === "confirming_intent";
+}
+
 const SHELL_BALL_NON_RECOVERABLE_VOICE_ERRORS = new Set([
   "audio-capture",
   "language-not-supported",
@@ -65,7 +67,7 @@ const SHELL_BALL_NON_RECOVERABLE_VOICE_ERRORS = new Set([
  * UI such as local bubbles and delivery previews.
  */
 export type ShellBallInputSubmitResult = (
-  | NonNullable<Awaited<ReturnType<typeof submitTextInput>>>
+  | NonNullable<Awaited<ReturnType<typeof submitShellBallInput>>>
   | Awaited<ReturnType<typeof startTaskFromFiles>>
 ) & {
   clientContext?: SubmitTextInputClientContext;
@@ -76,6 +78,13 @@ export type ShellBallInputSubmitResult = (
       task_id?: string | null;
     } | null;
   } | null;
+};
+
+export type ShellBallPreparedTextSubmitDraft = {
+  currentDraft: string;
+  currentInputValue: string;
+  currentPendingFiles: string[];
+  submittedDraftRevision: number;
 };
 
 type ShellBallPostSubmitReset = {
@@ -156,32 +165,6 @@ export function appendShellBallDroppedText(input: {
 }
 
 /**
- * Builds the formal `agent.input.submit` payload used by shell-ball text and
- * voice submissions.
- *
- * @param input Trigger metadata together with the draft text to submit.
- * @returns The normalized RPC payload, or `null` when the draft is empty.
- */
-export function createShellBallInputSubmitParams(input: {
-  text: string;
-  trigger: "voice_commit" | "hover_text_input";
-  inputMode: "voice" | "text";
-  sessionId?: string;
-}): AgentInputSubmitParams | null {
-  return createTextInputSubmitParams({
-    text: input.text,
-    source: "floating_ball",
-    trigger: input.trigger,
-    inputMode: input.inputMode,
-    sessionId: input.sessionId,
-    options: {
-      confirm_required: false,
-      preferred_delivery: "bubble",
-    },
-  });
-}
-
-/**
  * Builds the formal `agent.task.start` payload used when shell-ball submission
  * includes file attachments.
  *
@@ -211,27 +194,12 @@ export function createShellBallTaskStartParams(input: {
     delivery: {
       preferred: "bubble",
     },
-  };
-}
-
-async function submitShellBallInput(input: {
-  text: string;
-  trigger: "voice_commit" | "hover_text_input";
-  inputMode: "voice" | "text";
-  sessionId?: string;
-}): Promise<ShellBallInputSubmitResult | null> {
-  return submitTextInput({
-    text: input.text,
-    source: "floating_ball",
-    trigger: input.trigger,
-    inputMode: input.inputMode,
-    includeForegroundBrowserPageContext: true,
-    sessionId: input.sessionId,
     options: {
+      // File drops only carry a caller preference here. The backend owns the
+      // effective confirmation decision for bare files versus pending evidence.
       confirm_required: false,
-      preferred_delivery: "bubble",
     },
-  });
+  };
 }
 
 async function startShellBallFileTask(input: {
@@ -275,8 +243,7 @@ export function getShellBallDashboardOpenGesturePolicy(input: {
     return false;
   }
 
-  const canOpenFromState = input.state === "idle" || input.state === "hover_input";
-  return canOpenFromState && !input.interactionConsumed;
+  return canOpenShellBallDashboardFromDoubleClick(input.state) && !input.interactionConsumed;
 }
 
 /**
@@ -384,7 +351,10 @@ export function syncShellBallInteractionController(input: {
     return input.visualState;
   }
 
-  return input.controller.forceState(input.visualState, { regionActive: input.regionActive });
+  return input.controller.forceState(input.visualState, {
+    regionActive: input.regionActive,
+    scheduleProcessingReturn: false,
+  });
 }
 
 export function resolveShellBallVoiceRecognitionFinalState(input: {
@@ -480,6 +450,7 @@ export function useShellBallInteraction() {
   function syncVisualStateFromTaskStatus(status: Parameters<typeof getShellBallVisualStateForTaskStatus>[0], fallbackState: ShellBallVisualState) {
     controllerRef.current?.forceState(getShellBallVisualStateForTaskStatus(status, fallbackState), {
       regionActive: regionActiveRef.current,
+      scheduleProcessingReturn: false,
     });
     syncVisualState();
   }
@@ -745,21 +716,6 @@ export function useShellBallInteraction() {
     }
   }
 
-  function syncHoverRetention() {
-    if (regionActiveRef.current) {
-      return;
-    }
-
-    if (controllerRef.current?.getState() !== "hover_input") {
-      return;
-    }
-
-    dispatch("pointer_leave_region", {
-      regionActive: false,
-      hoverRetained: getHoverRetained(),
-    });
-  }
-
   function handlePrimaryClick() {
     return;
   }
@@ -767,6 +723,11 @@ export function useShellBallInteraction() {
   function handleRegionEnter() {
     regionActiveRef.current = true;
     setRegionActive(true);
+    dispatch("pointer_enter_hotspot", {
+      regionActive: true,
+      hoverRetained: getHoverRetained(),
+    });
+    syncVisualState();
   }
 
   function handleRegionLeave() {
@@ -778,19 +739,23 @@ export function useShellBallInteraction() {
       setCurrentVoicePreview(null);
     }
 
-    if (controllerRef.current?.getState() === "hover_input" && inputFocusedRef.current) {
-      dispatch("pointer_leave_region", {
-        regionActive: false,
-        hoverRetained: true,
-      });
-    }
+    dispatch("pointer_leave_region", {
+      regionActive: false,
+      hoverRetained: getHoverRetained(),
+    });
+    syncVisualState();
   }
 
   function handleInputHoverChange(active: boolean) {
     inputHoveredRef.current = active;
   }
 
-  async function handleSubmitText() {
+  /**
+   * Applies the shell-ball optimistic text-submit reset without consuming the
+   * user's draft revision. Callers can restore the captured draft later when
+   * the submit fails and no new draft has claimed the field yet.
+   */
+  function prepareTextSubmitDraft(): ShellBallPreparedTextSubmitDraft | null {
     const currentInputValue = inputValueRef.current ?? "";
     const currentPendingFiles = pendingFilesRef.current ?? [];
     const currentDraft = currentInputValue.trim();
@@ -809,37 +774,64 @@ export function useShellBallInteraction() {
     inputFocusedRef.current = reset.nextFocused;
     setInputFocused(reset.nextFocused);
 
+    return {
+      currentDraft,
+      currentInputValue,
+      currentPendingFiles,
+      submittedDraftRevision,
+    };
+  }
+
+  /**
+   * Restores an optimistically-cleared shell-ball draft only when the field is
+   * still untouched and no newer draft has started after the failed submit.
+   * Failed submits must also restore the interactive hover state immediately so
+   * the inline bar does not stay readonly during the controller cooldown.
+   */
+  function restorePreparedTextSubmitDraft(preparedDraft: ShellBallPreparedTextSubmitDraft) {
+    if (shouldRestoreShellBallSubmitFailureDraft({
+      currentInputValue: inputValueRef.current ?? "",
+      currentPendingFiles: pendingFilesRef.current ?? [],
+      currentDraftRevision: draftRevisionRef.current,
+      submittedDraftRevision: preparedDraft.submittedDraftRevision,
+    })) {
+      setInputValueState(preparedDraft.currentInputValue);
+      setPendingFilesState(preparedDraft.currentPendingFiles);
+    }
+    inputFocusedRef.current = true;
+    setInputFocused(true);
+    controllerRef.current?.forceState("hover_input", {
+      regionActive: regionActiveRef.current,
+      hoverRetained: true,
+    });
+    syncVisualState();
+  }
+
+  async function handleSubmitText() {
+    const preparedDraft = prepareTextSubmitDraft();
+    if (preparedDraft === null) {
+      return null;
+    }
+
     try {
       const result =
-        currentPendingFiles.length > 0
+        preparedDraft.currentPendingFiles.length > 0
           ? await startShellBallFileTask({
-              text: currentDraft,
-              files: currentPendingFiles,
-              sessionId: getCurrentConversationSessionId(),
+              text: preparedDraft.currentDraft,
+              files: preparedDraft.currentPendingFiles,
             })
           : await submitShellBallInput({
-              text: currentDraft,
+              text: preparedDraft.currentDraft,
               trigger: "hover_text_input",
               inputMode: "text",
-              sessionId: getCurrentConversationSessionId(),
             });
-      if (result !== null) {
+      if (result?.task) {
         syncVisualStateFromTaskStatus(result.task.status, controllerRef.current?.getState() ?? visualState);
       }
       return result;
     } catch (error) {
       console.warn("shell-ball text submit failed", error);
-      if (shouldRestoreShellBallSubmitFailureDraft({
-        currentInputValue: inputValueRef.current ?? "",
-        currentPendingFiles: pendingFilesRef.current ?? [],
-        currentDraftRevision: draftRevisionRef.current,
-        submittedDraftRevision,
-      })) {
-        setInputValueState(currentInputValue);
-        setPendingFilesState(currentPendingFiles);
-      }
-      inputFocusedRef.current = true;
-      setInputFocused(true);
+      restorePreparedTextSubmitDraft(preparedDraft);
       throw error;
     }
   }
@@ -862,10 +854,9 @@ export function useShellBallInteraction() {
         text: normalizedText,
         trigger: "voice_commit",
         inputMode: "voice",
-        sessionId: getCurrentConversationSessionId(),
       });
 
-      if (result !== null) {
+      if (result?.task) {
         syncVisualStateFromTaskStatus(result.task.status, controllerRef.current?.getState() ?? visualState);
       }
 
@@ -1082,7 +1073,7 @@ export function useShellBallInteraction() {
     return false;
   }
 
-  function handlePressCancel(event: PointerEvent<HTMLButtonElement>) {
+  function handlePressCancel(_event: PointerEvent<HTMLButtonElement>) {
     clearLongPressTimer();
 
     const cancelEvent = getShellBallPressCancelEvent(controllerRef.current?.getState() ?? visualState);
@@ -1113,14 +1104,20 @@ export function useShellBallInteraction() {
     }
 
     if (!focused) {
+      const currentState = controllerRef.current?.getState() ?? visualState;
+
       // Blur should fully retire the higher-level input-active state so later
-      // mascot gestures do not inherit a stale input hover relationship.
+      // mascot gestures do not inherit a stale input hover relationship. Once
+      // formal task states take over, blur must not clobber them back to idle.
       inputHoveredRef.current = false;
-      controllerRef.current?.forceState("idle", {
-        regionActive: false,
-        hoverRetained: false,
-      });
-      syncVisualState();
+
+      if (currentState === "hover_input") {
+        controllerRef.current?.forceState("idle", {
+          regionActive: false,
+          hoverRetained: false,
+        });
+        syncVisualState();
+      }
     }
   }
 
@@ -1163,6 +1160,23 @@ export function useShellBallInteraction() {
   }
 
   useEffect(() => {
+    if (getShellBallInputBarMode(visualState) !== "hidden") {
+      return;
+    }
+
+    inputHoveredRef.current = false;
+
+    if (!inputFocusedRef.current) {
+      return;
+    }
+
+    // Hidden input modes should retire any stale textarea-focus bookkeeping so
+    // follow-up hover transitions do not inherit a no-longer-rendered field.
+    inputFocusedRef.current = false;
+    setInputFocused(false);
+  }, [visualState]);
+
+  useEffect(() => {
     if (controllerRef.current === null) {
       return;
     }
@@ -1199,6 +1213,8 @@ export function useShellBallInteraction() {
     inputValue,
     pendingFiles,
     setInputValue: setTrackedInputValue,
+    prepareTextSubmitDraft,
+    restorePreparedTextSubmitDraft,
     finalizedSpeechPayload,
     acknowledgeFinalizedSpeechPayload,
     regionActive,
@@ -1229,7 +1245,6 @@ export function useShellBallInteraction() {
     handleInputHoverChange,
     handleInputFocusChange,
     handleInputFocusRequest,
-    getCurrentConversationSessionId,
     handleForceState,
   };
 }

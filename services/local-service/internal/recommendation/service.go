@@ -10,15 +10,17 @@ import (
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/perception"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 )
 
 const (
-	negativeCooldown         = 5 * time.Minute
-	ignoreCooldown           = 2 * time.Minute
-	recommendationRecordTTL  = 15 * time.Minute
-	recommendationStateTTL   = 30 * time.Minute
-	maxRecommendationRecords = 256
-	maxFingerprintStates     = 128
+	negativeCooldown          = 5 * time.Minute
+	ignoreCooldown            = 2 * time.Minute
+	recommendationRecordTTL   = 15 * time.Minute
+	recommendationStateTTL    = 30 * time.Minute
+	maxRecommendationRecords  = 256
+	maxFingerprintStates      = 128
+	candidatePreviewMaxLength = 24
 )
 
 type Service struct {
@@ -175,10 +177,7 @@ func (s *Service) rankCandidates(candidates []candidate, state fingerprintState)
 		return nil
 	}
 
-	filtered := make([]candidate, 0, len(candidates))
-	for _, item := range candidates {
-		filtered = append(filtered, item)
-	}
+	filtered := append([]candidate(nil), candidates...)
 
 	sort.SliceStable(filtered, func(i, j int) bool {
 		leftScore := state.IntentScores[filtered[i].IntentName]
@@ -217,17 +216,17 @@ func buildCandidates(input GenerateInput) []candidate {
 	case "error":
 		candidates = append(candidates, candidate{
 			IntentName: "explain",
-			Text:       fmt.Sprintf("要不要我先解释一下这个错误和处理方向：%s", truncateText(pageTitle, 18)),
+			Text:       fmt.Sprintf("要不要我先解释一下这个错误和处理方向：%s", truncateText(pageTitle, candidatePreviewMaxLength)),
 			Intent:     intentPayload("explain"),
 			Priority:   1000,
 		})
 	case "selected_text":
 		if selectionText != "" {
 			primaryIntent := "explain"
-			primaryText := fmt.Sprintf("要不要我先解释这段内容：%s", truncateText(selectionText, 18))
+			primaryText := fmt.Sprintf("要不要我先解释这段内容：%s", truncateText(selectionText, candidatePreviewMaxLength))
 			if utf8.RuneCountInString(selectionText) >= 80 || strings.Contains(selectionText, "\n") {
 				primaryIntent = "summarize"
-				primaryText = fmt.Sprintf("要不要我先总结这段内容：%s", truncateText(selectionText, 18))
+				primaryText = fmt.Sprintf("要不要我先总结这段内容：%s", truncateText(selectionText, candidatePreviewMaxLength))
 			}
 			candidates = append(candidates, candidate{
 				IntentName: primaryIntent,
@@ -247,7 +246,7 @@ func buildCandidates(input GenerateInput) []candidate {
 			intentName := taskIntentName(task.Intent)
 			candidates = append(candidates, candidate{
 				IntentName: intentName,
-				Text:       fmt.Sprintf("继续处理当前任务：%s", truncateText(task.Title, 18)),
+				Text:       fmt.Sprintf("继续处理当前任务：%s", truncateText(task.Title, candidatePreviewMaxLength)),
 				Intent:     intentPayload(intentName),
 				Priority:   700,
 			})
@@ -257,7 +256,7 @@ func buildCandidates(input GenerateInput) []candidate {
 			intentName := inferNotepadIntent(item)
 			candidates = append(candidates, candidate{
 				IntentName: intentName,
-				Text:       fmt.Sprintf("要不要先处理这个待办：%s", truncateText(title, 18)),
+				Text:       fmt.Sprintf("要不要先处理这个待办：%s", truncateText(title, candidatePreviewMaxLength)),
 				Intent:     intentPayload(intentName),
 				Priority:   650,
 			})
@@ -268,7 +267,7 @@ func buildCandidates(input GenerateInput) []candidate {
 	if len(candidates) == 0 {
 		candidates = append(candidates, candidate{
 			IntentName: "summarize",
-			Text:       fmt.Sprintf("要不要我先整理一下：%s", truncateText(pageTitle, 18)),
+			Text:       fmt.Sprintf("要不要我先整理一下：%s", truncateText(pageTitle, candidatePreviewMaxLength)),
 			Intent:     intentPayload("summarize"),
 			Priority:   500,
 		})
@@ -523,12 +522,7 @@ func intentPayload(name string) map[string]any {
 }
 
 func truncateText(value string, maxLength int) string {
-	if utf8.RuneCountInString(value) <= maxLength {
-		return value
-	}
-
-	runes := []rune(value)
-	return string(runes[:maxLength]) + "..."
+	return textutil.TruncateGraphemes(value, maxLength)
 }
 
 func fallbackString(primary, fallback string) string {

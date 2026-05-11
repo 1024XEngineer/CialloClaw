@@ -141,6 +141,9 @@ export interface PageContext {
   title?: string;
   app_name?: string;
   url?: string;
+  browser_kind?: "chrome" | "edge" | "other_browser" | "non_browser";
+  process_path?: string;
+  process_id?: number;
   window_title?: string;
   visible_text?: string;
   hover_target?: string;
@@ -232,9 +235,10 @@ export interface AgentInputSubmitParams {
   };
 }
 
-// AgentInputSubmitResult 定义当前模块的接口约束。
+// AgentInputSubmitResult returns either a formal task handoff or a detached
+// lightweight chat bubble when the input does not need task creation.
 export interface AgentInputSubmitResult {
-  task: Task;
+  task: Task | null;
   bubble_message: BubbleMessage | null;
   delivery_result: DeliveryResult | null;
 }
@@ -254,6 +258,9 @@ export interface AgentTaskStartParams {
   };
   context?: InputContext;
   delivery?: DeliveryPreference;
+  options?: {
+    confirm_required?: boolean;
+  };
 }
 
 // AgentTaskStartResult 定义当前模块的接口约束。
@@ -263,15 +270,19 @@ export interface AgentTaskStartResult {
   delivery_result: DeliveryResult | null;
 }
 
-// AgentTaskConfirmParams 定义当前模块的接口约束。
+// AgentTaskConfirmParams carries the confirmation decision or exactly one
+// correction path for a task that is still waiting at confirming_intent.
 export interface AgentTaskConfirmParams {
   request_meta: RequestMeta;
   task_id: string;
   confirmed: boolean;
   corrected_intent?: IntentPayload;
+  correction_text?: string;
 }
 
-// AgentTaskConfirmResult 定义当前模块的接口约束。
+// AgentTaskConfirmResult returns the same task projection after confirmation,
+// direct natural-language correction execution, or a clarification gate when
+// the caller still needs to provide a usable correction.
 export interface AgentTaskConfirmResult {
   task: Task;
   bubble_message: BubbleMessage | null;

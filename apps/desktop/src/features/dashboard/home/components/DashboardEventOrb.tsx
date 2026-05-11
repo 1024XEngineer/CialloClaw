@@ -1,12 +1,12 @@
 import { useEffect, useState, useRef, useCallback } from "react";
 import type { DashboardHomeStateData, DashboardHomeSummonEvent } from "../dashboardHome.types";
-import { AlertCircle, BellDot, BrainCircuit, FileText, NotebookPen, ShieldAlert, Sparkles, X } from "lucide-react";
+import { BrainCircuit, FileText, NotebookPen, ShieldAlert, X } from "lucide-react";
 
 type DashboardEventOrbProps = {
   event: DashboardHomeSummonEvent;
   stateMap: Record<string, DashboardHomeStateData>;
   onDismiss: (id: string) => void;
-  onExpand: (stateKey: DashboardHomeSummonEvent["stateKey"]) => void;
+  onExpand: (event: DashboardHomeSummonEvent) => void;
 };
 
 type Phase = "dormant" | "emerging" | "present" | "receding" | "gone";
@@ -19,12 +19,6 @@ const icons = {
   memory: BrainCircuit,
   safety: ShieldAlert,
   tasks: FileText,
-} as const;
-
-const priorityDots = {
-  low: Sparkles,
-  normal: BellDot,
-  urgent: AlertCircle,
 } as const;
 
 export function DashboardEventOrb({ event, stateMap, onDismiss, onExpand }: DashboardEventOrbProps) {
@@ -49,8 +43,6 @@ export function DashboardEventOrb({ event, stateMap, onDismiss, onExpand }: Dash
 
   const { duration = 5200 } = event;
   const Icon = icons[stateData.module];
-  const PriorityIcon = priorityDots[event.priority];
-
   useEffect(() => {
     const speed = 1.8;
     let last = 0;
@@ -245,9 +237,9 @@ export function DashboardEventOrb({ event, stateMap, onDismiss, onExpand }: Dash
       return;
     }
 
-    onExpand(event.stateKey);
+    onExpand(event);
     startRecede();
-  }, [event.stateKey, isDragging, onExpand, startRecede]);
+  }, [event, isDragging, onExpand, startRecede]);
 
   if (phase === "gone") {
     return null;

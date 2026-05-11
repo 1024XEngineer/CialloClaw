@@ -1,7 +1,7 @@
-import { useEffect, useLayoutEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent, CompositionEvent, KeyboardEvent } from "react";
 import styled from "styled-components";
-import { ArrowUp, Paperclip } from "lucide-react";
+import { ArrowUp, Paperclip, X } from "lucide-react";
 import type { ShellBallVoicePreview } from "../shellBall.interaction";
 import type { ShellBallInputBarMode } from "../shellBall.types";
 
@@ -11,8 +11,13 @@ type ShellBallInputBarProps = {
   value: string;
   hasPendingFiles?: boolean;
   focusToken?: number;
+  label?: string;
+  placeholder?: string;
+  auxiliaryAction?: "attach" | "cancel";
+  allowEmptySubmit?: boolean;
   onValueChange: (value: string) => void;
   onAttachFile: () => void;
+  onCancel?: () => void;
   onSubmit: () => void;
   onFocusChange: (focused: boolean) => void;
   onResizeStateChange?: (resizing: boolean) => void;
@@ -20,14 +25,15 @@ type ShellBallInputBarProps = {
   onTransientInputActivity?: () => void;
 };
 
-const SHELL_BALL_INPUT_LABEL = "Message";
+const SHELL_BALL_INPUT_DEFAULT_PLACEHOLDER = "和它说点什么…";
+const SHELL_BALL_INPUT_COLLAPSED_HEIGHT_PX = 40;
+const SHELL_BALL_INPUT_MIN_HEIGHT_PX = 48;
 
 /**
- * Renders the floating shell-ball input bar with the supplied Uiverse-inspired
- * field while preserving the attach and send buttons below the field.
- *
- * @param props Shell-ball input mode, draft state, and interaction callbacks.
- * @returns The shell-ball input bar UI.
+ * Renders the floating shell-ball hover input as one continuous capsule shell.
+ * A translucent hover surface upgrades into the filled focus surface by
+ * animating the inner paper layer from bottom to top without moving the outer
+ * frame or changing the submit behavior.
  */
 export function ShellBallInputBar({
   mode,
@@ -35,8 +41,13 @@ export function ShellBallInputBar({
   value,
   hasPendingFiles = false,
   focusToken = 0,
+  label: _label = "输入",
+  placeholder,
+  auxiliaryAction = "attach",
+  allowEmptySubmit = false,
   onValueChange,
   onAttachFile,
+  onCancel,
   onSubmit,
   onFocusChange,
   onResizeStateChange: _onResizeStateChange = () => {},
@@ -46,44 +57,31 @@ export function ShellBallInputBar({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const compositionActiveRef = useRef(false);
   const appliedFocusTokenRef = useRef(0);
-  const multilineStateRef = useRef(false);
+  const [focusWithin, setFocusWithin] = useState(false);
   const trimmedValue = value.trim();
+  const hasDraft = trimmedValue !== "";
   const isHidden = mode === "hidden";
   const isInteractive = mode === "interactive";
   const isReadonly = mode === "readonly";
   const isVoice = mode === "voice";
   const buttonsDisabled = isHidden || isReadonly || isVoice;
-  const submitDisabled = !isInteractive || (trimmedValue === "" && !hasPendingFiles);
+  const submitDisabled = !isInteractive || (!allowEmptySubmit && trimmedValue === "" && !hasPendingFiles);
+  const settledSurface = isReadonly || focusWithin;
+  const collapsedSurface = isInteractive && !settledSurface;
+  const auxiliaryActionLabel = auxiliaryAction === "cancel" ? "退出意图修改" : "添加文件";
+  const visiblePlaceholder = placeholder?.trim() || SHELL_BALL_INPUT_DEFAULT_PLACEHOLDER;
 
-  useLayoutEffect(() => {
+  useEffect(() => {
     const field = inputRef.current;
     if (field === null) {
       return;
     }
 
-    // Keep the decorative highlight layer aligned with the real textarea height
-    // so multiline growth and shrink stay visually locked together.
-    field.style.height = "auto";
-    const computedStyle = window.getComputedStyle(field);
-    const maxHeight = Number.parseFloat(window.getComputedStyle(field).maxHeight) || Number.POSITIVE_INFINITY;
-    const nextHeight = Math.min(Math.max(44, field.scrollHeight), maxHeight);
-    const lineHeight = Number.parseFloat(computedStyle.lineHeight) || 0;
-    const verticalPadding = Number.parseFloat(computedStyle.paddingTop) + Number.parseFloat(computedStyle.paddingBottom);
-    const multilineThreshold = lineHeight > 0 ? 44 + lineHeight * 0.5 : 52;
-    const isMultiline = nextHeight > multilineThreshold && nextHeight > verticalPadding + lineHeight;
-    const inputShell = field.parentElement;
-    const isCollapsingToSingleLine = multilineStateRef.current && !isMultiline;
-
-    field.style.height = `${nextHeight}px`;
-
-    if (inputShell !== null) {
-      inputShell.style.setProperty("--shell-ball-input-height", `${Math.max(44, nextHeight)}px`);
-      inputShell.dataset.collapseToSingleLine = isCollapsingToSingleLine ? "true" : "false";
-      inputShell.dataset.multiline = isMultiline ? "true" : "false";
-    }
-
-    multilineStateRef.current = isMultiline;
-  }, [value]);
+    field.closest<HTMLElement>(".shell-ball-uiverse-inputbox")?.style.setProperty(
+      "--shell-ball-input-height",
+      `${collapsedSurface ? SHELL_BALL_INPUT_COLLAPSED_HEIGHT_PX : SHELL_BALL_INPUT_MIN_HEIGHT_PX}px`,
+    );
+  }, [collapsedSurface]);
 
   useEffect(() => {
     if (inputRef.current === null) {
@@ -93,6 +91,7 @@ export function ShellBallInputBar({
     if (!isInteractive) {
       if (inputRef.current === document.activeElement) {
         inputRef.current.blur();
+        setFocusWithin(false);
         onFocusChange(false);
       }
       return;
@@ -136,7 +135,7 @@ export function ShellBallInputBar({
     onCompositionStateChange(false);
   }
 
-  function restoreTextareaFocus() {
+  function restoreInputFocus() {
     if (!isInteractive) {
       return;
     }
@@ -157,247 +156,331 @@ export function ShellBallInputBar({
 
   return (
     <StyledInputBar
-      data-filled={trimmedValue !== "" ? "true" : "false"}
+      data-can-attach={isInteractive ? "true" : "false"}
+      data-filled={hasDraft ? "true" : "false"}
       data-hidden={hiddenState ? "true" : "false"}
       data-mode={mode}
+      data-collapsed={collapsedSurface ? "true" : "false"}
+      data-settled={settledSurface ? "true" : "false"}
       data-voice-preview={voicePreview ?? undefined}
     >
       <div className="shell-ball-uiverse-inputbox">
-        <textarea
-          ref={inputRef}
-          data-shell-ball-interactive="true"
-          required
-          value={value}
-          onChange={handleChange}
-          onCompositionStart={handleCompositionStart}
-          onCompositionEnd={handleCompositionEnd}
-          onKeyDown={handleKeyDown}
-          onFocus={() => onFocusChange(true)}
-          onBlur={() => {
-            if (compositionActiveRef.current) {
-              return;
-            }
+        <div aria-hidden="true" className="shell-ball-uiverse-fill" />
+        <div className="shell-ball-uiverse-content">
+          <textarea
+            ref={inputRef}
+            data-shell-ball-interactive="true"
+            required
+            value={value}
+            onChange={handleChange}
+            onCompositionStart={handleCompositionStart}
+            onCompositionEnd={handleCompositionEnd}
+            onKeyDown={handleKeyDown}
+            onFocus={() => {
+              setFocusWithin(true);
+              onFocusChange(true);
+            }}
+            onBlur={() => {
+              if (compositionActiveRef.current) {
+                return;
+              }
 
-            onFocusChange(false);
-          }}
-          readOnly={isHidden || isReadonly || isVoice}
-          tabIndex={isInteractive ? 0 : -1}
-          aria-label="Shell-ball input"
-          placeholder={isVoice ? "Voice capture is active" : ""}
-          rows={1}
-        />
-        <span>{SHELL_BALL_INPUT_LABEL}</span>
-        <i />
-      </div>
-      <div className="shell-ball-uiverse-actions">
-        <button
-          type="button"
-          className="shell-ball-uiverse-action"
-          data-shell-ball-interactive="true"
-          onMouseDown={(event) => {
-            event.preventDefault();
-          }}
-          onClick={() => {
-            onAttachFile();
-            restoreTextareaFocus();
-          }}
-          disabled={buttonsDisabled}
-          aria-label="Attach file"
-        >
-          <Paperclip className="shell-ball-uiverse-action-icon" />
-        </button>
-        <button
-          type="button"
-          className="shell-ball-uiverse-action shell-ball-uiverse-action--send"
-          data-shell-ball-interactive="true"
-          onMouseDown={(event) => {
-            event.preventDefault();
-          }}
-          onClick={() => {
-            onSubmit();
-            restoreTextareaFocus();
-          }}
-          disabled={submitDisabled}
-          aria-label={isReadonly ? "Send disabled" : isVoice ? "Send unavailable during voice capture" : "Send request"}
-        >
-          <ArrowUp className="shell-ball-uiverse-action-icon" />
-        </button>
+              setFocusWithin(false);
+              onFocusChange(false);
+            }}
+            readOnly={isHidden || isReadonly || isVoice}
+            tabIndex={isInteractive ? 0 : -1}
+            aria-label="Shell-ball input"
+            placeholder=""
+            rows={1}
+          />
+          <span aria-hidden="true" className="shell-ball-uiverse-placeholder">
+            {visiblePlaceholder}
+          </span>
+          <div className="shell-ball-uiverse-actions">
+            <button
+              type="button"
+              className="shell-ball-uiverse-action shell-ball-uiverse-action--attach"
+              data-shell-ball-interactive="true"
+              onMouseDown={(event) => {
+                event.preventDefault();
+              }}
+              onClick={() => {
+                if (auxiliaryAction === "cancel") {
+                  onCancel?.();
+                  return;
+                }
+
+                onAttachFile();
+                restoreInputFocus();
+              }}
+              disabled={buttonsDisabled}
+              aria-label={auxiliaryActionLabel}
+            >
+              {auxiliaryAction === "cancel"
+                ? <X className="shell-ball-uiverse-action-icon" />
+                : <Paperclip className="shell-ball-uiverse-action-icon" />}
+            </button>
+            <button
+              type="button"
+              className="shell-ball-uiverse-action shell-ball-uiverse-action--send"
+              data-shell-ball-interactive="true"
+              onMouseDown={(event) => {
+                event.preventDefault();
+              }}
+              onClick={() => {
+                onSubmit();
+                restoreInputFocus();
+              }}
+              disabled={submitDisabled}
+              aria-label={isReadonly ? "发送不可用" : isVoice ? "语音输入期间不可发送" : "发送"}
+            >
+              <ArrowUp className="shell-ball-uiverse-action-icon" />
+            </button>
+          </div>
+        </div>
       </div>
     </StyledInputBar>
   );
 }
 
 const StyledInputBar = styled.div`
-  --shell-ball-input-paper: linear-gradient(180deg, rgba(255, 253, 249, 0.92), rgba(245, 236, 224, 0.86));
-  --shell-ball-input-paper-soft: linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(251, 246, 238, 0.14));
-  --shell-ball-input-line: rgba(132, 118, 99, 0.2);
-  --shell-ball-input-line-strong: rgba(106, 145, 200, 0.34);
-  --shell-ball-input-ink: rgba(36, 49, 58, 0.96);
-  --shell-ball-input-copy: rgba(96, 103, 113, 0.8);
-  --shell-ball-input-shadow: 0 14px 26px -22px rgba(122, 106, 79, 0.34);
-  align-items: flex-end;
+  --shell-ball-input-expanded-width: 224px;
+  --shell-ball-input-shell-surface: linear-gradient(180deg, rgba(255, 255, 255, 0.48), rgba(246, 244, 240, 0.3));
+  --shell-ball-input-shell-line: rgba(173, 188, 210, 0.46);
+  --shell-ball-input-shell-line-active: rgba(149, 188, 232, 0.9);
+  --shell-ball-input-fill-surface: linear-gradient(180deg, rgba(255, 255, 252, 0.98), rgba(252, 247, 240, 0.96) 76%, rgba(248, 243, 234, 0.96));
+  --shell-ball-input-fill-edge: rgba(255, 255, 255, 0.92);
+  --shell-ball-input-ink: rgba(43, 57, 74, 0.96);
+  --shell-ball-input-copy: rgba(93, 108, 128, 0.88);
+  --shell-ball-input-copy-active: rgba(132, 146, 164, 0.72);
+  --shell-ball-input-shell-shadow: 0 16px 32px -28px rgba(86, 100, 126, 0.24);
+  align-items: center;
   background: transparent;
   border: 0;
   display: inline-flex;
   flex-direction: column;
-  gap: 0.46rem;
   padding: 0;
-  width: max-content;
+  width: fit-content;
 
   &[data-hidden="true"] {
     display: none;
   }
 
   .shell-ball-uiverse-inputbox {
-    --shell-ball-input-height: 44px;
-    isolation: isolate;
-    position: relative;
-    width: 196px;
-  }
-
-  .shell-ball-uiverse-inputbox textarea {
-    position: relative;
-    top: 6px;
-    width: 100%;
-    padding: 10px;
-    background: var(--shell-ball-input-paper-soft);
-    outline: none;
+    --shell-ball-input-height: 48px;
+    background: var(--shell-ball-input-shell-surface);
+    backdrop-filter: blur(16px) saturate(118%);
+    -webkit-backdrop-filter: blur(16px) saturate(118%);
+    border: 1px solid var(--shell-ball-input-shell-line);
+    border-radius: 22px;
     box-shadow:
-      0 10px 20px -20px rgba(122, 106, 79, 0.22),
-      0 1px 0 rgba(255, 255, 255, 0.34) inset;
-    border: 1px solid transparent;
-    border-radius: 1rem;
-    caret-color: rgba(106, 145, 200, 0.94);
-    color: var(--shell-ball-input-ink);
-    font-size: 1em;
-    font-weight: 500;
-    letter-spacing: 0.05em;
-    line-height: 1.4;
-    max-height: calc(1.4em * 3 + 20px);
-    min-height: 44px;
-    overflow-y: auto;
-    -ms-overflow-style: none;
-    scrollbar-width: none;
-    resize: none;
+      0 0 0 1px rgba(255, 255, 255, 0.72) inset,
+      var(--shell-ball-input-shell-shadow),
+      0 1px 0 rgba(255, 255, 255, 0.42) inset;
+    isolation: isolate;
+    overflow: hidden;
+    position: relative;
     transition:
-      background 340ms ease,
-      border-color 340ms ease,
-      box-shadow 340ms ease,
-      transform 340ms ease;
-    z-index: 10;
+      background 220ms ease,
+      border-color 220ms cubic-bezier(0.22, 1, 0.36, 1),
+      box-shadow 220ms cubic-bezier(0.22, 1, 0.36, 1),
+      height 220ms cubic-bezier(0.22, 1, 0.36, 1);
+    height: var(--shell-ball-input-height);
+    width: var(--shell-ball-input-expanded-width);
   }
 
-  .shell-ball-uiverse-inputbox textarea::placeholder {
-    color: rgba(122, 132, 143, 0.72);
+  .shell-ball-uiverse-inputbox::before {
+    background: radial-gradient(
+      circle at center,
+      color-mix(in srgb, var(--shell-ball-input-shell-line-active) 72%, white) 0%,
+      transparent 72%
+    );
+    border-radius: 28px;
+    content: "";
+    filter: blur(14px);
+    inset: -8px;
+    opacity: 0;
+    pointer-events: none;
+    position: absolute;
+    transform: scale(1.04);
+    transition:
+      opacity 220ms cubic-bezier(0.22, 1, 0.36, 1),
+      transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+    z-index: -1;
   }
 
-  .shell-ball-uiverse-inputbox textarea::-webkit-scrollbar {
+  .shell-ball-uiverse-fill {
+    background: var(--shell-ball-input-fill-surface);
+    border-radius: 20px;
+    bottom: 2px;
+    box-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.78) inset,
+      0 -12px 20px -20px rgba(181, 206, 235, 0.34) inset;
+    left: 2px;
+    opacity: 0.96;
+    pointer-events: none;
+    position: absolute;
+    right: 2px;
+    top: 2px;
+    transform: scaleY(0);
+    transform-origin: center bottom;
+    transition:
+      background 220ms ease,
+      opacity 220ms ease,
+      transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+    z-index: 0;
+  }
+
+  .shell-ball-uiverse-fill::after {
+    background: linear-gradient(180deg, var(--shell-ball-input-fill-edge), rgba(255, 255, 255, 0));
+    border-radius: 999px;
+    content: "";
+    filter: blur(6px);
+    height: 20px;
+    left: 14px;
+    opacity: 0;
+    position: absolute;
+    right: 14px;
+    top: -7px;
+    transform: translateY(10px) scaleX(0.88);
+    transform-origin: center top;
+    transition:
+      opacity 180ms ease 70ms,
+      transform 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  .shell-ball-uiverse-content {
+    position: relative;
+    z-index: 1;
+  }
+
+  .shell-ball-uiverse-content textarea {
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+    caret-color: rgba(102, 147, 203, 0.96);
+    color: var(--shell-ball-input-ink);
+    font-size: 0.94rem;
+    font-weight: 500;
+    letter-spacing: 0.02em;
+    line-height: 1.45;
+    min-height: var(--shell-ball-input-height);
+    outline: none;
+    overflow-y: auto;
+    padding: 13px 76px 13px 16px;
+    resize: none;
+    scrollbar-width: none;
+    transition:
+      color 160ms ease,
+      opacity 160ms ease;
+    width: 100%;
+    z-index: 1;
+  }
+
+  .shell-ball-uiverse-content textarea::placeholder {
+    color: transparent;
+  }
+
+  .shell-ball-uiverse-content textarea::-webkit-scrollbar {
     display: none;
   }
 
-  .shell-ball-uiverse-inputbox span {
-    position: absolute;
-    left: 0;
-    top: 4px;
-    padding: 0 10px;
-    font-size: 1em;
+  .shell-ball-uiverse-placeholder {
     color: var(--shell-ball-input-copy);
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    transform: translateY(calc(var(--shell-ball-input-height) - 24px));
-    transition:
-      color 360ms ease,
-      transform 360ms ease,
-      font-size 360ms ease;
+    font-size: 0.94rem;
+    font-weight: 500;
+    left: 16px;
+    letter-spacing: 0.02em;
+    line-height: 1.45;
+    max-width: calc(100% - 92px);
+    opacity: 0.94;
+    overflow: hidden;
     pointer-events: none;
-    z-index: 11;
-  }
-
-  .shell-ball-uiverse-inputbox[data-multiline="true"] span {
-    transition: none;
-  }
-
-  .shell-ball-uiverse-inputbox textarea:valid ~ span,
-  .shell-ball-uiverse-inputbox textarea:focus ~ span,
-  &[data-filled="true"] .shell-ball-uiverse-inputbox span {
-    color: rgba(102, 138, 188, 0.92);
-    transform: translateX(-10px) translateY(-14px);
-    font-size: 0.75em;
-  }
-
-  .shell-ball-uiverse-inputbox i {
     position: absolute;
-    left: 0;
-    bottom: 0;
-    width: 100%;
-    height: 5px;
-    background: linear-gradient(90deg, rgba(168, 194, 225, 0.82), rgba(255, 243, 230, 0.96));
-    border: 1px solid rgba(255, 255, 255, 0.72);
-    border-radius: 1rem;
-    box-shadow:
-      0 0 10px rgba(168, 194, 225, 0.18),
-      0 8px 18px -18px rgba(122, 106, 79, 0.22);
-    transform: none;
+    text-overflow: ellipsis;
+    top: 13px;
     transition:
-      height 340ms ease,
-      background 340ms ease,
-      box-shadow 340ms ease,
-      border-color 340ms ease;
-    pointer-events: none;
-    z-index: 9;
-  }
-
-  .shell-ball-uiverse-inputbox[data-multiline="true"] i {
-    transition: none;
-  }
-
-  .shell-ball-uiverse-inputbox[data-collapse-to-single-line="true"] i {
-    transition: none;
-  }
-
-  .shell-ball-uiverse-inputbox textarea:valid ~ i,
-  .shell-ball-uiverse-inputbox textarea:focus ~ i,
-  &[data-filled="true"] .shell-ball-uiverse-inputbox i {
-    height: var(--shell-ball-input-height);
-    background: var(--shell-ball-input-paper);
-    border-color: rgba(255, 255, 255, 0.84);
-    box-shadow:
-      0 16px 28px -22px rgba(122, 106, 79, 0.42),
-      0 1px 0 rgba(255, 255, 255, 0.72) inset;
-  }
-
-  .shell-ball-uiverse-inputbox textarea:valid,
-  .shell-ball-uiverse-inputbox textarea:focus,
-  &[data-filled="true"] .shell-ball-uiverse-inputbox textarea {
-    background: rgba(255, 253, 249, 0.98);
-    border-color: rgba(171, 196, 229, 0.88);
-    box-shadow:
-      0 18px 30px -24px rgba(106, 145, 200, 0.24),
-      0 12px 24px -22px rgba(122, 106, 79, 0.32),
-      0 1px 0 rgba(255, 255, 255, 0.84) inset;
+      color 160ms ease 110ms,
+      opacity 160ms ease 110ms,
+      transform 220ms cubic-bezier(0.22, 1, 0.36, 1),
+      left 220ms cubic-bezier(0.22, 1, 0.36, 1),
+      top 220ms cubic-bezier(0.22, 1, 0.36, 1),
+      font-size 220ms cubic-bezier(0.22, 1, 0.36, 1),
+      max-width 220ms cubic-bezier(0.22, 1, 0.36, 1),
+      width 220ms cubic-bezier(0.22, 1, 0.36, 1);
+    white-space: nowrap;
+    z-index: 2;
   }
 
   .shell-ball-uiverse-actions {
     align-items: center;
     display: inline-flex;
     gap: 0.35rem;
-    justify-content: flex-end;
-    width: fit-content;
+    pointer-events: none;
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 3;
+  }
+
+  &[data-collapsed="true"] .shell-ball-uiverse-inputbox {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.28), rgba(245, 248, 252, 0.16));
+    border-color: rgba(149, 188, 232, 0.56);
+    box-shadow:
+      0 8px 24px rgba(90, 110, 130, 0.08),
+      inset 0 1px 1px rgba(255, 255, 255, 0.9),
+      0 0 0 1px rgba(255, 255, 255, 0.72) inset;
+  }
+
+  &[data-collapsed="true"] .shell-ball-uiverse-content textarea {
+    color: transparent;
+    min-height: ${SHELL_BALL_INPUT_COLLAPSED_HEIGHT_PX}px;
+    padding-bottom: 2px;
+    padding-top: 2px;
+    padding-right: 16px;
+  }
+
+  &[data-collapsed="true"] .shell-ball-uiverse-placeholder {
+    font-size: 0.82rem;
+    left: 14px;
+    max-width: calc(100% - 28px);
+    text-align: left;
+    top: 50%;
+    line-height: 1;
+    transform: translateY(calc(-50% - 3px));
+    width: calc(100% - 28px);
+  }
+
+  &[data-collapsed="true"] .shell-ball-uiverse-actions {
+    opacity: 0;
+    transform: translateY(-50%) translateX(8px);
+    transition:
+      opacity 140ms ease,
+      transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  &[data-collapsed="true"] .shell-ball-uiverse-action--send {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(10px) scale(0.88);
   }
 
   .shell-ball-uiverse-action {
     align-items: center;
-    background: linear-gradient(180deg, rgba(255, 253, 249, 0.9), rgba(244, 236, 225, 0.82));
-    border: 1px solid rgba(255, 255, 255, 0.58);
+    background: rgba(244, 248, 253, 0.48);
+    border: 1px solid rgba(173, 188, 210, 0.4);
     border-radius: 999px;
     box-shadow:
-      0 12px 20px -18px rgba(122, 106, 79, 0.32),
-      0 1px 0 rgba(255, 255, 255, 0.74) inset;
-    color: rgba(90, 101, 113, 0.82);
+      0 10px 18px -18px rgba(88, 104, 129, 0.22),
+      0 1px 0 rgba(255, 255, 255, 0.62) inset;
+    color: rgba(90, 108, 133, 0.78);
     cursor: pointer;
     display: inline-flex;
-    height: 1.88rem;
+    height: 1.9rem;
     justify-content: center;
+    pointer-events: auto;
     transition:
       transform 160ms ease,
       background 160ms ease,
@@ -405,23 +488,32 @@ const StyledInputBar = styled.div`
       box-shadow 160ms ease,
       color 160ms ease,
       opacity 160ms ease;
-    width: 1.88rem;
+    width: 1.9rem;
   }
 
   .shell-ball-uiverse-action:hover:not(:disabled) {
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(247, 239, 228, 0.88));
-    border-color: rgba(106, 145, 200, 0.28);
+    background: rgba(248, 251, 255, 0.92);
+    border-color: rgba(146, 180, 220, 0.56);
     box-shadow:
-      0 16px 26px -20px rgba(122, 106, 79, 0.36),
-      0 1px 0 rgba(255, 255, 255, 0.82) inset;
-    color: rgba(82, 114, 157, 0.92);
+      0 14px 24px -20px rgba(89, 109, 140, 0.3),
+      0 1px 0 rgba(255, 255, 255, 0.78) inset;
+    color: rgba(80, 114, 162, 0.94);
     transform: translateY(-1px);
   }
 
+  .shell-ball-uiverse-action--attach {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(6px) scale(0.88);
+  }
+
   .shell-ball-uiverse-action--send {
-    background: linear-gradient(180deg, rgba(220, 234, 252, 0.96), rgba(178, 204, 234, 0.9));
-    border-color: rgba(163, 196, 232, 0.72);
-    color: rgba(72, 97, 134, 0.96);
+    background: linear-gradient(180deg, rgba(220, 233, 249, 0.82), rgba(188, 210, 237, 0.86));
+    border-color: rgba(164, 195, 232, 0.72);
+    box-shadow:
+      0 12px 20px -18px rgba(115, 147, 191, 0.34),
+      0 1px 0 rgba(255, 255, 255, 0.7) inset;
+    color: rgba(71, 98, 135, 0.92);
   }
 
   .shell-ball-uiverse-action--send:hover:not(:disabled) {
@@ -433,6 +525,86 @@ const StyledInputBar = styled.div`
   .shell-ball-uiverse-action:disabled {
     cursor: default;
     opacity: 0.52;
+  }
+
+  &:focus-within .shell-ball-uiverse-inputbox,
+  &[data-settled="true"] .shell-ball-uiverse-inputbox {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.6), rgba(250, 247, 242, 0.44));
+    border-color: rgba(186, 216, 255, 0.92);
+    box-shadow:
+      0 0 0 1px rgba(186, 216, 255, 0.92),
+      0 18px 32px -24px rgba(109, 141, 185, 0.2),
+      0 0 0 5px rgba(142, 181, 232, 0.12),
+      0 1px 0 rgba(255, 255, 255, 0.72) inset;
+  }
+
+  &:focus-within .shell-ball-uiverse-inputbox::before,
+  &[data-settled="true"] .shell-ball-uiverse-inputbox::before {
+    opacity: 0.92;
+    transform: scale(1.08);
+  }
+
+  &:focus-within .shell-ball-uiverse-fill,
+  &[data-settled="true"] .shell-ball-uiverse-fill {
+    background: #fffcf8;
+    opacity: 1;
+    transform: scaleY(1);
+  }
+
+  &:focus-within .shell-ball-uiverse-fill::after,
+  &[data-settled="true"] .shell-ball-uiverse-fill::after {
+    opacity: 0.78;
+    transform: translateY(0) scaleX(1);
+  }
+
+  &:focus-within .shell-ball-uiverse-placeholder,
+  &[data-settled="true"] .shell-ball-uiverse-placeholder {
+    color: var(--shell-ball-input-copy-active);
+    font-size: 0.94rem;
+    left: 16px;
+    max-width: calc(100% - 92px);
+    opacity: 0.74;
+    top: 13px;
+    transform: translateY(-1px);
+    width: auto;
+  }
+
+  &[data-filled="true"] .shell-ball-uiverse-placeholder {
+    opacity: 0;
+    transform: translateY(2px);
+    transition-delay: 0ms;
+  }
+
+  &:focus-within .shell-ball-uiverse-content textarea,
+  &[data-settled="true"] .shell-ball-uiverse-content textarea {
+    color: var(--shell-ball-input-ink);
+    padding-right: 76px;
+  }
+
+  &:focus-within .shell-ball-uiverse-actions,
+  &[data-settled="true"] .shell-ball-uiverse-actions {
+    opacity: 1;
+    transform: translateY(calc(-50% - 3px)) translateX(0);
+  }
+
+  &[data-can-attach="true"]:focus-within .shell-ball-uiverse-action--attach,
+  &[data-can-attach="true"][data-settled="true"] .shell-ball-uiverse-action--attach {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateX(0) scale(1);
+  }
+
+  &:focus-within .shell-ball-uiverse-action--send,
+  &[data-settled="true"] .shell-ball-uiverse-action--send {
+    background: linear-gradient(180deg, rgba(226, 238, 253, 0.98), rgba(187, 212, 241, 0.94));
+    border-color: rgba(149, 188, 232, 0.88);
+    box-shadow:
+      0 14px 24px -18px rgba(115, 147, 191, 0.36),
+      0 1px 0 rgba(255, 255, 255, 0.78) inset;
+    color: rgba(62, 89, 127, 0.98);
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateX(0) scale(1);
   }
 
   .shell-ball-uiverse-action-icon {

@@ -51,6 +51,11 @@
             "title": { "type": "string" },
             "url": { "type": "string" },
             "app_name": { "type": "string" },
+            "browser_kind": {
+              "enum": ["chrome", "edge", "other_browser", "non_browser"]
+            },
+            "process_path": { "type": "string" },
+            "process_id": { "type": "integer" },
             "window_title": { "type": "string" },
             "visible_text": { "type": "string" },
             "hover_target": { "type": "string" }
@@ -67,6 +72,11 @@
             "title": { "type": "string" },
             "url": { "type": "string" },
             "app_name": { "type": "string" },
+            "browser_kind": {
+              "enum": ["chrome", "edge", "other_browser", "non_browser"]
+            },
+            "process_path": { "type": "string" },
+            "process_id": { "type": "integer" },
             "window_title": { "type": "string" },
             "visible_text": { "type": "string" },
             "hover_target": { "type": "string" }
@@ -158,6 +168,14 @@
         },
         "fallback": {
           "enum": ["bubble", "workspace_document", "result_page", "open_file", "reveal_in_folder", "task_detail"]
+        }
+      }
+    },
+    "options": {
+      "type": "object",
+      "properties": {
+        "confirm_required": {
+          "type": "boolean"
         }
       }
     }

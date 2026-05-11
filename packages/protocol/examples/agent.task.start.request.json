@@ -30,6 +30,9 @@
     "delivery": {
       "preferred": "bubble",
       "fallback": "task_detail"
+    },
+    "options": {
+      "confirm_required": true
     }
   }
 }

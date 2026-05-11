@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -83,6 +81,7 @@ func (s *inMemoryApprovalRequestStore) ListPendingApprovalRequests(_ context.Con
 	s.state.mu.Lock()
 	defer s.state.mu.Unlock()
 	items := filterApprovalRequests(s.state.approvalRequests, "", "pending")
+	items = latestApprovalRequestPerTask(items)
 	return pageApprovalRequests(items, limit, offset), len(items), nil
 }
 
@@ -118,14 +117,18 @@ func (s *inMemoryAuthorizationRecordStore) WriteAuthorizationDecision(_ context.
 	return nil
 }
 
-func (s *inMemoryAuthorizationRecordStore) ListAuthorizationRecords(_ context.Context, taskID string, limit, offset int) ([]AuthorizationRecordRecord, int, error) {
+func (s *inMemoryAuthorizationRecordStore) ListAuthorizationRecords(_ context.Context, taskID, runID string, limit, offset int) ([]AuthorizationRecordRecord, int, error) {
 	s.state.mu.Lock()
 	defer s.state.mu.Unlock()
 	items := make([]AuthorizationRecordRecord, 0)
 	for _, record := range s.state.authorizationRecords {
-		if taskID == "" || record.TaskID == taskID {
-			items = append(items, record)
+		if taskID != "" && record.TaskID != taskID {
+			continue
 		}
+		if runID != "" && record.RunID != runID {
+			continue
+		}
+		items = append(items, record)
 	}
 	sort.SliceStable(items, func(i, j int) bool {
 		return parseGovernanceTime(items[i].CreatedAt).After(parseGovernanceTime(items[j].CreatedAt))
@@ -149,14 +152,18 @@ func (s *inMemoryAuditStore) WriteAuditRecord(_ context.Context, record audit.Re
 	return nil
 }
 
-func (s *inMemoryAuditStore) ListAuditRecords(_ context.Context, taskID string, limit, offset int) ([]audit.Record, int, error) {
+func (s *inMemoryAuditStore) ListAuditRecords(_ context.Context, taskID, runID string, limit, offset int) ([]audit.Record, int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	items := make([]audit.Record, 0)
 	for _, record := range s.records {
-		if taskID == "" || record.TaskID == taskID {
-			items = append(items, record)
+		if taskID != "" && record.TaskID != taskID {
+			continue
 		}
+		if runID != "" && record.RunID != runID {
+			continue
+		}
+		items = append(items, record)
 	}
 	sort.SliceStable(items, func(i, j int) bool {
 		return parseGovernanceTime(items[i].CreatedAt).After(parseGovernanceTime(items[j].CreatedAt))
@@ -228,10 +235,11 @@ func NewSQLiteAuditStore(databasePath string) (*SQLiteAuditStore, error) {
 func (s *SQLiteAuditStore) WriteAuditRecord(ctx context.Context, record audit.Record) error {
 	_, err := s.db.ExecContext(
 		ctx,
-		`INSERT OR REPLACE INTO audit_records (audit_id, task_id, type, action, summary, target, result, created_at)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT OR REPLACE INTO audit_records (audit_id, task_id, run_id, type, action, summary, target, result, created_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		record.AuditID,
 		record.TaskID,
+		nullableRuntimeString(record.RunID),
 		record.Type,
 		record.Action,
 		record.Summary,
@@ -245,23 +253,33 @@ func (s *SQLiteAuditStore) WriteAuditRecord(ctx context.Context, record audit.Re
 	return nil
 }
 
-func (s *SQLiteAuditStore) ListAuditRecords(ctx context.Context, taskID string, limit, offset int) ([]audit.Record, int, error) {
+func (s *SQLiteAuditStore) ListAuditRecords(ctx context.Context, taskID, runID string, limit, offset int) ([]audit.Record, int, error) {
 	countQuery := `SELECT COUNT(1) FROM audit_records`
-	query := `SELECT audit_id, task_id, type, action, summary, target, result, created_at FROM audit_records`
-	args := []any{}
+	query := `SELECT audit_id, task_id, COALESCE(run_id, ''), type, action, summary, target, result, created_at FROM audit_records`
+	filters := make([]string, 0, 2)
+	filterArgs := make([]any, 0, 2)
 	if taskID != "" {
-		countQuery += ` WHERE task_id = ?`
-		query += ` WHERE task_id = ?`
-		args = append(args, taskID)
+		filters = append(filters, `task_id = ?`)
+		filterArgs = append(filterArgs, taskID)
+	}
+	if runID != "" {
+		filters = append(filters, `run_id = ?`)
+		filterArgs = append(filterArgs, runID)
+	}
+	if len(filters) > 0 {
+		whereClause := ` WHERE ` + strings.Join(filters, ` AND `)
+		countQuery += whereClause
+		query += whereClause
 	}
 	query += ` ORDER BY created_at DESC, audit_id DESC`
+	args := append([]any(nil), filterArgs...)
 	if limit > 0 {
 		query += ` LIMIT ? OFFSET ?`
 		args = append(args, limit, offset)
 	}
 
 	var total int
-	if err := s.db.QueryRowContext(ctx, countQuery, firstArg(taskID)...).Scan(&total); err != nil {
+	if err := s.db.QueryRowContext(ctx, countQuery, filterArgs...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count audit records: %w", err)
 	}
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -272,7 +290,7 @@ func (s *SQLiteAuditStore) ListAuditRecords(ctx context.Context, taskID string, 
 	items := make([]audit.Record, 0)
 	for rows.Next() {
 		var record audit.Record
-		if err := rows.Scan(&record.AuditID, &record.TaskID, &record.Type, &record.Action, &record.Summary, &record.Target, &record.Result, &record.CreatedAt); err != nil {
+		if err := rows.Scan(&record.AuditID, &record.TaskID, &record.RunID, &record.Type, &record.Action, &record.Summary, &record.Target, &record.Result, &record.CreatedAt); err != nil {
 			return nil, 0, fmt.Errorf("scan audit record: %w", err)
 		}
 		items = append(items, record)
@@ -301,6 +319,7 @@ func (s *SQLiteAuditStore) initialize(ctx context.Context) error {
 		CREATE TABLE IF NOT EXISTS audit_records (
 			audit_id TEXT PRIMARY KEY,
 			task_id TEXT NOT NULL,
+			run_id TEXT,
 			type TEXT NOT NULL,
 			action TEXT NOT NULL,
 			summary TEXT NOT NULL,
@@ -310,6 +329,12 @@ func (s *SQLiteAuditStore) initialize(ctx context.Context) error {
 		);
 	`); err != nil {
 		return fmt.Errorf("create audit_records table: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE audit_records ADD COLUMN run_id TEXT;`); err != nil && !isSQLiteDuplicateColumnError(err) {
+		return fmt.Errorf("add audit_records run_id column: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_audit_records_task_run_time ON audit_records(task_id, run_id, created_at DESC);`); err != nil {
+		return fmt.Errorf("create audit task run index: %w", err)
 	}
 	return nil
 }
@@ -374,7 +399,7 @@ func (s *SQLiteApprovalRequestStore) ListApprovalRequests(ctx context.Context, t
 }
 
 func (s *SQLiteApprovalRequestStore) ListPendingApprovalRequests(ctx context.Context, limit, offset int) ([]ApprovalRequestRecord, int, error) {
-	items, total, err := s.listApprovalRequests(ctx, "", "pending", limit, offset)
+	items, total, err := s.listLatestPendingApprovalRequests(ctx, limit, offset)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -426,6 +451,66 @@ func (s *SQLiteApprovalRequestStore) listApprovalRequests(ctx context.Context, t
 	}
 	if err := rows.Err(); err != nil {
 		return nil, 0, fmt.Errorf("iterate approval requests: %w", err)
+	}
+	return items, total, nil
+}
+
+func (s *SQLiteApprovalRequestStore) listLatestPendingApprovalRequests(ctx context.Context, limit, offset int) ([]ApprovalRequestRecord, int, error) {
+	countQuery := `
+		SELECT COUNT(1)
+		FROM approval_requests current
+		WHERE current.status = 'pending'
+			AND NOT EXISTS (
+				SELECT 1
+				FROM approval_requests newer
+				WHERE newer.status = 'pending'
+					AND newer.task_id = current.task_id
+					AND (
+						newer.created_at > current.created_at
+						OR (newer.created_at = current.created_at AND newer.approval_id > current.approval_id)
+					)
+			)
+	`
+	query := `
+		SELECT current.approval_id, current.task_id, current.operation_name, current.risk_level, current.target_object, current.reason, current.status, current.impact_scope_json, current.created_at, current.updated_at
+		FROM approval_requests current
+		WHERE current.status = 'pending'
+			AND NOT EXISTS (
+				SELECT 1
+				FROM approval_requests newer
+				WHERE newer.status = 'pending'
+					AND newer.task_id = current.task_id
+					AND (
+						newer.created_at > current.created_at
+						OR (newer.created_at = current.created_at AND newer.approval_id > current.approval_id)
+					)
+			)
+		ORDER BY current.created_at DESC, current.approval_id DESC
+	`
+	queryArgs := make([]any, 0, 2)
+	if limit > 0 {
+		query += ` LIMIT ? OFFSET ?`
+		queryArgs = append(queryArgs, limit, offset)
+	}
+	var total int
+	if err := s.db.QueryRowContext(ctx, countQuery).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count latest pending approval requests: %w", err)
+	}
+	rows, err := s.db.QueryContext(ctx, query, queryArgs...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("list latest pending approval requests: %w", err)
+	}
+	defer rows.Close()
+	items := make([]ApprovalRequestRecord, 0)
+	for rows.Next() {
+		var record ApprovalRequestRecord
+		if err := rows.Scan(&record.ApprovalID, &record.TaskID, &record.OperationName, &record.RiskLevel, &record.TargetObject, &record.Reason, &record.Status, &record.ImpactScopeJSON, &record.CreatedAt, &record.UpdatedAt); err != nil {
+			return nil, 0, fmt.Errorf("scan latest pending approval request: %w", err)
+		}
+		items = append(items, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate latest pending approval requests: %w", err)
 	}
 	return items, total, nil
 }
@@ -490,9 +575,9 @@ func (s *SQLiteAuthorizationRecordStore) WriteAuthorizationRecord(ctx context.Co
 	}
 	_, err := s.db.ExecContext(ctx, `
 		INSERT OR REPLACE INTO authorization_records (
-			authorization_record_id, task_id, approval_id, decision, operator, remember_rule, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, record.AuthorizationRecordID, record.TaskID, record.ApprovalID, record.Decision, record.Operator, rememberRule, record.CreatedAt)
+			authorization_record_id, task_id, run_id, approval_id, decision, operator, remember_rule, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, record.AuthorizationRecordID, record.TaskID, nullableRuntimeString(record.RunID), record.ApprovalID, record.Decision, record.Operator, rememberRule, record.CreatedAt)
 	if err != nil {
 		return fmt.Errorf("write authorization record: %w", err)
 	}
@@ -536,10 +621,10 @@ func (s *SQLiteAuthorizationRecordStore) WriteAuthorizationDecision(ctx context.
 		return ErrApprovalRequestNotFound
 	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT OR REPLACE INTO authorization_records (
-			authorization_record_id, task_id, approval_id, decision, operator, remember_rule, created_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, record.AuthorizationRecordID, record.TaskID, record.ApprovalID, record.Decision, record.Operator, rememberRule, record.CreatedAt); err != nil {
+			INSERT OR REPLACE INTO authorization_records (
+				authorization_record_id, task_id, run_id, approval_id, decision, operator, remember_rule, created_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`, record.AuthorizationRecordID, record.TaskID, nullableRuntimeString(record.RunID), record.ApprovalID, record.Decision, record.Operator, rememberRule, record.CreatedAt); err != nil {
 		return fmt.Errorf("write authorization record: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -549,22 +634,32 @@ func (s *SQLiteAuthorizationRecordStore) WriteAuthorizationDecision(ctx context.
 	return nil
 }
 
-func (s *SQLiteAuthorizationRecordStore) ListAuthorizationRecords(ctx context.Context, taskID string, limit, offset int) ([]AuthorizationRecordRecord, int, error) {
+func (s *SQLiteAuthorizationRecordStore) ListAuthorizationRecords(ctx context.Context, taskID, runID string, limit, offset int) ([]AuthorizationRecordRecord, int, error) {
 	countQuery := `SELECT COUNT(1) FROM authorization_records`
-	query := `SELECT authorization_record_id, task_id, approval_id, decision, operator, remember_rule, created_at FROM authorization_records`
-	args := []any{}
+	query := `SELECT authorization_record_id, task_id, COALESCE(run_id, ''), approval_id, decision, operator, remember_rule, created_at FROM authorization_records`
+	filters := make([]string, 0, 2)
+	filterArgs := make([]any, 0, 2)
 	if taskID != "" {
-		countQuery += ` WHERE task_id = ?`
-		query += ` WHERE task_id = ?`
-		args = append(args, taskID)
+		filters = append(filters, `task_id = ?`)
+		filterArgs = append(filterArgs, taskID)
+	}
+	if runID != "" {
+		filters = append(filters, `run_id = ?`)
+		filterArgs = append(filterArgs, runID)
+	}
+	if len(filters) > 0 {
+		whereClause := ` WHERE ` + strings.Join(filters, ` AND `)
+		countQuery += whereClause
+		query += whereClause
 	}
 	query += ` ORDER BY created_at DESC, authorization_record_id DESC`
+	args := append([]any(nil), filterArgs...)
 	if limit > 0 {
 		query += ` LIMIT ? OFFSET ?`
 		args = append(args, limit, offset)
 	}
 	var total int
-	if err := s.db.QueryRowContext(ctx, countQuery, firstArg(taskID)...).Scan(&total); err != nil {
+	if err := s.db.QueryRowContext(ctx, countQuery, filterArgs...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count authorization records: %w", err)
 	}
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -576,7 +671,7 @@ func (s *SQLiteAuthorizationRecordStore) ListAuthorizationRecords(ctx context.Co
 	for rows.Next() {
 		var record AuthorizationRecordRecord
 		var rememberRule int
-		if err := rows.Scan(&record.AuthorizationRecordID, &record.TaskID, &record.ApprovalID, &record.Decision, &record.Operator, &rememberRule, &record.CreatedAt); err != nil {
+		if err := rows.Scan(&record.AuthorizationRecordID, &record.TaskID, &record.RunID, &record.ApprovalID, &record.Decision, &record.Operator, &rememberRule, &record.CreatedAt); err != nil {
 			return nil, 0, fmt.Errorf("scan authorization record: %w", err)
 		}
 		record.RememberRule = rememberRule != 0
@@ -606,6 +701,7 @@ func (s *SQLiteAuthorizationRecordStore) initialize(ctx context.Context) error {
 		CREATE TABLE IF NOT EXISTS authorization_records (
 			authorization_record_id TEXT PRIMARY KEY,
 			task_id TEXT NOT NULL,
+			run_id TEXT,
 			approval_id TEXT NOT NULL,
 			decision TEXT NOT NULL,
 			operator TEXT NOT NULL,
@@ -615,8 +711,14 @@ func (s *SQLiteAuthorizationRecordStore) initialize(ctx context.Context) error {
 	`); err != nil {
 		return fmt.Errorf("create authorization_records table: %w", err)
 	}
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE authorization_records ADD COLUMN run_id TEXT;`); err != nil && !isSQLiteDuplicateColumnError(err) {
+		return fmt.Errorf("add authorization_records run_id column: %w", err)
+	}
 	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_authorization_records_task_time ON authorization_records(task_id, created_at DESC);`); err != nil {
 		return fmt.Errorf("create authorization_records index: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_authorization_records_task_run_time ON authorization_records(task_id, run_id, created_at DESC);`); err != nil {
+		return fmt.Errorf("create authorization_records task run index: %w", err)
 	}
 	return nil
 }
@@ -703,6 +805,23 @@ func filterApprovalRequests(records []ApprovalRequestRecord, taskID string, stat
 	sort.SliceStable(items, func(i, j int) bool {
 		return parseGovernanceTime(items[i].CreatedAt).After(parseGovernanceTime(items[j].CreatedAt))
 	})
+	return items
+}
+
+func latestApprovalRequestPerTask(records []ApprovalRequestRecord) []ApprovalRequestRecord {
+	items := make([]ApprovalRequestRecord, 0, len(records))
+	seenTasks := make(map[string]struct{}, len(records))
+	for _, record := range records {
+		key := strings.TrimSpace(record.TaskID)
+		if key == "" {
+			key = strings.TrimSpace(record.ApprovalID)
+		}
+		if _, ok := seenTasks[key]; ok {
+			continue
+		}
+		seenTasks[key] = struct{}{}
+		items = append(items, record)
+	}
 	return items
 }
 
@@ -793,14 +912,11 @@ func (s *SQLiteRecoveryPointStore) initialize(ctx context.Context) error {
 }
 
 func openSQLiteDatabase(databasePath string) (*sql.DB, error) {
-	databasePath = filepath.Clean(databasePath)
-	if databasePath == "" {
-		return nil, ErrDatabasePathRequired
+	cleanedPath, err := prepareSQLiteDatabasePath(databasePath)
+	if err != nil {
+		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(databasePath), 0o755); err != nil {
-		return nil, fmt.Errorf("prepare sqlite directory: %w", err)
-	}
-	db, err := sql.Open(sqliteDriverName, databasePath)
+	db, err := sql.Open(sqliteDriverName, cleanedPath)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}

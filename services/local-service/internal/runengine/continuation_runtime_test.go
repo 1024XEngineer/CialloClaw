@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 func TestEngineContinueTaskMergesContinuationStateAndDrainsSteeringMessages(t *testing.T) {
@@ -16,9 +16,12 @@ func TestEngineContinueTaskMergesContinuationStateAndDrainsSteeringMessages(t *t
 		Status:      "processing",
 		CurrentStep: "collect_input",
 		RiskLevel:   "green",
-		Snapshot: contextsvc.TaskContextSnapshot{
-			Source: "floating_ball",
-			Text:   "original text",
+		Snapshot: taskcontext.TaskContextSnapshot{
+			Source:      "floating_ball",
+			Text:        "original text",
+			BrowserKind: "chrome",
+			ProcessPath: "C:/Program Files/Google/Chrome/Application/chrome.exe",
+			ProcessID:   4242,
 		},
 	})
 
@@ -30,9 +33,12 @@ func TestEngineContinueTaskMergesContinuationStateAndDrainsSteeringMessages(t *t
 		BubbleMessage: map[string]any{
 			"content": "continuation bubble",
 		},
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			Text:          "updated text",
 			SelectionText: "important paragraph",
+			BrowserKind:   "edge",
+			ProcessPath:   "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe",
+			ProcessID:     5150,
 		},
 		SteeringMessage: "focus on highlights",
 	})
@@ -44,6 +50,9 @@ func TestEngineContinueTaskMergesContinuationStateAndDrainsSteeringMessages(t *t
 	}
 	if updated.Snapshot.SelectionText != "important paragraph" || updated.Snapshot.Source != "floating_ball" {
 		t.Fatalf("expected continuation snapshot to merge with prior source, got %+v", updated.Snapshot)
+	}
+	if updated.Snapshot.BrowserKind != "edge" || updated.Snapshot.ProcessPath != "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe" || updated.Snapshot.ProcessID != 5150 {
+		t.Fatalf("expected continuation snapshot to keep latest attach hints, got %+v", updated.Snapshot)
 	}
 	if !strings.Contains(updated.Snapshot.Text, "original text") || !strings.Contains(updated.Snapshot.Text, "updated text") {
 		t.Fatalf("expected continuation snapshot to merge with prior source, got %+v", updated.Snapshot)

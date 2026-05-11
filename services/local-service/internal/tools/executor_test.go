@@ -236,8 +236,10 @@ func TestApprovalBypassAllowedUsesStoredOperationAndTarget(t *testing.T) {
 		ApprovalGranted:      true,
 		ApprovedOperation:    "write_file",
 		ApprovedTargetObject: "workspace/notes/a.md",
+		ApprovedToolInput:    map[string]any{"path": "notes/a.md", "content": "hello"},
 	}
 	precheckInput := RiskPrecheckInput{
+		Input: map[string]any{"path": "notes/a.md", "content": "hello"},
 		Workspace: WorkspaceBoundaryInfo{
 			WorkspacePath: "D:/repo/workspace",
 			TargetPath:    "D:/repo/workspace/notes/a.md",
@@ -249,11 +251,42 @@ func TestApprovalBypassAllowedUsesStoredOperationAndTarget(t *testing.T) {
 	if approvalBypassAllowed(execCtx, "exec_command", precheckInput) {
 		t.Fatal("expected approval bypass to reject mismatched operation")
 	}
+	precheckInput.Input["content"] = "changed"
+	if approvalBypassAllowed(execCtx, "write_file", precheckInput) {
+		t.Fatal("expected approval bypass to reject mismatched approved tool input")
+	}
 
 	execCtx.ApprovedOperation = ""
 	execCtx.ApprovedTargetObject = ""
+	execCtx.ApprovedToolInput = nil
 	if !approvalBypassAllowed(execCtx, "write_file", precheckInput) {
 		t.Fatal("expected blank approved target to allow granted approval")
+	}
+}
+
+func TestApprovalBypassAllowedUsesBrowserKindForTabsListReplay(t *testing.T) {
+	execCtx := &ToolExecuteContext{
+		ApprovalGranted:      true,
+		ApprovedOperation:    "browser_tabs_list",
+		ApprovedTargetObject: "chrome",
+	}
+	precheckInput := RiskPrecheckInput{
+		Input: map[string]any{
+			"attach": map[string]any{
+				"browser_kind": "chrome",
+			},
+		},
+		Workspace: WorkspaceBoundaryInfo{
+			WorkspacePath: "/workspace",
+		},
+	}
+	if !approvalBypassAllowed(execCtx, "browser_tabs_list", precheckInput) {
+		t.Fatal("expected browser_tabs_list replay to honor approved browser kind target")
+	}
+
+	execCtx.ApprovedTargetObject = "edge"
+	if approvalBypassAllowed(execCtx, "browser_tabs_list", precheckInput) {
+		t.Fatal("expected browser_tabs_list replay to reject mismatched approved browser kind target")
 	}
 }
 

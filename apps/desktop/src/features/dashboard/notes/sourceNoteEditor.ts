@@ -20,9 +20,45 @@ const SOURCE_NOTE_RESERVED_METADATA_KEYS = new Set([
   "tags",
   "updated_at",
 ]);
+const SOURCE_NOTE_BODY_METADATA_NOISE_KEYS = new Set([
+  "created_at",
+  "ended_at",
+  "recurring_enabled",
+  "updated_at",
+]);
 
 function normalizeLineEndings(value: string) {
   return value.replace(/\r\n/g, "\n");
+}
+
+function trimTrailingEmptyLines(lines: string[]) {
+  const trimmedLines = [...lines];
+  while (trimmedLines.length > 0 && trimmedLines[trimmedLines.length - 1]?.trim() === "") {
+    trimmedLines.pop();
+  }
+  return trimmedLines;
+}
+
+function trimBoundaryBlankLines(lines: string[]) {
+  let start = 0;
+  let end = lines.length;
+
+  while (start < end && lines[start]?.trim() === "") {
+    start += 1;
+  }
+
+  while (end > start && lines[end - 1]?.trim() === "") {
+    end -= 1;
+  }
+
+  return lines.slice(start, end);
+}
+
+function stripLeadingStructuralBlankLine(lines: string[]) {
+  if (lines[0]?.trim() === "") {
+    return lines.slice(1);
+  }
+  return lines;
 }
 
 function parseChecklistLine(line: string) {
@@ -52,6 +88,26 @@ function splitMetadataLine(line: string) {
   return { key, value };
 }
 
+function isSourceNoteBodyMetadataNoiseLine(line: string) {
+  const metadata = splitMetadataLine(line.trim());
+  if (!metadata || !SOURCE_NOTE_BODY_METADATA_NOISE_KEYS.has(metadata.key)) {
+    return false;
+  }
+
+  if (metadata.key === "recurring_enabled") {
+    const normalizedValue = metadata.value.trim().toLowerCase();
+    return normalizedValue === "true"
+      || normalizedValue === "false"
+      || normalizedValue === "1"
+      || normalizedValue === "0"
+      || normalizedValue === "paused"
+      || normalizedValue === "enabled"
+      || normalizedValue === "disabled";
+  }
+
+  return !Number.isNaN(new Date(metadata.value).getTime());
+}
+
 function formatTimestampForEditor(value: string | null | undefined) {
   if (!value) {
     return "";
@@ -68,6 +124,15 @@ function formatTimestampForEditor(value: string | null | undefined) {
   const hour = `${parsed.getHours()}`.padStart(2, "0");
   const minute = `${parsed.getMinutes()}`.padStart(2, "0");
   return `${year}-${month}-${day} ${hour}:${minute}`;
+}
+
+function formatTimestampForScheduleInput(parsed: Date) {
+  const year = parsed.getFullYear();
+  const month = `${parsed.getMonth() + 1}`.padStart(2, "0");
+  const day = `${parsed.getDate()}`.padStart(2, "0");
+  const hour = `${parsed.getHours()}`.padStart(2, "0");
+  const minute = `${parsed.getMinutes()}`.padStart(2, "0");
+  return `${year}-${month}-${day}T${hour}:${minute}`;
 }
 
 function readTodoSourcePath(item: NoteListItem["item"]) {
@@ -105,7 +170,7 @@ function deriveDraftTitleAndBody(draft: SourceNoteEditorDraft) {
   if (explicitTitle !== "") {
     return {
       checked: draft.checked,
-      noteText: normalizedNoteText.trim(),
+      noteText: trimTrailingEmptyLines(normalizedNoteText.split("\n")).join("\n"),
       title: explicitTitle,
     };
   }
@@ -122,12 +187,188 @@ function deriveDraftTitleAndBody(draft: SourceNoteEditorDraft) {
 
   const firstContentLine = bodyLines[firstContentLineIndex].trim();
   const checklist = parseChecklistLine(firstContentLine);
-  const remainingLines = bodyLines.slice(firstContentLineIndex + 1).join("\n").trim();
+  const remainingLines = trimTrailingEmptyLines(bodyLines.slice(firstContentLineIndex + 1)).join("\n");
 
   return {
-    checked: checklist?.checked ?? draft.checked,
+    checked: draft.checked,
     noteText: remainingLines,
     title: (checklist?.title ?? firstContentLine).trim() || "New note",
+  };
+}
+
+/**
+ * Formats the structured note draft back into the single content field shown
+ * to users. The first line stays reserved for the derived title and the rest
+ * of the lines remain the editable body content.
+ *
+ * @param draft Current source-note editor draft.
+ * @returns Single textarea content shown in the notes editor.
+ */
+export function formatSourceNoteEditorContent(draft: SourceNoteEditorDraft) {
+  const title = draft.title.trim();
+  const noteText = normalizeLineEndings(draft.noteText);
+  if (title === "") {
+    return noteText;
+  }
+
+  return noteText === "" ? title : `${title}\n${noteText}`;
+}
+
+/**
+ * Removes backend-only metadata pollution from the content-only note body shown
+ * in the editor. This keeps duplicated timestamps and recurring flags out of
+ * the textarea while preserving legitimate body lines in the middle.
+ *
+ * @param value Raw note body text from markdown or formal note payloads.
+ * @param options Optional title context used to collapse title-only echoes.
+ * @returns Sanitized note body that is safe to show and write back.
+ */
+export function sanitizeSourceNoteBodyText(
+  value: string | null | undefined,
+  options: {
+    title?: string | null;
+  } = {},
+) {
+  if (!value) {
+    return "";
+  }
+
+  const normalizedTitle = options.title?.trim() ?? "";
+  let lines = trimBoundaryBlankLines(normalizeLineEndings(value).split("\n"));
+  if (lines.length === 0) {
+    return "";
+  }
+
+  if (normalizedTitle !== "" && lines[0]?.trim() === normalizedTitle) {
+    const remainingLines = trimBoundaryBlankLines(lines.slice(1));
+    if (remainingLines.length === 0 || remainingLines.every((line) => isSourceNoteBodyMetadataNoiseLine(line))) {
+      return "";
+    }
+  }
+
+  let start = 0;
+  let end = lines.length;
+  while (start < end && isSourceNoteBodyMetadataNoiseLine(lines[start] ?? "")) {
+    start += 1;
+  }
+
+  while (end > start && isSourceNoteBodyMetadataNoiseLine(lines[end - 1] ?? "")) {
+    end -= 1;
+  }
+
+  lines = trimBoundaryBlankLines(lines.slice(start, end));
+  const sanitizedText = lines.join("\n");
+  if (normalizedTitle !== "" && sanitizedText.trim() === normalizedTitle) {
+    return "";
+  }
+
+  return sanitizedText;
+}
+
+/**
+ * Formats hidden schedule metadata into the `datetime-local` value used by the
+ * lightweight schedule dialog.
+ *
+ * @param value Existing note schedule metadata from markdown or protocol state.
+ * @returns Local `datetime-local` input value, or an empty string when unknown.
+ */
+export function formatSourceNoteScheduleInputValue(value: string | null | undefined) {
+  if (!value) {
+    return "";
+  }
+
+  const normalizedValue = value.trim();
+  if (normalizedValue === "") {
+    return "";
+  }
+
+  const parsed = new Date(normalizedValue);
+  if (!Number.isNaN(parsed.getTime())) {
+    return formatTimestampForScheduleInput(parsed);
+  }
+
+  const normalizedLocalValue = normalizedValue.replace(" ", "T");
+  const localParsed = new Date(normalizedLocalValue);
+  if (!Number.isNaN(localParsed.getTime())) {
+    return formatTimestampForScheduleInput(localParsed);
+  }
+
+  return "";
+}
+
+/**
+ * Serializes a `datetime-local` input value back into the hidden markdown time
+ * metadata. The editor stores RFC3339 so later inspections preserve the user's
+ * local wall-clock selection without timezone drift.
+ *
+ * @param value Current `datetime-local` input value.
+ * @returns RFC3339 timestamp for markdown metadata, or an empty string.
+ */
+export function serializeSourceNoteScheduleInputValue(value: string) {
+  const normalizedValue = value.trim();
+  if (normalizedValue === "") {
+    return "";
+  }
+
+  const parsed = new Date(normalizedValue);
+  if (Number.isNaN(parsed.getTime())) {
+    return normalizedValue;
+  }
+
+  return parsed.toISOString();
+}
+
+/**
+ * Resolves the persisted note bucket that should accompany hidden schedule
+ * metadata. Timed notes become upcoming, recurring notes become recurring
+ * rules, and notes without schedule metadata fall back to later.
+ *
+ * @param schedule Hidden schedule fields about to be written back.
+ * @returns Bucket value that keeps later inspections aligned with the dialog.
+ */
+export function resolveSourceNoteDraftBucketForSchedule(schedule: Pick<SourceNoteEditorDraft, "dueAt" | "repeatRule">): SourceNoteEditorDraft["bucket"] {
+  if (schedule.repeatRule.trim() !== "") {
+    return "recurring_rule";
+  }
+
+  if (schedule.dueAt.trim() !== "") {
+    return "upcoming";
+  }
+
+  return "later";
+}
+
+/**
+ * Applies the single content field back onto the structured note draft while
+ * keeping the hidden metadata untouched. Users edit only free-form content;
+ * the editor still derives the title from the first line, but hidden checklist
+ * completion remains owned by the existing draft state.
+ *
+ * @param draft Current source-note editor draft.
+ * @param content Updated textarea content from the editor.
+ * @returns Next draft with derived title and body content.
+ */
+export function updateSourceNoteEditorDraftContent(draft: SourceNoteEditorDraft, content: string): SourceNoteEditorDraft {
+  if (content.trim() === "") {
+    return {
+      ...draft,
+      checked: draft.checked,
+      noteText: "",
+      title: "",
+    };
+  }
+
+  const derivedContent = deriveDraftTitleAndBody({
+    ...draft,
+    noteText: content,
+    title: "",
+  });
+
+  return {
+    ...draft,
+    checked: derivedContent.checked,
+    noteText: derivedContent.noteText,
+    title: derivedContent.title,
   };
 }
 
@@ -142,7 +383,7 @@ function createDraftSignaturePayload(draft: SourceNoteEditorDraft) {
     endedAt: draft.endedAt.trim(),
     extraMetadata: normalizeMetadataEntries(draft.extraMetadata),
     nextOccurrenceAt: draft.nextOccurrenceAt.trim(),
-    noteText: normalizeLineEndings(draft.noteText).trim(),
+    noteText: normalizeLineEndings(draft.noteText),
     prerequisite: draft.prerequisite.trim(),
     recentInstanceStatus: draft.recentInstanceStatus.trim(),
     repeatRule: draft.repeatRule.trim(),
@@ -159,6 +400,7 @@ function toIsoTimestamp(value: Date) {
 
 function buildDraftFromParsedBlock(block: SourceNoteEditorBlock, fallbackItem?: NoteListItem | null): SourceNoteEditorDraft {
   const fallbackDraft = fallbackItem ? buildSourceNoteEditorDraftFromItem(fallbackItem, block.sourcePath) : null;
+  const draftTitle = block.title || fallbackDraft?.title || "";
 
   return {
     agentSuggestion: block.agentSuggestion || fallbackDraft?.agentSuggestion || "",
@@ -170,15 +412,33 @@ function buildDraftFromParsedBlock(block: SourceNoteEditorBlock, fallbackItem?: 
     endedAt: block.endedAt || fallbackDraft?.endedAt || "",
     extraMetadata: [...block.extraMetadata],
     nextOccurrenceAt: block.nextOccurrenceAt || fallbackDraft?.nextOccurrenceAt || "",
-    noteText: block.noteText || fallbackDraft?.noteText || "",
+    noteText: sanitizeSourceNoteBodyText(block.noteText, { title: draftTitle }),
     prerequisite: block.prerequisite || fallbackDraft?.prerequisite || "",
     recentInstanceStatus: block.recentInstanceStatus || fallbackDraft?.recentInstanceStatus || "",
     repeatRule: block.repeatRule || fallbackDraft?.repeatRule || "",
     sourceLine: block.sourceLine,
     sourcePath: block.sourcePath,
-    title: block.title || fallbackDraft?.title || "",
+    title: draftTitle,
     updatedAt: block.updatedAt || fallbackDraft?.updatedAt || "",
   };
+}
+
+function findMatchingSourceNoteEditorBlock(
+  blocks: SourceNoteEditorBlock[],
+  draft: Pick<SourceNoteEditorDraft, "sourceLine" | "title">,
+) {
+  let matchedBlock: SourceNoteEditorBlock | null = null;
+
+  if (typeof draft.sourceLine === "number" && draft.sourceLine > 0) {
+    matchedBlock = blocks.find((block) => block.sourceLine === draft.sourceLine) ?? null;
+  }
+
+  if (!matchedBlock && draft.title.trim() !== "") {
+    const candidates = blocks.filter((block) => block.title.trim().toLowerCase() === draft.title.trim().toLowerCase());
+    matchedBlock = candidates.length === 1 ? candidates[0] : candidates[0] ?? null;
+  }
+
+  return matchedBlock;
 }
 
 /**
@@ -233,7 +493,7 @@ export function buildSourceNoteEditorDraftFromItem(
     endedAt: formatTimestampForEditor(item.experience.endedAt),
     extraMetadata: [],
     nextOccurrenceAt: formatTimestampForEditor(item.item.next_occurrence_at),
-    noteText: item.item.note_text?.trim() ?? "",
+    noteText: sanitizeSourceNoteBodyText(item.item.note_text, { title: item.item.title }),
     prerequisite: item.item.prerequisite?.trim() ?? "",
     recentInstanceStatus: item.item.recent_instance_status?.trim() ?? "",
     repeatRule: item.item.repeat_rule?.trim() ?? "",
@@ -256,6 +516,7 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
   let current:
     | (SourceNoteEditorDraft & {
         bodyLines: string[];
+        bodyStarted: boolean;
         endLine: number;
         noteMetadataText: string;
       })
@@ -266,8 +527,10 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
       return;
     }
 
-    const trimmedBody = current.bodyLines.join("\n").trim();
-    const noteText = [current.noteMetadataText, trimmedBody].filter(Boolean).join("\n\n").trim();
+    const bodyText = trimTrailingEmptyLines(stripLeadingStructuralBlankLine(current.bodyLines)).join("\n");
+    const noteText = current.noteMetadataText !== ""
+      ? [current.noteMetadataText, bodyText].filter(Boolean).join("\n\n")
+      : bodyText;
     blocks.push({
       agentSuggestion: current.agentSuggestion,
       bucket: current.bucket,
@@ -298,6 +561,7 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
       current = {
         ...createEmptySourceNoteEditorDraft(note.path),
         bodyLines: [],
+        bodyStarted: false,
         checked: checklist.checked,
         endLine: index + 1,
         noteMetadataText: "",
@@ -313,12 +577,21 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
 
     current.endLine = index + 1;
     if (line.trim() === "") {
+      current.bodyStarted = true;
       current.bodyLines.push("");
+      return;
+    }
+
+    // Hidden metadata only belongs to the header segment above the body.
+    // After the body starts, reserved "key: value" prefixes must stay as literal note content.
+    if (current.bodyStarted) {
+      current.bodyLines.push(line.trimEnd());
       return;
     }
 
     const metadata = splitMetadataLine(line.trim());
     if (!metadata) {
+      current.bodyStarted = true;
       current.bodyLines.push(line.trimEnd());
       return;
     }
@@ -370,7 +643,10 @@ export function parseSourceNoteEditorBlocks(note: SourceNoteDocument): SourceNot
         current.extraMetadata.push(metadata);
         return;
       default:
-        current.bodyLines.push(line.trimEnd());
+        // Keep any remaining header "key: value" lines hidden so the editor
+        // always round-trips metadata without showing it as editable content.
+        current.extraMetadata.push(metadata);
+        return;
     }
   });
 
@@ -451,8 +727,11 @@ export function serializeSourceNoteEditorDraft(draft: SourceNoteEditorDraft, now
     title: derivedContent.title,
     updatedAt: normalizedNow,
   } satisfies SourceNoteEditorDraft);
+  const bodyText = normalizedDraft.noteText;
+  const inlineNoteText = bodyText !== "" && !bodyText.includes("\n") ? bodyText : null;
   const metadataLines = [
     `bucket: ${normalizedDraft.bucket}`,
+    normalizedDraft.createdAt ? `created_at: ${normalizedDraft.createdAt}` : null,
     normalizedDraft.dueAt ? `due: ${normalizedDraft.dueAt}` : null,
     normalizedDraft.nextOccurrenceAt ? `next: ${normalizedDraft.nextOccurrenceAt}` : null,
     normalizedDraft.repeatRule ? `repeat: ${normalizedDraft.repeatRule}` : null,
@@ -460,12 +739,14 @@ export function serializeSourceNoteEditorDraft(draft: SourceNoteEditorDraft, now
     normalizedDraft.agentSuggestion ? `agent: ${normalizedDraft.agentSuggestion}` : null,
     normalizedDraft.effectiveScope ? `scope: ${normalizedDraft.effectiveScope}` : null,
     normalizedDraft.recentInstanceStatus ? `status: ${normalizedDraft.recentInstanceStatus}` : null,
+    inlineNoteText ? `note: ${inlineNoteText}` : null,
+    normalizedDraft.endedAt ? `ended_at: ${normalizedDraft.endedAt}` : null,
+    normalizedDraft.updatedAt ? `updated_at: ${normalizedDraft.updatedAt}` : null,
     ...normalizedDraft.extraMetadata
       .filter((entry) => !SOURCE_NOTE_RESERVED_METADATA_KEYS.has(entry.key))
       .map((entry) => `${entry.key}: ${entry.value}`),
   ].filter((line): line is string => Boolean(line));
-  const bodyText = normalizedDraft.noteText;
-  const bodyLines = bodyText === "" ? [] : ["", ...bodyText.split("\n")];
+  const bodyLines = inlineNoteText || bodyText === "" ? [] : ["", ...bodyText.split("\n")];
   const checklistMarker = normalizedDraft.checked ? "[x]" : "[ ]";
   const blockLines = [
     `- ${checklistMarker} ${normalizedDraft.title}`,
@@ -504,16 +785,7 @@ export function upsertSourceNoteEditorBlock(note: SourceNoteDocument, draft: Sou
   const normalizedContent = normalizeLineEndings(note.content);
   const lines = normalizedContent.split("\n");
   const blocks = parseSourceNoteEditorBlocks(note);
-  let matchedBlock: SourceNoteEditorBlock | null = null;
-
-  if (typeof draft.sourceLine === "number" && draft.sourceLine > 0) {
-    matchedBlock = blocks.find((block) => block.sourceLine === draft.sourceLine) ?? null;
-  }
-
-  if (!matchedBlock && normalizedDraft.title !== "") {
-    const candidates = blocks.filter((block) => block.title.trim().toLowerCase() === normalizedDraft.title.trim().toLowerCase());
-    matchedBlock = candidates.length === 1 ? candidates[0] : candidates[0] ?? null;
-  }
+  const matchedBlock = findMatchingSourceNoteEditorBlock(blocks, normalizedDraft);
 
   if (!matchedBlock || matchedBlock.sourceLine === null) {
     const trimmed = normalizedContent.trimEnd();
@@ -533,5 +805,41 @@ export function upsertSourceNoteEditorBlock(note: SourceNoteDocument, draft: Sou
   return {
     content: `${nextLines.join("\n").trimEnd()}\n`,
     sourceLine: matchedBlock.sourceLine,
+  };
+}
+
+/**
+ * Removes one markdown note block from the shared source file when the caller
+ * already knows which draft identity was deleted from the formal note list.
+ *
+ * @param note Shared markdown source document.
+ * @param draft Draft identity used to resolve the existing block.
+ * @returns Updated file content plus whether any matching block was removed.
+ */
+export function removeSourceNoteEditorBlock(
+  note: SourceNoteDocument,
+  draft: Pick<SourceNoteEditorDraft, "sourceLine" | "title">,
+) {
+  const normalizedContent = normalizeLineEndings(note.content);
+  const lines = normalizedContent.split("\n");
+  const blocks = parseSourceNoteEditorBlocks(note);
+  const matchedBlock = findMatchingSourceNoteEditorBlock(blocks, draft);
+
+  if (!matchedBlock || matchedBlock.sourceLine === null) {
+    return {
+      content: normalizedContent,
+      removed: false,
+    };
+  }
+
+  const nextLines = [
+    ...lines.slice(0, matchedBlock.sourceLine - 1),
+    ...lines.slice(matchedBlock.endLine),
+  ];
+  const trimmedContent = nextLines.join("\n").trimEnd();
+
+  return {
+    content: trimmedContent === "" ? "" : `${trimmedContent}\n`,
+    removed: true,
   };
 }

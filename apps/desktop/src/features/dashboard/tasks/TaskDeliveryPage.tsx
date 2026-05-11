@@ -5,19 +5,22 @@ import { AlertTriangle, ArrowLeft, ArrowUpRight, FolderOutput, Link2, RefreshCcw
 import { Link, NavLink, Navigate, useNavigate, useParams } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { DashboardMockToggle } from "@/features/dashboard/shared/DashboardMockToggle";
-import { loadDashboardDataMode, saveDashboardDataMode } from "@/features/dashboard/shared/dashboardDataMode";
 import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import { buildDashboardTaskDetailRouteState } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { resolveDashboardModuleRoutePath, resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
-import { subscribeDeliveryReady, subscribeTaskUpdated } from "@/rpc/subscriptions";
+import { subscribeDeliveryReady, subscribeTaskRuntime, subscribeTaskUpdated } from "@/rpc/subscriptions";
 import { cn } from "@/utils/cn";
 import { formatTimestamp } from "@/utils/formatters";
+import { navigateToDashboardTaskDelivery } from "./taskDeliveryNavigation";
 import { getTaskPreviewStatusLabel, getTaskStatusBadgeClass } from "./taskPage.mapper";
 import { buildDashboardTaskArtifactQueryKey, buildDashboardTaskDetailQueryKey } from "./taskPage.query";
 import { loadTaskDetailData, type TaskPageDataMode } from "./taskPage.service";
 import {
+  canOpenTaskDeliveryResult,
+  getTaskDeliveryOpenLabel,
+  isAllowedTaskOpenUrl,
   loadTaskArtifactPage,
+  mergeTaskArtifactItems,
   openTaskArtifactForTask,
   openTaskDeliveryForTask,
   performTaskOpenExecution,
@@ -26,6 +29,7 @@ import {
 import "./taskDeliveryPage.css";
 
 type TaskDeliveryOpenResult = Awaited<ReturnType<typeof openTaskArtifactForTask>> | Awaited<ReturnType<typeof openTaskDeliveryForTask>>;
+const TASK_DELIVERY_DETAIL_REFRESH_DEBOUNCE_MS = 280;
 
 /**
  * Renders the dedicated task delivery page so formal task output can be read
@@ -47,7 +51,7 @@ export function TaskDeliveryPage() {
       return encodedTaskId;
     }
   }, [encodedTaskId]);
-  const [dataMode, setDataMode] = useState<TaskPageDataMode>(() => loadDashboardDataMode("tasks") as TaskPageDataMode);
+  const dataMode: TaskPageDataMode = "rpc";
   const [feedback, setFeedback] = useState<string | null>(null);
   const feedbackTimeoutRef = useRef<number | null>(null);
 
@@ -89,8 +93,14 @@ export function TaskDeliveryPage() {
   const detailData = taskDetailQuery.data ?? null;
   const detailState = taskDetailQuery.isError ? "error" : taskDetailQuery.isPending ? "loading" : "ready";
   const detailErrorMessage = taskDetailQuery.isError ? (taskDetailQuery.error instanceof Error ? taskDetailQuery.error.message : "交付详情请求失败") : null;
-  const artifactItems = artifactListQuery.data?.items ?? detailData?.detail.artifacts ?? [];
+  const taskDetailArtifacts = useMemo(() => detailData?.detail.artifacts ?? [], [detailData?.detail.artifacts]);
+  const artifactItems = useMemo(
+    () => mergeTaskArtifactItems(artifactListQuery.data?.items ?? [], taskDetailArtifacts),
+    [artifactListQuery.data?.items, taskDetailArtifacts],
+  );
   const formalDeliveryResult = detailData?.detail.delivery_result ?? null;
+  const formalDeliveryUrl = formalDeliveryResult?.payload.url ?? null;
+  const formalDeliveryUrlIsAllowed = formalDeliveryUrl !== null && isAllowedTaskOpenUrl(formalDeliveryUrl);
   const citations = useMemo(() => detailData?.detail.citations ?? [], [detailData?.detail.citations]);
   const evidenceArtifactRefs = useMemo(
     () =>
@@ -104,13 +114,7 @@ export function TaskDeliveryPage() {
   );
   const evidenceArtifacts = artifactItems.filter((artifact) => evidenceArtifactRefs.has(artifact.artifact_id) || evidenceArtifactRefs.has(artifact.path));
   const outputArtifacts = artifactItems.filter((artifact) => !evidenceArtifactRefs.has(artifact.artifact_id) && !evidenceArtifactRefs.has(artifact.path));
-  const canOpenFormalDelivery =
-    formalDeliveryResult !== null &&
-    (formalDeliveryResult.type !== "task_detail" || Boolean(formalDeliveryResult.payload.path) || Boolean(formalDeliveryResult.payload.url));
-
-  useEffect(() => {
-    saveDashboardDataMode("tasks", dataMode);
-  }, [dataMode]);
+  const canOpenFormalDelivery = canOpenTaskDeliveryResult(formalDeliveryResult, taskId);
 
   useEffect(() => {
     return () => {
@@ -121,18 +125,53 @@ export function TaskDeliveryPage() {
   }, []);
 
   useEffect(() => {
-    if (dataMode === "mock" || taskId.length === 0) {
+    if (taskId.length === 0) {
       return;
     }
 
-    function invalidateCurrentTaskDelivery() {
+    let detailRefreshTimeoutId: number | null = null;
+
+    function invalidateCurrentTaskDetail() {
       void queryClient.invalidateQueries({ queryKey: buildDashboardTaskDetailQueryKey(dataMode, taskId) });
+    }
+
+    function invalidateCurrentTaskArtifacts() {
       void queryClient.invalidateQueries({ queryKey: buildDashboardTaskArtifactQueryKey(dataMode, taskId) });
+    }
+
+    function flushScheduledTaskDetailRefresh() {
+      detailRefreshTimeoutId = null;
+      invalidateCurrentTaskDetail();
+    }
+
+    /**
+     * Task delivery only needs task detail progress while the run is active.
+     * Debounce task.updated so progress ticks do not refetch both delivery
+     * queries on every runtime heartbeat.
+     */
+    function scheduleTaskDetailRefresh() {
+      if (detailRefreshTimeoutId !== null) {
+        return;
+      }
+
+      detailRefreshTimeoutId = window.setTimeout(() => {
+        flushScheduledTaskDetailRefresh();
+      }, TASK_DELIVERY_DETAIL_REFRESH_DEBOUNCE_MS);
+    }
+
+    function invalidateCurrentTaskDelivery() {
+      if (detailRefreshTimeoutId !== null) {
+        window.clearTimeout(detailRefreshTimeoutId);
+        detailRefreshTimeoutId = null;
+      }
+
+      invalidateCurrentTaskDetail();
+      invalidateCurrentTaskArtifacts();
     }
 
     const clearTaskUpdatedSubscription = subscribeTaskUpdated((payload) => {
       if (payload.task_id === taskId) {
-        invalidateCurrentTaskDelivery();
+        scheduleTaskDetailRefresh();
       }
     });
 
@@ -142,9 +181,17 @@ export function TaskDeliveryPage() {
       }
     });
 
+    const clearRuntimeSubscription = subscribeTaskRuntime(taskId, () => {
+      scheduleTaskDetailRefresh();
+    });
+
     return () => {
+      if (detailRefreshTimeoutId !== null) {
+        window.clearTimeout(detailRefreshTimeoutId);
+      }
       clearTaskUpdatedSubscription();
       clearDeliveryReadySubscription();
+      clearRuntimeSubscription();
     };
   }, [dataMode, queryClient, taskId]);
 
@@ -176,7 +223,7 @@ export function TaskDeliveryPage() {
   }
 
   async function handleResolvedOpen(result: TaskDeliveryOpenResult) {
-    const plan = resolveTaskOpenExecutionPlan(result);
+    const plan = resolveTaskOpenExecutionPlan(result, taskId);
 
     if (plan.mode === "task_detail" && plan.taskId === taskId) {
       showFeedback("当前正式结果已经在交付页中展示。");
@@ -191,8 +238,41 @@ export function TaskDeliveryPage() {
           });
           return plan.feedback;
         },
+        onOpenTaskDelivery: ({ taskId: resolvedTaskId }) => {
+          navigateToDashboardTaskDelivery(navigate, resolvedTaskId);
+          return plan.feedback;
+        },
       }),
     );
+  }
+
+  async function handleOpenFormalDeliveryUrl() {
+    if (!formalDeliveryResult || !formalDeliveryUrl) {
+      return;
+    }
+
+    if (formalDeliveryResult.type === "result_page") {
+      const deliveryOpenResult: TaskDeliveryOpenResult = {
+        delivery_result: formalDeliveryResult,
+        open_action: "result_page",
+        resolved_payload: {
+          path: formalDeliveryResult.payload.path ?? null,
+          task_id: formalDeliveryResult.payload.task_id ?? taskId,
+          url: formalDeliveryUrl,
+        },
+      };
+
+      await handleResolvedOpen(deliveryOpenResult);
+      return;
+    }
+
+    showFeedback(await performTaskOpenExecution({
+      feedback: "已打开链接。",
+      mode: "open_url",
+      path: formalDeliveryResult.payload.path ?? null,
+      taskId: formalDeliveryResult.payload.task_id ?? taskId,
+      url: formalDeliveryUrl,
+    }));
   }
 
   const artifactOpenMutation = useMutation({
@@ -214,20 +294,6 @@ export function TaskDeliveryPage() {
       showFeedback(error instanceof Error ? `执行正式打开动作失败：${error.message}` : "执行正式打开动作失败，请稍后再试。");
     },
   });
-
-  function getFormalOpenLabel() {
-    switch (formalDeliveryResult?.type) {
-      case "result_page":
-        return "打开网页结果";
-      case "workspace_document":
-      case "open_file":
-        return "打开交付文件";
-      case "reveal_in_folder":
-        return "定位交付文件";
-      default:
-        return "执行正式打开动作";
-    }
-  }
 
   if (!taskId) {
     return <Navigate replace to={resolveDashboardModuleRoutePath("tasks")} />;
@@ -280,7 +346,7 @@ export function TaskDeliveryPage() {
           {canOpenFormalDelivery ? (
             <Button disabled={deliveryOpenMutation.isPending} onClick={() => deliveryOpenMutation.mutate()} type="button">
               <ArrowUpRight className="h-4 w-4" />
-              {deliveryOpenMutation.isPending ? "执行中..." : getFormalOpenLabel()}
+              {deliveryOpenMutation.isPending ? "执行中..." : getTaskDeliveryOpenLabel(formalDeliveryResult)}
             </Button>
           ) : null}
         </div>
@@ -371,10 +437,14 @@ export function TaskDeliveryPage() {
               <div>
                 <dt>URL</dt>
                 <dd>
-                  {formalDeliveryResult.payload.url ? (
-                    <a href={formalDeliveryResult.payload.url} rel="noreferrer noopener" target="_blank">
-                      {formalDeliveryResult.payload.url}
-                    </a>
+                  {formalDeliveryUrl ? (
+                    formalDeliveryUrlIsAllowed ? (
+                      <button className="task-delivery-page__inline-link" onClick={() => void handleOpenFormalDeliveryUrl()} type="button">
+                        {formalDeliveryUrl}
+                      </button>
+                    ) : (
+                      <span>{formalDeliveryUrl}</span>
+                    )
                   ) : (
                     "无"
                   )}
@@ -469,14 +539,6 @@ export function TaskDeliveryPage() {
           </div>
         </section>
       </section>
-
-      <DashboardMockToggle
-        enabled={dataMode === "mock"}
-        onToggle={() => {
-          setFeedback(null);
-          setDataMode((current) => (current === "rpc" ? "mock" : "rpc"));
-        }}
-      />
     </main>
   );
 }

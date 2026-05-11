@@ -1,0 +1,82 @@
+/* Shared desktop tokens keep the mascot, dashboard modules, and settings pages visually aligned without changing formal task data. */
+:root {
+  --cc-font-ui:
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Microsoft YaHei",
+    "Segoe UI Variable Text",
+    "Segoe UI",
+    "Noto Sans CJK SC",
+    "Source Han Sans SC",
+    "WenQuanYi Micro Hei",
+    sans-serif;
+  --cc-font-display:
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Microsoft YaHei",
+    "Segoe UI Variable Text",
+    "Segoe UI",
+    "Noto Sans CJK SC",
+    "Source Han Sans SC",
+    "WenQuanYi Micro Hei",
+    sans-serif;
+  --cc-font-mono: "Cascadia Mono", "SFMono-Regular", "Segoe UI Mono", Consolas, Menlo, "Liberation Mono", monospace;
+
+  --cc-cream-0: #fffaf6;
+  --cc-cream-1: #fcf5ed;
+  --cc-cream-2: #f4eadc;
+  --cc-cream-3: #eadccc;
+  --cc-paper: rgba(255, 252, 247, 0.84);
+  --cc-paper-strong: rgba(255, 253, 250, 0.93);
+  --cc-paper-soft: rgba(252, 246, 238, 0.62);
+  --cc-glass: rgba(255, 251, 246, 0.62);
+  --cc-glass-strong: rgba(255, 253, 249, 0.78);
+
+  --cc-ink: #493d33;
+  --cc-ink-soft: #74675b;
+  --cc-ink-muted: rgba(116, 103, 91, 0.54);
+  --cc-line: rgba(126, 101, 76, 0.105);
+  --cc-line-strong: rgba(126, 101, 76, 0.18);
+
+  --cc-honey: #dcb470;
+  --cc-peach: #edb79d;
+  --cc-sky: #a8bed2;
+  --cc-sage: #b8cdbc;
+  --cc-lilac: #d1c8e3;
+  --cc-rose: #e2b2ba;
+
+  --cc-module-task: #afc2d8;
+  --cc-module-task-strong: #7f9ab5;
+  --cc-module-task-glow: rgba(175, 194, 216, 0.2);
+  --cc-module-notes: #e9c6a3;
+  --cc-module-notes-strong: #a77b58;
+  --cc-module-notes-glow: rgba(233, 198, 163, 0.18);
+  --cc-module-memory: #d2c9e4;
+  --cc-module-memory-strong: #9383ad;
+  --cc-module-memory-glow: rgba(210, 201, 228, 0.18);
+  --cc-module-safety: #b8cdbc;
+  --cc-module-safety-strong: #7f9a82;
+  --cc-module-safety-glow: rgba(184, 205, 188, 0.18);
+
+  --cc-page-bg:
+    radial-gradient(circle at 16% 14%, rgba(255, 255, 255, 0.7), transparent 24%),
+    radial-gradient(circle at 84% 10%, rgba(255, 226, 190, 0.28), transparent 22%),
+    radial-gradient(circle at 50% 78%, rgba(210, 228, 217, 0.18), transparent 32%),
+    linear-gradient(180deg, var(--cc-cream-0) 0%, var(--cc-cream-1) 48%, var(--cc-cream-2) 100%);
+  --cc-dot-pattern:
+    radial-gradient(rgba(126, 101, 76, 0.045) 0.65px, transparent 0.65px),
+    radial-gradient(rgba(255, 255, 255, 0.58) 1px, transparent 1px);
+  --cc-card-shadow:
+    0 26px 74px -54px rgba(91, 66, 42, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.62);
+  --cc-card-shadow-hover:
+    0 32px 88px -58px rgba(91, 66, 42, 0.27),
+    inset 0 1px 0 rgba(255, 255, 255, 0.7);
+
+  --cc-radius-sm: 1rem;
+  --cc-radius-md: 1.45rem;
+  --cc-radius-lg: 2rem;
+  --cc-radius-xl: 2.7rem;
+  --cc-motion-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  --cc-motion-bouncy: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
