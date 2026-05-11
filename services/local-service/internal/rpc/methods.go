@@ -57,7 +57,7 @@ func (s *Server) stableMethodRegistry() []registeredMethod {
 	return []registeredMethod{
 		registered(methodAgentInputSubmit, decodeAgentInputSubmitParams, s.handleAgentInputSubmit),
 		registered(methodAgentTaskStart, decodeAgentTaskStartParams, s.handleAgentTaskStart),
-		registered(methodAgentTaskConfirm, decodeParamsRequiringRequestMeta, s.handleAgentTaskConfirm),
+		registered(methodAgentTaskConfirm, decodeAgentTaskConfirmParams, s.handleAgentTaskConfirm),
 		registered(methodAgentRecommendationGet, decodeParamsRequiringRequestMeta, s.handleAgentRecommendationGet),
 		registered(methodAgentRecommendationFeedbackSubmit, decodeParamsRequiringRequestMeta, s.handleAgentRecommendationFeedbackSubmit),
 		registered(methodAgentTaskList, decodeAgentTaskListParams, s.handleAgentTaskList),

@@ -79,6 +79,22 @@ type AgentTaskStartParams = orchestrator.StartTaskRequest
 // detail lookups validate the same typed contract the orchestrator consumes.
 type AgentTaskDetailGetParams = orchestrator.TaskDetailGetRequest
 
+type intentPayload struct {
+	Name      string         `json:"name,omitempty"`
+	Arguments map[string]any `json:"arguments,omitempty"`
+}
+
+// AgentTaskConfirmParams mirrors packages/protocol AgentTaskConfirmParams and
+// keeps correction fields typed at the RPC boundary so malformed payloads fail
+// before confirm-flow business logic tries to reinterpret them.
+type AgentTaskConfirmParams struct {
+	RequestMeta     orchestrator.RequestMeta `json:"request_meta"`
+	TaskID          string                   `json:"task_id,omitempty"`
+	Confirmed       bool                     `json:"confirmed,omitempty"`
+	CorrectedIntent *intentPayload           `json:"corrected_intent,omitempty"`
+	CorrectionText  *string                  `json:"correction_text,omitempty"`
+}
+
 func decodeAgentInputSubmitParams(raw json.RawMessage) (map[string]any, *rpcError) {
 	return decodeTypedProtocolParams(raw, validateAgentInputSubmitParams, orchestrator.SubmitInputRequestFromParams, func(request AgentInputSubmitParams) map[string]any {
 		return request.ProtocolParamsMap()
@@ -99,6 +115,10 @@ func decodeAgentTaskDetailGetParams(raw json.RawMessage) (map[string]any, *rpcEr
 	return decodeTypedProtocolParams(raw, validateAgentTaskDetailGetParams, orchestrator.TaskDetailGetRequestFromParams, func(request AgentTaskDetailGetParams) map[string]any {
 		return request.ProtocolParamsMap()
 	})
+}
+
+func decodeAgentTaskConfirmParams(raw json.RawMessage) (map[string]any, *rpcError) {
+	return decodeParamsWithValidation(raw, validateAgentTaskConfirmParams)
 }
 
 func decodeAgentTaskListParams(raw json.RawMessage) (map[string]any, *rpcError) {
@@ -237,6 +257,35 @@ func validateAgentTaskStartParams(params map[string]any) *rpcError {
 		return err
 	}
 	if err := optionalBoolField(options, "confirm_required"); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateAgentTaskConfirmParams(params map[string]any) *rpcError {
+	if err := requireRequestMeta(params); err != nil {
+		return err
+	}
+	if err := requireNonEmptyString(params, "task_id"); err != nil {
+		return err
+	}
+	if err := optionalBoolField(params, "confirmed"); err != nil {
+		return err
+	}
+	if err := optionalStringField(params, "correction_text"); err != nil {
+		return err
+	}
+	correctedIntent, err := optionalObject(params, "corrected_intent")
+	if err != nil {
+		return err
+	}
+	if len(correctedIntent) == 0 {
+		return nil
+	}
+	if err := requireNonEmptyString(correctedIntent, "name"); err != nil {
+		return err
+	}
+	if _, err := optionalObject(correctedIntent, "arguments"); err != nil {
 		return err
 	}
 	return nil

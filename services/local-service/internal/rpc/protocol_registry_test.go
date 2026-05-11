@@ -85,12 +85,58 @@ func TestAgentTaskStartDTOOmitsUnsupportedIntentField(t *testing.T) {
 	}
 }
 
+func TestAgentTaskConfirmDTORejectsMalformedCorrectionFields(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  map[string]any
+	}{
+		{
+			name: "correction_text must be string",
+			raw: map[string]any{
+				"request_meta":    map[string]any{"trace_id": "trace_task_confirm_bad_text"},
+				"task_id":         "task_confirm_bad_text",
+				"confirmed":       false,
+				"correction_text": 42,
+			},
+		},
+		{
+			name: "corrected_intent must be object",
+			raw: map[string]any{
+				"request_meta":     map[string]any{"trace_id": "trace_task_confirm_bad_intent"},
+				"task_id":          "task_confirm_bad_intent",
+				"confirmed":        false,
+				"corrected_intent": "translate",
+			},
+		},
+		{
+			name: "confirmed must be bool",
+			raw: map[string]any{
+				"request_meta": map[string]any{"trace_id": "trace_task_confirm_bad_confirmed"},
+				"task_id":      "task_confirm_bad_confirmed",
+				"confirmed":    "false",
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, rpcErr := decodeAgentTaskConfirmParams(mustMarshal(t, test.raw))
+			if rpcErr == nil {
+				t.Fatalf("expected invalid params error for %+v", test.raw)
+			}
+			if rpcErr.Code != errInvalidParams || rpcErr.Message != "INVALID_PARAMS" {
+				t.Fatalf("expected INVALID_PARAMS envelope, got %+v", rpcErr)
+			}
+		})
+	}
+}
+
 func TestStableMethodRegistryDispatchMatrix(t *testing.T) {
 	server := newTestServer()
 	expectedDecoders := map[string]func(json.RawMessage) (map[string]any, *rpcError){
 		methodAgentInputSubmit:            decodeAgentInputSubmitParams,
 		methodAgentTaskStart:              decodeAgentTaskStartParams,
-		methodAgentTaskConfirm:            decodeParamsRequiringRequestMeta,
+		methodAgentTaskConfirm:            decodeAgentTaskConfirmParams,
 		methodAgentTaskControl:            decodeParamsRequiringRequestMeta,
 		methodAgentTaskDetailGet:          decodeAgentTaskDetailGetParams,
 		methodAgentTaskList:               decodeAgentTaskListParams,
