@@ -22,7 +22,7 @@ func TestRuntimeModelHelpersHandleNilService(t *testing.T) {
 	if service.currentModelDescriptor() != "" {
 		t.Fatalf("expected nil service descriptor to be empty, got %q", service.currentModelDescriptor())
 	}
-	if err := service.reloadRuntimeModelForSettings(nil); err != nil {
+	if err := service.reloadRuntimeModelFromSettings(); err != nil {
 		t.Fatalf("expected nil service reload to be ignored, got %v", err)
 	}
 }
@@ -39,8 +39,8 @@ func TestReloadRuntimeModelFromSettingsFallsBackToPlaceholderWhenSecretUnavailab
 		t.Fatalf("seed settings failed: %v", err)
 	}
 
-	if err := service.reloadRuntimeModelForSettings(service.runEngine.Settings()); err != nil {
-		t.Fatalf("reloadRuntimeModelForSettings returned error: %v", err)
+	if err := service.reloadRuntimeModelFromSettings(); err != nil {
+		t.Fatalf("reloadRuntimeModelFromSettings returned error: %v", err)
 	}
 	if service.currentModel() == nil {
 		t.Fatal("expected placeholder runtime model to stay installed")
