@@ -1,9 +1,9 @@
 package orchestrator
 
 import (
-	"fmt"
 	"strings"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 )
 
@@ -23,7 +23,7 @@ func (s *Service) queueTaskIfSessionBusy(task runengine.TaskRecord) (runengine.T
 	bubble := s.delivery.BuildBubbleMessage(
 		task.TaskID,
 		"status",
-		fmt.Sprintf("当前会话已有任务 %s 正在执行，本任务已排队等待。", truncateText(activeTask.Title, 24)),
+		presentation.Text(presentation.MessageBubbleQueueWait, map[string]string{"task_title": truncateText(activeTask.Title, 24)}),
 		task.UpdatedAt.Format(dateTimeLayout),
 	)
 	var queuedTask runengine.TaskRecord
@@ -52,7 +52,7 @@ func (s *Service) drainSessionQueue(sessionID string) error {
 		bubble := s.delivery.BuildBubbleMessage(
 			nextTask.TaskID,
 			"status",
-			"前序任务已完成，当前会话中的下一个任务开始执行。",
+			presentation.Text(presentation.MessageBubbleQueueResume, nil),
 			nextTask.UpdatedAt.Format(dateTimeLayout),
 		)
 		resumedTask, changed := s.runEngine.ResumeQueuedTask(nextTask.TaskID, s.activeExecutionStepName(nextTask.Intent), bubble)

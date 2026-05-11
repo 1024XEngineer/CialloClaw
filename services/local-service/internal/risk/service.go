@@ -1,7 +1,14 @@
 // Package risk implements the minimal governance assessment layer.
 package risk
 
-import "strings"
+import (
+	"net"
+	"net/netip"
+	"net/url"
+	"strings"
+)
+
+var carrierGradeNATPrefix = netip.MustParsePrefix("100.64.0.0/10")
 
 // Service evaluates tool risk without mutating orchestrator state.
 type Service struct{}
@@ -63,6 +70,13 @@ func (s *Service) Assess(input AssessmentInput) AssessmentResult {
 	}
 
 	if isLowRiskBrowserObservationOperation(input.OperationName) {
+		return result
+	}
+
+	if s.requiresApprovalForSensitiveWebTarget(input.OperationName, input.TargetObject) {
+		result.RiskLevel = RiskLevelYellow
+		result.ApprovalRequired = true
+		result.Reason = ReasonWebpageApproval
 		return result
 	}
 
@@ -141,7 +155,7 @@ func isApprovalCommand(commandPreview string) bool {
 
 func isApprovalBrowserOperation(operationName string) bool {
 	switch strings.TrimSpace(operationName) {
-	case "page_read", "page_search", "page_interact", "structured_dom", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact":
+	case "page_interact", "structured_dom", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact":
 		return true
 	default:
 		return false
@@ -155,6 +169,84 @@ func isLowRiskBrowserObservationOperation(operationName string) bool {
 	default:
 		return false
 	}
+}
+
+// requiresApprovalForSensitiveWebTarget keeps read-only web tools low risk for
+// explicit http(s) targets by shape. Approval remains required only for
+// localhost-style hosts, single-label hosts, local-only suffixes, and literal
+// loopback/private/link-local/CGNAT IP targets. The precheck intentionally
+// avoids DNS resolution and broader public-Internet classification so task
+// startup does not block on name service or reinterpret explicit user targets.
+func (s *Service) requiresApprovalForSensitiveWebTarget(operationName, targetObject string) bool {
+	switch strings.TrimSpace(operationName) {
+	case "page_read", "page_search":
+		return s.isSensitiveWebTarget(targetObject)
+	default:
+		return false
+	}
+}
+
+func (s *Service) isSensitiveWebTarget(targetObject string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(targetObject))
+	if err != nil {
+		return true
+	}
+	if scheme := strings.ToLower(strings.TrimSpace(parsed.Scheme)); scheme != "http" && scheme != "https" {
+		return true
+	}
+	hostname := normalizeWebTargetHostname(parsed.Hostname())
+	if hostname == "" {
+		return true
+	}
+	if ip := parseHostnameIP(hostname); ip != nil {
+		return isNonPublicIPAddress(ip)
+	}
+	if isSensitiveHostnamePattern(hostname) {
+		return true
+	}
+	return false
+}
+
+func normalizeWebTargetHostname(hostname string) string {
+	hostname = strings.ToLower(strings.TrimSpace(hostname))
+	hostname = strings.TrimSuffix(hostname, ".")
+	return hostname
+}
+
+func isSensitiveHostnamePattern(hostname string) bool {
+	if hostname == "localhost" || strings.HasSuffix(hostname, ".localhost") {
+		return true
+	}
+	if !strings.Contains(hostname, ".") {
+		return true
+	}
+	for _, suffix := range []string{".local", ".localdomain", ".internal", ".home", ".lan", ".home.arpa"} {
+		if strings.HasSuffix(hostname, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseHostnameIP(hostname string) net.IP {
+	if zoneIndex := strings.LastIndex(hostname, "%"); zoneIndex >= 0 {
+		hostname = hostname[:zoneIndex]
+	}
+	return net.ParseIP(hostname)
+}
+
+func isNonPublicIPAddress(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	if !ip.IsGlobalUnicast() || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+		return true
+	}
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return true
+	}
+	return carrierGradeNATPrefix.Contains(addr.Unmap())
 }
 
 func isWorkspaceWriteOperation(operationName string) bool {

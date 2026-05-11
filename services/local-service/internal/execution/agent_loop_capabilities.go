@@ -3,8 +3,8 @@ package execution
 import (
 	"strings"
 
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
@@ -87,7 +87,8 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 		UseWhen:   "需要读取某个网页的标题或主要可见文本",
 		AvoidWhen: "用户只需要确认关键词是否出现，而不需要通读页面内容",
 		Constraints: []string{
-			"网页读取可能触发审批",
+			"显式网页目标默认按低风险只读处理",
+			"仅 localhost 风格主机名、单标签主机名、本地域后缀，以及字面量回环/私网/link-local/CGNAT IP 仍可能触发审批",
 			"一次只读取一个绝对 URL",
 			"不会执行页面交互",
 		},
@@ -105,7 +106,8 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 		UseWhen:   "需要确认某个网页里是否出现某个关键词或短语",
 		AvoidWhen: "用户需要完整页面内容，或需要进一步浏览页面结构",
 		Constraints: []string{
-			"网页读取可能触发审批",
+			"显式网页目标默认按低风险只读处理",
+			"仅 localhost 风格主机名、单标签主机名、本地域后缀，以及字面量回环/私网/link-local/CGNAT IP 仍可能触发审批",
 			"一次只搜索一个绝对 URL",
 			"返回受限数量的关键词命中",
 		},
@@ -153,10 +155,10 @@ type agentLoopCapabilitySpec struct {
 // shared catalog and the live registry. Missing registry entries are skipped so
 // partially wired environments never advertise tools that cannot execute.
 func (s *Service) agentLoopToolDefinitions() []model.ToolDefinition {
-	return s.agentLoopToolDefinitionsForSnapshot(contextsvc.TaskContextSnapshot{})
+	return s.agentLoopToolDefinitionsForSnapshot(taskcontext.TaskContextSnapshot{})
 }
 
-func (s *Service) agentLoopToolDefinitionsForSnapshot(snapshot contextsvc.TaskContextSnapshot) []model.ToolDefinition {
+func (s *Service) agentLoopToolDefinitionsForSnapshot(snapshot taskcontext.TaskContextSnapshot) []model.ToolDefinition {
 	if s == nil || s.tools == nil {
 		return nil
 	}
@@ -179,10 +181,10 @@ func (s *Service) agentLoopToolDefinitionsForSnapshot(snapshot contextsvc.TaskCo
 // catalog and the live registry. This prevents hallucinated or unregistered
 // tool names from slipping past the allowlist.
 func (s *Service) isAllowedAgentLoopTool(name string) bool {
-	return s.isAllowedAgentLoopToolForSnapshot(name, contextsvc.TaskContextSnapshot{})
+	return s.isAllowedAgentLoopToolForSnapshot(name, taskcontext.TaskContextSnapshot{})
 }
 
-func (s *Service) isAllowedAgentLoopToolForSnapshot(name string, snapshot contextsvc.TaskContextSnapshot) bool {
+func (s *Service) isAllowedAgentLoopToolForSnapshot(name string, snapshot taskcontext.TaskContextSnapshot) bool {
 	if s == nil || s.tools == nil {
 		return false
 	}
@@ -202,7 +204,7 @@ func (s *Service) agentLoopToolMetadata(name string) (tools.ToolMetadata, bool) 
 	return tool.Metadata(), true
 }
 
-func resolveAgentLoopToolInput(toolName string, arguments map[string]any, snapshot contextsvc.TaskContextSnapshot) (map[string]any, bool) {
+func resolveAgentLoopToolInput(toolName string, arguments map[string]any, snapshot taskcontext.TaskContextSnapshot) (map[string]any, bool) {
 	trimmedName := strings.TrimSpace(toolName)
 	if browserInput, ok := resolveBrowserToolInput(trimmedName, arguments, snapshot); ok {
 		return browserInput, true
@@ -257,7 +259,7 @@ func joinCapabilityConstraints(values []string) string {
 	return strings.Join(cleaned, ", ")
 }
 
-func (c agentLoopCapabilitySpec) allowedForSnapshot(snapshot contextsvc.TaskContextSnapshot) bool {
+func (c agentLoopCapabilitySpec) allowedForSnapshot(snapshot taskcontext.TaskContextSnapshot) bool {
 	if !c.RequiresCurrentBrowser {
 		return true
 	}

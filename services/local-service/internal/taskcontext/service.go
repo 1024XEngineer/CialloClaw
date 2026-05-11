@@ -1,5 +1,5 @@
-// Package context captures and normalizes task-facing input snapshots.
-package context
+// Package taskcontext captures and normalizes task-facing input snapshots.
+package taskcontext
 
 import "strings"
 
@@ -32,24 +32,24 @@ type TaskContextSnapshot struct {
 	PageSwitches   int
 }
 
-// Service folds JSON-RPC request params into a stable task context object.
+// CaptureService folds JSON-RPC request params into a stable task context object.
 // It does not make intent or execution decisions.
-type Service struct{}
+type CaptureService struct{}
 
-// NewService constructs a context capture service.
-func NewService() *Service {
-	return &Service{}
+// NewCaptureService constructs a task context capture service.
+func NewCaptureService() *CaptureService {
+	return &CaptureService{}
 }
 
 // Snapshot returns a minimal service descriptor for bootstrap and debug views.
-func (s *Service) Snapshot() map[string]string {
+func (s *CaptureService) Snapshot() map[string]string {
 	return map[string]string{"source": "desktop"}
 }
 
 // Capture extracts task context from an RPC payload.
 // It merges both input.* and context.* fields so downstream services can rely
 // on one normalized snapshot shape.
-func (s *Service) Capture(params map[string]any) TaskContextSnapshot {
+func (s *CaptureService) Capture(params map[string]any) TaskContextSnapshot {
 	input := mapValue(params, "input")
 	contextValue := mapValue(params, "context")
 	selection := mapValue(contextValue, "selection")

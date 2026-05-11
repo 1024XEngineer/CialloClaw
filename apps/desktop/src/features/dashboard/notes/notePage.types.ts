@@ -7,6 +7,7 @@ export type NoteDetailAction =
   | "cancel"
   | "skip-once"
   | "edit"
+  | "open-linked-task"
   | "open-resource"
   | "move-upcoming"
   | "toggle-recurring"
@@ -22,7 +23,7 @@ export type NoteResource = {
   label: string;
   path: string;
   type: string;
-  openAction?: "task_detail" | "open_url" | "open_file" | "reveal_in_folder" | "copy_path" | null;
+  openAction?: "task_detail" | "result_page" | "open_url" | "open_file" | "reveal_in_folder" | "copy_path" | null;
   taskId?: string | null;
   url?: string | null;
 };

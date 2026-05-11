@@ -1676,9 +1676,11 @@ flowchart TB
 
 补充约束：`exec_command` 默认优先路由到 Docker sandbox；仅对 `cmd` / `powershell` / `pwsh` 这类 Windows shell 入口保留受控宿主执行路径，避免在 Windows 主目标上把本地命令误送入 Linux 容器。
 
+- 真实浏览器附着线索只允许来自桌面快照承接的 `browser_kind / page_url / page_title / window_title`，执行层不得信任模型直接覆盖 CDP 端点或浏览器类型；
+- agent loop 默认只暴露无需审批的浏览器能力（如 `browser_attach_current / browser_snapshot`）；`browser_tabs_list / browser_navigate / browser_tab_focus / browser_interact` 仍受审批边界约束，在具备 loop 内授权暂停前不得进入默认目录。
 - 当前桌面 Agent Loop 的 planner-visible capability catalog 必须由执行层单一真源生成，同一份定义同时派生工具描述、参数 schema 和运行态 allowlist，避免出现“Prompt 里可用但执行层拒绝”或反向漂移。
 - 当前默认冻结的只读规划能力面为 `read_file / list_dir / page_read / page_search`；`page_interact / structured_dom` 虽已是 Playwright sidecar 正式能力，但不进入当前桌面 Agent Loop 的默认规划目录。
-- 每个能力条目都必须同时声明适用场景、不适用场景和约束；网页只读能力还必须保留“可能触发审批”的治理边界。
+- 每个能力条目都必须同时声明适用场景、不适用场景和约束；当前 `page_read / page_search` 对显式 `http(s)` 网页目标默认按低风险只读处理。审批边界仅保留给 `localhost` 风格主机名、单标签主机名、本地域后缀，以及字面量回环 / 私网 / link-local / CGNAT IP 目标；页面交互、导航和跨标签页浏览器动作仍保留审批治理边界。
 
 #### 处理主线
 1. 根据 `Intent` 和 arguments 解析目标工具及目标对象。
@@ -1745,6 +1747,7 @@ flowchart TB
 - sidecar 启动前必须通过健康检查，避免把未就绪 worker 暴露给主执行链；
 - 传输层失败要清空 ready 状态并触发回收，普通请求失败则保留 ready 状态；
 - 页面交互与结构化 DOM 结果必须通过 `tool_call -> event -> delivery_result` 链回写，而不是前端直连 sidecar；
+- 当执行层为 `page_*` 工具注入 `attach` 时，顶层 `url` 仍表示目标页面语义，附着筛选只允许来自可信桌面快照而非模型自报的浏览器覆盖；
 - `tool_call.completed` 事件需要回写 worker/source/output 元信息，便于任务详情、通知订阅和后续审计复用。
 
 #### worker 契约补充
@@ -1881,6 +1884,7 @@ flowchart TB
 ### 子模块说明
 - **风险评估 / 授权承接**：判断动作风险、形成待授权对象，并把用户决策重新并入主链。
 - **正式结果交付协调**：把执行结果装配成 `delivery_result / artifact / citation`，并决定如何进入通知和查询视图。
+- **展示文案渲染**：本轮已把任务标题、确认气泡、授权/排队/续接反馈、交付结果标题与预览，以及执行失败、回退结果、工具气泡等任务侧展示文案收口到 `presentation` 层；编排、意图、交付路径优先只选择语义键与参数，避免继续把中文展示句混入状态机控制流。其余社交回复、感知机会提示、模型校验提示等非本轮主链展示文案仍留在各自模块，后续再独立收口。
 - **记忆与镜像沉淀**：决定哪些运行结果应沉淀为长期记忆或镜像引用，哪些只能保留为运行态痕迹。
 - **结果审查 / Hooks / Trace / Eval**：负责对输出做质量检查、记录命中、沉淀可观测性与评估快照。
 - **Doom Loop / Human-in-the-loop**：在执行异常、重复无进展或高不确定性场景下，负责熔断、重规划和人工升级。
@@ -1893,6 +1897,7 @@ flowchart TB
 | --- | --- | --- | --- |
 | 风险评估与授权承接 | 运行层提交的拟执行动作、目标范围、能力请求 | `risk_level`、`impact_scope`、`approval_request`、`pending_execution` | `approval.pending`、授权结果、阻断或继续执行结论 |
 | 正式结果交付协调 | 执行结果、artifact/citation 候选、交付偏好 | `delivery_result`、artifact 计划、交付说明 | `delivery.ready`、任务详情交付、文件/文档/结果页入口 |
+| 展示文案渲染 | 已迁移主链的意图名、展示语义键、渲染参数 | `presentation.MessageKey`、渲染后的 task/bubble/result 文案 | `bubble_message`、`delivery_result`、任务标题 |
 | 记忆与镜像沉淀 | 已完成阶段结果、检索计划、摘要候选 | `memory_candidate`、`memory_summary`、镜像引用关系 | 后续检索命中、任务详情中的记忆摘要 |
 | 结果审查与 Hooks | 执行结果、工具调用记录、交付对象 | 审查结论、hook 命中、结构化失败原因 | 继续交付、重试、HITL 或阻断 |
 | Trace / Eval | 模型调用、tool_call、输出摘要、资产命中 | `trace_record`、`eval_snapshot`、review result | 调试视图、loop 诊断、评估快照 |
@@ -2678,6 +2683,7 @@ sequenceDiagram
 **关键结果**：在执行前形成 `approval_request` 和 `recovery_point`，在执行后形成 `authorization_record` 和 `audit_record`。  
 **异常分支**：执行失败或用户中断时，必须显式回滚或保留可恢复信息。  
 **实现说明**：此链路是治理链的最小闭环，凡是跨工作区、命令执行、联网下载、删除/覆盖等动作，都必须从这里经过。
+补充边界：`agent_loop` 在运行中若某轮工具命中 `approval_required`，也必须立刻把该次真实工具输入回写为 `approval_request / pending_execution`，并把精确 `tool input` 固化到恢复计划中；把任务切回 `waiting_auth`，并且在获批前不得伪造 `delivery_result`。
 
 设计约束：对于 `exec_command` 这类高风险执行，默认应优先进入 Docker Sandbox，并且支持上下文中断后的容器清理；仅在 Windows shell 命令入口上允许走受控宿主路径，其他失败情形不能静默回退到宿主直接执行。
 
@@ -3103,8 +3109,8 @@ sequenceDiagram
         I-->>U: 打开工作区文档
     else 网页结果或结构化结果
         A->>P: 更新气泡提示=正在打开结果页
-        A->>I: 调用外部能力，打开浏览器或结果页
-        I-->>U: 展示浏览器或结果页
+        A->>I: 调用正式打开链路，优先打开 dashboard 结果页
+        I-->>U: 展示正式结果页；若是外部 URL 再交给浏览器
     else 单个文件产物
         A->>P: 更新气泡提示=已生成文件，正在打开
         A->>I: 打开生成文件

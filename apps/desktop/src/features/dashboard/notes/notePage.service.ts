@@ -9,16 +9,39 @@ import type {
   TodoBucket,
   TodoItem,
 } from "@cialloclaw/protocol";
+import { openDesktopExternalUrl } from "@/platform/desktopExternalUrl";
 import { openDesktopLocalPath, revealDesktopLocalPath } from "@/platform/desktopLocalPath";
 import { convertNotepadToTask, listNotepad, updateNotepad } from "@/rpc/methods";
+import { isDashboardTaskDeliveryHref } from "../tasks/taskDeliveryNavigation";
 import type { NoteConvertOutcome, NoteDetailExperience, NoteListItem, NoteResource, NoteUpdateOutcome, SourceNoteDocument } from "./notePage.types";
+import { sanitizeSourceNoteBodyText } from "./sourceNoteEditor";
 
 const NOTEPAD_RPC_TIMEOUT_MS = 2_500;
+const NOTE_HIDDEN_METADATA_KEYS = new Set([
+  "agent",
+  "bucket",
+  "created_at",
+  "due",
+  "ended_at",
+  "next",
+  "note",
+  "prerequisite",
+  "recent_instance_status",
+  "reminder",
+  "repeat",
+  "resource",
+  "recurring_enabled",
+  "scope",
+  "status",
+  "suggest",
+  "tags",
+  "updated_at",
+]);
 
 export type NotePageDataMode = "rpc";
 
 export type NoteResourceOpenExecutionPlan = {
-  mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+  mode: "task_detail" | "open_result_page" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
   feedback: string;
   path: string | null;
   taskId: string | null;
@@ -29,6 +52,11 @@ export type NoteResourceOpenExecutionOptions = {
   onOpenTaskDetail?: (input: {
     plan: NoteResourceOpenExecutionPlan;
     taskId: string;
+  }) => Promise<string | void> | string | void;
+  onOpenResultPage?: (input: {
+    plan: NoteResourceOpenExecutionPlan;
+    taskId: string | null;
+    url: string;
   }) => Promise<string | void> | string | void;
 };
 
@@ -57,6 +85,21 @@ function formatAbsoluteTimestamp(value: number) {
   });
 }
 
+function trimBoundaryBlankLines(lines: string[]) {
+  let start = 0;
+  let end = lines.length;
+
+  while (start < end && lines[start]?.trim() === "") {
+    start += 1;
+  }
+
+  while (end > start && lines[end - 1]?.trim() === "") {
+    end -= 1;
+  }
+
+  return lines.slice(start, end);
+}
+
 function createSourceNoteFallbackId(path: string) {
   let hash = 2166136261;
 
@@ -66,6 +109,58 @@ function createSourceNoteFallbackId(path: string) {
   }
 
   return `source_note_${(hash >>> 0).toString(16)}`;
+}
+
+/**
+ * Converts note text that may still contain hidden markdown header metadata
+ * into the content-only text that should be rendered in note cards and detail
+ * panels. Header metadata stays hidden until the body begins.
+ *
+ * @param value Raw note text from protocol or markdown-derived fallback data.
+ * @param options Optional title context used to collapse title-only echoes.
+ * @returns User-visible note content with hidden header metadata removed.
+ */
+export function buildVisibleNoteText(
+  value: string | null | undefined,
+  options: {
+    title?: string | null;
+  } = {},
+) {
+  if (!value) {
+    return "";
+  }
+
+  const normalizedLines = value.replace(/\r\n/g, "\n").split("\n");
+  const visibleLines: string[] = [];
+  let bodyStarted = false;
+
+  normalizedLines.forEach((rawLine) => {
+    const line = rawLine.trimEnd();
+    const trimmed = line.trim();
+
+    if (bodyStarted) {
+      visibleLines.push(line);
+      return;
+    }
+
+    if (trimmed === "") {
+      return;
+    }
+
+    const metadata = splitSourceMetadataLine(trimmed);
+    if (metadata && NOTE_HIDDEN_METADATA_KEYS.has(metadata.key)) {
+      if (metadata.key === "note") {
+        visibleLines.push(metadata.value);
+        bodyStarted = true;
+      }
+      return;
+    }
+
+    visibleLines.push(line);
+    bodyStarted = true;
+  });
+
+  return sanitizeSourceNoteBodyText(trimBoundaryBlankLines(visibleLines).join("\n"), options);
 }
 
 function extractSourceNotePreview(content: string) {
@@ -105,6 +200,10 @@ export function isAllowedNoteOpenUrl(url: string): boolean {
   } catch {
     return false;
   }
+}
+
+function isAllowedNoteResultPageUrl(url: string): boolean {
+  return isDashboardTaskDeliveryHref(url) || isAllowedNoteOpenUrl(url);
 }
 
 function resolveResourceOpenPayload(resource: NonNullable<TodoItem["related_resources"]>[number]): DeliveryPayload | null {
@@ -232,7 +331,7 @@ function normalizeResourceOpenAction(action: DeliveryType | null, payload: Deliv
   }
 
   if (action === "result_page" && payload?.url) {
-    return "open_url";
+    return "result_page";
   }
 
   if (payload?.url) {
@@ -273,6 +372,7 @@ function createResourceHints(item: TodoItem) {
 function createFallbackExperience(item: TodoItem): NoteDetailExperience {
   const previewStatus = getPreviewStatus(item);
   const detailStatus = getDetailStatus(item);
+  const visibleNoteText = buildVisibleNoteText(item.note_text, { title: item.title });
   const fallbackNoteType =
     item.bucket === "recurring_rule"
       ? "recurring"
@@ -288,7 +388,7 @@ function createFallbackExperience(item: TodoItem): NoteDetailExperience {
     agentSuggestion: {
       detail:
         item.agent_suggestion ??
-        "当前拿到的是协议中的基础便签数据，建议补一条更明确的上下文后再决定是否转交给 Agent。",
+        "这条便签会按当前正文直接生成任务；如果还想补充路径、时间或说明，可以继续写在正文里后再转交给 Agent。",
       label: "下一步建议",
     },
     canConvertToTask: item.bucket !== "closed" && !item.linked_task_id,
@@ -300,10 +400,13 @@ function createFallbackExperience(item: TodoItem): NoteDetailExperience {
     isRecurringEnabled: item.bucket === "recurring_rule" ? item.recurring_enabled !== false : false,
     nextOccurrenceAt: item.next_occurrence_at ?? (item.bucket === "recurring_rule" ? item.due_at : null),
     noteText:
-      item.note_text ??
-      (item.agent_suggestion
-        ? `${item.title}。${item.agent_suggestion}`
-        : `${item.title}。当前只返回了基础便签字段，页面用最小默认说明承接这条事项。`),
+      visibleNoteText !== ""
+        ? visibleNoteText
+        : item.note_text
+          ? ""
+          : item.agent_suggestion
+            ? `${item.title}。${item.agent_suggestion}`
+            : `${item.title}。当前只返回了基础便签字段，页面用最小默认说明承接这条事项。`,
     noteType: fallbackNoteType,
     plannedAt: item.due_at,
     previewStatus,
@@ -681,7 +784,7 @@ async function withTimeout<T>(promise: Promise<T>, label: string): Promise<T> {
   return Promise.race([
     promise,
     new Promise<T>((_, reject) => {
-      window.setTimeout(() => reject(new Error(`${label} 请求超时`)), NOTEPAD_RPC_TIMEOUT_MS);
+      globalThis.setTimeout(() => reject(new Error(`${label} 请求超时`)), NOTEPAD_RPC_TIMEOUT_MS);
     }),
   ]);
 }
@@ -744,6 +847,16 @@ export function resolveNoteResourceOpenExecutionPlan(resource: NoteResource): No
       path: resource.path,
       taskId: resource.taskId,
       url: resource.url ?? null,
+    };
+  }
+
+  if (resource.openAction === "result_page" && resource.url) {
+    return {
+      feedback: `已打开 ${resource.label} 结果页。`,
+      mode: "open_result_page",
+      path: resource.path || null,
+      taskId: resource.taskId ?? null,
+      url: resource.url,
     };
   }
 
@@ -812,6 +925,15 @@ function localPathExecutionFailure(message: string, error: unknown) {
   return `${message}（${detail}）`;
 }
 
+function externalUrlExecutionFailure(message: string, error: unknown) {
+  const detail = error instanceof Error ? error.message.trim() : "";
+  if (!detail) {
+    return message;
+  }
+
+  return `${message}（${detail}）`;
+}
+
 /**
  * Executes a note resource open plan while preserving task-detail routing and
  * copy-path fallback inside the same renderer entry.
@@ -835,13 +957,40 @@ export async function performNoteResourceOpenExecution(
       : plan.feedback;
   }
 
+  if (plan.mode === "open_result_page" && plan.url) {
+    if (!isAllowedNoteResultPageUrl(plan.url)) {
+      return "已拦截不受支持的便签结果页链接。";
+    }
+
+    const resultPageFeedback = await options.onOpenResultPage?.({
+      plan,
+      taskId: plan.taskId,
+      url: plan.url,
+    });
+
+    if (typeof resultPageFeedback === "string" && resultPageFeedback.trim() !== "") {
+      return resultPageFeedback;
+    }
+
+    try {
+      await openDesktopExternalUrl(plan.url);
+      return plan.feedback;
+    } catch (error) {
+      return externalUrlExecutionFailure("无法通过系统浏览器打开便签结果页链接", error);
+    }
+  }
+
   if (plan.mode === "open_url" && plan.url) {
     if (!isAllowedNoteOpenUrl(plan.url)) {
       return "已拦截不受支持的便签资源链接。";
     }
 
-    window.open(plan.url, "_blank", "noopener,noreferrer");
-    return plan.feedback;
+    try {
+      await openDesktopExternalUrl(plan.url);
+      return plan.feedback;
+    } catch (error) {
+      return externalUrlExecutionFailure("无法通过系统浏览器打开便签资源链接", error);
+    }
   }
 
   if (plan.mode === "open_local_path" && plan.path) {

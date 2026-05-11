@@ -134,6 +134,12 @@ func TestSQLiteLoopRuntimeStoreStructuredQueries(t *testing.T) {
 	if emptyEvents, total, err := store.ListEvents(context.Background(), "task_sql_001", "run_sql_001", "loop.completed", "2026-04-21T10:00:05Z", "", 10, 0); err != nil || total != 0 || len(emptyEvents) != 0 {
 		t.Fatalf("expected filtered ListEvents to return empty slice, total=%d items=%+v err=%v", total, emptyEvents, err)
 	}
+	if err := store.SaveEvents(context.Background(), []EventRecord{{EventID: "evt_sql_003", RunID: "run_sql_001", TaskID: "task_sql_001", StepID: "step_sql_003", Type: "loop.partial", Level: "info", PayloadJSON: `{}`, CreatedAt: "2026-04-21T10:00:00.123Z"}}); err != nil {
+		t.Fatalf("SaveEvents nano event returned error: %v", err)
+	}
+	if filteredEvents, total, err := store.ListEvents(context.Background(), "task_sql_001", "", "", "2026-04-21T10:00:00Z", "2026-04-21T10:00:00.999Z", 10, 0); err != nil || total != 1 || len(filteredEvents) != 1 || filteredEvents[0].EventID != "evt_sql_003" {
+		t.Fatalf("expected same-second nano event to survive sqlite time filtering, total=%d items=%+v err=%v", total, filteredEvents, err)
+	}
 	if emptyCitations, err := store.ListTaskCitations(context.Background(), "missing_task", ""); err != nil || len(emptyCitations) != 0 {
 		t.Fatalf("expected missing task citations to return empty slice, citations=%+v err=%v", emptyCitations, err)
 	}

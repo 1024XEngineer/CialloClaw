@@ -446,6 +446,13 @@ async fn desktop_open_local_path(
 }
 
 #[tauri::command]
+async fn desktop_open_external_url(url: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || local_path::open_external_url(&url))
+        .await
+        .map_err(|error| format!("desktop external url open task failed: {error}"))?
+}
+
+#[tauri::command]
 async fn desktop_reveal_local_path(
     bridge_state: tauri::State<'_, Arc<NamedPipeBridgeState>>,
     settings_snapshot_state: tauri::State<'_, Arc<DesktopSettingsSnapshotState>>,
@@ -480,6 +487,21 @@ async fn desktop_open_runtime_data_path(
     })
     .await
     .map_err(|error| format!("desktop runtime data open task failed: {error}"))?
+}
+
+#[tauri::command]
+async fn desktop_open_runtime_workspace_path(
+    runtime_paths_state: tauri::State<'_, Arc<runtime_paths::DesktopRuntimePaths>>,
+) -> Result<(), String> {
+    let runtime_paths_state = Arc::clone(runtime_paths_state.inner());
+    tauri::async_runtime::spawn_blocking(move || {
+        local_path::open_trusted_directory(
+            runtime_paths_state.workspace_root().as_path(),
+            runtime_paths_state.runtime_root().as_path(),
+        )
+    })
+    .await
+    .map_err(|error| format!("desktop runtime workspace open task failed: {error}"))?
 }
 
 #[tauri::command]
@@ -597,7 +619,7 @@ fn desktop_sync_settings_snapshot(
 fn desktop_get_runtime_defaults(
     runtime_paths_state: tauri::State<'_, Arc<runtime_paths::DesktopRuntimePaths>>,
 ) -> DesktopRuntimeDefaultsPayload {
-    let task_source = runtime_paths_state.workspace_root().join("todos");
+    let task_source = runtime_paths_state.task_source_root();
 
     DesktopRuntimeDefaultsPayload {
         data_path: format_runtime_defaults_path(runtime_paths_state.data_dir().as_path()),
@@ -2306,6 +2328,9 @@ fn main() {
         .setup(|app| {
             let runtime_paths = runtime_paths::DesktopRuntimePaths::detect()
                 .map_err(|error| std::io::Error::other(error))?;
+            runtime_paths
+                .ensure_runtime_directories()
+                .map_err(|error| std::io::Error::other(error))?;
             app.manage(Arc::new(runtime_paths));
             activity::install_mouse_activity_listener()
                 .map_err(|error| std::io::Error::other(error))?;
@@ -2337,8 +2362,10 @@ fn main() {
             desktop_open_or_focus_onboarding,
             desktop_promote_onboarding,
             desktop_open_local_path,
+            desktop_open_external_url,
             desktop_reveal_local_path,
             desktop_open_runtime_data_path,
+            desktop_open_runtime_workspace_path,
             desktop_sync_settings_snapshot,
             desktop_get_runtime_defaults,
             desktop_load_source_notes,

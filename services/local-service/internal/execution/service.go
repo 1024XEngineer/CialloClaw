@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,13 +20,14 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/agentloop"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
-	contextsvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/context"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	risksvc "github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textdecode"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
@@ -136,7 +138,7 @@ type Request struct {
 	Intent               map[string]any
 	AttemptIndex         int
 	SegmentKind          string
-	Snapshot             contextsvc.TaskContextSnapshot
+	Snapshot             taskcontext.TaskContextSnapshot
 	MemoryReadPlans      []map[string]any
 	SteeringMessages     []string
 	DeliveryType         string
@@ -144,6 +146,7 @@ type Request struct {
 	ApprovalGranted      bool
 	ApprovedOperation    string
 	ApprovedTargetObject string
+	ApprovedToolInput    map[string]any
 	BudgetDowngrade      map[string]any
 }
 
@@ -338,7 +341,7 @@ func (s *Service) AssessGovernance(ctx context.Context, request Request) (Govern
 // currently captured browser page through the default local endpoint. Explicit
 // selectors for other tabs or explicit endpoint overrides must be promoted
 // back onto the approval path.
-func requiresBrowserObservationApproval(toolName string, arguments map[string]any, toolInput map[string]any, snapshot contextsvc.TaskContextSnapshot) bool {
+func requiresBrowserObservationApproval(toolName string, arguments map[string]any, toolInput map[string]any, snapshot taskcontext.TaskContextSnapshot) bool {
 	switch strings.TrimSpace(toolName) {
 	case "browser_attach_current", "browser_snapshot":
 	default:
@@ -415,6 +418,20 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 	if err != nil {
 		return Result{}, err
 	}
+	if trace.LoopStopReason == string(agentloop.StopReasonNeedAuthorization) {
+		latestCall := latestToolCall(trace.ToolCalls)
+		return Result{
+			Content:         trace.OutputText,
+			DurationMS:      time.Since(startedAt).Milliseconds(),
+			ModelInvocation: cloneMap(trace.ModelInvocation),
+			AuditRecord:     cloneMap(trace.AuditRecord),
+			ToolCalls:       append([]tools.ToolCallRecord(nil), trace.ToolCalls...),
+			LoopStopReason:  trace.LoopStopReason,
+			ToolName:        latestCall.ToolName,
+			ToolInput:       cloneMap(latestCall.Input),
+			ToolOutput:      cloneMap(latestCall.Output),
+		}, nil
+	}
 
 	deliveryType := firstNonEmpty(request.DeliveryType, "workspace_document")
 	targetPath := targetPathFromIntent(request.Intent)
@@ -480,7 +497,7 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 		result.RecoveryPoint = cloneMap(recoveryPoint)
 		result.Content = documentContent
 		result.Artifacts = s.delivery.BuildArtifact(request.TaskID, request.ResultTitle, deliveryResult)
-		result.BubbleText = fmt.Sprintf("结果已写入 %s，可直接查看。", targetPath)
+		result.BubbleText = presentation.Text(presentation.MessageBubbleWriteFileReady, map[string]string{"path": targetPath})
 		assignLatestToolTrace(&result, writeResult.ToolCall)
 		if len(recoveryPoint) > 0 {
 			enrichToolTrace(&result, map[string]any{"recovery_point": cloneMap(recoveryPoint)})
@@ -1133,7 +1150,7 @@ func (s *Service) executeThroughToolExecutor(ctx context.Context, request Reques
 	}
 	if toolName == "write_file" {
 		result.Artifacts = s.delivery.BuildArtifact(request.TaskID, request.ResultTitle, deliveryResult)
-		result.BubbleText = fmt.Sprintf("结果已写入 %s，可直接查看。", deliveryPayloadPath(deliveryResult))
+		result.BubbleText = presentation.Text(presentation.MessageBubbleWriteFileReady, map[string]string{"path": deliveryPayloadPath(deliveryResult)})
 		if content, ok := toolResult.RawOutput["content"].(string); ok && strings.TrimSpace(content) != "" {
 			result.Content = content
 		}
@@ -1196,7 +1213,7 @@ func (s *Service) resolveToolExecution(request Request, deliveryResult map[strin
 	return intentName, input, true
 }
 
-func resolveDirectToolInput(intentName string, args map[string]any, snapshot contextsvc.TaskContextSnapshot) (map[string]any, bool) {
+func resolveDirectToolInput(intentName string, args map[string]any, snapshot taskcontext.TaskContextSnapshot) (map[string]any, bool) {
 	switch intentName {
 	case "read_file":
 		pathValue := stringValue(args, "path", stringValue(args, "target_path", ""))
@@ -1611,11 +1628,11 @@ func (s *Service) buildScreenAnalysisResult(ctx context.Context, taskID string, 
 	}
 	ocrSummary := truncateText(normalizeWhitespace(flow.OCRResult.Text), 160)
 	if strings.TrimSpace(ocrSummary) == "" {
-		ocrSummary = "未识别到可用屏幕文本。"
+		ocrSummary = presentation.Text(presentation.MessageBubbleScreenOCRUnavailable, nil)
 	}
 	bubbleText := firstNonEmpty(
-		fmt.Sprintf("已分析屏幕内容：%s", ocrSummary),
-		"已分析屏幕内容。",
+		presentation.Text(presentation.MessageBubbleScreenAnalyzed, map[string]string{"summary": ocrSummary}),
+		presentation.Text(presentation.MessageBubbleScreenAnalyzed, map[string]string{"summary": presentation.Text(presentation.MessageBubbleScreenOCRUnavailable, nil)}),
 	)
 	previewText := truncateText(ocrSummary, deliveryPreviewMaxLength)
 	observationSummary := cloneMap(flow.ObservationSeed)
@@ -1866,7 +1883,7 @@ func workspacePathFromDeliveryResult(deliveryResult map[string]any) string {
 
 func toolBubbleText(toolName string, result *tools.ToolExecutionResult) string {
 	if result == nil {
-		return fmt.Sprintf("%s 执行完成。", toolName)
+		return presentation.Text(presentation.MessageToolBubbleGeneric, map[string]string{"tool_name": toolName})
 	}
 	if preview := stringValue(result.SummaryOutput, "content_preview", ""); preview != "" {
 		return preview
@@ -1876,16 +1893,42 @@ func toolBubbleText(toolName string, result *tools.ToolExecutionResult) string {
 	}
 	if query := stringValue(result.SummaryOutput, "query", ""); query != "" {
 		if count, ok := result.SummaryOutput["match_count"]; ok {
-			return fmt.Sprintf("页面搜索完成，关键词 %q 共匹配 %v 处。", query, count)
+			return presentation.Text(presentation.MessageToolBubbleSearchMatches, map[string]string{"query": strconv.Quote(query), "count": fmt.Sprintf("%v", count)})
 		}
 	}
-	if count, ok := result.SummaryOutput["entry_count"]; ok {
-		return fmt.Sprintf("%s 执行完成，当前目录条目数：%v。", toolName, count)
+	if toolName == "browser_attach_current" {
+		title := stringValue(result.SummaryOutput, "title", "")
+		if title == "" {
+			title = stringValue(result.RawOutput, "title", "")
+		}
+		if title != "" {
+			return presentation.Text(presentation.MessageToolBubbleBrowserAttach, map[string]string{"title": title})
+		}
+		return presentation.Text(presentation.MessageToolBubbleBrowserAttachHere, nil)
 	}
-	return fmt.Sprintf("%s 执行完成。", toolName)
+	if toolName == "browser_tab_focus" {
+		title := stringValue(result.SummaryOutput, "title", "")
+		if title == "" {
+			title = stringValue(result.RawOutput, "title", "")
+		}
+		if title != "" {
+			return presentation.Text(presentation.MessageToolBubbleBrowserFocus, map[string]string{"title": title})
+		}
+		return presentation.Text(presentation.MessageToolBubbleBrowserFocused, nil)
+	}
+	if toolName == "browser_tabs_list" {
+		if count, ok := result.SummaryOutput["tab_count"]; ok {
+			return presentation.Text(presentation.MessageToolBubbleBrowserTabsCount, map[string]string{"count": fmt.Sprintf("%v", count)})
+		}
+		return presentation.Text(presentation.MessageToolBubbleBrowserTabsReady, nil)
+	}
+	if count, ok := result.SummaryOutput["entry_count"]; ok {
+		return presentation.Text(presentation.MessageToolBubbleDirectoryEntries, map[string]string{"tool_name": toolName, "count": fmt.Sprintf("%v", count)})
+	}
+	return presentation.Text(presentation.MessageToolBubbleGeneric, map[string]string{"tool_name": toolName})
 }
 
-func (s *Service) buildExecutionInput(snapshot contextsvc.TaskContextSnapshot, memoryReadPlans []map[string]any) string {
+func (s *Service) buildExecutionInput(snapshot taskcontext.TaskContextSnapshot, memoryReadPlans []map[string]any) string {
 	sections := make([]string, 0, 7)
 	if snapshot.SelectionText != "" {
 		sections = append(sections, "选中文本:\n"+strings.TrimSpace(snapshot.SelectionText))
@@ -2038,7 +2081,7 @@ func (s *Service) generateOutput(ctx context.Context, request Request, inputText
 		// Prompt-only execution does not have a live loop poller, so queued
 		// steering must be folded into this generation request before the task
 		// resumes from authorization or a session queue.
-		promptInputText = appendPromptSteeringInput(inputText, request.SteeringMessages)
+		promptInputText = agentloopAppendSteeringInput(inputText, request.SteeringMessages)
 	}
 	trace, err := s.generateOutputWithPrompt(ctx, request, promptInputText)
 	if err != nil {
@@ -2409,30 +2452,30 @@ func fallbackOutput(request Request, inputText string) string {
 	intentName := effectiveIntentName(request.Intent)
 	normalized := normalizeWhitespace(inputText)
 	if normalized == "" {
-		normalized = "无可用输入"
+		normalized = presentation.Text(presentation.MessageFallbackNoInput, nil)
 	}
 
 	switch intentName {
 	case "":
-		return "我还不确定你希望我怎么处理这段内容，请补充你的目标，例如解释、翻译、改写或总结。"
+		return presentation.Text(presentation.MessageFallbackClarify, nil)
 	case defaultAgentLoopIntentName:
-		return "我还不确定你希望我怎么处理这段内容，请补充你的目标，例如解释、翻译、改写或总结。"
+		return presentation.Text(presentation.MessageFallbackClarify, nil)
 	case "rewrite":
-		return "改写结果：\n" + normalized
+		return presentation.Text(presentation.MessageFallbackRewriteHeader, nil) + "\n" + normalized
 	case "translate":
 		targetLanguage := stringValue(mapValue(request.Intent, "arguments"), "target_language", "中文")
-		return fmt.Sprintf("翻译结果（回退模式，目标语言：%s）：\n%s", targetLanguage, normalized)
+		return presentation.Text(presentation.MessageFallbackTranslate, map[string]string{"target_language": targetLanguage}) + "\n" + normalized
 	case "explain":
-		return "解释结果：\n" + firstNonEmpty(firstSentence(normalized), normalized)
+		return presentation.Text(presentation.MessageFallbackExplainHeader, nil) + "\n" + firstNonEmpty(firstSentence(normalized), normalized)
 	case "write_file":
 		fallthrough
 	case "summarize":
 		highlights := extractHighlights(normalized, 3)
 		if len(highlights) == 0 {
-			return "总结结果：\n- 暂无可总结内容"
+			return presentation.Text(presentation.MessageFallbackSummarizeTitle, nil) + "\n" + presentation.Text(presentation.MessageFallbackSummarizeEmpty, nil)
 		}
 
-		lines := []string{"总结结果："}
+		lines := []string{presentation.Text(presentation.MessageFallbackSummarizeTitle, nil)}
 		for _, highlight := range highlights {
 			lines = append(lines, "- "+highlight)
 		}
@@ -2449,36 +2492,33 @@ func effectiveIntentName(taskIntent map[string]any) string {
 func workspaceDocumentContent(title, outputText string) string {
 	trimmed := strings.TrimSpace(outputText)
 	if trimmed == "" {
-		trimmed = "暂无内容"
+		trimmed = presentation.Text(presentation.MessageDocumentEmpty, nil)
 	}
 	if strings.HasPrefix(trimmed, "#") {
 		return trimmed + "\n"
 	}
-	return fmt.Sprintf("# %s\n\n%s\n", firstNonEmpty(strings.TrimSpace(title), "处理结果"), trimmed)
+	return fmt.Sprintf("# %s\n\n%s\n", firstNonEmpty(strings.TrimSpace(title), presentation.Text(presentation.MessageDocumentDefaultTitle, nil)), trimmed)
 }
 
 func previewTextForOutput(outputText, deliveryType string) string {
 	preview := truncateText(normalizeWhitespace(outputText), deliveryPreviewMaxLength)
 	if preview == "" {
-		preview = "结果已生成"
+		preview = presentation.Text(presentation.MessagePreviewGenerated, nil)
 	}
 	if deliveryType == "workspace_document" {
-		return "已生成正式文档：" + preview
+		return presentation.Text(presentation.MessagePreviewWorkspaceGenerated, map[string]string{"preview": preview})
 	}
 	return preview
 }
 
 func previewTextForDeliveryType(deliveryType string) string {
-	if deliveryType == "workspace_document" {
-		return "已为你写入文档并打开"
-	}
-	return "结果已通过气泡返回"
+	return presentation.DeliveryPreviewText(deliveryType)
 }
 
 func truncateBubbleText(outputText string) string {
 	trimmed := strings.TrimSpace(outputText)
 	if trimmed == "" {
-		return "结果已生成。"
+		return presentation.Text(presentation.MessageBubbleGenerated, nil)
 	}
 	return truncateText(trimmed, 480)
 }
@@ -2743,24 +2783,6 @@ func (noopAgentLoopHook) BeforeTool(_ context.Context, _ agentloop.PersistedRoun
 
 func (noopAgentLoopHook) AfterTool(_ context.Context, _ agentloop.PersistedRound, _ tools.ToolCallRecord, _ string) error {
 	return nil
-}
-
-func appendPromptSteeringInput(inputText string, steeringMessages []string) string {
-	if len(steeringMessages) == 0 {
-		return inputText
-	}
-	steeringLines := make([]string, 0, len(steeringMessages))
-	for _, item := range steeringMessages {
-		trimmed := strings.TrimSpace(item)
-		if trimmed == "" {
-			continue
-		}
-		steeringLines = append(steeringLines, "- "+trimmed)
-	}
-	if len(steeringLines) == 0 {
-		return inputText
-	}
-	return strings.TrimSpace(inputText) + "\n\nFollow-up steering:\n" + strings.Join(steeringLines, "\n")
 }
 
 func agentloopAppendSteeringInput(inputText string, steeringMessages []string) string {
@@ -3160,7 +3182,7 @@ func (s *Service) resolveGovernanceToolExecution(request Request) (string, map[s
 	deliveryResult := s.delivery.BuildDeliveryResultWithTargetPath(
 		request.TaskID,
 		deliveryType,
-		firstNonEmpty(strings.TrimSpace(request.ResultTitle), "处理结果"),
+		firstNonEmpty(strings.TrimSpace(request.ResultTitle), presentation.Text(presentation.MessageResultTitleGeneric, nil)),
 		previewText,
 		targetPathFromIntent(request.Intent),
 	)
@@ -3272,6 +3294,7 @@ func (s *Service) toolExecutionContext(workspacePath string, request Request) *t
 		ApprovalGranted:      request.ApprovalGranted,
 		ApprovedOperation:    approvedOperation,
 		ApprovedTargetObject: approvedTargetObject,
+		ApprovedToolInput:    cloneMap(request.ApprovedToolInput),
 		Platform:             s.fileSystem,
 		Execution:            s.execution,
 		Playwright:           s.playwright,
@@ -3317,11 +3340,18 @@ func recoveryPointMap(point checkpoint.RecoveryPoint) map[string]any {
 	}
 }
 
-func governanceTargetObject(toolName string, toolInput map[string]any, execCtx *tools.ToolExecuteContext) string {
+// GovernanceTargetObject derives the stable approval boundary for a concrete
+// tool invocation. Orchestrator runtime-approval recovery reuses the same
+// target-object rules so resumed approval checks match the executor's
+// preflight and replay behavior.
+func GovernanceTargetObject(toolName string, toolInput map[string]any, execCtx *tools.ToolExecuteContext) string {
 	switch toolName {
 	case "write_file":
 		return stringValue(toolInput, "path", "")
 	case "exec_command":
+		if execCtx == nil {
+			return stringValue(toolInput, "working_dir", "")
+		}
 		return firstNonEmpty(stringValue(toolInput, "working_dir", ""), execCtx.WorkspacePath)
 	case "page_read", "page_search", "page_interact", "structured_dom":
 		return stringValue(toolInput, "url", "")
@@ -3339,6 +3369,10 @@ func governanceTargetObject(toolName string, toolInput map[string]any, execCtx *
 		}
 		return ""
 	}
+}
+
+func governanceTargetObject(toolName string, toolInput map[string]any, execCtx *tools.ToolExecuteContext) string {
+	return GovernanceTargetObject(toolName, toolInput, execCtx)
 }
 
 func approvedTargetObject(intent map[string]any, workspacePath string) string {
@@ -3401,7 +3435,7 @@ func approvedTargetKeys(intentName string) []string {
 	}
 }
 
-func resolveBrowserToolInput(intentName string, arguments map[string]any, snapshot contextsvc.TaskContextSnapshot) (map[string]any, bool) {
+func resolveBrowserToolInput(intentName string, arguments map[string]any, snapshot taskcontext.TaskContextSnapshot) (map[string]any, bool) {
 	if explicitInput, ok := resolveExplicitBrowserToolInput(intentName, arguments); ok {
 		return explicitInput, true
 	}
@@ -3505,7 +3539,7 @@ func mergeExplicitBrowserAttachInput(attachInput map[string]any, arguments map[s
 	return merged
 }
 
-func buildBrowserAttachInput(browserKind string, snapshot contextsvc.TaskContextSnapshot, arguments map[string]any, useSnapshotTarget, allowEmptyTarget, requireStableTarget bool) map[string]any {
+func buildBrowserAttachInput(browserKind string, snapshot taskcontext.TaskContextSnapshot, arguments map[string]any, useSnapshotTarget, allowEmptyTarget, requireStableTarget bool) map[string]any {
 	target := map[string]any{}
 	if pageIndex, ok := browserAttachPageIndex(arguments["page_index"]); ok {
 		target["page_index"] = pageIndex
@@ -3655,7 +3689,7 @@ func browserTargetOverrideMissing(arguments map[string]any) bool {
 	return strings.TrimSpace(stringValue(arguments, "title_contains", "")) == ""
 }
 
-func resolvePageToolInput(intentName string, arguments map[string]any, snapshot contextsvc.TaskContextSnapshot) (map[string]any, bool) {
+func resolvePageToolInput(intentName string, arguments map[string]any, snapshot taskcontext.TaskContextSnapshot) (map[string]any, bool) {
 	urlValue := strings.TrimSpace(stringValue(arguments, "url", ""))
 	if urlValue == "" {
 		return nil, false
@@ -3682,7 +3716,7 @@ func resolvePageToolInput(intentName string, arguments map[string]any, snapshot 
 	return input, true
 }
 
-func pageAttachInput(urlValue string, arguments map[string]any, snapshot contextsvc.TaskContextSnapshot) map[string]any {
+func pageAttachInput(urlValue string, arguments map[string]any, snapshot taskcontext.TaskContextSnapshot) map[string]any {
 	// Page-level attach hints must come from trusted desktop context. The planner
 	// can request a page tool, but it must not steer browser kind or CDP endpoint
 	// away from the observed foreground session.
