@@ -3132,7 +3132,7 @@ func TestServiceTaskControlResumeExecutesHumanLoopPromptFallbackTask(t *testing.
 		Intent:      map[string]any{"name": "agent_loop", "arguments": map[string]any{}},
 		CurrentStep: "generate_output",
 		RiskLevel:   "green",
-		Snapshot: contextsvc.TaskContextSnapshot{
+		Snapshot: taskcontext.TaskContextSnapshot{
 			Text:      "Polish this response after review",
 			InputType: "text",
 			Trigger:   "hover_text_input",

@@ -797,10 +797,10 @@ func (s *Service) maybeEscalateHumanLoop(task runengine.TaskRecord, capture trac
 }
 
 func resumedFromHumanLoop(task runengine.TaskRecord) bool {
-	if task.Status != "processing" || task.CurrentStep != executionStepName(task.Intent) {
+	if task.Status != "processing" {
 		return false
 	}
-	return true
+	return stringValue(task.PendingExecution, "kind", "") == "human_in_loop"
 }
 
 func taskIsBlockedHumanLoop(task runengine.TaskRecord) bool {
@@ -993,13 +993,6 @@ func marshalOrchestratorEventPayload(payload map[string]any) string {
 
 func isAgentLoopTaskIntent(taskIntent map[string]any) bool {
 	return stringValue(taskIntent, "name", "") == "agent_loop"
-}
-
-func executionStepName(taskIntent map[string]any) string {
-	if stringValue(taskIntent, "name", "") == "agent_loop" {
-		return "agent_loop"
-	}
-	return "generate_output"
 }
 
 // activeExecutionStepName records the execution step that can actually consume

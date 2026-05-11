@@ -49,26 +49,6 @@ func (s *Service) currentModelDescriptor() string {
 	return modelService.Descriptor()
 }
 
-func (s *Service) reloadRuntimeModelFromSettings() error {
-	if s == nil || s.runEngine == nil {
-		return nil
-	}
-	resolvedConfig := model.RuntimeConfigFromSettings(s.currentModelConfig(), s.runEngine.Settings())
-	modelService, err := model.NewServiceFromConfig(model.ServiceConfig{
-		ModelConfig:  resolvedConfig,
-		SecretSource: model.NewStaticSecretSource(s.storage),
-	})
-	if err != nil {
-		if shouldFallbackRuntimeModelReload(err) {
-			modelService = model.NewService(resolvedConfig)
-		} else {
-			return err
-		}
-	}
-	s.ReplaceModel(modelService)
-	return nil
-}
-
 func shouldFallbackRuntimeModelReload(err error) bool {
 	if errors.Is(err, model.ErrModelProviderUnsupported) {
 		return true

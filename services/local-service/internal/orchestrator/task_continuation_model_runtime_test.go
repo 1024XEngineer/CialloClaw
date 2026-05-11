@@ -28,7 +28,7 @@ func TestModelTaskContinuationDecisionUsesCurrentModelAccessor(t *testing.T) {
 
 func TestModelTaskContinuationDecisionNilServiceIsSafe(t *testing.T) {
 	var service *Service
-	decision, ok := service.modelTaskContinuationDecision(contextsvc.TaskContextSnapshot{InputType: "text", Text: "follow up"}, nil, taskContinuationContext{}, taskContinuationOptions{})
+	decision, ok := service.modelTaskContinuationDecision(taskcontext.TaskContextSnapshot{InputType: "text", Text: "follow up"}, nil, taskContinuationContext{}, taskContinuationOptions{})
 	if ok || decision != (taskContinuationDecision{}) {
 		t.Fatalf("expected nil service receiver to skip model continuation path safely, got decision=%+v ok=%v", decision, ok)
 	}
