@@ -27,7 +27,7 @@ type stubModelClient struct {
 	wait   bool
 }
 
-func (s stubModelClient) GenerateText(ctx context.Context, _ model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+func (s stubModelClient) GenerateText(ctx context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
 	if s.calls != nil {
 		s.calls.Add(1)
 	}
@@ -35,7 +35,14 @@ func (s stubModelClient) GenerateText(ctx context.Context, _ model.GenerateTextR
 		<-ctx.Done()
 		return model.GenerateTextResponse{}, ctx.Err()
 	}
-	return model.GenerateTextResponse{OutputText: s.output}, nil
+	return model.GenerateTextResponse{
+		TaskID:     request.TaskID,
+		RunID:      request.RunID,
+		RequestID:  "req_taskinspector_title",
+		Provider:   "openai_responses",
+		ModelID:    "gpt-5.4",
+		OutputText: s.output,
+	}, nil
 }
 
 type readFileErrorAdapter struct {
@@ -259,6 +266,41 @@ func TestServiceRunCachesGeneratedNoteTitlesUntilContentChanges(t *testing.T) {
 	}
 	if got := callCount.Load(); got != 2 {
 		t.Fatalf("expected changed note content to refresh generated title, got %d calls", got)
+	}
+}
+
+func TestServiceRunReturnsTitleGenerationAuditDataWithInspectionOwner(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "weekly.md"), []byte("- [ ] Weekly retro\n  note: review blockers and next steps\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"每周复盘阻塞项"}`,
+	})))
+
+	result, err := service.Run(RunInput{
+		InspectionID:         "insp_manual_titles",
+		AllowGeneratedTitles: true,
+		TitleGenerationOwner: titlegen.GenerationOwner{TaskID: "insp_manual_titles", RunID: "insp_manual_titles"},
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if len(result.TitleGenerationAuditData) != 1 {
+		t.Fatalf("expected one title-generation invocation, got %+v", result.TitleGenerationAuditData)
+	}
+	if result.TitleGenerationAuditData[0].TaskID != "insp_manual_titles" || result.TitleGenerationAuditData[0].RunID != "insp_manual_titles" {
+		t.Fatalf("expected title generation owner attribution to use inspection owner, got %+v", result.TitleGenerationAuditData[0])
 	}
 }
 

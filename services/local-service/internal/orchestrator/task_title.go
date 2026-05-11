@@ -43,7 +43,10 @@ func (s *Service) scheduleTaskTitleRefresh(task runengine.TaskRecord, snapshot t
 	intentValue := cloneMap(taskIntent)
 	go func() {
 		intentName := strings.TrimSpace(stringValue(intentValue, "name", ""))
-		result := s.titleGenerator.GenerateTaskSubjectResult(context.Background(), snapshot, intentName, fallbackTitle)
+		result := s.titleGenerator.GenerateTaskSubjectResult(context.Background(), titlegen.GenerationOwner{
+			TaskID: task.TaskID,
+			RunID:  task.RunID,
+		}, snapshot, intentName, fallbackTitle)
 		s.appendTaskTitleGenerationAudit(task, intentName, fallbackTitle, result)
 		if result.Title == "" || result.Title == fallbackTitle {
 			return

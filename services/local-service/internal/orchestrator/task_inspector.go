@@ -1,12 +1,19 @@
 package orchestrator
 
 import (
+	"context"
+	"fmt"
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/titlegen"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/traceeval"
 )
 
 // TaskInspectorConfigGet returns the inspector configuration projected from the
@@ -37,10 +44,14 @@ func (s *Service) TaskInspectorRun(params map[string]any) (map[string]any, error
 	notepadItems, _ := s.runEngine.NotepadItems("", 0, 0)
 	unfinishedTasks, _ := s.runEngine.ListTasks("unfinished", "updated_at", "desc", 0, 0)
 	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
+	reason := stringValue(params, "reason", "")
+	inspectionID := fmt.Sprintf("insp_%d", time.Now().UTC().UnixNano())
 
 	result, err := s.inspector.Run(taskinspector.RunInput{
-		Reason:               stringValue(params, "reason", ""),
-		AllowGeneratedTitles: inspectorAllowsGeneratedTitles(stringValue(params, "reason", "")),
+		Reason:               reason,
+		InspectionID:         inspectionID,
+		AllowGeneratedTitles: inspectorAllowsGeneratedTitles(reason),
+		TitleGenerationOwner: titlegen.GenerationOwner{TaskID: inspectionID, RunID: inspectionID},
 		TargetSources:        targetSources,
 		Config:               config,
 		UnfinishedTasks:      unfinishedTasks,
@@ -55,6 +66,7 @@ func (s *Service) TaskInspectorRun(params map[string]any) (map[string]any, error
 			return nil, err
 		}
 	}
+	s.recordInspectorTitleGeneration(result.InspectionID, reason, result.TitleGenerationAuditData)
 
 	return map[string]any{
 		"inspection_id": result.InspectionID,
@@ -69,6 +81,57 @@ func inspectorAllowsGeneratedTitles(reason string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// recordInspectorTitleGeneration projects manual note-title generation into one
+// durable audit and metering owner keyed by inspection_id, because inspector
+// runs do not create formal tasks yet still spend model quota on workspace
+// content.
+func (s *Service) recordInspectorTitleGeneration(inspectionID string, reason string, invocations []model.InvocationRecord) {
+	inspectionID = strings.TrimSpace(inspectionID)
+	if s == nil || inspectionID == "" || len(invocations) == 0 {
+		return
+	}
+
+	for _, invocation := range invocations {
+		_, _ = s.audit.Write(context.Background(), audit.RecordInput{
+			TaskID:  inspectionID,
+			RunID:   inspectionID,
+			Type:    "model",
+			Action:  "note_title.generate",
+			Summary: "generate compact note title during manual inspector run",
+			Target:  firstNonEmptyString(strings.TrimSpace(reason), "task_inspector.run"),
+			Result:  "success",
+		})
+		if s.traceEval == nil {
+			continue
+		}
+		traceResult, err := s.traceEval.Capture(traceeval.CaptureInput{
+			TaskID:          inspectionID,
+			RunID:           inspectionID,
+			IntentName:      "task_inspector.generate_note_title",
+			OutputText:      "manual note title generated",
+			ModelInvocation: invocation.Map(),
+			TokenUsage:      modelInvocationTokenUsage(invocation),
+			DurationMS:      invocation.LatencyMS,
+		})
+		if err == nil {
+			_ = s.traceEval.Record(context.Background(), traceResult)
+		}
+	}
+}
+
+func modelInvocationTokenUsage(invocation model.InvocationRecord) map[string]any {
+	return map[string]any{
+		"input_tokens":   invocation.Usage.InputTokens,
+		"output_tokens":  invocation.Usage.OutputTokens,
+		"total_tokens":   invocation.Usage.TotalTokens,
+		"estimated_cost": 0.0,
+		"request_id":     invocation.RequestID,
+		"provider":       invocation.Provider,
+		"model_id":       invocation.ModelID,
+		"latency_ms":     invocation.LatencyMS,
 	}
 }
 

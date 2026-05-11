@@ -29,7 +29,14 @@ func (s stubModelClient) GenerateText(_ context.Context, request model.GenerateT
 	if s.err != nil {
 		return model.GenerateTextResponse{}, s.err
 	}
-	return model.GenerateTextResponse{OutputText: s.output}, nil
+	return model.GenerateTextResponse{
+		TaskID:     request.TaskID,
+		RunID:      request.RunID,
+		RequestID:  "req_titlegen_test",
+		Provider:   "openai_responses",
+		ModelID:    "gpt-5.4",
+		OutputText: s.output,
+	}, nil
 }
 
 func TestGenerateTaskSubjectUsesModelSummary(t *testing.T) {
@@ -37,7 +44,7 @@ func TestGenerateTaskSubjectUsesModelSummary(t *testing.T) {
 		output: `{"title":"发布复盘风险跟进"}`,
 	}))
 
-	title := service.GenerateTaskSubject(context.Background(), taskcontext.TaskContextSnapshot{
+	title := service.GenerateTaskSubject(context.Background(), GenerationOwner{TaskID: "task_123", RunID: "run_123"}, taskcontext.TaskContextSnapshot{
 		InputType: "text",
 		Text:      "请帮我整理这次发布复盘，重点补齐风险项和后续跟进安排",
 	}, "agent_loop", "这次发布复盘")
@@ -52,7 +59,7 @@ func TestGenerateTaskSubjectFallsBackWhenModelFails(t *testing.T) {
 		err: errors.New("boom"),
 	}))
 
-	title := service.GenerateTaskSubject(context.Background(), taskcontext.TaskContextSnapshot{
+	title := service.GenerateTaskSubject(context.Background(), GenerationOwner{TaskID: "task_123", RunID: "run_123"}, taskcontext.TaskContextSnapshot{
 		InputType: "text",
 		Text:      "请帮我整理这次发布复盘，重点补齐风险项和后续跟进安排",
 	}, "agent_loop", "这次发布复盘")
@@ -83,7 +90,7 @@ func TestGenerateNoteTitleParsesRawTextFallback(t *testing.T) {
 		output: "每周复盘待补充事项",
 	}))
 
-	title := service.GenerateNoteTitle(context.Background(), map[string]any{
+	title := service.GenerateNoteTitle(context.Background(), GenerationOwner{TaskID: "insp_123", RunID: "insp_123"}, map[string]any{
 		"title":            "Weekly retro",
 		"note_text":        "Weekly retro\n补齐风险项、责任人和发布时间",
 		"agent_suggestion": "先整理未完成项",
@@ -102,11 +109,11 @@ func TestGenerateNoteTitleDoesNotCacheFallbackAfterModelFailure(t *testing.T) {
 	}
 	service := NewService(model.NewService(serviceconfig.ModelConfig{}, client))
 
-	first := service.GenerateNoteTitle(context.Background(), map[string]any{
+	first := service.GenerateNoteTitle(context.Background(), GenerationOwner{TaskID: "insp_123", RunID: "insp_123"}, map[string]any{
 		"title":     "Weekly retro",
 		"note_text": "Weekly retro\n补齐风险项和责任人",
 	}, "Weekly retro")
-	second := service.GenerateNoteTitle(context.Background(), map[string]any{
+	second := service.GenerateNoteTitle(context.Background(), GenerationOwner{TaskID: "insp_123", RunID: "insp_123"}, map[string]any{
 		"title":     "Weekly retro",
 		"note_text": "Weekly retro\n补齐风险项和责任人",
 	}, "Weekly retro")
@@ -126,7 +133,7 @@ func TestGenerateTaskSubjectPromptOmitsClipboardText(t *testing.T) {
 		last:   &prompt,
 	}))
 
-	_ = service.GenerateTaskSubject(context.Background(), taskcontext.TaskContextSnapshot{
+	_ = service.GenerateTaskSubject(context.Background(), GenerationOwner{TaskID: "task_123", RunID: "run_123"}, taskcontext.TaskContextSnapshot{
 		InputType:     "text_selection",
 		SelectionText: "请检查发布说明",
 		ClipboardText: "secret copied token",
@@ -145,7 +152,7 @@ func TestGenerateTaskSubjectPromptBudgetsLargeSnapshotFields(t *testing.T) {
 	}))
 	longText := strings.Repeat("A", taskPromptPrimaryLimit+40) + "TAIL"
 
-	_ = service.GenerateTaskSubject(context.Background(), taskcontext.TaskContextSnapshot{
+	_ = service.GenerateTaskSubject(context.Background(), GenerationOwner{TaskID: "task_123", RunID: "run_123"}, taskcontext.TaskContextSnapshot{
 		InputType:     "text_selection",
 		SelectionText: longText,
 		VisibleText:   longText,
@@ -163,7 +170,7 @@ func TestGenerateTaskSubjectPromptOmitsAmbientScreenContextForOrdinaryTasks(t *t
 		last:   &prompt,
 	}))
 
-	_ = service.GenerateTaskSubject(context.Background(), taskcontext.TaskContextSnapshot{
+	_ = service.GenerateTaskSubject(context.Background(), GenerationOwner{TaskID: "task_123", RunID: "run_123"}, taskcontext.TaskContextSnapshot{
 		InputType:     "text_selection",
 		SelectionText: "请检查发布说明",
 		VisibleText:   "ambient page text",
@@ -185,7 +192,7 @@ func TestGenerateTaskSubjectPromptKeepsScreenContextForScreenAnalyze(t *testing.
 		last:   &prompt,
 	}))
 
-	_ = service.GenerateTaskSubject(context.Background(), taskcontext.TaskContextSnapshot{
+	_ = service.GenerateTaskSubject(context.Background(), GenerationOwner{TaskID: "task_123", RunID: "run_123"}, taskcontext.TaskContextSnapshot{
 		InputType:     "text",
 		Text:          "帮我看看这个报错",
 		VisibleText:   "runtime stack trace",
@@ -208,12 +215,55 @@ func TestGenerateNoteTitlePromptBudgetsLargeNoteFields(t *testing.T) {
 	}))
 	longNote := strings.Repeat("B", notePromptPrimaryLimit+40) + "TAIL"
 
-	_ = service.GenerateNoteTitle(context.Background(), map[string]any{
+	_ = service.GenerateNoteTitle(context.Background(), GenerationOwner{TaskID: "insp_123", RunID: "insp_123"}, map[string]any{
 		"title":     "Weekly retro",
 		"note_text": longNote,
 	}, "Weekly retro")
 
 	if strings.Contains(prompt, "TAIL") {
 		t.Fatalf("expected prompt budgeting to truncate oversized note context, got %q", prompt)
+	}
+}
+
+func TestGenerateTaskSubjectResultPreservesOwnerAttribution(t *testing.T) {
+	service := NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"发布复盘风险跟进"}`,
+	}))
+
+	result := service.GenerateTaskSubjectResult(context.Background(), GenerationOwner{
+		TaskID: "task_title_owner",
+		RunID:  "run_title_owner",
+	}, taskcontext.TaskContextSnapshot{
+		InputType: "text",
+		Text:      "请帮我整理这次发布复盘，重点补齐风险项和后续跟进安排",
+	}, "agent_loop", "这次发布复盘")
+
+	if result.Invocation == nil {
+		t.Fatal("expected task title generation to expose invocation metadata")
+	}
+	if result.Invocation.TaskID != "task_title_owner" || result.Invocation.RunID != "run_title_owner" {
+		t.Fatalf("expected invocation owner attribution to be preserved, got %+v", result.Invocation)
+	}
+}
+
+func TestGenerateNoteTitleResultPreservesOwnerAttribution(t *testing.T) {
+	service := NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"每周复盘待补充事项"}`,
+	}))
+
+	result := service.GenerateNoteTitleResult(context.Background(), GenerationOwner{
+		TaskID: "insp_note_owner",
+		RunID:  "insp_note_owner",
+	}, map[string]any{
+		"title":            "Weekly retro",
+		"note_text":        "Weekly retro\n补齐风险项、责任人和发布时间",
+		"agent_suggestion": "先整理未完成项",
+	}, "Weekly retro")
+
+	if result.Invocation == nil {
+		t.Fatal("expected note title generation to expose invocation metadata")
+	}
+	if result.Invocation.TaskID != "insp_note_owner" || result.Invocation.RunID != "insp_note_owner" {
+		t.Fatalf("expected note title invocation owner attribution to be preserved, got %+v", result.Invocation)
 	}
 }

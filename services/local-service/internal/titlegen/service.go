@@ -23,8 +23,6 @@ const (
 	taskPromptSecondaryLimit   = 160
 	notePromptPrimaryLimit     = 320
 	notePromptSecondaryLimit   = 160
-	taskTitleRequestID         = "task_title_generator"
-	noteTitleRequestID         = "note_title_generator"
 )
 
 var defaultGenerationTimeout = 3 * time.Second
@@ -40,9 +38,24 @@ type Service struct {
 	noteTitleCache map[string]string
 }
 
+// GenerationOwner carries the formal task/run ownership that a title
+// generation call must preserve for provider attribution and downstream audit.
+type GenerationOwner struct {
+	TaskID string
+	RunID  string
+}
+
 // TaskSubjectResult captures the user-facing title plus the model invocation
 // metadata needed when callers must audit or account for the generation cost.
 type TaskSubjectResult struct {
+	Title      string
+	Generated  bool
+	Invocation *model.InvocationRecord
+}
+
+// NoteTitleResult mirrors TaskSubjectResult for note-title generation so
+// caller-controlled flows can persist ownership, audit, and token accounting.
+type NoteTitleResult struct {
 	Title      string
 	Generated  bool
 	Invocation *model.InvocationRecord
@@ -80,15 +93,15 @@ func (s *Service) currentModel() *model.Service {
 
 // GenerateTaskSubject summarizes the full task snapshot into a short final task
 // title.
-func (s *Service) GenerateTaskSubject(ctx context.Context, snapshot taskcontext.TaskContextSnapshot, intentName string, fallback string) string {
-	return s.GenerateTaskSubjectResult(ctx, snapshot, intentName, fallback).Title
+func (s *Service) GenerateTaskSubject(ctx context.Context, owner GenerationOwner, snapshot taskcontext.TaskContextSnapshot, intentName string, fallback string) string {
+	return s.GenerateTaskSubjectResult(ctx, owner, snapshot, intentName, fallback).Title
 }
 
 // GenerateTaskSubjectResult exposes the task-title model invocation so the
 // caller can project the spend back into formal task audit/token accounting.
-func (s *Service) GenerateTaskSubjectResult(ctx context.Context, snapshot taskcontext.TaskContextSnapshot, intentName string, fallback string) TaskSubjectResult {
+func (s *Service) GenerateTaskSubjectResult(ctx context.Context, owner GenerationOwner, snapshot taskcontext.TaskContextSnapshot, intentName string, fallback string) TaskSubjectResult {
 	prompt := buildTaskSubjectPrompt(snapshot, intentName, s.maxTitle)
-	title, generated, invocation := s.generate(ctx, taskTitleRequestID, prompt, fallback)
+	title, generated, invocation := s.generate(ctx, owner, prompt, fallback)
 	return TaskSubjectResult{
 		Title:      title,
 		Generated:  generated,
@@ -110,17 +123,27 @@ func CompactNoteFallback(raw string) string {
 
 // GenerateNoteTitle summarizes note body context into one short dashboard
 // label.
-func (s *Service) GenerateNoteTitle(ctx context.Context, item map[string]any, fallback string) string {
+func (s *Service) GenerateNoteTitle(ctx context.Context, owner GenerationOwner, item map[string]any, fallback string) string {
+	return s.GenerateNoteTitleResult(ctx, owner, item, fallback).Title
+}
+
+// GenerateNoteTitleResult preserves the model invocation for callers that must
+// account for manual note-title generation outside the task execution loop.
+func (s *Service) GenerateNoteTitleResult(ctx context.Context, owner GenerationOwner, item map[string]any, fallback string) NoteTitleResult {
 	prompt := buildNoteTitlePrompt(item, s.maxTitle)
 	cacheKey := noteTitleCacheKey(prompt, fallback, s.maxTitle)
 	if title, ok := s.cachedNoteTitle(cacheKey); ok {
-		return title
+		return NoteTitleResult{Title: title}
 	}
-	title, generated, _ := s.generate(ctx, noteTitleRequestID, prompt, fallback)
+	title, generated, invocation := s.generate(ctx, owner, prompt, fallback)
 	if generated {
 		s.storeNoteTitle(cacheKey, title)
 	}
-	return title
+	return NoteTitleResult{
+		Title:      title,
+		Generated:  generated,
+		Invocation: invocation,
+	}
 }
 
 // CachedNoteTitle exposes note-title cache hits so callers can keep manual
@@ -134,7 +157,7 @@ func (s *Service) CachedNoteTitle(item map[string]any, fallback string) (string,
 	return s.cachedNoteTitle(cacheKey)
 }
 
-func (s *Service) generate(ctx context.Context, requestID string, prompt string, fallback string) (string, bool, *model.InvocationRecord) {
+func (s *Service) generate(ctx context.Context, owner GenerationOwner, prompt string, fallback string) (string, bool, *model.InvocationRecord) {
 	fallback = normalizeTitle(fallback, s.maxTitle)
 	if strings.TrimSpace(prompt) == "" {
 		return fallback, false, nil
@@ -145,9 +168,10 @@ func (s *Service) generate(ctx context.Context, requestID string, prompt string,
 	}
 	generationCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
+	owner = normalizedGenerationOwner(owner)
 	response, err := modelService.GenerateText(generationCtx, model.GenerateTextRequest{
-		TaskID: requestID,
-		RunID:  requestID,
+		TaskID: owner.TaskID,
+		RunID:  owner.RunID,
 		Input:  prompt,
 	})
 	if err != nil {
@@ -158,6 +182,27 @@ func (s *Service) generate(ctx context.Context, requestID string, prompt string,
 		return title, true, &invocation
 	}
 	return fallback, false, &invocation
+}
+
+func normalizedGenerationOwner(owner GenerationOwner) GenerationOwner {
+	taskID := strings.TrimSpace(owner.TaskID)
+	runID := strings.TrimSpace(owner.RunID)
+	if taskID == "" && runID == "" {
+		return GenerationOwner{
+			TaskID: "title_generation",
+			RunID:  "title_generation",
+		}
+	}
+	if taskID == "" {
+		taskID = runID
+	}
+	if runID == "" {
+		runID = taskID
+	}
+	return GenerationOwner{
+		TaskID: taskID,
+		RunID:  runID,
+	}
 }
 
 func buildTaskSubjectPrompt(snapshot taskcontext.TaskContextSnapshot, intentName string, maxLength int) string {
