@@ -380,20 +380,20 @@ function loadNotePageServiceModule(desktopLocalPath?: DashboardContractDesktopLo
       resolveNoteResourceOpenExecutionPlan: (resource: {
         id: string;
         label: string;
-        openAction?: "task_detail" | "open_url" | "open_file" | "reveal_in_folder" | "copy_path" | null;
+        openAction?: "task_detail" | "result_page" | "open_url" | "open_file" | "reveal_in_folder" | "copy_path" | null;
         path: string;
         taskId?: string | null;
         type: string;
         url?: string | null;
       }) => {
-        mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+        mode: "task_detail" | "open_result_page" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
         taskId: string | null;
         path: string | null;
         url: string | null;
         feedback: string;
       };
       performNoteResourceOpenExecution: (plan: {
-        mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+        mode: "task_detail" | "open_result_page" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
         feedback: string;
         path: string | null;
         taskId: string | null;
@@ -401,13 +401,24 @@ function loadNotePageServiceModule(desktopLocalPath?: DashboardContractDesktopLo
       }, options?: {
         onOpenTaskDetail?: (input: {
           plan: {
-            mode: "task_detail" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+            mode: "task_detail" | "open_result_page" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
             feedback: string;
             path: string | null;
             taskId: string | null;
             url: string | null;
           };
           taskId: string;
+        }) => Promise<string | void> | string | void;
+        onOpenResultPage?: (input: {
+          plan: {
+            mode: "task_detail" | "open_result_page" | "open_url" | "open_local_path" | "reveal_local_path" | "copy_path";
+            feedback: string;
+            path: string | null;
+            taskId: string | null;
+            url: string | null;
+          };
+          taskId: string | null;
+          url: string;
         }) => Promise<string | void> | string | void;
       }) => Promise<string>;
     };
@@ -6335,6 +6346,29 @@ test("note resource execution delegates task-detail routing through the shared c
 
   assert.deepEqual(openedTaskIds, ["task_dashboard_001"]);
   assert.equal(feedback, "已在仪表盘中打开 Task detail。");
+});
+
+test("note result-page execution accepts dashboard delivery hrefs and delegates the in-app callback", async () => {
+  const noteService = loadNotePageServiceModule();
+  const openedTaskIds: string[] = [];
+
+  const feedback = await noteService.performNoteResourceOpenExecution({
+    mode: "open_result_page",
+    feedback: "已打开 Result page。",
+    path: null,
+    taskId: "task_dashboard_001",
+    url: "./dashboard.html#/tasks/delivery/task_dashboard_001",
+  }, {
+    onOpenResultPage: ({ taskId }: { taskId: string | null; url: string; plan: unknown }) => {
+      if (taskId) {
+        openedTaskIds.push(taskId);
+      }
+      return "已在仪表盘中打开结果页。";
+    },
+  });
+
+  assert.deepEqual(openedTaskIds, ["task_dashboard_001"]);
+  assert.equal(feedback, "已在仪表盘中打开结果页。");
 });
 
 test("task workspace routes formal delivery through a dedicated page and keeps list refresh task-updated aware", () => {

@@ -12,6 +12,7 @@ import type {
 import { openDesktopExternalUrl } from "@/platform/desktopExternalUrl";
 import { openDesktopLocalPath, revealDesktopLocalPath } from "@/platform/desktopLocalPath";
 import { convertNotepadToTask, listNotepad, updateNotepad } from "@/rpc/methods";
+import { isDashboardTaskDeliveryHref } from "../tasks/taskDeliveryNavigation";
 import type { NoteConvertOutcome, NoteDetailExperience, NoteListItem, NoteResource, NoteUpdateOutcome, SourceNoteDocument } from "./notePage.types";
 import { sanitizeSourceNoteBodyText } from "./sourceNoteEditor";
 
@@ -199,6 +200,10 @@ export function isAllowedNoteOpenUrl(url: string): boolean {
   } catch {
     return false;
   }
+}
+
+function isAllowedNoteResultPageUrl(url: string): boolean {
+  return isDashboardTaskDeliveryHref(url) || isAllowedNoteOpenUrl(url);
 }
 
 function resolveResourceOpenPayload(resource: NonNullable<TodoItem["related_resources"]>[number]): DeliveryPayload | null {
@@ -953,7 +958,7 @@ export async function performNoteResourceOpenExecution(
   }
 
   if (plan.mode === "open_result_page" && plan.url) {
-    if (!isAllowedNoteOpenUrl(plan.url)) {
+    if (!isAllowedNoteResultPageUrl(plan.url)) {
       return "已拦截不受支持的便签结果页链接。";
     }
 
