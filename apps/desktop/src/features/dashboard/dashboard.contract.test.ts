@@ -2035,6 +2035,7 @@ test("dashboard home no longer replays mock summon or voice presets when live re
   assert.match(dashboardHomeSource, /if \(data\.summonTemplates\.length === 0\) \{/);
   assert.match(dashboardHomeSource, /data\.loadWarnings\.length > 0/);
   assert.match(dashboardHomeSource, /部分模块未同步/);
+  assert.match(dashboardHomeSource, /useDesktopOnboardingLoading\("dashboard"\)/);
 });
 
 test("dashboard event panel routes task-detail actions through the shared navigation helper", () => {
