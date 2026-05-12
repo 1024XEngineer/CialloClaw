@@ -567,6 +567,57 @@ func TestExecuteAgentLoopReadsFileBeforeReturningAnswer(t *testing.T) {
 	if result.ModelInvocation["request_id"] != "req_loop_2" {
 		t.Fatalf("expected final planning turn metadata, got %+v", result.ModelInvocation)
 	}
+	if result.DeliveryResult["type"] != "bubble" {
+		t.Fatalf("expected short agent_loop answer to remain bubble delivery, got %+v", result.DeliveryResult)
+	}
+	if len(result.Artifacts) != 0 {
+		t.Fatalf("expected short agent_loop answer not to create artifacts, got %+v", result.Artifacts)
+	}
+}
+
+func TestExecuteAgentLoopPromotesLongBubbleOutputToWorkspaceDocument(t *testing.T) {
+	longOutput := strings.Repeat("This is a long-form planning paragraph that should be delivered as a workspace document. ", 8)
+	service, workspaceRoot := newTestExecutionServiceWithModelClient(t, &stubModelClient{toolCalls: []model.ToolCallResult{{
+		RequestID:  "req_loop_workspace_doc",
+		Provider:   "openai_responses",
+		ModelID:    "gpt-5.4",
+		OutputText: longOutput,
+	}}})
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_loop_workspace_doc",
+		RunID:        "run_loop_workspace_doc",
+		Title:        "Loop workspace delivery",
+		Intent:       map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}},
+		Snapshot:     taskcontext.TaskContextSnapshot{InputType: "text", Text: "Draft a long-form migration plan."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Loop document result",
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+
+	if result.DeliveryResult["type"] != "workspace_document" {
+		t.Fatalf("expected long agent_loop output to promote to workspace_document, got %+v", result.DeliveryResult)
+	}
+	if result.ToolName != "write_file" {
+		t.Fatalf("expected write_file to become the latest tool, got %s", result.ToolName)
+	}
+	if len(result.Artifacts) != 1 {
+		t.Fatalf("expected promoted agent_loop output to persist one artifact, got %+v", result.Artifacts)
+	}
+	outputPath := deliveryPayloadPath(result.DeliveryResult)
+	if outputPath == "" {
+		t.Fatalf("expected promoted workspace document to expose a payload path, got %+v", result.DeliveryResult)
+	}
+	writtenPath := filepath.Join(workspaceRoot, strings.TrimPrefix(outputPath, "workspace/"))
+	content, err := os.ReadFile(writtenPath)
+	if err != nil {
+		t.Fatalf("read promoted workspace document: %v", err)
+	}
+	if !strings.Contains(string(content), longOutput[:64]) {
+		t.Fatalf("expected promoted workspace document to contain model output, got %q", string(content))
+	}
 }
 
 func TestExecuteAgentLoopRetriesFalseCapabilityDenialBeforeCallingTool(t *testing.T) {

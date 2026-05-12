@@ -18252,6 +18252,59 @@ func TestServiceStartTaskWithExecutorReturnsGeneratedBubble(t *testing.T) {
 	}
 }
 
+func TestServiceStartTaskWithExecutorPromotesLongAgentLoopOutputToWorkspaceDocument(t *testing.T) {
+	longOutput := strings.Repeat("This is a long-form agent loop section that should land in a workspace document. ", 8)
+	service, workspaceRoot := newTestServiceWithModelClient(t, &stubToolCallingModelClient{toolCalls: []model.ToolCallResult{{
+		RequestID:  "req_orchestrator_loop_workspace_doc",
+		Provider:   "openai_responses",
+		ModelID:    "gpt-5.4",
+		OutputText: longOutput,
+	}}})
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_loop_doc",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Draft a long-form migration plan.",
+		},
+		"intent": map[string]any{
+			"name":      "agent_loop",
+			"arguments": map[string]any{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	deliveryResult := result["delivery_result"].(map[string]any)
+	if deliveryResult["type"] != "workspace_document" {
+		t.Fatalf("expected long agent_loop output to promote to workspace_document, got %+v", deliveryResult)
+	}
+	payload := deliveryResult["payload"].(map[string]any)
+	outputPath := stringValue(payload, "path", "")
+	if outputPath == "" {
+		t.Fatalf("expected promoted delivery payload path, got %+v", payload)
+	}
+	content, err := os.ReadFile(filepath.Join(workspaceRoot, strings.TrimPrefix(outputPath, "workspace/")))
+	if err != nil {
+		t.Fatalf("read promoted workspace document: %v", err)
+	}
+	if !strings.Contains(string(content), longOutput[:64]) {
+		t.Fatalf("expected promoted workspace document to contain model output, got %q", string(content))
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected task to remain in runtime")
+	}
+	if record.LatestToolCall["tool_name"] != "write_file" {
+		t.Fatalf("expected promoted agent_loop task to record write_file, got %v", record.LatestToolCall["tool_name"])
+	}
+}
+
 func TestServiceStartTaskWithExecutorDeliversPageReadResultPage(t *testing.T) {
 	service, _ := newTestServiceWithExecutionAndPlaywright(t, "unused", platform.LocalExecutionBackend{}, nil, stubPlaywrightClient{readResult: tools.BrowserPageReadResult{
 		Title:       "Example Domain",

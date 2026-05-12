@@ -39,6 +39,7 @@ const (
 	internalScreenAnalyzeIntent = "screen_analyze_candidate"
 	deliveryPreviewMaxLength    = 120
 	inputPreviewMaxLength       = 96
+	bubbleTextMaxLength         = 480
 )
 
 // Service owns the minimum executable task pipeline inside local-service.
@@ -433,7 +434,7 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 		}, nil
 	}
 
-	deliveryType := firstNonEmpty(request.DeliveryType, "workspace_document")
+	deliveryType := effectiveDeliveryType(request, trace.OutputText)
 	targetPath := targetPathFromIntent(request.Intent)
 	previewText := previewTextForOutput(trace.OutputText, deliveryType)
 	deliveryResult := s.delivery.BuildDeliveryResultWithTargetPath(request.TaskID, deliveryType, request.ResultTitle, previewText, targetPath)
@@ -2489,40 +2490,6 @@ func fallbackOutput(request Request, inputText string) string {
 
 func effectiveIntentName(taskIntent map[string]any) string {
 	return strings.TrimSpace(stringValue(taskIntent, "name", ""))
-}
-
-func workspaceDocumentContent(title, outputText string) string {
-	trimmed := strings.TrimSpace(outputText)
-	if trimmed == "" {
-		trimmed = presentation.Text(presentation.MessageDocumentEmpty, nil)
-	}
-	if strings.HasPrefix(trimmed, "#") {
-		return trimmed + "\n"
-	}
-	return fmt.Sprintf("# %s\n\n%s\n", firstNonEmpty(strings.TrimSpace(title), presentation.Text(presentation.MessageDocumentDefaultTitle, nil)), trimmed)
-}
-
-func previewTextForOutput(outputText, deliveryType string) string {
-	preview := truncateText(normalizeWhitespace(outputText), deliveryPreviewMaxLength)
-	if preview == "" {
-		preview = presentation.Text(presentation.MessagePreviewGenerated, nil)
-	}
-	if deliveryType == "workspace_document" {
-		return presentation.Text(presentation.MessagePreviewWorkspaceGenerated, map[string]string{"preview": preview})
-	}
-	return preview
-}
-
-func previewTextForDeliveryType(deliveryType string) string {
-	return presentation.DeliveryPreviewText(deliveryType)
-}
-
-func truncateBubbleText(outputText string) string {
-	trimmed := strings.TrimSpace(outputText)
-	if trimmed == "" {
-		return presentation.Text(presentation.MessageBubbleGenerated, nil)
-	}
-	return truncateText(trimmed, 480)
 }
 
 func deliveryPayloadPath(deliveryResult map[string]any) string {
