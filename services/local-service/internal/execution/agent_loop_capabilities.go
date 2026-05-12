@@ -51,6 +51,24 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 		},
 	},
 	{
+		Name:      "extract_text",
+		UseWhen:   "Need readable text from a document, PDF, image, or another file that is not safe to consume through read_file directly.",
+		AvoidWhen: "The target is already a small plain-text file and read_file can return the exact content safely.",
+		Constraints: []string{
+			"Workspace files only",
+			"Returns extracted text instead of raw binary bytes",
+			"Prefer read_file for exact plain-text content and fall back to extract_text for document-style inputs",
+		},
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{"type": "string", "description": "Workspace-relative path to a document, image, or PDF."},
+			},
+			"required":             []string{"path"},
+			"additionalProperties": false,
+		},
+	},
+	{
 		Name:                   "browser_attach_current",
 		RequiresCurrentBrowser: true,
 		UseWhen:                "需要附着当前真实浏览器标签页，并确认当前页面 URL 或标题",
