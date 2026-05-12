@@ -743,6 +743,9 @@ func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot taskco
 		return nil, ErrTaskNotFound
 	}
 	if suggestion.RequiresConfirm {
+		if suggestion.IntentConfirmed {
+			s.maybeRefineConfirmIntentTextAsync(task.TaskID, mergedSnapshot, suggestion)
+		}
 		return map[string]any{
 			"task":            taskMap(updatedTask),
 			"bubble_message":  bubble,
