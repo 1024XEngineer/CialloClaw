@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import path from "node:path";
 
-import { extractOCRPDF, handleRequest, healthResponse } from "./index.js";
+import { extractOCRPDF, extractTextResult, handleRequest, healthResponse } from "./index.js";
 
 function createDeps(overrides = {}) {
   return {
@@ -15,6 +15,63 @@ function createDeps(overrides = {}) {
     tmpdir: () => "/tmp",
     ...overrides,
   };
+}
+
+function buildStoredZip(entries) {
+  const localParts = [];
+  const centralParts = [];
+  let offset = 0;
+  for (const [fileName, rawContent] of Object.entries(entries)) {
+    const nameBuffer = Buffer.from(fileName, "utf8");
+    const contentBuffer = Buffer.isBuffer(rawContent) ? rawContent : Buffer.from(String(rawContent), "utf8");
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034B50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt16LE(0, 6);
+    localHeader.writeUInt16LE(0, 8);
+    localHeader.writeUInt16LE(0, 10);
+    localHeader.writeUInt16LE(0, 12);
+    localHeader.writeUInt32LE(0, 14);
+    localHeader.writeUInt32LE(contentBuffer.length, 18);
+    localHeader.writeUInt32LE(contentBuffer.length, 22);
+    localHeader.writeUInt16LE(nameBuffer.length, 26);
+    localHeader.writeUInt16LE(0, 28);
+    localParts.push(localHeader, nameBuffer, contentBuffer);
+
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014B50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt16LE(0, 8);
+    centralHeader.writeUInt16LE(0, 10);
+    centralHeader.writeUInt16LE(0, 12);
+    centralHeader.writeUInt16LE(0, 14);
+    centralHeader.writeUInt32LE(0, 16);
+    centralHeader.writeUInt32LE(contentBuffer.length, 20);
+    centralHeader.writeUInt32LE(contentBuffer.length, 24);
+    centralHeader.writeUInt16LE(nameBuffer.length, 28);
+    centralHeader.writeUInt16LE(0, 30);
+    centralHeader.writeUInt16LE(0, 32);
+    centralHeader.writeUInt16LE(0, 34);
+    centralHeader.writeUInt16LE(0, 36);
+    centralHeader.writeUInt32LE(0, 38);
+    centralHeader.writeUInt32LE(offset, 42);
+    centralParts.push(centralHeader, nameBuffer);
+
+    offset += localHeader.length + nameBuffer.length + contentBuffer.length;
+  }
+
+  const centralDirectory = Buffer.concat(centralParts);
+  const endRecord = Buffer.alloc(22);
+  endRecord.writeUInt32LE(0x06054B50, 0);
+  endRecord.writeUInt16LE(0, 4);
+  endRecord.writeUInt16LE(0, 6);
+  endRecord.writeUInt16LE(Object.keys(entries).length, 8);
+  endRecord.writeUInt16LE(Object.keys(entries).length, 10);
+  endRecord.writeUInt32LE(centralDirectory.length, 12);
+  endRecord.writeUInt32LE(offset, 16);
+  endRecord.writeUInt16LE(0, 20);
+  return Buffer.concat([...localParts, centralDirectory, endRecord]);
 }
 
 test("health reports missing OCR dependencies", async () => {
@@ -75,6 +132,66 @@ test("extract_text routes PDFs through PDF extraction before OCR fallback", asyn
   assert.equal(response.result.source, "ocr_worker_pdf_text");
   assert.equal(response.result.text, "embedded pdf text");
   assert.equal(calls.length, 1);
+});
+
+test("extract_text parses OOXML documents without external converters", async () => {
+  const response = await handleRequest({ action: "extract_text", path: "workspace/demo.docx" }, createDeps({
+    readFile: async (targetPath, encoding) => {
+      if (targetPath === "workspace/demo.docx") {
+        return buildStoredZip({
+          "word/document.xml": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><w:document><w:body><w:p><w:r><w:t>First paragraph</w:t></w:r></w:p><w:p><w:r><w:t>Second paragraph</w:t></w:r></w:p></w:body></w:document>",
+          "word/header1.xml": "<w:hdr><w:p><w:r><w:t>Header text</w:t></w:r></w:p></w:hdr>",
+        });
+      }
+      throw new Error(`unexpected readFile target: ${targetPath} (${encoding ?? "buffer"})`);
+    },
+  }));
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.source, "ocr_worker_docx");
+  assert.equal(response.result.language, "docx_text");
+  assert.match(response.result.text, /Header text/);
+  assert.match(response.result.text, /First paragraph/);
+  assert.match(response.result.text, /Second paragraph/);
+});
+
+test("extract_text converts legacy doc files with soffice when available", async () => {
+  const removed = [];
+  const tempDir = path.join("/tmp", "ocr-worker-doc");
+  const response = await handleRequest({ action: "extract_text", path: "workspace/demo.doc" }, createDeps({
+    execFile: async (command, args) => {
+      assert.equal(command, "soffice");
+      assert.deepEqual(args, ["--headless", "--convert-to", "txt:Text", "--outdir", tempDir, "workspace/demo.doc"]);
+      return { stdout: "", stderr: "" };
+    },
+    mkdtemp: async () => tempDir,
+    readFile: async (targetPath, encoding) => {
+      if (targetPath === path.join(tempDir, "demo.txt") && encoding === "utf8") {
+        return "converted legacy doc text";
+      }
+      throw new Error(`unexpected readFile target: ${targetPath} (${encoding ?? "buffer"})`);
+    },
+    rm: async (targetPath) => {
+      removed.push(targetPath);
+    },
+  }));
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.source, "ocr_worker_doc");
+  assert.equal(response.result.language, "legacy_doc_text");
+  assert.equal(response.result.text, "converted legacy doc text");
+  assert.deepEqual(removed, [tempDir]);
+});
+
+test("extract_text reports legacy doc converter requirements clearly", async () => {
+  await assert.rejects(
+    () => extractTextResult("workspace/demo.doc", undefined, createDeps({
+      execFile: async () => {
+        throw new Error("missing converter");
+      },
+    })),
+    /convert the file to \.docx/i,
+  );
 });
 
 test("ocr_pdf falls back to page OCR when pdftotext returns no text", async () => {
