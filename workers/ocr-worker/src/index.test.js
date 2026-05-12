@@ -251,6 +251,37 @@ test("extract_text rejects docx archives without readable word xml", async () =>
   );
 });
 
+test("extract_text rejects oversized docx archives before reading them", async () => {
+  await assert.rejects(
+    () => extractTextResult("workspace/huge.docx", undefined, createDeps({
+      readFile: async () => {
+        throw new Error("readFile should not be called");
+      },
+      stat: async () => ({
+        isFile: () => true,
+        size: 26 * 1024 * 1024,
+      }),
+    })),
+    /docx_archive_too_large/,
+  );
+});
+
+test("extract_text rejects oversized docx xml entries", async () => {
+  const oversizedEntry = "A".repeat((8 * 1024 * 1024) + 1);
+  await assert.rejects(
+    () => extractTextResult("workspace/large-entry.docx", undefined, createDeps({
+      readFile: async () => buildStoredZip({
+        "word/document.xml": oversizedEntry,
+      }),
+      stat: async () => ({
+        isFile: () => true,
+        size: 1024,
+      }),
+    })),
+    /docx_entry_too_large:word\/document\.xml/,
+  );
+});
+
 test("ocr_pdf falls back to page OCR when pdftotext returns no text", async () => {
   const commands = [];
   const removed = [];

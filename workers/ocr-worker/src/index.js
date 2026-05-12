@@ -16,6 +16,10 @@ const imageExtensions = new Set([".bmp", ".gif", ".jpg", ".jpeg", ".png", ".tif"
 const htmlExtensions = new Set([".htm", ".html"]);
 const docxExtensions = new Set([".docx"]);
 const legacyWordExtensions = new Set([".doc"]);
+const docxArchiveSizeLimitBytes = 25 * 1024 * 1024;
+const docxEntrySizeLimitBytes = 8 * 1024 * 1024;
+const docxTotalXMLSizeLimitBytes = 16 * 1024 * 1024;
+const docxWordEntryPattern = /^word\/(document|header\d+|footer\d+|footnotes|endnotes)\.xml$/i;
 
 const defaultDependencies = {
   execFile,
@@ -193,7 +197,7 @@ function zipEndOfCentralDirectoryOffset(buffer) {
   throw new Error("zip_end_of_central_directory_not_found");
 }
 
-function readZipEntryContent(buffer, localHeaderOffset, compressionMethod, compressedSize) {
+function readZipEntryContent(buffer, localHeaderOffset, compressionMethod, compressedSize, options = {}) {
   if (buffer.readUInt32LE(localHeaderOffset) !== 0x04034B50) {
     throw new Error("zip_local_header_not_found");
   }
@@ -201,21 +205,33 @@ function readZipEntryContent(buffer, localHeaderOffset, compressionMethod, compr
   const extraLength = buffer.readUInt16LE(localHeaderOffset + 28);
   const dataOffset = localHeaderOffset + 30 + fileNameLength + extraLength;
   const compressed = buffer.subarray(dataOffset, dataOffset + compressedSize);
+  const maxOutputLength = options.maxOutputLength;
   switch (compressionMethod) {
     case 0:
+      if (typeof maxOutputLength === "number" && compressed.length > maxOutputLength) {
+        throw new Error(`docx_entry_too_large:${options.entryName ?? "unknown"}`);
+      }
       return Buffer.from(compressed);
     case 8:
-      return inflateRawSync(compressed);
+      try {
+        return inflateRawSync(compressed, typeof maxOutputLength === "number" ? { maxOutputLength } : undefined);
+      } catch (error) {
+        if (typeof maxOutputLength === "number" && error?.code === "ERR_BUFFER_TOO_LARGE") {
+          throw new Error(`docx_entry_too_large:${options.entryName ?? "unknown"}`);
+        }
+        throw error;
+      }
     default:
       throw new Error(`zip_compression_unsupported:${compressionMethod}`);
   }
 }
 
-function unzipEntries(buffer) {
+function unzipEntries(buffer, options = {}) {
   const endRecordOffset = zipEndOfCentralDirectoryOffset(buffer);
   const entryCount = buffer.readUInt16LE(endRecordOffset + 10);
   let offset = buffer.readUInt32LE(endRecordOffset + 16);
   const entries = new Map();
+  let totalSize = 0;
   for (let index = 0; index < entryCount; index += 1) {
     if (buffer.readUInt32LE(offset) !== 0x02014B50) {
       throw new Error("zip_central_directory_entry_not_found");
@@ -227,7 +243,17 @@ function unzipEntries(buffer) {
     const commentLength = buffer.readUInt16LE(offset + 32);
     const localHeaderOffset = buffer.readUInt32LE(offset + 42);
     const fileName = buffer.subarray(offset + 46, offset + 46 + fileNameLength).toString("utf8");
-    entries.set(fileName, readZipEntryContent(buffer, localHeaderOffset, compressionMethod, compressedSize));
+    if (!options.includeEntry || options.includeEntry(fileName)) {
+      const entry = readZipEntryContent(buffer, localHeaderOffset, compressionMethod, compressedSize, {
+        entryName: fileName,
+        maxOutputLength: options.maxEntrySize,
+      });
+      totalSize += entry.length;
+      if (typeof options.maxTotalSize === "number" && totalSize > options.maxTotalSize) {
+        throw new Error("docx_text_too_large");
+      }
+      entries.set(fileName, entry);
+    }
     offset += 46 + fileNameLength + extraLength + commentLength;
   }
   return entries;
@@ -259,9 +285,18 @@ function normalizeWordXML(value) {
 }
 
 async function extractDOCXText(targetPath, deps) {
-  const archive = unzipEntries(await readBuffer(targetPath, deps));
+  const targetStats = await deps.stat(targetPath);
+  if (typeof targetStats?.size === "number" && targetStats.size > docxArchiveSizeLimitBytes) {
+    throw new Error("docx_archive_too_large");
+  }
+  const archive = unzipEntries(await readBuffer(targetPath, deps), {
+    includeEntry(name) {
+      return docxWordEntryPattern.test(name);
+    },
+    maxEntrySize: docxEntrySizeLimitBytes,
+    maxTotalSize: docxTotalXMLSizeLimitBytes,
+  });
   const candidateNames = Array.from(archive.keys())
-    .filter((name) => /^word\/(document|header\d+|footer\d+|footnotes|endnotes)\.xml$/i.test(name))
     .sort((left, right) => {
       if (left === "word/document.xml") {
         return -1;
