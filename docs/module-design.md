@@ -1740,6 +1740,7 @@ flowchart TB
 #### 实现约束
 - Playwright sidecar 至少支持 `page_read`、`page_search`、`page_interact` 三类兼容能力，以及 `browser_attach_current`、`browser_snapshot`、`browser_navigate`、`browser_tabs_list`、`browser_tab_focus`、`browser_interact` 六类真实浏览器动作；
 - sidecar 可在保持既有 launch 路径兼容的前提下附加 `attach.mode = cdp` 请求形状，用于附着已开启调试端口的本地 Chromium 浏览器；
+- 当前默认 launch 路径优先尝试拉起本地 Chrome / Edge 并经 loopback CDP 建立受管浏览器会话；仅在本地浏览器不可用时才回退到 Playwright 自带 Chromium；
 - 当前执行层会在可信桌面快照的 `PageURL` 与目标 `url` 对齐时，为 `page_*` 请求自动注入 `attach`，未命中时必须回退到既有 launch 路径而不是伪造附着成功；
 - `attach.target.url / title_contains / page_index` 仅在显式提供时才参与附着页缩小；顶层 `url` 继续保留给 launch 路径与展示 fallback，不得隐式升级成 attach 过滤条件；
 - `attach.endpoint_url` 仅允许 loopback 目标（`localhost`、`127.0.0.0/8`、`::1`），避免 sidecar 退化为通用 outbound CDP dialer；
