@@ -37,60 +37,32 @@ func (s *Service) bubbleTextForStart(snapshot taskcontext.TaskContextSnapshot, s
 	return suggestion.ResultBubbleText
 }
 
-// confirmIntentText returns the deterministic confirmation question that keeps
-// the main entry flow responsive. Model refinement runs asynchronously after
-// the task has already entered the confirming_intent gate.
+// confirmIntentText prefers a model-authored confirmation question that can use
+// the inferred intent payload plus the current task object context. When the
+// runtime model is unavailable or returns unusable text, the backend falls back
+// to a deterministic question so the confirmation gate remains stable.
 func (s *Service) confirmIntentText(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) string {
+	if question := s.modelBackedConfirmIntentText(snapshot, suggestion); question != "" {
+		return question
+	}
 	return fallbackConfirmIntentText(snapshot, suggestion)
 }
 
-func (s *Service) maybeRefineConfirmIntentTextAsync(taskID string, snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) {
-	if strings.TrimSpace(taskID) == "" || !shouldUseModelBackedConfirmIntentText(suggestion) {
-		return
-	}
+func (s *Service) modelBackedConfirmIntentText(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) string {
 	modelService := s.currentModel()
-	if modelService == nil {
-		return
-	}
-
-	go func() {
-		fallback := fallbackConfirmIntentText(snapshot, suggestion)
-		question := s.modelBackedConfirmIntentText(modelService, snapshot, suggestion, fallback)
-		if question == "" || question == fallback {
-			return
-		}
-
-		task, ok := s.runEngine.GetTask(taskID)
-		if !ok || task.Status != "confirming_intent" || task.CurrentStep != "intent_confirmation" {
-			return
-		}
-
-		bubble := cloneMap(task.BubbleMessage)
-		if len(bubble) == 0 {
-			return
-		}
-		if stringValue(bubble, "text", "") == question {
-			return
-		}
-		bubble["text"] = question
-		_, _ = s.runEngine.SetPresentation(taskID, bubble, nil, nil)
-	}()
-}
-
-func (s *Service) modelBackedConfirmIntentText(modelService *model.Service, snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, fallback string) string {
-	if modelService == nil {
+	if modelService == nil || !shouldUseModelBackedConfirmIntentText(suggestion) {
 		return ""
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), taskConfirmQuestionModelTimeout)
 	defer cancel()
 	response, err := modelService.GenerateText(ctx, model.GenerateTextRequest{
-		Input: buildTaskConfirmQuestionPrompt(snapshot, suggestion, fallback),
+		Input: buildTaskConfirmQuestionPrompt(snapshot, suggestion),
 	})
 	if err != nil {
 		return ""
 	}
-	return normalizeTaskConfirmQuestion(response.OutputText, snapshot, suggestion, fallback)
+	return normalizeTaskConfirmQuestion(response.OutputText)
 }
 
 func shouldUseModelBackedConfirmIntentText(suggestion intent.Suggestion) bool {
@@ -125,13 +97,12 @@ func fallbackConfirmIntentText(snapshot taskcontext.TaskContextSnapshot, suggest
 	}
 }
 
-func buildTaskConfirmQuestionPrompt(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, fallback string) string {
+func buildTaskConfirmQuestionPrompt(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) string {
 	intentPayload, _ := json.Marshal(suggestion.Intent)
 	lines := []string{
 		"You write one confirmation question for CialloClaw before the task executes.",
 		"Return exactly one concise Chinese question and nothing else.",
-		"Keep the confirmation loyal to the inferred operation and target object from the formal intent payload.",
-		"Only refine the fallback question when you can stay on the same action and target.",
+		"Use the inferred operation and the most specific target object you can justify from the intent payload and task context.",
 		"Do not mention internal labels such as intent, task title, current intent, JSON, payload, or field names.",
 		"Do not explain your reasoning. Do not add bullets, quotes, or multiple options.",
 		"If the task changes files, pages, or other state, make that action explicit in the question.",
@@ -140,22 +111,11 @@ func buildTaskConfirmQuestionPrompt(snapshot taskcontext.TaskContextSnapshot, su
 		fmt.Sprintf("intent_payload=%s", string(intentPayload)),
 		fmt.Sprintf("source_type=%s", strings.TrimSpace(suggestion.TaskSourceType)),
 		fmt.Sprintf("delivery_type=%s", strings.TrimSpace(suggestion.DirectDeliveryType)),
-		fmt.Sprintf("fallback_question=%s", fallback),
 		"",
-		"trusted_task_context:",
-		taskConfirmQuestionContextSummary(trustedTaskConfirmQuestionSnapshot(snapshot)),
+		"task_context:",
+		taskConfirmQuestionContextSummary(snapshot),
 	}
 	return strings.Join(lines, "\n")
-}
-
-func trustedTaskConfirmQuestionSnapshot(snapshot taskcontext.TaskContextSnapshot) taskcontext.TaskContextSnapshot {
-	return taskcontext.TaskContextSnapshot{
-		InputType:     snapshot.InputType,
-		Text:          snapshot.Text,
-		SelectionText: snapshot.SelectionText,
-		ErrorText:     snapshot.ErrorText,
-		Files:         append([]string(nil), snapshot.Files...),
-	}
 }
 
 func taskConfirmQuestionContextSummary(snapshot taskcontext.TaskContextSnapshot) string {
@@ -165,6 +125,12 @@ func taskConfirmQuestionContextSummary(snapshot taskcontext.TaskContextSnapshot)
 		fmt.Sprintf("selection_text=%s", truncateTaskConfirmQuestionField(snapshot.SelectionText)),
 		fmt.Sprintf("error_text=%s", truncateTaskConfirmQuestionField(snapshot.ErrorText)),
 		fmt.Sprintf("files=%s", strings.Join(snapshot.Files, ",")),
+		fmt.Sprintf("page_title=%s", truncateTaskConfirmQuestionField(snapshot.PageTitle)),
+		fmt.Sprintf("page_url=%s", truncateTaskConfirmQuestionField(snapshot.PageURL)),
+		fmt.Sprintf("window_title=%s", truncateTaskConfirmQuestionField(snapshot.WindowTitle)),
+		fmt.Sprintf("visible_text=%s", truncateTaskConfirmQuestionField(snapshot.VisibleText)),
+		fmt.Sprintf("screen_summary=%s", truncateTaskConfirmQuestionField(snapshot.ScreenSummary)),
+		fmt.Sprintf("hover_target=%s", truncateTaskConfirmQuestionField(snapshot.HoverTarget)),
 	}
 	return strings.Join(parts, "\n")
 }
@@ -174,7 +140,7 @@ func truncateTaskConfirmQuestionField(value string) string {
 	return textutil.TruncateGraphemes(trimmed, 240)
 }
 
-func normalizeTaskConfirmQuestion(raw string, snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, fallback string) string {
+func normalizeTaskConfirmQuestion(raw string) string {
 	trimmed := strings.Join(strings.Fields(strings.TrimSpace(raw)), " ")
 	trimmed = strings.Trim(trimmed, "\"'`“”")
 	if trimmed == "" {
@@ -190,35 +156,7 @@ func normalizeTaskConfirmQuestion(raw string, snapshot taskcontext.TaskContextSn
 	if !strings.HasSuffix(trimmed, "？") && !strings.HasSuffix(trimmed, "?") {
 		return ""
 	}
-	if !isSemanticallyTrustedConfirmQuestion(trimmed, snapshot, suggestion, fallback) {
-		return ""
-	}
 	return textutil.TruncateGraphemes(trimmed, 80)
-}
-
-func isSemanticallyTrustedConfirmQuestion(question string, snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, fallback string) bool {
-	if strings.TrimSpace(question) == strings.TrimSpace(fallback) {
-		return true
-	}
-
-	action, _ := intentConfirmTitleParts(suggestion.TaskTitle)
-	if action != "" && action != "处理" && !strings.Contains(question, action) {
-		return false
-	}
-
-	target := normalizeIntentConfirmSubject(intentConfirmArgumentTarget(suggestion.Intent))
-	if target == "" {
-		target = intentConfirmSubject(snapshot, suggestion.Intent)
-	}
-	if target == "" {
-		return true
-	}
-	if strings.Contains(question, target) {
-		return true
-	}
-
-	baseTarget := normalizeIntentConfirmSubject(filepath.Base(target))
-	return baseTarget != "" && strings.Contains(question, baseTarget)
 }
 
 func intentConfirmTitleParts(taskTitle string) (string, string) {

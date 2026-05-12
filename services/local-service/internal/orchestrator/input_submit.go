@@ -113,9 +113,6 @@ func (s *Service) finishInputSubmit(flow taskEntryFlow, task runengine.TaskRecor
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(flow.Suggestion.RequiresConfirm), s.bubbleTextForInput(flow.Snapshot, flow.Suggestion), task.StartedAt.Format(dateTimeLayout))
 	if flow.Suggestion.RequiresConfirm {
 		task = s.persistTaskPresentation(task, bubble)
-		if flow.Suggestion.IntentConfirmed {
-			s.maybeRefineConfirmIntentTextAsync(task.TaskID, flow.Snapshot, flow.Suggestion)
-		}
 		return buildTaskEntryResponse(task, bubble, nil), nil
 	}
 	if queuedTask, queueBubble, queued, queueErr := s.queueTaskIfSessionBusy(task); queueErr != nil {

@@ -179,9 +179,6 @@ func (s *Service) finishNotepadTask(snapshot taskcontext.TaskContextSnapshot, su
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), s.bubbleTextForStart(snapshot, suggestion), task.StartedAt.Format(dateTimeLayout))
 	if suggestion.RequiresConfirm {
 		task = s.persistTaskPresentation(task, bubble)
-		if suggestion.IntentConfirmed {
-			s.maybeRefineConfirmIntentTextAsync(task.TaskID, snapshot, suggestion)
-		}
 		return buildTaskEntryResponse(task, bubble, nil), nil
 	}
 
