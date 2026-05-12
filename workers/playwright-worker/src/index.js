@@ -115,14 +115,15 @@ async function browserVersionString(browser) {
 
 function detectWindowsBrowserCandidates(env = process.env) {
   const roots = [env["ProgramFiles(x86)"], env.ProgramFiles, env.LOCALAPPDATA].filter(Boolean);
+  const joinWindowsPath = path.win32.join;
   return [
     {
       browserKind: "edge",
-      executablePaths: roots.map((root) => path.join(root, "Microsoft", "Edge", "Application", "msedge.exe")),
+      executablePaths: roots.map((root) => joinWindowsPath(root, "Microsoft", "Edge", "Application", "msedge.exe")),
     },
     {
       browserKind: "chrome",
-      executablePaths: roots.map((root) => path.join(root, "Google", "Chrome", "Application", "chrome.exe")),
+      executablePaths: roots.map((root) => joinWindowsPath(root, "Google", "Chrome", "Application", "chrome.exe")),
     },
   ];
 }

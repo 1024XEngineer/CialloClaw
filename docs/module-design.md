@@ -1680,8 +1680,8 @@ flowchart TB
 - 真实浏览器附着线索只允许来自桌面快照承接的 `browser_kind / page_url / page_title / window_title`，执行层不得信任模型直接覆盖 CDP 端点或浏览器类型；
 - agent loop 默认只暴露无需审批的浏览器能力（如 `browser_attach_current / browser_snapshot`）；`browser_tabs_list / browser_navigate / browser_tab_focus / browser_interact` 仍受审批边界约束，在具备 loop 内授权暂停前不得进入默认目录。
 - 当前桌面 Agent Loop 的 planner-visible capability catalog 必须由执行层单一真源生成，同一份定义同时派生工具描述、参数 schema 和运行态 allowlist，避免出现“Prompt 里可用但执行层拒绝”或反向漂移。
-- 当前默认冻结的只读规划能力面为 `read_file / list_dir / page_read / page_search`；`page_interact` 虽已是 Playwright sidecar 正式能力，但不进入当前桌面 Agent Loop 的默认规划目录。
-- 每个能力条目都必须同时声明适用场景、不适用场景和约束；当前 `page_read / page_search` 对显式 `http(s)` 网页目标默认按低风险只读处理。审批边界仅保留给 `localhost` 风格主机名、单标签主机名、本地域后缀，以及字面量回环 / 私网 / link-local / CGNAT IP 目标；页面交互、导航和跨标签页浏览器动作仍保留审批治理边界。
+- 当前默认冻结的只读规划能力面为 `read_file / list_dir / extract_text / page_read / page_search / web_search`；`page_interact` 虽已是 Playwright sidecar 正式能力，但不进入当前桌面 Agent Loop 的默认规划目录。
+- 每个能力条目都必须同时声明适用场景、不适用场景和约束；当前 `page_read / page_search / web_search` 对显式 `http(s)` 网页目标默认按低风险只读处理。审批边界仅保留给 `localhost` 风格主机名、单标签主机名、本地域后缀，以及字面量回环 / 私网 / link-local / CGNAT IP 目标；页面交互、导航和跨标签页浏览器动作仍保留审批治理边界。
 
 #### 处理主线
 1. 根据 `Intent` 和 arguments 解析目标工具及目标对象。
@@ -1692,7 +1692,7 @@ flowchart TB
 
 #### 浏览器附着补充约束
 - `browser_*` intents 仍然走执行层与治理层的正式工具解析路径，不得因为页面附着优化而绕过 `resolveToolExecution / resolveGovernanceToolExecution` 主链；
-- 对 `page_read / page_search / page_interact` 的 attach 注入只允许建立在可信桌面快照上，至少要求当前 `PageURL` 与请求 `url` 归一化后仍能对齐；
+- 对 `page_read / page_search / page_interact` 的 attach 注入只允许建立在可信桌面快照上，至少要求当前 `PageURL` 与请求 `url` 归一化后仍能对齐；`web_search` 继续走独立搜索页与结果解析路径，不参与桌面浏览器附着。
 - 当前 3b 只把 `PageURL / PageTitle / BrowserKind` 用作页面级附着线索，`ProcessPath / ProcessID` 仅在快照和续跑链路中保留，尚未进入 worker attach contract 的进程级会话收窄逻辑；
 - URL 归一化目前只安全忽略 host 大小写、fragment 与默认根路径 / 默认端口差异，不在执行层静态处理 redirects 或所有尾斜杠等价关系，避免误附着到错误页面。
 
@@ -1735,10 +1735,10 @@ flowchart TB
 - 浏览器自动化；
 - 表单填写与页面操作；
 - 网页抓取；
-- 结构化 DOM/页面结果回传。
+- 页面文本、搜索结果与浏览器快照结果回传。
 
 #### 实现约束
-- Playwright sidecar 至少支持 `page_read`、`page_search`、`page_interact` 三类兼容能力，以及 `browser_attach_current`、`browser_snapshot`、`browser_navigate`、`browser_tabs_list`、`browser_tab_focus`、`browser_interact` 六类真实浏览器动作；
+- Playwright sidecar 至少支持 `page_read`、`page_search`、`web_search`、`page_interact` 四类兼容能力，以及 `browser_attach_current`、`browser_snapshot`、`browser_navigate`、`browser_tabs_list`、`browser_tab_focus`、`browser_interact` 六类真实浏览器动作；
 - sidecar 可在保持既有 launch 路径兼容的前提下附加 `attach.mode = cdp` 请求形状，用于附着已开启调试端口的本地 Chromium 浏览器；
 - 当前默认 launch 路径优先尝试拉起本地 Chrome / Edge 并经 loopback CDP 建立受管浏览器会话；仅在本地浏览器不可用时才回退到 Playwright 自带 Chromium；
 - 当前执行层会在可信桌面快照的 `PageURL` 与目标 `url` 对齐时，为 `page_*` 请求自动注入 `attach`，未命中时必须回退到既有 launch 路径而不是伪造附着成功；
@@ -1759,8 +1759,8 @@ flowchart TB
 
 #### 处理主线
 1. 先确认 sidecar 健康状态与浏览器能力可用。
-2. 接收标准页面能力请求，路由到 `page_read / page_search / page_interact` 与 `browser_*` 动作。
-3. 把页面结果、结构化 DOM、页签列表、导航结果或 URL 元数据组装成标准工具输出。
+2. 接收标准页面能力请求，路由到 `page_read / page_search / web_search / page_interact` 与 `browser_*` 动作。
+3. 把页面结果、搜索命中、页签列表、导航结果或 URL 元数据组装成标准工具输出。
 4. 为需要证据链的场景生成 `citation_seed` 与 artifact 候选。
 5. 通过 `tool_call.completed` 和正式交付链回流，而不是独立暴露页面结果。
 
