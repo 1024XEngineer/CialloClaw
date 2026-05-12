@@ -85,11 +85,11 @@ func shouldUseModelBackedConfirmIntentText(suggestion intent.Suggestion) bool {
 	if intentName == "" || intentName == "agent_loop" || intentName == "screen_analyze" {
 		return false
 	}
-	if strings.TrimSpace(intentConfirmArgumentTarget(suggestion.Intent)) != "" {
-		return true
-	}
-	action, subject := intentConfirmTitleParts(suggestion.TaskTitle)
-	return action == "" || action == "处理" || subject == ""
+	// Confirmation copy should stay local for free-text or pre-confirm follow-ups
+	// so the backend does not spend extra model calls before the user has approved
+	// the task. A structured intent target is the minimum signal that justifies a
+	// model-authored question.
+	return strings.TrimSpace(intentConfirmArgumentTarget(suggestion.Intent)) != ""
 }
 
 // fallbackConfirmIntentText keeps the confirmation gate functional even when a
@@ -99,6 +99,7 @@ func shouldUseModelBackedConfirmIntentText(suggestion intent.Suggestion) bool {
 func fallbackConfirmIntentText(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) string {
 	action, subject := intentConfirmTitleParts(suggestion.TaskTitle)
 	if subject == "" {
+		action = intentConfirmAction(snapshot, suggestion.Intent)
 		subject = intentConfirmSubject(snapshot, suggestion.Intent)
 	}
 
@@ -110,6 +111,24 @@ func fallbackConfirmIntentText(snapshot taskcontext.TaskContextSnapshot, suggest
 	default:
 		return presentation.Text(presentation.MessageBubbleConfirmDefault, nil)
 	}
+}
+
+func intentConfirmAction(snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any) string {
+	intentName := strings.TrimSpace(stringValue(taskIntent, "name", ""))
+	if intentName == "" {
+		return ""
+	}
+	const subjectMarker = "__confirm_subject__"
+	title := presentation.TaskTitle(intentName, presentation.TaskTitleOptions{
+		Subject:  subjectMarker,
+		HasError: strings.TrimSpace(snapshot.ErrorText) != "",
+		IsFile:   len(snapshot.Files) > 0,
+	})
+	prefix, _, ok := strings.Cut(title, subjectMarker)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimRight(prefix, "：:"))
 }
 
 func buildTaskConfirmQuestionPrompt(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) string {

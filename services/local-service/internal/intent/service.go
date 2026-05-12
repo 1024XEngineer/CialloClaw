@@ -8,7 +8,7 @@ import (
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/titlegen"
 )
 
 const (
@@ -107,18 +107,26 @@ func (s *Service) defaultIntent(snapshot taskcontext.TaskContextSnapshot) map[st
 	return intentPayload(defaultAgentLoopIntent)
 }
 
+// ComposeTaskTitle creates the fallback user-facing task title that appears in
+// task lists, dashboard modules, and later memory summaries before model-backed
+// title generation can refine it.
+func ComposeTaskTitle(snapshot taskcontext.TaskContextSnapshot, intentName string, subject string) string {
+	subject = strings.TrimSpace(subject)
+	if subject == "" {
+		subject = subjectText(snapshot)
+	}
+	switch intentName {
+	case "screen_analyze":
+		return titlegen.CompactTaskFallback(screenSubjectText(snapshot))
+	default:
+		return titlegen.CompactTaskFallback(subject)
+	}
+}
+
 // buildTaskTitle creates the user-facing task title that appears in task lists,
 // dashboard modules, and later memory summaries.
 func (s *Service) buildTaskTitle(snapshot taskcontext.TaskContextSnapshot, intentName string) string {
-	subject := subjectText(snapshot)
-	if intentName == "screen_analyze" {
-		subject = screenSubjectText(snapshot)
-	}
-	return presentation.TaskTitle(intentName, presentation.TaskTitleOptions{
-		Subject:  subject,
-		HasError: snapshot.ErrorText != "" || snapshot.InputType == "error",
-		IsFile:   len(snapshot.Files) > 0 || snapshot.InputType == "file",
-	})
+	return ComposeTaskTitle(snapshot, intentName, subjectText(snapshot))
 }
 
 // buildResultTitle creates the formal delivery title used by delivery_result
@@ -238,15 +246,17 @@ func subjectText(snapshot taskcontext.TaskContextSnapshot) string {
 	case len(snapshot.Files) > 0:
 		return filepath.Base(snapshot.Files[0])
 	case strings.TrimSpace(snapshot.SelectionText) != "":
-		return truncateText(snapshot.SelectionText, subjectPreviewMaxLength)
+		return normalizeSubjectSource(snapshot.SelectionText)
 	case strings.TrimSpace(snapshot.Text) != "":
-		return truncateText(snapshot.Text, subjectPreviewMaxLength)
+		return normalizeSubjectSource(snapshot.Text)
 	case strings.TrimSpace(snapshot.ErrorText) != "":
-		return truncateText(snapshot.ErrorText, subjectPreviewMaxLength)
+		return normalizeSubjectSource(snapshot.ErrorText)
 	case strings.TrimSpace(snapshot.PageTitle) != "":
-		return truncateText(snapshot.PageTitle, subjectPreviewMaxLength)
+		return normalizeSubjectSource(snapshot.PageTitle)
 	case strings.TrimSpace(snapshot.WindowTitle) != "":
-		return truncateText(snapshot.WindowTitle, subjectPreviewMaxLength)
+		return normalizeSubjectSource(snapshot.WindowTitle)
+	case strings.TrimSpace(snapshot.ScreenSummary) != "":
+		return normalizeSubjectSource(snapshot.ScreenSummary)
 	default:
 		return "当前内容"
 	}
@@ -255,9 +265,9 @@ func subjectText(snapshot taskcontext.TaskContextSnapshot) string {
 func screenSubjectText(snapshot taskcontext.TaskContextSnapshot) string {
 	switch {
 	case strings.TrimSpace(snapshot.PageTitle) != "":
-		return truncateText(snapshot.PageTitle, subjectPreviewMaxLength)
+		return normalizeSubjectSource(snapshot.PageTitle)
 	case strings.TrimSpace(snapshot.WindowTitle) != "":
-		return truncateText(snapshot.WindowTitle, subjectPreviewMaxLength)
+		return normalizeSubjectSource(snapshot.WindowTitle)
 	default:
 		return subjectText(snapshot)
 	}
@@ -327,8 +337,8 @@ func isLongContent(text string) bool {
 	return strings.Contains(trimmed, "\n") || utf8.RuneCountInString(trimmed) >= 80
 }
 
-func truncateText(value string, maxLength int) string {
-	return textutil.TruncateGraphemes(value, maxLength)
+func normalizeSubjectSource(value string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
 }
 
 // stringValue safely reads a string field from an intent payload.

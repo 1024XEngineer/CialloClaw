@@ -80,6 +80,7 @@ func (s *Service) drainSessionQueue(sessionID string) error {
 			}
 			return nil
 		}
+		s.refreshTitleAfterGovernance(governedTask, snapshotFromTask(governedTask), governedTask.Intent)
 
 		updatedTask, _, _, _, err := s.executeTask(governedTask, snapshotFromTask(governedTask), governedTask.Intent)
 		if err != nil {

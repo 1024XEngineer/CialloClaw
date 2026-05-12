@@ -22,6 +22,9 @@ func TestBrowserIntentDefaults(t *testing.T) {
 	if deliveryTypeFromIntent(map[string]any{"name": "browser_navigate"}) != "bubble" {
 		t.Fatal("expected browser_navigate to default to bubble delivery")
 	}
+	if deliveryTypeFromIntent(map[string]any{"name": "web_search"}) != "result_page" {
+		t.Fatal("expected web_search to default to result_page delivery")
+	}
 	if !isMutatingToolCall("browser_interact") {
 		t.Fatal("expected browser_interact to count as mutating")
 	}

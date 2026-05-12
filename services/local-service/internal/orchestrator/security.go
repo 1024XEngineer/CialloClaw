@@ -350,6 +350,7 @@ func (s *Service) SecurityRespond(params map[string]any) (map[string]any, error)
 		}, nil
 	}
 
+	s.refreshTitleAfterGovernance(processingTask, snapshotFromTask(processingTask), processingTask.Intent)
 	updatedTask, resultBubble, deliveryResult, _, err := s.executeTask(processingTask, snapshotFromTask(processingTask), processingTask.Intent)
 	if err != nil {
 		return nil, err

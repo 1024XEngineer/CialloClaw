@@ -20,6 +20,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/titlegen"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/sidecarclient"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/traceeval"
@@ -148,6 +149,7 @@ func buildRuntimes(core coreDeps) (runtimeDeps, error) {
 func buildServices(core coreDeps, runtimes runtimeDeps) (serviceDeps, error) {
 	deliveryService := delivery.NewService()
 	traceEvalService := traceeval.NewService(core.storageService.TraceStore(), core.storageService.EvalStore())
+	titleGenerator := titlegen.NewService(runtimes.modelService)
 	executionService := execution.NewService(
 		core.fileSystem,
 		core.executionBackend,
@@ -200,6 +202,7 @@ func buildServices(core coreDeps, runtimes runtimeDeps) (serviceDeps, error) {
 	if err != nil {
 		return serviceDeps{}, err
 	}
+	orchestratorService.WithTitleGenerator(titleGenerator)
 
 	return serviceDeps{
 		deliveryService:     deliveryService,

@@ -129,7 +129,7 @@ func TestCatalogEntriesAndSnapshotsAreCloned(t *testing.T) {
 	if len(freshSnapshot.Manifest.Capabilities) != 10 {
 		t.Fatalf("expected playwright snapshot to expose full browser capability set, got %+v", freshSnapshot.Manifest.Capabilities)
 	}
-	for _, capability := range []string{"browser_attach_current", "browser_snapshot", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact"} {
+	for _, capability := range []string{"web_search", "browser_attach_current", "browser_snapshot", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact"} {
 		if !containsCapability(freshSnapshot.Manifest.Capabilities, capability) {
 			t.Fatalf("expected playwright snapshot to include capability %q, got %+v", capability, freshSnapshot.Manifest.Capabilities)
 		}
