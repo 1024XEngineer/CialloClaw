@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { CSSProperties } from "react";
-import { Keyboard, Sparkles } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import ClickSpark from "@/components/ClickSpark";
 import { dashboardDecorOrbs, dashboardEntranceOrbs, dashboardModuleColors } from "@/features/dashboard/home/dashboardHome.config";
@@ -18,11 +17,9 @@ import { resolveDashboardModuleRoutePath } from "@/features/dashboard/shared/das
 import { buildDesktopOnboardingPresentation } from "@/features/onboarding/onboardingGeometry";
 import { setDesktopOnboardingPresentation } from "@/features/onboarding/onboardingService";
 import { useDesktopOnboardingActions } from "@/features/onboarding/useDesktopOnboardingActions";
-import { useDesktopOnboardingLoading } from "@/features/onboarding/useDesktopOnboardingLoading";
 import { useDesktopOnboardingSession } from "@/features/onboarding/useDesktopOnboardingSession";
 import { openControlPanelFromTray } from "@/platform/trayController";
 import { openOrFocusDesktopWindow } from "@/platform/windowController";
-import { cn } from "@/utils/cn";
 import "@/features/shell-ball/shellBall.css";
 import "@/features/dashboard/home/dashboardHome.css";
 
@@ -148,7 +145,6 @@ export function DashboardHome({
   voiceOpen,
 }: DashboardHomeProps) {
   const onboardingSession = useDesktopOnboardingSession();
-  const onboardingLoading = useDesktopOnboardingLoading("dashboard");
   const navigate = useNavigate();
   const [orbDragOffset, setOrbDragOffset] = useState({ x: 0, y: 0 });
   const [hoveredEntranceKey, setHoveredEntranceKey] = useState<string | null>(null);
@@ -167,8 +163,6 @@ export function DashboardHome({
     ? dashboardEntranceOrbs.find((config) => config.key === hoveredEntranceKey)?.module ?? activeState?.module ?? null
     : activeState?.module ?? null;
   const activeModuleColor = activeModule ? dashboardModuleColors[activeModule].color : null;
-  const currentFocusLine = activeState?.headline ?? summons[0]?.message ?? data.focusLine.headline;
-  const currentReasonLine = activeState?.subline ?? summons[0]?.reason ?? data.focusLine.reason;
   const isOverlayOpen = Boolean(activeState || voiceOpen);
 
   const closeActiveOverlay = useCallback(() => {
@@ -326,20 +320,6 @@ export function DashboardHome({
           <div className="dashboard-orbit-home__badge-dot" />
           <span>Dashboard Orbit</span>
         </div>
-
-        <div className="dashboard-orbit-home__shortcut-pill">
-          <Keyboard className="h-3.5 w-3.5" />
-          Ctrl / Cmd + 1 2 3 4 5
-        </div>
-        {data.loadWarnings.length > 0 ? (
-          <div
-            className="dashboard-orbit-home__shortcut-pill dashboard-orbit-home__shortcut-pill--warn"
-            title={data.loadWarnings.join(" | ")}
-          >
-            部分模块未同步
-          </div>
-        ) : null}
-        {onboardingLoading ? <div className="dashboard-orbit-home__shortcut-pill">{onboardingLoading.message}</div> : null}
       </header>
 
       <div className="dashboard-orbit-home__canvas">
@@ -385,18 +365,6 @@ export function DashboardHome({
           : null}
 
         <DashboardCenterOrb activeColor={activeModuleColor} onDragOffset={handleOrbDragOffset} onLongPress={onVoiceOpen} visualState={centerVisualState} />
-      </div>
-
-      <div className={cn("dashboard-orbit-home__focus-bar", isOverlayOpen && "is-muted")}>
-        <div className="dashboard-orbit-home__focus-main">
-          <p className="dashboard-orbit-home__focus-eyebrow">现在最值得注意的</p>
-          <p className="dashboard-orbit-home__focus-title">{currentFocusLine}</p>
-          <p className="dashboard-orbit-home__focus-copy">{currentReasonLine}</p>
-        </div>
-        <div className="dashboard-orbit-home__focus-hint">
-          <Sparkles className="h-4 w-4" />
-          入口球负责跳页，事件球负责展开首页实时信号。
-        </div>
       </div>
 
       <DashboardEventPanel
