@@ -77,8 +77,10 @@ export function buildLocalServiceSidecar() {
   const srcTauriRoot = resolve(currentDirectory, "..");
   const targetTriple = resolveRustTargetTriple(repoRoot);
   const { goarch, goos } = resolveGoPlatform(targetTriple);
-  const sidecarDirectory = resolve(srcTauriRoot, "binaries");
-  const sidecarFileName = `local-service-${targetTriple}${targetTriple.includes("windows") ? ".exe" : ""}`;
+  const sidecarDirectory = resolve(srcTauriRoot, "bin");
+  // Keep the dev sidecar path aligned with `externalBin` so `tauri dev`
+  // and packaged builds resolve the same executable name.
+  const sidecarFileName = `cialloclaw-service-${targetTriple}${targetTriple.includes("windows") ? ".exe" : ""}`;
   const sidecarPath = resolve(sidecarDirectory, sidecarFileName);
 
   mkdirSync(sidecarDirectory, { recursive: true });

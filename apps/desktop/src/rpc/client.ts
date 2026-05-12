@@ -72,7 +72,9 @@ class NamedPipeJsonRpcTransport implements JsonRpcTransport {
     const bridge = window.__CIALLOCLAW_NAMED_PIPE__;
 
     if (!bridge) {
-      throw new Error("Named Pipe transport is not wired. Set VITE_CIALLOCLAW_RPC_TRANSPORT=http to use the debug HTTP fallback.");
+      throw new Error(
+        "Named Pipe transport is not wired. Set VITE_CIALLOCLAW_RPC_TRANSPORT=http to use the debug HTTP transport.",
+      );
     }
 
     return bridge.request<T>(payload);

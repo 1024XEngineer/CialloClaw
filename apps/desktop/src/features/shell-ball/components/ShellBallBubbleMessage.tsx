@@ -34,8 +34,8 @@ export function ShellBallBubbleMessage({
   const measureRef = useRef<HTMLParagraphElement>(null);
   const userToggledCollapseRef = useRef(false);
   const bubbleId = item.bubble.bubble_id;
-  const taskId = item.bubble.task_id.trim();
-  const bubbleText = item.bubble.text;
+  const taskId = typeof item.bubble.task_id === "string" ? item.bubble.task_id.trim() : "";
+  const bubbleText = typeof item.bubble.text === "string" ? item.bubble.text : "";
   const showMarkdown = item.role === "agent" && item.bubble.type !== "intent_confirm";
   const showLoadingState = item.desktop.presentationHint === "loading";
   const inlineApproval = item.role === "agent" ? item.desktop.inlineApproval : undefined;

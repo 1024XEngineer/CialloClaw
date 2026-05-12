@@ -71,6 +71,7 @@ func (s *Service) maybeContinueStartTask(flow *taskEntryFlow) (map[string]any, b
 	if strings.TrimSpace(resolvedSessionID) != "" {
 		flow.Params = withResolvedSessionID(flow.Params, resolvedSessionID)
 	}
+	flow.Snapshot = s.applySessionInputContext(flow.Params, flow.Snapshot)
 	return nil, false, nil
 }
 
@@ -120,13 +121,14 @@ func (s *Service) createTaskFromEntryFlow(flow taskEntryFlow) runengine.TaskReco
 		Timeline:          initialTimeline(status, currentStep),
 		Snapshot:          flow.Snapshot,
 	})
+	s.clearSessionInputContext(task.SessionID)
 	s.publishTaskStart(task.TaskID, task.SessionID, requestTraceID(flow.Params))
 	s.attachMemoryReadPlans(task.TaskID, task.RunID, flow.Snapshot, flow.Suggestion.Intent)
 	return task
 }
 
 func (s *Service) finishStartTask(flow taskEntryFlow, task runengine.TaskRecord) (map[string]any, error) {
-	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(flow.Suggestion.RequiresConfirm), s.bubbleTextForStart(flow.Snapshot, flow.Suggestion), task.StartedAt.Format(dateTimeLayout))
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(flow.Suggestion.RequiresConfirm), s.bubbleTextForStart(task, flow.Snapshot, flow.Suggestion), task.StartedAt.Format(dateTimeLayout))
 	if flow.Suggestion.RequiresConfirm {
 		task = s.persistTaskPresentation(task, bubble)
 		return buildTaskEntryResponse(task, bubble, nil), nil

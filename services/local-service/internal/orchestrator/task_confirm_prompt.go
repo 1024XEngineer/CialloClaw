@@ -11,30 +11,45 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 )
 
 const taskConfirmQuestionModelTimeout = 3 * time.Second
 
-func (s *Service) bubbleTextForInput(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) string {
-	if suggestion.RequiresConfirm {
-		if !suggestion.IntentConfirmed {
-			return presentation.Text(presentation.MessageBubbleInputConfirmUnknown, nil)
-		}
-		return s.confirmIntentText(snapshot, suggestion)
-	}
-	return suggestion.ResultBubbleText
+func (s *Service) bubbleTextForInput(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) string {
+	return s.bubbleTextForConfirmation(task, snapshot, suggestion, false)
 }
 
-func (s *Service) bubbleTextForStart(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) string {
-	if suggestion.RequiresConfirm {
+func (s *Service) bubbleTextForStart(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) string {
+	return s.bubbleTextForConfirmation(task, snapshot, suggestion, true)
+}
+
+func (s *Service) bubbleTextForConfirmation(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, startFlow bool) string {
+	if !suggestion.RequiresConfirm {
+		return suggestion.ResultBubbleText
+	}
+	if shouldUseClarificationBubble(suggestion) {
 		if !suggestion.IntentConfirmed {
+			return initialClarificationPromptForLanguage(snapshot, startFlow, snapshot.SessionReplyLanguage)
+		}
+		return clarificationBubbleTextForLanguage(suggestion.Intent, s.clarificationPreviewHits(task, snapshot), clarificationReplyLanguage(snapshot))
+	}
+	if !suggestion.IntentConfirmed {
+		if startFlow {
 			return presentation.Text(presentation.MessageBubbleStartConfirmUnknown, nil)
 		}
-		return s.confirmIntentText(snapshot, suggestion)
+		return presentation.Text(presentation.MessageBubbleInputConfirmUnknown, nil)
 	}
-	return suggestion.ResultBubbleText
+	return s.confirmIntentText(snapshot, suggestion)
+}
+
+func shouldUseClarificationBubble(suggestion intent.Suggestion) bool {
+	if !suggestion.IntentConfirmed {
+		return true
+	}
+	return strings.TrimSpace(stringValue(suggestion.Intent, "name", "")) == "agent_loop"
 }
 
 // confirmIntentText prefers a model-authored confirmation question that can use

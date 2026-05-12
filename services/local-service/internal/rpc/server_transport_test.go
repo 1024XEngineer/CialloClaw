@@ -911,7 +911,7 @@ func TestTransportSupervisorReturnsTimeoutWhenWorkerDoesNotExit(t *testing.T) {
 	}
 }
 
-func TestServerStartFencesReuseAfterTransportTimeout(t *testing.T) {
+func TestServerStartRejectsRestartAfterTransportTimeout(t *testing.T) {
 	server := newTestServer()
 	server.transport = "named_pipe"
 	server.debugHTTPServer = nil
@@ -954,8 +954,8 @@ func TestServerStartFencesReuseAfterTransportTimeout(t *testing.T) {
 	}()
 	select {
 	case err := <-reuseErr:
-		if !errors.Is(err, errTransportShutdownIncomplete) {
-			t.Fatalf("expected terminal server reuse to fail, got %v", err)
+		if !errors.Is(err, errServerAlreadyStarted) {
+			t.Fatalf("expected one-shot server to reject restart after timeout, got %v", err)
 		}
 	case <-startCalls:
 		t.Fatal("expected terminal server to reject reuse before starting transports")
@@ -996,8 +996,8 @@ func TestServerStartRejectsConcurrentServeRun(t *testing.T) {
 
 	select {
 	case err := <-secondStartErr:
-		if !errors.Is(err, errServerAlreadyRunning) {
-			t.Fatalf("expected concurrent Start to be rejected, got %v", err)
+		if !errors.Is(err, errServerAlreadyStarted) {
+			t.Fatalf("expected one-shot server to reject concurrent Start, got %v", err)
 		}
 	case <-started:
 		t.Fatal("expected second Start to fail before opening another listener")
@@ -1020,13 +1020,13 @@ func TestServerStartRejectsConcurrentServeRun(t *testing.T) {
 	}
 }
 
-func TestServerStartAllowsReuseAfterCleanShutdown(t *testing.T) {
+func TestServerStartRejectsRestartAfterCleanShutdown(t *testing.T) {
 	server := newTestServer()
 	server.transport = "named_pipe"
 	server.debugHTTPServer = nil
 
-	started := make(chan struct{}, 2)
-	listenerReleased := make(chan struct{}, 2)
+	started := make(chan struct{}, 1)
+	listenerReleased := make(chan struct{}, 1)
 	server.serveNamedPipe = func(ctx context.Context, pipeName string, handler func(net.Conn)) error {
 		started <- struct{}{}
 		<-ctx.Done()
@@ -1065,23 +1065,14 @@ func TestServerStartAllowsReuseAfterCleanShutdown(t *testing.T) {
 	}()
 
 	select {
-	case <-started:
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected cleanly stopped server to allow a second serve run")
-	}
-
-	listenerReleased <- struct{}{}
-	if err := server.Shutdown(context.Background()); err != nil {
-		t.Fatalf("shutdown second serve run: %v", err)
-	}
-
-	select {
 	case err := <-secondStartErr:
-		if err != nil {
-			t.Fatalf("expected second serve run to stop cleanly, got %v", err)
+		if !errors.Is(err, errServerAlreadyStarted) {
+			t.Fatalf("expected one-shot server to reject restart after clean shutdown, got %v", err)
 		}
+	case <-started:
+		t.Fatal("expected one-shot server to reject restart before opening another listener")
 	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected second serve run to exit after shutdown")
+		t.Fatal("expected second Start to return without blocking")
 	}
 }
 

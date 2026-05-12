@@ -16,7 +16,6 @@ export const SHELL_BALL_LOCK_DELTA_PX = 48;
 export const SHELL_BALL_CANCEL_DELTA_PX = 48;
 export const SHELL_BALL_VERTICAL_PRIORITY_RATIO = 1.25;
 export const SHELL_BALL_CONFIRMING_MS = 600;
-export const SHELL_BALL_WAITING_AUTH_MS = 700;
 export const SHELL_BALL_PROCESSING_MS = 1200;
 
 export type ShellBallVoicePreview = "lock" | "cancel" | null;
@@ -265,8 +264,6 @@ export function resolveShellBallTransition(input: {
       if (current === "hover_input") {
         return {
           next: "waiting_auth",
-          autoAdvanceTo: "processing",
-          autoAdvanceMs: SHELL_BALL_WAITING_AUTH_MS,
         };
       }
       return { next: current };
@@ -294,7 +291,7 @@ export function resolveShellBallTransition(input: {
       };
 
     case "auto_advance":
-      if (current === "confirming_intent" || current === "waiting_auth") {
+      if (current === "confirming_intent") {
         return { next: "processing" };
       }
 
