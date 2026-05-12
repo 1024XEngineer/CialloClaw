@@ -46,7 +46,6 @@
 - `page_read`
 - `page_search`
 - `page_interact`
-- `structured_dom`
 - `browser_attach_current`
 - `browser_snapshot`
 - `browser_navigate`
