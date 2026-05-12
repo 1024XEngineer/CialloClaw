@@ -33,6 +33,10 @@ func (noopPlaywrightSidecarClient) SearchPageAttached(_ context.Context, _, _ st
 	return tools.BrowserPageSearchResult{}, tools.ErrPlaywrightSidecarFailed
 }
 
+func (noopPlaywrightSidecarClient) SearchWeb(_ context.Context, _ tools.BrowserWebSearchRequest) (tools.BrowserWebSearchResult, error) {
+	return tools.BrowserWebSearchResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
 func (noopPlaywrightSidecarClient) InteractPage(_ context.Context, _ string, _ []map[string]any) (tools.BrowserPageInteractResult, error) {
 	return tools.BrowserPageInteractResult{}, tools.ErrPlaywrightSidecarFailed
 }
@@ -163,6 +167,79 @@ func NewPageSearchTool() *PageSearchTool {
 
 type PageInteractTool struct {
 	meta tools.ToolMetadata
+}
+
+type WebSearchTool struct {
+	meta tools.ToolMetadata
+}
+
+func NewWebSearchTool() *WebSearchTool {
+	return &WebSearchTool{meta: tools.ToolMetadata{
+		Name:            "web_search",
+		DisplayName:     "联网搜索",
+		Description:     "通过 Playwright sidecar 执行互联网搜索并返回结构化结果摘要",
+		Source:          tools.ToolSourceSidecar,
+		RiskHint:        "green",
+		TimeoutSec:      20,
+		InputSchemaRef:  "tools/web_search/input",
+		OutputSchemaRef: "tools/web_search/output",
+		SupportsDryRun:  false,
+	}}
+}
+
+func (t *WebSearchTool) Metadata() tools.ToolMetadata { return t.meta }
+
+func (t *WebSearchTool) Validate(input map[string]any) error {
+	query, ok := input["query"].(string)
+	if !ok || strings.TrimSpace(query) == "" {
+		return fmt.Errorf("input field 'query' must be a non-empty string")
+	}
+	return nil
+}
+
+func (t *WebSearchTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteContext, input map[string]any) (*tools.ToolResult, error) {
+	if execCtx == nil || execCtx.Playwright == nil {
+		return nil, tools.ErrPlaywrightSidecarFailed
+	}
+
+	request := tools.BrowserWebSearchRequest{
+		Query: strings.TrimSpace(input["query"].(string)),
+		URL:   strings.TrimSpace(stringValueMap(input, "url")),
+		Limit: intValueMap(input, "limit"),
+	}
+	if request.Limit <= 0 {
+		request.Limit = defaultPageSearchLimit
+	}
+	result, err := execCtx.Playwright.SearchWeb(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+
+	items := make([]map[string]any, 0, len(result.Results))
+	for _, item := range result.Results {
+		items = append(items, map[string]any{
+			"title":   item.Title,
+			"url":     item.URL,
+			"snippet": item.Snippet,
+		})
+	}
+	rawOutput := browserExecutionMetadataOutput(result.BrowserExecutionMetadata)
+	rawOutput["query"] = result.Query
+	rawOutput["search_url"] = result.SearchURL
+	rawOutput["result_count"] = result.ResultCount
+	rawOutput["results"] = items
+	rawOutput["source"] = firstNonEmptyString(result.Source, "playwright_sidecar")
+	return &tools.ToolResult{
+		ToolName:  t.meta.Name,
+		RawOutput: rawOutput,
+		SummaryOutput: map[string]any{
+			"query":           result.Query,
+			"search_url":      result.SearchURL,
+			"result_count":    result.ResultCount,
+			"content_preview": previewWebSearchResult(result.Results),
+			"source":          firstNonEmptyString(result.Source, "playwright_sidecar"),
+		},
+	}, nil
 }
 
 func NewPageInteractTool() *PageInteractTool {
@@ -371,6 +448,7 @@ func RegisterPlaywrightTools(registry *tools.Registry) error {
 	for _, tool := range []tools.Tool{
 		NewPageReadTool(),
 		NewPageSearchTool(),
+		NewWebSearchTool(),
 		NewPageInteractTool(),
 		NewStructuredDOMTool(),
 		NewBrowserAttachCurrentTool(),
@@ -385,6 +463,20 @@ func RegisterPlaywrightTools(registry *tools.Registry) error {
 		}
 	}
 	return nil
+}
+
+func previewWebSearchResult(results []tools.BrowserSearchResultItem) string {
+	if len(results) == 0 {
+		return ""
+	}
+	first := strings.TrimSpace(results[0].Title)
+	if snippet := strings.TrimSpace(results[0].Snippet); snippet != "" {
+		if first != "" {
+			return previewPageText(first + ": " + snippet)
+		}
+		return previewPageText(snippet)
+	}
+	return previewPageText(first)
 }
 
 func mapSliceValue(values map[string]any, key string) []map[string]any {
@@ -432,6 +524,20 @@ func stringValueMap(values map[string]any, key string) string {
 	}
 	value, _ := values[key].(string)
 	return strings.TrimSpace(value)
+}
+
+func intValueMap(values map[string]any, key string) int {
+	if len(values) == 0 {
+		return 0
+	}
+	switch value := values[key].(type) {
+	case int:
+		return value
+	case float64:
+		return int(value)
+	default:
+		return 0
+	}
 }
 
 func previewPageText(input string) string {

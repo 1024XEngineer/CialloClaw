@@ -2014,6 +2014,47 @@ func TestExecuteDirectSidecarPageSearchUsesToolExecutor(t *testing.T) {
 	}
 }
 
+func TestExecuteDirectSidecarWebSearchUsesToolExecutor(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", stubPlaywrightClient{webSearchResult: tools.BrowserWebSearchResult{
+		Query:       "release notes",
+		SearchURL:   "https://duckduckgo.com/html/?q=release+notes",
+		ResultCount: 2,
+		Results: []tools.BrowserSearchResultItem{
+			{Title: "Release Notes", URL: "https://example.com/release-notes", Snippet: "Latest release notes"},
+			{Title: "Docs", URL: "https://example.com/docs", Snippet: "Documentation home"},
+		},
+		Source: "playwright_sidecar",
+	}})
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:               "task_006_web",
+		RunID:                "run_006_web",
+		Title:                "联网搜索",
+		Intent:               map[string]any{"name": "web_search", "arguments": map[string]any{"query": "release notes", "limit": 2}},
+		Snapshot:             taskcontext.TaskContextSnapshot{InputType: "text", Text: "搜索 release notes"},
+		DeliveryType:         "bubble",
+		ResultTitle:          "联网搜索结果",
+		ApprovalGranted:      true,
+		ApprovedOperation:    "web_search",
+		ApprovedTargetObject: "https://duckduckgo.com/html/?q=release+notes",
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if result.ToolName != "web_search" {
+		t.Fatalf("expected web_search tool, got %s", result.ToolName)
+	}
+	if result.ToolOutput["summary_output"] == nil {
+		t.Fatalf("expected web_search summary output, got %+v", result.ToolOutput)
+	}
+	if result.ToolInput["url"] != "https://duckduckgo.com/html/?q=release+notes" {
+		t.Fatalf("expected derived search url in tool input, got %+v", result.ToolInput)
+	}
+	if !strings.Contains(result.BubbleText, "Release Notes") {
+		t.Fatalf("expected bubble text to include search preview, got %s", result.BubbleText)
+	}
+}
+
 func TestExecuteDirectSidecarPageInteractUsesToolExecutor(t *testing.T) {
 	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", stubPlaywrightClient{interactResult: tools.BrowserPageInteractResult{
 		Title:          "Interactive Page",
@@ -3775,6 +3816,7 @@ func TestResolveToolExecutionSupportsWorkerAndInteractiveIntents(t *testing.T) {
 		{name: "browser_interact", request: Request{Intent: map[string]any{"name": "browser_interact", "arguments": map[string]any{"actions": []any{map[string]any{"type": "click", "selector": "button"}}}}, Snapshot: taskcontext.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "browser_interact", wantKey: "actions", wantAttach: true},
 		{name: "page_interact", request: Request{Intent: map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com", "actions": []any{map[string]any{"type": "click", "selector": "button"}}}}, Snapshot: taskcontext.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "page_interact", wantKey: "url", wantAttach: true},
 		{name: "structured_dom", request: Request{Intent: map[string]any{"name": "structured_dom", "arguments": map[string]any{"url": "https://example.com"}}, Snapshot: taskcontext.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "structured_dom", wantKey: "url", wantAttach: true},
+		{name: "web_search", request: Request{Intent: map[string]any{"name": "web_search", "arguments": map[string]any{"query": "release notes", "limit": 3.0}}}, wantTool: "web_search", wantKey: "query"},
 		{name: "extract_text", request: Request{Intent: map[string]any{"name": "extract_text", "arguments": map[string]any{"path": "notes/demo.txt"}}}, wantTool: "extract_text", wantKey: "path"},
 		{name: "transcode_media", request: Request{Intent: map[string]any{"name": "transcode_media", "arguments": map[string]any{"path": "clips/demo.mov", "output_path": "clips/demo.mp4", "format": "mp4"}}}, wantTool: "transcode_media", wantKey: "output_path"},
 		{name: "extract_frames", request: Request{Intent: map[string]any{"name": "extract_frames", "arguments": map[string]any{"path": "clips/demo.mov", "output_dir": "frames", "limit": 2.0}}}, wantTool: "extract_frames", wantKey: "output_dir"},
@@ -4119,6 +4161,7 @@ type stubExecutionCapability struct {
 type stubPlaywrightClient struct {
 	readResult               tools.BrowserPageReadResult
 	searchResult             tools.BrowserPageSearchResult
+	webSearchResult          tools.BrowserWebSearchResult
 	interactResult           tools.BrowserPageInteractResult
 	structuredResult         tools.BrowserStructuredDOMResult
 	attachedReadResult       tools.BrowserPageReadResult
@@ -4168,6 +4211,24 @@ func (s stubPlaywrightClient) SearchPage(_ context.Context, url, query string, l
 	if limit > 0 && len(result.Matches) > limit {
 		result.Matches = result.Matches[:limit]
 		result.MatchCount = len(result.Matches)
+	}
+	return result, nil
+}
+
+func (s stubPlaywrightClient) SearchWeb(_ context.Context, request tools.BrowserWebSearchRequest) (tools.BrowserWebSearchResult, error) {
+	if s.err != nil {
+		return tools.BrowserWebSearchResult{}, s.err
+	}
+	result := s.webSearchResult
+	if result.Query == "" {
+		result.Query = request.Query
+	}
+	if result.SearchURL == "" {
+		result.SearchURL = request.URL
+	}
+	if request.Limit > 0 && len(result.Results) > request.Limit {
+		result.Results = result.Results[:request.Limit]
+		result.ResultCount = len(result.Results)
 	}
 	return result, nil
 }

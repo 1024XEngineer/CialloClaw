@@ -9,6 +9,7 @@ export const manifest = {
   capabilities: [
     "page_read",
     "page_search",
+    "web_search",
     "page_interact",
     "structured_dom",
     "browser_attach_current",
@@ -22,6 +23,7 @@ export const manifest = {
 
 const browserTimeoutMS = 30000;
 const defaultCDPEndpointURL = "http://127.0.0.1:9222";
+const defaultSearchEngineURL = "https://duckduckgo.com/html/";
 const supportedCDPBrowserKinds = new Set(["chrome", "edge"]);
 const workerUserAgent = "CialloClawPlaywrightWorker/0.1";
 
@@ -126,6 +128,70 @@ async function openBrowserPage(url, deps, callback) {
   } finally {
     await closeResources(context, browser);
   }
+}
+
+function buildWebSearchURL(query, rawURL) {
+  const normalizedURL = normalizeOptionalString(rawURL);
+  if (normalizedURL) {
+    return normalizedURL;
+  }
+
+  const normalizedQuery = String(query ?? "").trim();
+  if (normalizedQuery === "") {
+    throw createStructuredWorkerError("invalid_input", "query is required for web_search");
+  }
+  const searchURL = new URL(defaultSearchEngineURL);
+  searchURL.searchParams.set("q", normalizedQuery);
+  return searchURL.toString();
+}
+
+async function collectWebSearchResults(page, limit) {
+  return page.evaluate((maxResults) => {
+    const selectors = [
+      "a.result__a",
+      ".result__body a[href]",
+      "article a[href]",
+      ".links_main a[href]",
+      "main a[href]",
+    ];
+    const seen = new Set();
+    const results = [];
+    const snippetFor = (node) => {
+      const containers = [
+        node.closest(".result"),
+        node.closest("article"),
+        node.parentElement,
+      ].filter(Boolean);
+      for (const container of containers) {
+        const snippetNode = container.querySelector(".result__snippet, .snippet, p");
+        const snippet = snippetNode?.textContent?.trim();
+        if (snippet) {
+          return snippet;
+        }
+      }
+      return "";
+    };
+
+    for (const selector of selectors) {
+      for (const anchor of Array.from(document.querySelectorAll(selector))) {
+        const url = anchor.href?.trim();
+        const title = anchor.textContent?.trim();
+        if (!url || !title || seen.has(url)) {
+          continue;
+        }
+        seen.add(url);
+        results.push({
+          title,
+          url,
+          snippet: snippetFor(anchor),
+        });
+        if (results.length >= maxResults) {
+          return results;
+        }
+      }
+    }
+    return results;
+  }, limit);
 }
 
 function createStructuredWorkerError(code, message) {
@@ -687,6 +753,28 @@ export async function handleRequest(request, deps = defaultDependencies) {
           matches,
           source: page.source,
         };
+      });
+    }
+    case "web_search": {
+      return executeBrowserRequest(request, deps, async () => {
+        const normalizedQuery = String(request.query ?? "").trim();
+        const rawLimit = Number(request.limit ?? 0);
+        const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.floor(rawLimit) : 5;
+        const searchURL = buildWebSearchURL(normalizedQuery, request.url);
+        return openBrowserPage(searchURL, deps, async (page, _response, execution) => {
+          const results = await collectWebSearchResults(page, limit);
+          return {
+            attached: execution.attached,
+            browser_kind: execution.browserKind,
+            browser_transport: execution.browserTransport,
+            endpoint_url: execution.endpointURL,
+            query: normalizedQuery,
+            search_url: page.url(),
+            result_count: results.length,
+            results,
+            source: execution.source,
+          };
+        });
       });
     }
     case "structured_dom": {

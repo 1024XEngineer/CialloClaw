@@ -426,7 +426,7 @@ func pluginDeliveryMappingForMetadata(metadata tools.ToolMetadata) pluginDeliver
 		CitationSourceTypes: []string{},
 	}
 	switch metadata.Name {
-	case "page_read", "page_search", "page_interact", "structured_dom", "browser_attach_current", "browser_snapshot", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact":
+	case "page_read", "page_search", "web_search", "page_interact", "structured_dom", "browser_attach_current", "browser_snapshot", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact":
 		mapping.CitationSourceTypes = []string{"web"}
 	case "extract_text", "ocr_image", "ocr_pdf":
 		mapping.CitationSourceTypes = []string{"file"}

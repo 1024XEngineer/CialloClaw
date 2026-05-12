@@ -216,6 +216,35 @@ func (c runtimePlaywrightClient) SearchPageAttached(ctx context.Context, url, qu
 	}, nil
 }
 
+func (c runtimePlaywrightClient) SearchWeb(ctx context.Context, request tools.BrowserWebSearchRequest) (tools.BrowserWebSearchResult, error) {
+	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{
+		Action: "web_search",
+		URL:    strings.TrimSpace(request.URL),
+		Query:  strings.TrimSpace(request.Query),
+		Limit:  request.Limit,
+	})
+	if err != nil {
+		return tools.BrowserWebSearchResult{}, err
+	}
+
+	items := make([]tools.BrowserSearchResultItem, 0)
+	for _, item := range mapSliceValue(response.Result, "results") {
+		items = append(items, tools.BrowserSearchResultItem{
+			Title:   stringValue(item, "title"),
+			URL:     stringValue(item, "url"),
+			Snippet: stringValue(item, "snippet"),
+		})
+	}
+	return tools.BrowserWebSearchResult{
+		BrowserExecutionMetadata: browserExecutionMetadata(response.Result),
+		Query:                    stringValue(response.Result, "query"),
+		SearchURL:                stringValue(response.Result, "search_url"),
+		ResultCount:              intValue(response.Result, "result_count"),
+		Results:                  items,
+		Source:                   firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
+	}, nil
+}
+
 func (c runtimePlaywrightClient) InteractPage(ctx context.Context, url string, actions []map[string]any) (tools.BrowserPageInteractResult, error) {
 	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{Action: "page_interact", URL: url, Actions: cloneActionSlice(actions)})
 	if err != nil {

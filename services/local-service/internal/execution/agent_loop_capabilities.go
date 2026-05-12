@@ -140,6 +140,25 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 			"additionalProperties": false,
 		},
 	},
+	{
+		Name:      "web_search",
+		UseWhen:   "Need to search the web for sources before reading specific pages.",
+		AvoidWhen: "You already have the exact page URL and only need to read or search within that page.",
+		Constraints: []string{
+			"Read-only search over public web pages",
+			"Returns structured search hits rather than a full page transcript",
+			"Follow up with page_read after choosing a promising result",
+		},
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query": map[string]any{"type": "string", "description": "Search query to look up on the web."},
+				"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 10},
+			},
+			"required":             []string{"query"},
+			"additionalProperties": false,
+		},
+	},
 }
 
 type agentLoopCapabilitySpec struct {

@@ -288,6 +288,32 @@ type BrowserPageSearchResult struct {
 	Source     string
 }
 
+// BrowserSearchResultItem describes one internet search hit returned by the
+// browser worker.
+type BrowserSearchResultItem struct {
+	Title   string
+	URL     string
+	Snippet string
+}
+
+// BrowserWebSearchRequest is the normalized request shape for internet search.
+type BrowserWebSearchRequest struct {
+	Query  string
+	URL    string
+	Engine string
+	Limit  int
+}
+
+// BrowserWebSearchResult describes one internet search result page.
+type BrowserWebSearchResult struct {
+	BrowserExecutionMetadata
+	Query       string
+	SearchURL   string
+	ResultCount int
+	Results     []BrowserSearchResultItem
+	Source      string
+}
+
 // BrowserPageInteractResult describes one page interaction run.
 type BrowserPageInteractResult struct {
 	BrowserExecutionMetadata
@@ -518,6 +544,7 @@ type PlaywrightSidecarClient interface {
 	ReadPageAttached(ctx context.Context, url string, attach BrowserAttachConfig) (BrowserPageReadResult, error)
 	SearchPage(ctx context.Context, url, query string, limit int) (BrowserPageSearchResult, error)
 	SearchPageAttached(ctx context.Context, url, query string, limit int, attach BrowserAttachConfig) (BrowserPageSearchResult, error)
+	SearchWeb(ctx context.Context, request BrowserWebSearchRequest) (BrowserWebSearchResult, error)
 	InteractPage(ctx context.Context, url string, actions []map[string]any) (BrowserPageInteractResult, error)
 	InteractPageAttached(ctx context.Context, url string, actions []map[string]any, attach BrowserAttachConfig) (BrowserPageInteractResult, error)
 	StructuredDOM(ctx context.Context, url string) (BrowserStructuredDOMResult, error)

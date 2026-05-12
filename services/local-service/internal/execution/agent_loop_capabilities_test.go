@@ -18,11 +18,11 @@ import (
 func TestAgentLoopToolDefinitionsUseSharedCatalog(t *testing.T) {
 	service := newAgentLoopCapabilityTestService(t, true)
 	definitions := service.agentLoopToolDefinitions()
-	if len(definitions) != 5 {
-		t.Fatalf("expected five planner-visible tools without browser hints, got %+v", definitions)
+	if len(definitions) != 6 {
+		t.Fatalf("expected six planner-visible tools without browser hints, got %+v", definitions)
 	}
 
-	wantNames := []string{"read_file", "list_dir", "extract_text", "page_read", "page_search"}
+	wantNames := []string{"read_file", "list_dir", "extract_text", "page_read", "page_search", "web_search"}
 	for index, want := range wantNames {
 		if definitions[index].Name != want {
 			t.Fatalf("unexpected tool definition order at %d: got %q want %q", index, definitions[index].Name, want)
@@ -56,11 +56,11 @@ func TestAgentLoopToolDefinitionsExposeBrowserToolsWhenSnapshotSupportsAttach(t 
 		PageURL:     "https://example.com",
 		WindowTitle: "Example",
 	})
-	if len(definitions) != 7 {
-		t.Fatalf("expected browser-capable snapshot to expose seven planner-visible tools, got %+v", definitions)
+	if len(definitions) != 8 {
+		t.Fatalf("expected browser-capable snapshot to expose eight planner-visible tools, got %+v", definitions)
 	}
 
-	wantNames := []string{"read_file", "list_dir", "extract_text", "browser_attach_current", "browser_snapshot", "page_read", "page_search"}
+	wantNames := []string{"read_file", "list_dir", "extract_text", "browser_attach_current", "browser_snapshot", "page_read", "page_search", "web_search"}
 	for index, want := range wantNames {
 		if definitions[index].Name != want {
 			t.Fatalf("unexpected browser-aware tool definition order at %d: got %q want %q", index, definitions[index].Name, want)
@@ -78,7 +78,7 @@ func TestAgentLoopToolDefinitionsAllowSparseBrowserContextForDiscoveryTools(t *t
 	for _, definition := range definitions {
 		names = append(names, definition.Name)
 	}
-	if !containsString(names, "read_file") || !containsString(names, "list_dir") || !containsString(names, "extract_text") || !containsString(names, "page_read") || !containsString(names, "page_search") {
+	if !containsString(names, "read_file") || !containsString(names, "list_dir") || !containsString(names, "extract_text") || !containsString(names, "page_read") || !containsString(names, "page_search") || !containsString(names, "web_search") {
 		t.Fatalf("expected sparse browser context to preserve non-browser planner tools, got %+v", names)
 	}
 	if containsString(names, "browser_attach_current") || containsString(names, "browser_snapshot") || containsString(names, "browser_tabs_list") || containsString(names, "browser_navigate") || containsString(names, "browser_tab_focus") {
@@ -108,6 +108,9 @@ func TestAgentLoopToolAllowlistRequiresCatalogMembershipAndRegistryPresence(t *t
 		t.Fatal("expected missing browser registry entry to stay disallowed")
 	}
 	if builtinOnly.isAllowedAgentLoopTool("page_search") {
+		t.Fatal("expected missing registry entry to stay disallowed")
+	}
+	if builtinOnly.isAllowedAgentLoopTool("web_search") {
 		t.Fatal("expected missing registry entry to stay disallowed")
 	}
 

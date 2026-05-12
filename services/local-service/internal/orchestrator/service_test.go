@@ -121,6 +121,7 @@ type successfulExecutionBackend struct {
 type stubPlaywrightClient struct {
 	readResult       tools.BrowserPageReadResult
 	searchResult     tools.BrowserPageSearchResult
+	webSearchResult  tools.BrowserWebSearchResult
 	interactResult   tools.BrowserPageInteractResult
 	structuredResult tools.BrowserStructuredDOMResult
 	attachResult     tools.BrowserAttachedPageResult
@@ -218,6 +219,10 @@ func (localHTTPPlaywrightClient) SearchPage(_ context.Context, url, query string
 
 func (localHTTPPlaywrightClient) SearchPageAttached(_ context.Context, _, _ string, _ int, _ tools.BrowserAttachConfig) (tools.BrowserPageSearchResult, error) {
 	return tools.BrowserPageSearchResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
+func (localHTTPPlaywrightClient) SearchWeb(_ context.Context, _ tools.BrowserWebSearchRequest) (tools.BrowserWebSearchResult, error) {
+	return tools.BrowserWebSearchResult{}, tools.ErrPlaywrightSidecarFailed
 }
 
 func (s stubPlaywrightClient) SearchPageAttached(ctx context.Context, url, query string, limit int, _ tools.BrowserAttachConfig) (tools.BrowserPageSearchResult, error) {
@@ -326,6 +331,24 @@ func (s stubPlaywrightClient) SearchPage(_ context.Context, url, query string, l
 	if limit > 0 && len(result.Matches) > limit {
 		result.Matches = result.Matches[:limit]
 		result.MatchCount = len(result.Matches)
+	}
+	return result, nil
+}
+
+func (s stubPlaywrightClient) SearchWeb(_ context.Context, request tools.BrowserWebSearchRequest) (tools.BrowserWebSearchResult, error) {
+	if s.err != nil {
+		return tools.BrowserWebSearchResult{}, s.err
+	}
+	result := s.webSearchResult
+	if result.Query == "" {
+		result.Query = request.Query
+	}
+	if result.SearchURL == "" {
+		result.SearchURL = request.URL
+	}
+	if request.Limit > 0 && len(result.Results) > request.Limit {
+		result.Results = result.Results[:request.Limit]
+		result.ResultCount = len(result.Results)
 	}
 	return result, nil
 }
@@ -15664,8 +15687,8 @@ func TestServicePluginDetailGetIncludesBrowserToolMetadata(t *testing.T) {
 		t.Fatalf("expected playwright plugin detail header, got %+v", pluginValue)
 	}
 	tools := result["tools"].([]map[string]any)
-	if len(tools) != 10 {
-		t.Fatalf("expected playwright plugin detail to expose ten tools, got %+v", tools)
+	if len(tools) != 11 {
+		t.Fatalf("expected playwright plugin detail to expose eleven tools, got %+v", tools)
 	}
 	for _, toolName := range []string{"browser_attach_current", "browser_snapshot", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact"} {
 		item := pluginToolItemByName(tools, toolName)

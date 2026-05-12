@@ -14,4 +14,9 @@ func TestPluginDeliveryMappingForBrowserTools(t *testing.T) {
 	if len(mapping.DeliveryTypes) != 1 || mapping.DeliveryTypes[0] != "task_detail" {
 		t.Fatalf("expected browser_snapshot delivery mapping to stay task_detail, got %+v", mapping)
 	}
+
+	searchMapping := pluginDeliveryMappingForMetadata(tools.ToolMetadata{Name: "web_search"})
+	if len(searchMapping.CitationSourceTypes) != 1 || searchMapping.CitationSourceTypes[0] != "web" {
+		t.Fatalf("expected web_search citation mapping to stay web, got %+v", searchMapping)
+	}
 }

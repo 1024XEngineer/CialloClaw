@@ -179,7 +179,7 @@ func isLowRiskBrowserObservationOperation(operationName string) bool {
 // startup does not block on name service or reinterpret explicit user targets.
 func (s *Service) requiresApprovalForSensitiveWebTarget(operationName, targetObject string) bool {
 	switch strings.TrimSpace(operationName) {
-	case "page_read", "page_search":
+	case "page_read", "page_search", "web_search":
 		return s.isSensitiveWebTarget(targetObject)
 	default:
 		return false

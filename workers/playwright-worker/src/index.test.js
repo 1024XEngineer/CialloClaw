@@ -23,6 +23,9 @@ function createPage(overrides = {}) {
       actionLog.push({ action: "bringToFront" });
     },
     async evaluate() {
+      if (overrides.searchResults) {
+        return overrides.searchResults;
+      }
       return overrides.snapshot ?? {
         headings: ["Heading A"],
         links: ["Docs"],
@@ -204,6 +207,26 @@ test("page_search returns bounded matches", async () => {
   assert.equal(response.ok, true);
   assert.equal(response.result.match_count, 2);
   assert.deepEqual(response.result.matches, ["First target"]);
+});
+
+test("web_search returns structured search hits", async () => {
+  const response = await handleRequest({ action: "web_search", query: "release notes", limit: 2 }, createDeps({
+    gotoURL: "https://duckduckgo.com/html/?q=release+notes",
+    searchResults: [
+      { title: "Release Notes", url: "https://example.com/release-notes", snippet: "Latest release notes." },
+      { title: "Docs", url: "https://example.com/docs", snippet: "Documentation home." },
+    ],
+  }));
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.query, "release notes");
+  assert.equal(response.result.search_url, "https://duckduckgo.com/html/?q=release+notes");
+  assert.equal(response.result.result_count, 2);
+  assert.deepEqual(response.result.results[0], {
+    title: "Release Notes",
+    url: "https://example.com/release-notes",
+    snippet: "Latest release notes.",
+  });
 });
 
 test("page_read falls back to hostname and untitled titles when needed", async () => {

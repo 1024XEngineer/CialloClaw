@@ -1246,6 +1246,8 @@ func resolveDirectToolInput(intentName string, args map[string]any, snapshot tas
 		return resolvePageToolInput(intentName, args, snapshot)
 	case "page_search":
 		return resolvePageToolInput(intentName, args, snapshot)
+	case "web_search":
+		return resolveWebSearchToolInput(args)
 	case "page_interact":
 		return resolvePageToolInput(intentName, args, snapshot)
 	case "structured_dom":
@@ -3227,6 +3229,10 @@ func (s *Service) resolveGovernanceToolExecution(request Request) (string, map[s
 				if input, ok := resolvePageToolInput(intentName, args, request.Snapshot); ok {
 					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
 				}
+			case "web_search":
+				if input, ok := resolveWebSearchToolInput(args); ok {
+					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
+				}
 			case "page_interact":
 				if input, ok := resolvePageToolInput(intentName, args, request.Snapshot); ok {
 					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
@@ -3353,7 +3359,7 @@ func GovernanceTargetObject(toolName string, toolInput map[string]any, execCtx *
 			return stringValue(toolInput, "working_dir", "")
 		}
 		return firstNonEmpty(stringValue(toolInput, "working_dir", ""), execCtx.WorkspacePath)
-	case "page_read", "page_search", "page_interact", "structured_dom":
+	case "page_read", "page_search", "page_interact", "structured_dom", "web_search":
 		return stringValue(toolInput, "url", "")
 	case "browser_navigate":
 		return firstNonEmpty(strings.TrimSpace(stringValue(toolInput, "url", "")), browserStableTargetObject(mapValue(toolInput, "attach")))
@@ -3714,6 +3720,29 @@ func resolvePageToolInput(intentName string, arguments map[string]any, snapshot 
 		input["attach"] = attach
 	}
 	return input, true
+}
+
+func resolveWebSearchToolInput(arguments map[string]any) (map[string]any, bool) {
+	queryValue := strings.TrimSpace(stringValue(arguments, "query", ""))
+	if queryValue == "" {
+		return nil, false
+	}
+
+	input := map[string]any{
+		"query": queryValue,
+		"url":   defaultWebSearchURL(queryValue),
+	}
+	if limit, ok := arguments["limit"]; ok {
+		input["limit"] = limit
+	}
+	return input, true
+}
+
+func defaultWebSearchURL(query string) string {
+	if strings.TrimSpace(query) == "" {
+		return ""
+	}
+	return "https://duckduckgo.com/html/?q=" + url.QueryEscape(strings.TrimSpace(query))
 }
 
 func pageAttachInput(urlValue string, arguments map[string]any, snapshot taskcontext.TaskContextSnapshot) map[string]any {
