@@ -134,6 +134,16 @@ test("extract_text routes PDFs through PDF extraction before OCR fallback", asyn
   assert.equal(calls.length, 1);
 });
 
+test("extract_text normalizes HTML files as plain text", async () => {
+  const response = await handleRequest({ action: "extract_text", path: "workspace/demo.html" }, createDeps({
+    readFile: async () => "<html><body><h1>Title</h1><script>ignored()</script><p>Body text</p></body></html>",
+  }));
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.source, "ocr_worker_text");
+  assert.equal(response.result.text, "Title Body text");
+});
+
 test("extract_text parses OOXML documents without external converters", async () => {
   const response = await handleRequest({ action: "extract_text", path: "workspace/demo.docx" }, createDeps({
     readFile: async (targetPath, encoding) => {
@@ -194,6 +204,37 @@ test("extract_text reports legacy doc converter requirements clearly", async () 
   );
 });
 
+test("extract_text falls back to antiword when soffice is unavailable", async () => {
+  const calls = [];
+  const result = await extractTextResult("workspace/fallback.doc", undefined, createDeps({
+    execFile: async (command, args) => {
+      calls.push({ command, args });
+      if (command === "soffice") {
+        throw new Error("missing soffice");
+      }
+      if (command === "antiword") {
+        return { stdout: "converted by antiword", stderr: "" };
+      }
+      throw new Error(`unexpected command: ${command}`);
+    },
+  }));
+
+  assert.equal(result.source, "ocr_worker_doc");
+  assert.equal(result.text, "converted by antiword");
+  assert.deepEqual(calls.map(({ command }) => command), ["soffice", "antiword"]);
+});
+
+test("extract_text rejects docx archives without readable word xml", async () => {
+  await assert.rejects(
+    () => extractTextResult("workspace/empty.docx", undefined, createDeps({
+      readFile: async () => buildStoredZip({
+        "word/document.xml": "<w:document><w:body></w:body></w:document>",
+      }),
+    })),
+    /docx_text_not_found/,
+  );
+});
+
 test("ocr_pdf falls back to page OCR when pdftotext returns no text", async () => {
   const commands = [];
   const removed = [];
@@ -225,4 +266,37 @@ test("ocr_pdf falls back to page OCR when pdftotext returns no text", async () =
   assert.match(result.text, /page-2\.png/);
   assert.equal(commands.filter(({ command }) => command === "tesseract").length, 2);
   assert.deepEqual(removed, ["/tmp/ocr-worker-scan"]);
+});
+
+test("ocr_image action returns direct OCR payload", async () => {
+  const response = await handleRequest({ action: "ocr_image", path: "workspace/direct.png", language: "eng" }, createDeps({
+    execFile: async (command) => {
+      assert.equal(command, "tesseract");
+      return { stdout: "direct image text", stderr: "" };
+    },
+  }));
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.source, "ocr_worker_tesseract");
+  assert.equal(response.result.text, "direct image text");
+});
+
+test("ocr_pdf action returns OCR payload", async () => {
+  const response = await handleRequest({ action: "ocr_pdf", path: "workspace/direct.pdf" }, createDeps({
+    execFile: async (command) => {
+      assert.equal(command, "pdftotext");
+      return { stdout: "direct pdf text", stderr: "" };
+    },
+  }));
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.source, "ocr_worker_pdf_text");
+  assert.equal(response.result.text, "direct pdf text");
+});
+
+test("unsupported actions stay structured", async () => {
+  const response = await handleRequest({ action: "unknown_action" }, createDeps());
+
+  assert.equal(response.ok, false);
+  assert.equal(response.error.code, "unsupported_action");
 });
