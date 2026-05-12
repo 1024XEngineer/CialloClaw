@@ -14,6 +14,7 @@ function createResponse(overrides = {}) {
 function createPage(overrides = {}) {
   const actionLog = overrides.actionLog ?? [];
   const navigationLog = overrides.navigationLog ?? [];
+  let windowName = overrides.windowName ?? "";
   const page = {
     currentURL: overrides.currentURL ?? "https://example.com/final",
     async content() {
@@ -25,7 +26,20 @@ function createPage(overrides = {}) {
     async bringToFront() {
       actionLog.push({ action: "bringToFront" });
     },
-    async evaluate() {
+    async evaluate(callback, ...args) {
+      if (overrides.evaluateImpl) {
+        return overrides.evaluateImpl(callback, ...args);
+      }
+      const callbackSource = typeof callback === "function" ? String(callback) : "";
+      if (callbackSource.includes("window.name = pageName")) {
+        windowName = args[0] ?? "";
+        actionLog.push({ action: "markManagedWorkerPage", windowName });
+        return undefined;
+      }
+      if (callbackSource.includes("window.name === \"cialloclaw-playwright-worker\"")) {
+        actionLog.push({ action: "isManagedWorkerPage", windowName });
+        return windowName === "cialloclaw-playwright-worker";
+      }
       if (overrides.searchResults) {
         return overrides.searchResults;
       }
@@ -328,7 +342,7 @@ test("handleRequest delegates health requests through the worker switch", async 
 
 test("health prefers a managed local browser session before bundled launch", async () => {
   const lifecycle = [];
-  const existingPage = createPage({ title: "Managed Health Page" });
+  const existingPage = createPage({ title: "Managed Health Page", windowName: "cialloclaw-playwright-worker" });
   const response = await healthResponse(createDeps({
     lifecycle,
     launchManagedBrowser: async () => ({
@@ -395,6 +409,7 @@ test("page_read uses a managed local browser session when available", async () =
     gotoURL: "https://example.com/managed",
     navigationLog,
     title: "Managed Article",
+    windowName: "cialloclaw-playwright-worker",
   });
   const response = await handleRequest({ action: "page_read", url: "https://example.com" }, createDeps({
     lifecycle,
@@ -438,12 +453,14 @@ test("page_read uses a managed local browser session when available", async () =
     },
     url: "https://example.com",
   }]);
-  assert.deepEqual(actionLog.map((entry) => entry.action), []);
+  assert.deepEqual(actionLog.map((entry) => entry.action), ["isManagedWorkerPage"]);
 });
 
 test("page_read opens a managed tab when no reusable page is available", async () => {
   const lifecycle = [];
+  const actionLog = [];
   const page = createPage({
+    actionLog,
     bodyText: "Managed tab created on demand",
     currentURL: "https://example.com/new-managed",
     gotoURL: "https://example.com/new-managed",
@@ -476,6 +493,56 @@ test("page_read opens a managed tab when no reusable page is available", async (
   assert.equal(response.ok, true);
   assert.equal(response.result.title, "Managed New Tab");
   assert.deepEqual(lifecycle, ["launchManagedBrowser", "managed.newPage", "managed.browser.close"]);
+  assert.deepEqual(actionLog.map((entry) => entry.action), ["markManagedWorkerPage"]);
+});
+
+test("page_read does not reuse an unowned managed browser tab", async () => {
+  const lifecycle = [];
+  const actionLog = [];
+  const userPage = createPage({
+    actionLog,
+    currentURL: "https://example.com/user-tab",
+    title: "User Tab",
+    windowName: "user-owned-page",
+  });
+  const workerPage = createPage({
+    actionLog,
+    bodyText: "Fresh worker-owned tab",
+    currentURL: "https://example.com/worker-tab",
+    gotoURL: "https://example.com/worker-tab",
+    title: "Worker Tab",
+  });
+  const response = await handleRequest({ action: "page_read", url: "https://example.com" }, createDeps({
+    lifecycle,
+    launchManagedBrowser: async () => ({
+      managed: true,
+      browserKind: "edge",
+      browserTransport: "cdp",
+      endpointURL: "http://127.0.0.1:9333",
+      source: "playwright_worker_local_browser",
+      browser: {
+        async close() {
+          lifecycle.push("managed.browser.close");
+        },
+        contexts() {
+          return [{
+            pages() {
+              return [userPage];
+            },
+            async newPage() {
+              lifecycle.push("managed.newPage");
+              return workerPage;
+            },
+          }];
+        },
+      },
+    }),
+  }));
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.title, "Worker Tab");
+  assert.deepEqual(lifecycle, ["launchManagedBrowser", "managed.newPage", "managed.browser.close"]);
+  assert.deepEqual(actionLog.map((entry) => entry.action), ["isManagedWorkerPage", "markManagedWorkerPage"]);
 });
 
 test("health fails fast when a managed browser has no writable context", async () => {

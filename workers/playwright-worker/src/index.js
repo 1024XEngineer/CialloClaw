@@ -31,6 +31,7 @@ const defaultSearchEngineURL = "https://duckduckgo.com/html/";
 const managedBrowserStartupTimeoutMS = 10000;
 const managedBrowserRetryIntervalMS = 250;
 const managedBrowserUserDataRoot = path.join(os.tmpdir(), "cialloclaw-playwright-browser");
+const managedWorkerPageName = "cialloclaw-playwright-worker";
 const supportedCDPBrowserKinds = new Set(["chrome", "edge"]);
 const workerUserAgent = "CialloClawPlaywrightWorker/0.1";
 
@@ -319,6 +320,20 @@ async function closeResources(context, browser) {
   }
 }
 
+async function markManagedWorkerPage(page) {
+  await page.evaluate((pageName) => {
+    window.name = pageName;
+  }, managedWorkerPageName);
+}
+
+async function isManagedWorkerPage(page) {
+  try {
+    return await page.evaluate(() => window.name === "cialloclaw-playwright-worker");
+  } catch {
+    return false;
+  }
+}
+
 async function openSessionPage(session) {
   const browser = session?.browser;
   const contexts = typeof browser?.contexts === "function" ? browser.contexts() : [];
@@ -328,7 +343,17 @@ async function openSessionPage(session) {
       throw new Error("managed browser did not expose a writable context");
     }
     const existingPages = typeof context.pages === "function" ? context.pages() : [];
-    const page = existingPages.at(-1) ?? await context.newPage();
+    let page;
+    for (let index = existingPages.length - 1; index >= 0; index -= 1) {
+      if (await isManagedWorkerPage(existingPages[index])) {
+        page = existingPages[index];
+        break;
+      }
+    }
+    if (!page) {
+      page = await context.newPage();
+      await markManagedWorkerPage(page);
+    }
     return {
       context,
       page,
