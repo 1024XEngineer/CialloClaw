@@ -119,15 +119,15 @@ type successfulExecutionBackend struct {
 }
 
 type stubPlaywrightClient struct {
-	readResult       tools.BrowserPageReadResult
-	searchResult     tools.BrowserPageSearchResult
-	interactResult   tools.BrowserPageInteractResult
-	structuredResult tools.BrowserStructuredDOMResult
-	attachResult     tools.BrowserAttachedPageResult
-	snapshotResult   tools.BrowserSnapshotResult
-	navigateResult   tools.BrowserNavigationResult
-	tabsResult       tools.BrowserTabsListResult
-	err              error
+	readResult      tools.BrowserPageReadResult
+	searchResult    tools.BrowserPageSearchResult
+	webSearchResult tools.BrowserWebSearchResult
+	interactResult  tools.BrowserPageInteractResult
+	attachResult    tools.BrowserAttachedPageResult
+	snapshotResult  tools.BrowserSnapshotResult
+	navigateResult  tools.BrowserNavigationResult
+	tabsResult      tools.BrowserTabsListResult
+	err             error
 }
 
 type localHTTPPlaywrightClient struct{}
@@ -262,6 +262,10 @@ func (localHTTPPlaywrightClient) SearchPageAttached(_ context.Context, _, _ stri
 	return tools.BrowserPageSearchResult{}, tools.ErrPlaywrightSidecarFailed
 }
 
+func (localHTTPPlaywrightClient) SearchWeb(_ context.Context, _ tools.BrowserWebSearchRequest) (tools.BrowserWebSearchResult, error) {
+	return tools.BrowserWebSearchResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
 func (s stubPlaywrightClient) SearchPageAttached(ctx context.Context, url, query string, limit int, _ tools.BrowserAttachConfig) (tools.BrowserPageSearchResult, error) {
 	return s.SearchPage(ctx, url, query, limit)
 }
@@ -276,18 +280,6 @@ func (localHTTPPlaywrightClient) InteractPageAttached(_ context.Context, _ strin
 
 func (s stubPlaywrightClient) InteractPageAttached(ctx context.Context, url string, actions []map[string]any, _ tools.BrowserAttachConfig) (tools.BrowserPageInteractResult, error) {
 	return s.InteractPage(ctx, url, actions)
-}
-
-func (localHTTPPlaywrightClient) StructuredDOM(_ context.Context, _ string) (tools.BrowserStructuredDOMResult, error) {
-	return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
-}
-
-func (localHTTPPlaywrightClient) StructuredDOMAttached(_ context.Context, _ string, _ tools.BrowserAttachConfig) (tools.BrowserStructuredDOMResult, error) {
-	return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
-}
-
-func (s stubPlaywrightClient) StructuredDOMAttached(ctx context.Context, url string, _ tools.BrowserAttachConfig) (tools.BrowserStructuredDOMResult, error) {
-	return s.StructuredDOM(ctx, url)
 }
 
 func (localHTTPPlaywrightClient) AttachCurrentPage(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserAttachedPageResult, error) {
@@ -372,22 +364,29 @@ func (s stubPlaywrightClient) SearchPage(_ context.Context, url, query string, l
 	return result, nil
 }
 
+func (s stubPlaywrightClient) SearchWeb(_ context.Context, request tools.BrowserWebSearchRequest) (tools.BrowserWebSearchResult, error) {
+	if s.err != nil {
+		return tools.BrowserWebSearchResult{}, s.err
+	}
+	result := s.webSearchResult
+	if result.Query == "" {
+		result.Query = request.Query
+	}
+	if result.SearchURL == "" {
+		result.SearchURL = request.URL
+	}
+	if request.Limit > 0 && len(result.Results) > request.Limit {
+		result.Results = result.Results[:request.Limit]
+		result.ResultCount = len(result.Results)
+	}
+	return result, nil
+}
+
 func (s stubPlaywrightClient) InteractPage(_ context.Context, url string, _ []map[string]any) (tools.BrowserPageInteractResult, error) {
 	if s.err != nil {
 		return tools.BrowserPageInteractResult{}, s.err
 	}
 	result := s.interactResult
-	if result.URL == "" {
-		result.URL = url
-	}
-	return result, nil
-}
-
-func (s stubPlaywrightClient) StructuredDOM(_ context.Context, url string) (tools.BrowserStructuredDOMResult, error) {
-	if s.err != nil {
-		return tools.BrowserStructuredDOMResult{}, s.err
-	}
-	result := s.structuredResult
 	if result.URL == "" {
 		result.URL = url
 	}
@@ -19188,6 +19187,59 @@ func TestServiceStartTaskWithExecutorReturnsGeneratedBubble(t *testing.T) {
 	}
 	if output["audit_record"] == nil {
 		t.Fatalf("expected latest tool call to include audit record, got %+v", output)
+	}
+}
+
+func TestServiceStartTaskWithExecutorPromotesLongAgentLoopOutputToWorkspaceDocument(t *testing.T) {
+	longOutput := strings.Repeat("This is a long-form agent loop section that should land in a workspace document. ", 8)
+	service, workspaceRoot := newTestServiceWithModelClient(t, &stubToolCallingModelClient{toolCalls: []model.ToolCallResult{{
+		RequestID:  "req_orchestrator_loop_workspace_doc",
+		Provider:   "openai_responses",
+		ModelID:    "gpt-5.4",
+		OutputText: longOutput,
+	}}})
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_loop_doc",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Draft a long-form migration plan.",
+		},
+		"intent": map[string]any{
+			"name":      "agent_loop",
+			"arguments": map[string]any{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	deliveryResult := result["delivery_result"].(map[string]any)
+	if deliveryResult["type"] != "workspace_document" {
+		t.Fatalf("expected long agent_loop output to promote to workspace_document, got %+v", deliveryResult)
+	}
+	payload := deliveryResult["payload"].(map[string]any)
+	outputPath := stringValue(payload, "path", "")
+	if outputPath == "" {
+		t.Fatalf("expected promoted delivery payload path, got %+v", payload)
+	}
+	content, err := os.ReadFile(filepath.Join(workspaceRoot, strings.TrimPrefix(outputPath, "workspace/")))
+	if err != nil {
+		t.Fatalf("read promoted workspace document: %v", err)
+	}
+	if !strings.Contains(string(content), longOutput[:64]) {
+		t.Fatalf("expected promoted workspace document to contain model output, got %q", string(content))
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected task to remain in runtime")
+	}
+	if record.LatestToolCall["tool_name"] != "write_file" {
+		t.Fatalf("expected promoted agent_loop task to record write_file, got %v", record.LatestToolCall["tool_name"])
 	}
 }
 

@@ -40,6 +40,7 @@ const (
 	internalScreenAnalyzeIntent = "screen_analyze_candidate"
 	deliveryPreviewMaxLength    = 120
 	inputPreviewMaxLength       = 96
+	bubbleTextMaxLength         = 480
 )
 
 // Service owns the minimum executable task pipeline inside local-service.
@@ -436,7 +437,7 @@ func (s *Service) Execute(ctx context.Context, request Request) (Result, error) 
 		}, nil
 	}
 
-	deliveryType := firstNonEmpty(request.DeliveryType, "workspace_document")
+	deliveryType := effectiveDeliveryType(request, trace.OutputText)
 	targetPath := targetPathFromIntent(request.Intent)
 	previewText := previewTextForOutput(trace.OutputText, deliveryType)
 	deliveryResult := s.delivery.BuildDeliveryResultWithTargetPath(request.TaskID, deliveryType, request.ResultTitle, previewText, targetPath)
@@ -1249,9 +1250,9 @@ func resolveDirectToolInput(intentName string, args map[string]any, snapshot tas
 		return resolvePageToolInput(intentName, args, snapshot)
 	case "page_search":
 		return resolvePageToolInput(intentName, args, snapshot)
+	case "web_search":
+		return resolveWebSearchToolInput(args)
 	case "page_interact":
-		return resolvePageToolInput(intentName, args, snapshot)
-	case "structured_dom":
 		return resolvePageToolInput(intentName, args, snapshot)
 	case "extract_text", "ocr_image", "ocr_pdf":
 		pathValue := stringValue(args, "path", stringValue(args, "file_path", ""))
@@ -2483,40 +2484,6 @@ func containsExecutionString(values []string, expected string) bool {
 	return false
 }
 
-func workspaceDocumentContent(title, outputText string) string {
-	trimmed := strings.TrimSpace(outputText)
-	if trimmed == "" {
-		trimmed = presentation.Text(presentation.MessageDocumentEmpty, nil)
-	}
-	if strings.HasPrefix(trimmed, "#") {
-		return trimmed + "\n"
-	}
-	return fmt.Sprintf("# %s\n\n%s\n", firstNonEmpty(strings.TrimSpace(title), presentation.Text(presentation.MessageDocumentDefaultTitle, nil)), trimmed)
-}
-
-func previewTextForOutput(outputText, deliveryType string) string {
-	preview := truncateText(normalizeWhitespace(outputText), deliveryPreviewMaxLength)
-	if preview == "" {
-		preview = presentation.Text(presentation.MessagePreviewGenerated, nil)
-	}
-	if deliveryType == "workspace_document" {
-		return presentation.Text(presentation.MessagePreviewWorkspaceGenerated, map[string]string{"preview": preview})
-	}
-	return preview
-}
-
-func previewTextForDeliveryType(deliveryType string) string {
-	return presentation.DeliveryPreviewText(deliveryType)
-}
-
-func truncateBubbleText(outputText string) string {
-	trimmed := strings.TrimSpace(outputText)
-	if trimmed == "" {
-		return presentation.Text(presentation.MessageBubbleGenerated, nil)
-	}
-	return truncateText(trimmed, 480)
-}
-
 func deliveryPayloadPath(deliveryResult map[string]any) string {
 	payload, ok := deliveryResult["payload"].(map[string]any)
 	if !ok {
@@ -3221,11 +3188,11 @@ func (s *Service) resolveGovernanceToolExecution(request Request) (string, map[s
 				if input, ok := resolvePageToolInput(intentName, args, request.Snapshot); ok {
 					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
 				}
-			case "page_interact":
-				if input, ok := resolvePageToolInput(intentName, args, request.Snapshot); ok {
+			case "web_search":
+				if input, ok := resolveWebSearchToolInput(args); ok {
 					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
 				}
-			case "structured_dom":
+			case "page_interact":
 				if input, ok := resolvePageToolInput(intentName, args, request.Snapshot); ok {
 					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
 				}
@@ -3347,7 +3314,7 @@ func GovernanceTargetObject(toolName string, toolInput map[string]any, execCtx *
 			return stringValue(toolInput, "working_dir", "")
 		}
 		return firstNonEmpty(stringValue(toolInput, "working_dir", ""), execCtx.WorkspacePath)
-	case "page_read", "page_search", "page_interact", "structured_dom":
+	case "page_read", "page_search", "page_interact", "web_search":
 		return stringValue(toolInput, "url", "")
 	case "browser_navigate":
 		return firstNonEmpty(strings.TrimSpace(stringValue(toolInput, "url", "")), browserStableTargetObject(mapValue(toolInput, "attach")))
@@ -3708,6 +3675,33 @@ func resolvePageToolInput(intentName string, arguments map[string]any, snapshot 
 		input["attach"] = attach
 	}
 	return input, true
+}
+
+func resolveWebSearchToolInput(arguments map[string]any) (map[string]any, bool) {
+	queryValue := strings.TrimSpace(stringValue(arguments, "query", ""))
+	if queryValue == "" {
+		return nil, false
+	}
+
+	// Keep the derived search URL for governance/audit targeting, but mark it as
+	// implicit so the worker still treats "no parseable results from the default
+	// search page" as a structured failure instead of a silent empty success.
+	input := map[string]any{
+		"query":           queryValue,
+		"url":             defaultWebSearchURL(queryValue),
+		"url_is_explicit": false,
+	}
+	if limit, ok := arguments["limit"]; ok {
+		input["limit"] = limit
+	}
+	return input, true
+}
+
+func defaultWebSearchURL(query string) string {
+	if strings.TrimSpace(query) == "" {
+		return ""
+	}
+	return "https://duckduckgo.com/html/?q=" + url.QueryEscape(strings.TrimSpace(query))
 }
 
 func pageAttachInput(urlValue string, arguments map[string]any, snapshot taskcontext.TaskContextSnapshot) map[string]any {

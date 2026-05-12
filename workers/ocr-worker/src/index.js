@@ -4,6 +4,7 @@ import { stdin as input, stdout as output, stderr as errorOutput } from "node:pr
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { inflateRawSync } from "node:zlib";
 
 export const manifest = {
   worker_name: "ocr_worker",
@@ -13,6 +14,12 @@ export const manifest = {
 
 const imageExtensions = new Set([".bmp", ".gif", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"]);
 const htmlExtensions = new Set([".htm", ".html"]);
+const docxExtensions = new Set([".docx"]);
+const legacyWordExtensions = new Set([".doc"]);
+const docxArchiveSizeLimitBytes = 25 * 1024 * 1024;
+const docxEntrySizeLimitBytes = 8 * 1024 * 1024;
+const docxTotalXMLSizeLimitBytes = 16 * 1024 * 1024;
+const docxWordEntryPattern = /^word\/(document|header\d+|footer\d+|footnotes|endnotes)\.xml$/i;
 
 const defaultDependencies = {
   execFile,
@@ -75,8 +82,12 @@ function normalizedExtension(targetPath) {
 
 function commandVersionArgs(command) {
   switch (command) {
+    case "soffice":
+      return ["--version"];
     case "tesseract":
       return ["--version"];
+    case "antiword":
+      return ["-h"];
     default:
       return ["-v"];
   }
@@ -92,12 +103,20 @@ async function checkCommand(command, deps) {
 }
 
 async function backendStatus(deps) {
-  const [tesseract, pdftotext, pdftoppm] = await Promise.all([
+  const [tesseract, pdftotext, pdftoppm, soffice, antiword, catdoc] = await Promise.all([
     checkCommand("tesseract", deps),
     checkCommand("pdftotext", deps),
     checkCommand("pdftoppm", deps),
+    checkCommand("soffice", deps),
+    checkCommand("antiword", deps),
+    checkCommand("catdoc", deps),
   ]);
-  return { pdftoppm, pdftotext, tesseract };
+  return {
+    legacy_doc: soffice || antiword || catdoc,
+    pdftoppm,
+    pdftotext,
+    tesseract,
+  };
 }
 
 function missingDependencies(backends) {
@@ -109,7 +128,12 @@ function missingDependencies(backends) {
 
 export async function healthResponse(deps = defaultDependencies) {
   const backends = await backendStatus(deps);
-  const missing = missingDependencies(backends);
+  const requiredBackends = {
+    pdftoppm: backends.pdftoppm,
+    pdftotext: backends.pdftotext,
+    tesseract: backends.tesseract,
+  };
+  const missing = missingDependencies(requiredBackends);
   if (missing.length > 0) {
     return {
       ok: false,
@@ -128,7 +152,9 @@ export async function healthResponse(deps = defaultDependencies) {
   return {
     ok: true,
     result: {
-      status: "ok",
+      // `legacy_doc` is an optional compatibility path: keep the worker healthy for
+      // text/PDF/image extraction and surface `.doc` gaps only when that format is requested.
+      status: backends.legacy_doc ? "ok" : "degraded",
       worker_name: manifest.worker_name,
       capabilities: manifest.capabilities,
       dependencies: backends,
@@ -151,6 +177,212 @@ function pdfPageCount(rawText) {
     .map((pageText) => normalizeText(pageText))
     .filter((pageText) => pageText !== "").length;
   return count;
+}
+
+async function readBuffer(targetPath, deps) {
+  const value = await deps.readFile(targetPath);
+  if (Buffer.isBuffer(value)) {
+    return value;
+  }
+  if (value instanceof Uint8Array) {
+    return Buffer.from(value);
+  }
+  if (typeof value === "string") {
+    return Buffer.from(value);
+  }
+  throw new Error("unsupported_binary_payload");
+}
+
+function zipEndOfCentralDirectoryOffset(buffer) {
+  const minimumRecordLength = 22;
+  const lowerBound = Math.max(0, buffer.length - 0xFFFF - minimumRecordLength);
+  for (let offset = buffer.length - minimumRecordLength; offset >= lowerBound; offset -= 1) {
+    if (buffer.readUInt32LE(offset) === 0x06054B50) {
+      return offset;
+    }
+  }
+  throw new Error("zip_end_of_central_directory_not_found");
+}
+
+function readZipEntryContent(buffer, localHeaderOffset, compressionMethod, compressedSize, options = {}) {
+  if (buffer.readUInt32LE(localHeaderOffset) !== 0x04034B50) {
+    throw new Error("zip_local_header_not_found");
+  }
+  const fileNameLength = buffer.readUInt16LE(localHeaderOffset + 26);
+  const extraLength = buffer.readUInt16LE(localHeaderOffset + 28);
+  const dataOffset = localHeaderOffset + 30 + fileNameLength + extraLength;
+  const compressed = buffer.subarray(dataOffset, dataOffset + compressedSize);
+  const maxOutputLength = options.maxOutputLength;
+  switch (compressionMethod) {
+    case 0:
+      if (typeof maxOutputLength === "number" && compressed.length > maxOutputLength) {
+        throw new Error(`docx_entry_too_large:${options.entryName ?? "unknown"}`);
+      }
+      return Buffer.from(compressed);
+    case 8:
+      try {
+        return inflateRawSync(compressed, typeof maxOutputLength === "number" ? { maxOutputLength } : undefined);
+      } catch (error) {
+        if (typeof maxOutputLength === "number" && error?.code === "ERR_BUFFER_TOO_LARGE") {
+          throw new Error(`docx_entry_too_large:${options.entryName ?? "unknown"}`);
+        }
+        throw error;
+      }
+    default:
+      throw new Error(`zip_compression_unsupported:${compressionMethod}`);
+  }
+}
+
+function unzipEntries(buffer, options = {}) {
+  const endRecordOffset = zipEndOfCentralDirectoryOffset(buffer);
+  const entryCount = buffer.readUInt16LE(endRecordOffset + 10);
+  let offset = buffer.readUInt32LE(endRecordOffset + 16);
+  const entries = new Map();
+  let totalSize = 0;
+  for (let index = 0; index < entryCount; index += 1) {
+    if (buffer.readUInt32LE(offset) !== 0x02014B50) {
+      throw new Error("zip_central_directory_entry_not_found");
+    }
+    const compressionMethod = buffer.readUInt16LE(offset + 10);
+    const compressedSize = buffer.readUInt32LE(offset + 20);
+    const fileNameLength = buffer.readUInt16LE(offset + 28);
+    const extraLength = buffer.readUInt16LE(offset + 30);
+    const commentLength = buffer.readUInt16LE(offset + 32);
+    const localHeaderOffset = buffer.readUInt32LE(offset + 42);
+    const fileName = buffer.subarray(offset + 46, offset + 46 + fileNameLength).toString("utf8");
+    if (!options.includeEntry || options.includeEntry(fileName)) {
+      const entry = readZipEntryContent(buffer, localHeaderOffset, compressionMethod, compressedSize, {
+        entryName: fileName,
+        maxOutputLength: options.maxEntrySize,
+      });
+      totalSize += entry.length;
+      if (typeof options.maxTotalSize === "number" && totalSize > options.maxTotalSize) {
+        throw new Error("docx_text_too_large");
+      }
+      entries.set(fileName, entry);
+    }
+    offset += 46 + fileNameLength + extraLength + commentLength;
+  }
+  return entries;
+}
+
+function decodeXMLText(value) {
+  return String(value ?? "").replace(/&#(\d+);/g, (_, digits) => String.fromCodePoint(Number.parseInt(digits, 10)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, hexDigits) => String.fromCodePoint(Number.parseInt(hexDigits, 16)))
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&apos;/g, "'");
+}
+
+function normalizeWordXML(value) {
+  const text = String(value ?? "")
+    .replace(/<w:tab[^>]*\/>/gi, "\t")
+    .replace(/<w:br[^>]*\/>/gi, "\n")
+    .replace(/<\/w:p>/gi, "\n")
+    .replace(/<\/w:tr>/gi, "\n")
+    .replace(/<[^>]+>/g, " ");
+  return decodeXMLText(text)
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+async function extractDOCXText(targetPath, deps) {
+  const targetStats = await deps.stat(targetPath);
+  if (typeof targetStats?.size === "number" && targetStats.size > docxArchiveSizeLimitBytes) {
+    throw new Error("docx_archive_too_large");
+  }
+  const archive = unzipEntries(await readBuffer(targetPath, deps), {
+    includeEntry(name) {
+      return docxWordEntryPattern.test(name);
+    },
+    maxEntrySize: docxEntrySizeLimitBytes,
+    maxTotalSize: docxTotalXMLSizeLimitBytes,
+  });
+  const candidateNames = Array.from(archive.keys())
+    .sort((left, right) => {
+      if (left === "word/document.xml") {
+        return -1;
+      }
+      if (right === "word/document.xml") {
+        return 1;
+      }
+      return left.localeCompare(right);
+    });
+  const sections = [];
+  for (const name of candidateNames) {
+    const value = normalizeWordXML(archive.get(name)?.toString("utf8") ?? "");
+    if (value !== "") {
+      sections.push(value);
+    }
+  }
+  if (sections.length === 0) {
+    throw new Error("docx_text_not_found");
+  }
+  return {
+    path: targetPath,
+    text: sections.join("\n\n"),
+    language: "docx_text",
+    page_count: 1,
+    source: "ocr_worker_docx",
+  };
+}
+
+async function extractLegacyWordViaSoffice(targetPath, deps) {
+  const tempDir = await deps.mkdtemp(path.join(deps.tmpdir(), "ocr-worker-doc-"));
+  const outputPath = path.join(tempDir, `${path.basename(targetPath, path.extname(targetPath))}.txt`);
+  try {
+    await deps.execFile("soffice", ["--headless", "--convert-to", "txt:Text", "--outdir", tempDir, targetPath]);
+    const text = String(await deps.readFile(outputPath, "utf8")).trim();
+    if (text === "") {
+      throw new Error("legacy_doc_conversion_empty");
+    }
+    return {
+      path: targetPath,
+      text,
+      language: "legacy_doc_text",
+      page_count: 1,
+      source: "ocr_worker_doc",
+    };
+  } finally {
+    await deps.rm(tempDir, { force: true, recursive: true });
+  }
+}
+
+async function extractLegacyWordViaStdout(command, targetPath, deps) {
+  const result = await deps.execFile(command, [targetPath]);
+  const text = normalizeText(result.stdout);
+  if (text === "") {
+    throw new Error(`${command}_empty_output`);
+  }
+  return {
+    path: targetPath,
+    text,
+    language: "legacy_doc_text",
+    page_count: 1,
+    source: "ocr_worker_doc",
+  };
+}
+
+async function extractLegacyDOCText(targetPath, deps) {
+  const attempts = [
+    async () => extractLegacyWordViaSoffice(targetPath, deps),
+    async () => extractLegacyWordViaStdout("antiword", targetPath, deps),
+    async () => extractLegacyWordViaStdout("catdoc", targetPath, deps),
+  ];
+  for (const attempt of attempts) {
+    try {
+      return await attempt();
+    } catch {
+      // Try the next converter. Legacy .doc files often need a real document
+      // parser, so we avoid falling back to unsafe byte-to-text decoding here.
+    }
+  }
+  throw new Error("legacy .doc extraction requires soffice, antiword, or catdoc; convert the file to .docx if those tools are unavailable");
 }
 
 async function extractPDFText(targetPath, deps) {
@@ -228,6 +460,12 @@ export async function extractTextResult(targetPath, language, deps = defaultDepe
   const extension = normalizedExtension(targetPath);
   if (extension === ".pdf") {
     return extractOCRPDF(targetPath, language, deps);
+  }
+  if (docxExtensions.has(extension)) {
+    return extractDOCXText(targetPath, deps);
+  }
+  if (legacyWordExtensions.has(extension)) {
+    return extractLegacyDOCText(targetPath, deps);
   }
   if (imageExtensions.has(extension)) {
     return {
