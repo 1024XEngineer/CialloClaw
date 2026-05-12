@@ -6146,6 +6146,116 @@ func TestServiceStartTaskFileWithoutInstructionStillRequiresConfirmation(t *test
 	}
 }
 
+func TestServiceStartTaskIntentConfirmationUsesModelAuthoredQuestionWhenAvailable(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			if !strings.Contains(request.Input, `"name":"write_file"`) {
+				t.Fatalf("expected confirmation prompt to include write_file intent payload, got %q", request.Input)
+			}
+			if !strings.Contains(request.Input, `"target_path":"workspace/release-notes.md"`) {
+				t.Fatalf("expected confirmation prompt to include write target, got %q", request.Input)
+			}
+			return model.GenerateTextResponse{
+				OutputText: "你现在是希望我把内容整理后写入「workspace/release-notes.md」吗？",
+			}, nil
+		},
+	})
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_confirm_question_model",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "整理本次发布说明并保存成文档",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"target_path": "workspace/release-notes.md",
+			},
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("start confirm-required write_file task failed: %v", err)
+	}
+
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["type"] != "intent_confirm" {
+		t.Fatalf("expected write_file task to return intent confirmation bubble, got %+v", bubble)
+	}
+	if bubble["text"] != "你现在是希望我把内容整理后写入「workspace/release-notes.md」吗？" {
+		t.Fatalf("expected model-authored confirmation question, got %+v", bubble)
+	}
+}
+
+func TestServiceStartTaskIntentConfirmationFallsBackToDeterministicQuestion(t *testing.T) {
+	service := newTestService()
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_confirm_question_specific",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "请尽快同步到海外发布渠道。",
+		},
+		"intent": map[string]any{
+			"name": "translate",
+			"arguments": map[string]any{
+				"target_language": "en",
+			},
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("start confirm-required translate task failed: %v", err)
+	}
+
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["type"] != "intent_confirm" {
+		t.Fatalf("expected translate task to return intent confirmation bubble, got %+v", bubble)
+	}
+	if bubble["text"] != "你现在是希望我翻译「请尽快同步到海外发布渠道。」吗？" {
+		t.Fatalf("expected deterministic confirmation question, got %+v", bubble)
+	}
+}
+
+func TestServiceStartTaskIntentConfirmationFallbackUsesIntentTargetWhenContextLacksSubject(t *testing.T) {
+	service := newTestService()
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_confirm_question_fallback",
+		"source":     "floating_ball",
+		"trigger":    "recommendation_click",
+		"input": map[string]any{
+			"type": "text",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"target_path": "workspace/release-notes.md",
+			},
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("start confirm-required write_file task without model failed: %v", err)
+	}
+
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["text"] != "你现在是希望我处理「workspace/release-notes.md」吗？" {
+		t.Fatalf("expected fallback confirmation question to use intent target, got %+v", bubble)
+	}
+}
+
 func TestServiceStartTaskPersistsFormalReadFileSampleChain(t *testing.T) {
 	service, workspaceRoot := newTestServiceWithExecution(t, "unused")
 	readPath := filepath.Join(workspaceRoot, "notes", "source.txt")

@@ -142,7 +142,6 @@ type ShellBallTaskOutputServiceModule = {
 type ShellBallIntentCorrectionSession = {
   taskId: string;
   intentName: string;
-  intentLabel: string;
   savedInputValue: string;
   status: "idle" | "submitting";
 };
@@ -860,7 +859,6 @@ export function createShellBallAgentBubbleItem(
     const intentConfirm = bubbleType === "intent_confirm" && result.task?.intent?.name?.trim()
       ? {
           intentName: result.task.intent.name,
-          intentLabel: result.task.intent.name,
           status: "idle" as const,
         }
       : undefined;
@@ -1346,7 +1344,6 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
   const enterIntentCorrectionMode = useCallback((input: {
     taskId: string;
     intentName: string;
-    intentLabel: string;
     draftOverride?: string;
     savedInputValueOverride?: string;
   }) => {
@@ -1364,7 +1361,6 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     setIntentCorrection({
       taskId: normalizedTaskId,
       intentName: input.intentName,
-      intentLabel: input.intentLabel,
       savedInputValue: nextSavedInputValue,
       status: "idle",
     });
@@ -3411,7 +3407,6 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     enterIntentCorrectionMode({
       taskId: normalizedTaskId,
       intentName: intentConfirm.intentName,
-      intentLabel: intentConfirm.intentLabel,
     });
   }, [enterIntentCorrectionMode]);
 

@@ -9198,6 +9198,15 @@ test("intent confirm cancel action is wired to formal task cancellation", () => 
   );
 });
 
+test("intent confirm bubble keeps a single backend-authored question without local intent labels", () => {
+  const bubbleMessageSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallBubbleMessage.tsx"), "utf8");
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+
+  assert.doesNotMatch(bubbleMessageSource, /当前意图：/);
+  assert.doesNotMatch(bubbleMessageSource, /shell-ball-bubble-message__intent-summary/);
+  assert.doesNotMatch(coordinatorSource, /intentLabel/);
+});
+
 test("shell-ball text submit clears drafts before RPC completion and fully restores failed optimistic submits", () => {
   const interactionSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallInteraction.ts"), "utf8");
 
