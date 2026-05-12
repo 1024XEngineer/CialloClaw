@@ -185,6 +185,27 @@ test("page_read returns normalized page metadata", async () => {
   }]);
 });
 
+test("page_read promotes bare domains to https before navigation", async () => {
+  const navigationLog = [];
+  const response = await handleRequest({ action: "page_read", url: "example.com/docs" }, createDeps({
+    bodyText: "Hello world from browser",
+    gotoURL: "https://example.com/docs",
+    navigationLog,
+    title: "Example Docs",
+  }));
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.url, "https://example.com/docs");
+  assert.deepEqual(navigationLog, [{
+    action: "goto",
+    options: {
+      timeout: 30000,
+      waitUntil: "load",
+    },
+    url: "https://example.com/docs",
+  }]);
+});
+
 test("page_read uses the HTML title tag when Playwright title lookup is empty", async () => {
   const response = await handleRequest({ action: "page_read", url: "https://example.com" }, createDeps({
     bodyText: "Hello world from browser",

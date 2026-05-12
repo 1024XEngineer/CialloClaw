@@ -166,6 +166,28 @@ function normalizeComparableURL(url) {
   }
 }
 
+function normalizeTopLevelURL(rawURL) {
+  const normalized = normalizeOptionalString(rawURL);
+  if (!normalized) {
+    return undefined;
+  }
+
+  if (/^[a-z][a-z\d+.-]*:/iu.test(normalized)) {
+    return normalized;
+  }
+  if (normalized.startsWith("//")) {
+    return `https:${normalized}`;
+  }
+
+  // Bare domains are common in natural-language requests, so promote them to
+  // https before the launch-path browser navigation validates the URL.
+  if (/^(localhost|\d{1,3}(?:\.\d{1,3}){3}|[^\s/?.#]+\.[^\s/?#]+)(?::\d+)?(?:[/?#].*)?$/iu.test(normalized)) {
+    return `https://${normalized}`;
+  }
+
+  return normalized;
+}
+
 function createAttachedExecution(attachConfig) {
   return {
     attached: true,
@@ -372,7 +394,7 @@ async function withAttachedPage(request, deps, callback) {
 
 async function openAttachedPage(request, deps, callback) {
   if (!request?.attach) {
-    return openBrowserPage(String(request.url ?? ""), deps, callback);
+    return openBrowserPage(normalizeTopLevelURL(request?.url) ?? "", deps, callback);
   }
 
   return withAttachedPage(request, deps, async (descriptor, execution) => {
@@ -396,7 +418,7 @@ function serializeAttachedPageSelection(descriptor, execution) {
 }
 
 function requireTopLevelURL(request, actionName) {
-  const url = normalizeOptionalString(request?.url);
+  const url = normalizeTopLevelURL(request?.url);
   if (!url) {
     throw createStructuredWorkerError("invalid_input", `${actionName} requires a top-level url`);
   }

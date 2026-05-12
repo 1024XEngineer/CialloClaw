@@ -646,6 +646,18 @@ func TestResolveRelativePathFromRootsFindsWorkerEntry(t *testing.T) {
 	}
 }
 
+func TestWorkerSearchRootsPrefersExplicitPackagedRuntimeRoot(t *testing.T) {
+	runtimeRoot := t.TempDir()
+	t.Setenv(playwrightRuntimeRootEnvKey, runtimeRoot)
+	roots := workerSearchRoots()
+	if len(roots) == 0 {
+		t.Fatal("expected worker search roots to include the packaged runtime root")
+	}
+	if roots[0] != runtimeRoot {
+		t.Fatalf("expected packaged runtime root %q to be searched first, got %q", runtimeRoot, roots[0])
+	}
+}
+
 func TestCommandWorkerInvokerInvokeReturnsStructuredRequestError(t *testing.T) {
 	entryPath := writeTempWorkerScript(t, `process.stdin.resume(); process.stdin.on("end", () => { process.stdout.write(JSON.stringify({ ok: false, error: { code: "http_404", message: "page not found" } })); process.exitCode = 1; });`)
 	invoker := newCommandWorkerInvoker(entryPath)

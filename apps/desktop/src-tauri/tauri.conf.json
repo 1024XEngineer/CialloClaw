@@ -13,6 +13,7 @@
     "active": true,
     "targets": ["nsis", "msi"],
     "externalBin": ["bin/cialloclaw-service"],
+    "resources": ["resources/playwright-runtime"],
     "icon": ["icons/icon.ico", "icons/icon.png"],
     "windows": {
       "webviewInstallMode": {

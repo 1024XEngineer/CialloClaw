@@ -52,6 +52,9 @@ use windows::Win32::{
 type JsonChannel = Channel<Value>;
 
 const DEFAULT_NAMED_PIPE_PATH: &str = r"\\.\pipe\cialloclaw-rpc";
+const PLAYWRIGHT_RUNTIME_ROOT_ENV_KEY: &str = "CIALLOCLAW_PLAYWRIGHT_RUNTIME_ROOT";
+const PLAYWRIGHT_BROWSERS_PATH_ENV_KEY: &str = "PLAYWRIGHT_BROWSERS_PATH";
+const PLAYWRIGHT_RUNTIME_DIRECTORY_NAME: &str = "playwright-runtime";
 #[derive(Clone, Serialize)]
 struct DesktopRuntimeDefaultsPayload {
     data_path: String,
@@ -645,7 +648,7 @@ fn start_local_service_sidecar(
         ),
     );
 
-    let sidecar_command = match app.shell().sidecar("cialloclaw-service") {
+    let mut sidecar_command = match app.shell().sidecar("cialloclaw-service") {
         Ok(command) => command,
         Err(error) => {
             if cfg!(debug_assertions) {
@@ -660,6 +663,20 @@ fn start_local_service_sidecar(
             return Err(format!("failed to resolve local service sidecar: {error}"));
         }
     };
+    if let Some(playwright_runtime_root) = resolve_packaged_playwright_runtime_root(app) {
+        sidecar_command = sidecar_command
+            .env(
+                PLAYWRIGHT_RUNTIME_ROOT_ENV_KEY,
+                playwright_runtime_root.to_string_lossy().to_string(),
+            )
+            .env(
+                PLAYWRIGHT_BROWSERS_PATH_ENV_KEY,
+                playwright_runtime_root
+                    .join("ms-playwright")
+                    .to_string_lossy()
+                    .to_string(),
+            );
+    }
 
     let (mut rx, child) = sidecar_command
         .args([
@@ -723,6 +740,15 @@ fn start_local_service_sidecar(
     });
 
     Ok(true)
+}
+
+fn resolve_packaged_playwright_runtime_root(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let resource_dir = app.path().resource_dir().ok()?;
+    let runtime_root = resource_dir.join(PLAYWRIGHT_RUNTIME_DIRECTORY_NAME);
+    if runtime_root.is_dir() {
+        return Some(runtime_root);
+    }
+    None
 }
 
 /// wait_for_local_service_ready blocks the renderer bootstrap until the named

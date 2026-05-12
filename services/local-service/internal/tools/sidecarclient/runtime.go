@@ -22,6 +22,7 @@ import (
 const sidecarHealthTimeout = 5 * time.Second
 const sidecarDefaultTimeout = 20 * time.Second
 const playwrightWorkerRelativePath = "workers/playwright-worker/src/index.js"
+const playwrightRuntimeRootEnvKey = "CIALLOCLAW_PLAYWRIGHT_RUNTIME_ROOT"
 
 type workerInvoker interface {
 	Invoke(ctx context.Context, request sidecarRequest) (sidecarResponse, error)
@@ -636,7 +637,10 @@ func resolveWorkerEntryPath() (string, error) {
 }
 
 func workerSearchRoots() []string {
-	roots := make([]string, 0, 3)
+	roots := make([]string, 0, 4)
+	if envRoot := strings.TrimSpace(os.Getenv(playwrightRuntimeRootEnvKey)); envRoot != "" {
+		roots = append(roots, envRoot)
+	}
 	if exePath, err := os.Executable(); err == nil && strings.TrimSpace(exePath) != "" {
 		roots = append(roots, filepath.Dir(exePath))
 	}
