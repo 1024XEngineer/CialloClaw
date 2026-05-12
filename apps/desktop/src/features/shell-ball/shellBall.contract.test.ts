@@ -25,7 +25,6 @@ import {
   SHELL_BALL_PRESS_DRIFT_TOLERANCE_PX,
   SHELL_BALL_PROCESSING_MS,
   SHELL_BALL_VERTICAL_PRIORITY_RATIO,
-  SHELL_BALL_WAITING_AUTH_MS,
 } from "./shellBall.interaction";
 import { getShellBallMotionConfig } from "./shellBall.motion";
 import { collectShellBallSpeechTranscript, composeShellBallSpeechDraft } from "./shellBall.speech";
@@ -313,6 +312,7 @@ function withWindowControllerRuntime<T>(runtime: {
 function withHideOnCloseRequestRuntime<T>(
   currentWindow: {
     __calls__?: string[];
+    __transitionResult__?: boolean;
     destroy?: () => Promise<void> | void;
     label?: string;
     hide: () => Promise<void> | void;
@@ -340,7 +340,7 @@ function withHideOnCloseRequestRuntime<T>(
       return {
         requestShellBallDashboardCloseTransition() {
           (currentWindow as { __calls__?: string[] }).__calls__?.push("requestShellBallDashboardCloseTransition");
-          return Promise.resolve(true);
+          return Promise.resolve((currentWindow as { __transitionResult__?: boolean }).__transitionResult__ ?? true);
         },
       };
     }
@@ -1227,10 +1227,12 @@ test("hide-on-close helper waits for the dashboard close transition only in the 
   for (const scenario of [
     {
       label: "dashboard",
+      transitionResult: true,
       expectedCalls: ["onCloseRequested", "preventDefault", "requestShellBallDashboardCloseTransition", "hide"],
     },
     {
       label: "control-panel",
+      transitionResult: true,
       expectedCalls: ["onCloseRequested", "preventDefault", "destroy"],
     },
   ] as const) {
@@ -1239,6 +1241,7 @@ test("hide-on-close helper waits for the dashboard close transition only in the 
 
     await withHideOnCloseRequestRuntime({
       __calls__: calls,
+      __transitionResult__: scenario.transitionResult,
       label: scenario.label,
       onCloseRequested(handler) {
         calls.push("onCloseRequested");
@@ -1262,6 +1265,34 @@ test("hide-on-close helper waits for the dashboard close transition only in the 
 
     assert.deepEqual(calls, scenario.expectedCalls);
   }
+});
+
+test("hide-on-close helper still hides dashboard when the shell-ball close transition fails", async () => {
+  const calls: string[] = [];
+  let closeHandler: ((event: { preventDefault: () => void }) => Promise<void> | void) | null = null;
+
+  await withHideOnCloseRequestRuntime({
+    __calls__: calls,
+    __transitionResult__: false,
+    label: "dashboard",
+    onCloseRequested(handler) {
+      calls.push("onCloseRequested");
+      closeHandler = handler;
+      return "unlisten";
+    },
+    async hide() {
+      calls.push("hide");
+    },
+  }, async ({ installHideOnCloseRequest }) => {
+    installHideOnCloseRequest();
+    await closeHandler?.({
+      preventDefault() {
+        calls.push("preventDefault");
+      },
+    });
+  });
+
+  assert.deepEqual(calls, ["onCloseRequested", "preventDefault", "requestShellBallDashboardCloseTransition", "hide"]);
 });
 
 test("hide-on-close helper lets a destroy-triggered second close continue without prevention", async () => {
@@ -3785,16 +3816,7 @@ test("shell-ball text drop target only arms during eligible text drags", () => {
   );
 });
 
-test("shell-ball interaction contract auto-advances waiting auth and processing states", () => {
-  assert.deepEqual(
-    resolveShellBallTransition({
-      current: "waiting_auth",
-      event: "auto_advance",
-      regionActive: true,
-    }),
-    { next: "processing" },
-  );
-
+test("shell-ball interaction contract keeps waiting auth stable while processing still auto-advances", () => {
   assert.deepEqual(
     resolveShellBallTransition({
       current: "processing",
@@ -3865,14 +3887,10 @@ test("shell-ball controller schedules confirm, auth, and processing auto-advance
 
   authController.dispatch("attach_file", { regionActive: false });
   assert.equal(authController.getState(), "waiting_auth");
-  assert.equal(authScheduler.size, 1);
+  assert.equal(authScheduler.size, 0);
 
   authScheduler.flush();
-  assert.equal(authController.getState(), "processing");
-  assert.equal(authScheduler.size, 1);
-
-  authScheduler.flush();
-  assert.equal(authController.getState(), "idle");
+  assert.equal(authController.getState(), "waiting_auth");
   authController.dispose();
 });
 
@@ -4423,6 +4441,10 @@ test("shell-ball dashboard gesture policy stays task-2 explicit", () => {
   );
   assert.equal(
     getShellBallDashboardOpenGesturePolicy({ gesture: "double_click", state: "hover_input", interactionConsumed: false }),
+    true,
+  );
+  assert.equal(
+    getShellBallDashboardOpenGesturePolicy({ gesture: "double_click", state: "waiting_auth", interactionConsumed: false }),
     true,
   );
   assert.equal(
@@ -8896,6 +8918,10 @@ test("shell-ball coordinator subscribes to formal task, approval, and runtime up
 
   assert.match(coordinatorSource, /subscribeTaskUpdated\(\(payload\) => \{/);
   assert.match(coordinatorSource, /subscribeApprovalPending\(\(payload\) => \{/);
+  assert.match(coordinatorSource, /const operationName = typeof approvalRequest\.operation_name === "string" \? approvalRequest\.operation_name\.trim\(\) : "";/);
+  assert.match(coordinatorSource, /const targetObject = typeof approvalRequest\.target_object === "string" \? approvalRequest\.target_object\.trim\(\) : "";/);
+  assert.match(coordinatorSource, /const reason = typeof approvalRequest\.reason === "string" \? approvalRequest\.reason\.trim\(\) : "";/);
+  assert.match(coordinatorSource, /if \(result\.task\?\.status === "waiting_auth"\) \{[\s\S]*仪表盘的安全页完成授权/);
   assert.match(coordinatorSource, /subscribeAllTaskRuntime\(\(payload\) => \{/);
   assert.match(coordinatorSource, /const queuedRuntimeNotificationsRef = useRef\(new Map<string, QueuedRuntimeNotification\[]>\(\)\);/);
   assert.match(coordinatorSource, /queuedRuntimeNotifications\.forEach\(\(notification\) => \{\s*appendRuntimeObservationBubble\(notification\.taskId, notification\.payload\);/);
@@ -9091,6 +9117,10 @@ test("shell-ball app dashboard-open gate stays blocked for consumed or non-resti
     true,
   );
   assert.equal(
+    getShellBallDashboardOpenGesturePolicy({ gesture: "double_click", state: "waiting_auth", interactionConsumed: false }),
+    true,
+  );
+  assert.equal(
     getShellBallDashboardOpenGesturePolicy({ gesture: "double_click", state: "hover_input", interactionConsumed: true }),
     false,
   );
@@ -9155,13 +9185,26 @@ test("intent confirm cancel action is wired to formal task cancellation", () => 
   const bubbleMessageSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallBubbleMessage.tsx"), "utf8");
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
 
+  assert.match(bubbleMessageSource, /const taskId = typeof item\.bubble\.task_id === "string" \? item\.bubble\.task_id\.trim\(\) : "";/);
+  assert.match(bubbleMessageSource, /const bubbleText = typeof item\.bubble\.text === "string" \? item\.bubble\.text : "";/);
   assert.match(bubbleMessageSource, />取消任务</);
   assert.match(bubbleMessageSource, /data-bubble-action="cancel_task"/);
+  assert.match(coordinatorSource, /function normalizeShellBallBackendBubbleMessage\(/);
+  assert.match(coordinatorSource, /task_id: typeof bubbleMessage\.task_id === "string" && bubbleMessage\.task_id\.trim\(\) !== ""[\s\S]*\? bubbleMessage\.task_id[\s\S]*: fallback\.taskId,/);
   assert.match(coordinatorSource, /const decisionText = payload\.decision === "confirm" \? "确认" : "取消任务";/);
   assert.match(
     coordinatorSource,
     /payload\.decision === "confirm"\s*\?\s*await confirmTask\([\s\S]*:\s*await controlTask\(\{[\s\S]*action:\s*"cancel"/,
   );
+});
+
+test("intent confirm bubble keeps a single backend-authored question without local intent labels", () => {
+  const bubbleMessageSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallBubbleMessage.tsx"), "utf8");
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+
+  assert.doesNotMatch(bubbleMessageSource, /当前意图：/);
+  assert.doesNotMatch(bubbleMessageSource, /shell-ball-bubble-message__intent-summary/);
+  assert.doesNotMatch(coordinatorSource, /intentLabel/);
 });
 
 test("shell-ball text submit clears drafts before RPC completion and fully restores failed optimistic submits", () => {
@@ -9193,7 +9236,6 @@ test("shell-ball interaction timing constants stay frozen", () => {
   assert.equal(SHELL_BALL_CANCEL_DELTA_PX, 48);
   assert.equal(SHELL_BALL_VERTICAL_PRIORITY_RATIO, 1.25);
   assert.equal(SHELL_BALL_CONFIRMING_MS, 600);
-  assert.equal(SHELL_BALL_WAITING_AUTH_MS, 700);
   assert.equal(SHELL_BALL_PROCESSING_MS, 1200);
 });
 

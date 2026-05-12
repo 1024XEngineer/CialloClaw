@@ -3,8 +3,9 @@ package orchestrator
 import (
 	"strings"
 
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/languagepolicy"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 // ConfirmTask applies a user decision to a task that is still waiting for
@@ -26,6 +27,7 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		return nil, err
 	}
 	snapshot := snapshotFromTask(task)
+	replyLanguage := taskConfirmReplyLanguage(snapshot, correctionText)
 	intentValue := cloneMap(task.Intent)
 	updatedTitle := task.Title
 	if !confirmed && correctionText != "" {
@@ -42,7 +44,13 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 			if err != nil {
 				return nil, err
 			}
-			bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleConfirmRejected, nil), updatedTask.UpdatedAt.Format(dateTimeLayout))
+			snapshot := snapshotFromTask(updatedTask)
+			replyLanguage := taskConfirmReplyLanguage(snapshot, correctionText)
+			clarificationText := rejectedIntentClarificationText(replyLanguage)
+			if clarificationHits := s.clarificationPreviewHits(updatedTask, snapshot); len(clarificationHits) > 0 {
+				clarificationText = clarificationText + " " + clarificationBubbleTextForLanguage(map[string]any{}, clarificationHits, replyLanguage)
+			}
+			bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", clarificationText, updatedTask.UpdatedAt.Format(dateTimeLayout))
 			if presentedTask, ok := s.runEngine.SetPresentation(task.TaskID, bubble, nil, nil); ok {
 				updatedTask = presentedTask
 			} else {
@@ -59,7 +67,13 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleConfirmRejected, nil), updatedTask.UpdatedAt.Format(dateTimeLayout))
+		snapshot := snapshotFromTask(updatedTask)
+		replyLanguage := taskConfirmReplyLanguage(snapshot, correctionText)
+		clarificationText := rejectedIntentClarificationText(replyLanguage)
+		if clarificationHits := s.clarificationPreviewHits(updatedTask, snapshot); len(clarificationHits) > 0 {
+			clarificationText = clarificationText + " " + clarificationBubbleTextForLanguage(map[string]any{}, clarificationHits, replyLanguage)
+		}
+		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", clarificationText, updatedTask.UpdatedAt.Format(dateTimeLayout))
 		if presentedTask, ok := s.runEngine.SetPresentation(task.TaskID, bubble, nil, nil); ok {
 			updatedTask = presentedTask
 		} else {
@@ -72,7 +86,13 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		}, nil
 	}
 	if strings.TrimSpace(stringValue(intentValue, "name", "")) == "" {
-		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleConfirmMissingIntent, nil), task.UpdatedAt.Format(dateTimeLayout))
+		snapshot := snapshotFromTask(task)
+		replyLanguage := taskConfirmReplyLanguage(snapshot, correctionText)
+		clarificationText := missingIntentClarificationText(replyLanguage)
+		if clarificationHits := s.clarificationPreviewHits(task, snapshot); len(clarificationHits) > 0 {
+			clarificationText = clarificationText + " " + clarificationBubbleTextForLanguage(map[string]any{}, clarificationHits, replyLanguage)
+		}
+		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", clarificationText, task.UpdatedAt.Format(dateTimeLayout))
 		if updatedTask, ok := s.runEngine.SetPresentation(task.TaskID, bubble, nil, nil); ok {
 			return map[string]any{
 				"task":            taskMap(updatedTask),
@@ -86,7 +106,8 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		updatedTitle = s.intent.Suggest(snapshot, intentValue, false).TaskTitle
 	}
 
-	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleConfirmStarted, nil), task.UpdatedAt.Format(dateTimeLayout))
+	bubbleText := confirmationAcceptedText(replyLanguage)
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", bubbleText, task.UpdatedAt.Format(dateTimeLayout))
 	updatedTask, ok := s.runEngine.UpdateIntent(task.TaskID, updatedTitle, intentValue)
 	if !ok {
 		return nil, ErrTaskNotFound
@@ -116,7 +137,7 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	}
 	executionSnapshot := snapshotFromTask(updatedTask)
 
-	updatedTask, resultBubble, deliveryResult, _, err := s.executeTask(updatedTask, executionSnapshot, intentValue)
+	updatedTask, resultBubble, deliveryResult, _, err := s.executeTaskWithReplyLanguage(updatedTask, executionSnapshot, intentValue, replyLanguage)
 	if err != nil {
 		return nil, err
 	}
@@ -126,6 +147,38 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		"bubble_message":  resultBubble,
 		"delivery_result": optionalFormalDeliveryResult(deliveryResult),
 	}, nil
+}
+
+func confirmationAcceptedText(replyLanguage string) string {
+	if isEnglishReplyLanguage(replyLanguage) {
+		return "Got it. I am starting with your updated goal."
+	}
+	return "已按新的要求开始处理"
+}
+
+func taskConfirmReplyLanguage(snapshot taskcontext.TaskContextSnapshot, correctionText string) string {
+	if trimmed := strings.TrimSpace(correctionText); trimmed != "" {
+		return languagepolicy.PreferredReplyLanguage(trimmed)
+	}
+	return clarificationReplyLanguage(snapshot)
+}
+
+func isEnglishReplyLanguage(replyLanguage string) bool {
+	return replyLanguage == languagepolicy.ReplyLanguageEnglish
+}
+
+func rejectedIntentClarificationText(replyLanguage string) string {
+	if isEnglishReplyLanguage(replyLanguage) {
+		return "That is not the right handling path. Please restate your goal or give me a more accurate intent."
+	}
+	return "这不是我该做的处理方式。请重新说明你的目标，或给我一个更准确的处理意图。"
+}
+
+func missingIntentClarificationText(replyLanguage string) string {
+	if isEnglishReplyLanguage(replyLanguage) {
+		return "Please tell me clearly what kind of handling you want me to perform first."
+	}
+	return "请先明确告诉我你希望执行的处理方式。"
 }
 
 func (s *Service) revertTaskToIntentConfirmation(task runengine.TaskRecord) (runengine.TaskRecord, error) {
