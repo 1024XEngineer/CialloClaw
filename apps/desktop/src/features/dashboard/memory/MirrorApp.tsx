@@ -841,7 +841,7 @@ export function MirrorApp() {
   const dataSourceDetails = [
     mirrorData.source === "rpc"
       ? "当前展示来自本地 JSON-RPC 服务。"
-      : "当前展示的是本地 mock 示例数据。",
+      : "当前展示的是本地缓存的镜像概览，用于在 RPC 不可用时保持页面可读性。",
   ];
 
   if (mirrorData.rpcContext.serverTime) {

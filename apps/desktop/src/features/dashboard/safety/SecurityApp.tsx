@@ -567,7 +567,7 @@ function getCardPreview(
       badgeLabel: latestRestorePoint ? "restore ready" : "audit",
       badgeColor: latestRestorePoint ? "orange" : "gray",
       headline: latestRestorePoint?.summary ?? "查看任务与全局审计",
-      supporting: latestRestorePoint ? `最近恢复点 ${formatDateTime(latestRestorePoint.created_at)}` : "只保留后端真实返回的审计与恢复信息",
+      supporting: latestRestorePoint ? `最近恢复点 ${formatDateTime(latestRestorePoint.created_at)}` : "当前仅展示后端返回的正式审计与恢复记录。",
       meta: moduleData.summary.pending_authorizations > 0 ? `${moduleData.summary.pending_authorizations} 条待确认` : "无待确认授权",
       icon: Siren,
     };

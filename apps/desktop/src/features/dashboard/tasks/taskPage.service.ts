@@ -153,7 +153,7 @@ function buildProtocolTaskExperience(task: Task, detail?: AgentTaskDetailGetResu
   return {
     acceptance: [],
     assistantState: {
-      hint: "当前面板只消费正式 task/detail 返回内容，不再复用 mock 任务说明。",
+      hint: "当前面板只消费正式 task/detail 返回内容，不再复用示意任务说明。",
       label: getTaskPreviewStatusLabel(task.status),
     },
     background: "当前说明直接基于正式 task/detail 数据生成，只保留协议已返回的任务事实与本地展示性文案。",

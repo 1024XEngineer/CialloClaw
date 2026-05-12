@@ -386,7 +386,7 @@ func buildDashboardSignals(unfinishedTasks, finishedTasks []runengine.TaskRecord
 		signals = append(signals, "最近一次正式交付已经生成可回放的恢复点。")
 	}
 	if len(signals) == 0 {
-		signals = append(signals, "主链路当前暂无活跃任务。")
+		signals = append(signals, "当前没有可展示的活跃任务信号。")
 	}
 	return signals
 }
