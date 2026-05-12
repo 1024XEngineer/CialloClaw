@@ -490,7 +490,7 @@ func applyNotepadMetadataLine(item map[string]any, line string, now time.Time) b
 		return false
 	}
 	switch key {
-	case "due":
+	case "due", "due_at":
 		if dueAt := normalizeMetadataTime(value, now); dueAt != "" {
 			item["due_at"] = dueAt
 			item["planned_at"] = dueAt
@@ -499,22 +499,22 @@ func applyNotepadMetadataLine(item map[string]any, line string, now time.Time) b
 		item["bucket"] = normalizeBucketValue(value, stringValue(item, "bucket"))
 	case "prerequisite":
 		item["prerequisite"] = value
-	case "suggest", "agent":
+	case "suggest", "agent", "agent_suggestion":
 		item["agent_suggestion"] = value
-	case "repeat":
+	case "repeat", "repeat_rule_text":
 		item["repeat_rule_text"] = value
 		item["bucket"] = notepadBucketRecurringRule
 		item["type"] = "recurring"
-	case "next":
+	case "next", "next_occurrence_at":
 		if nextOccurrence := normalizeMetadataTime(value, now); nextOccurrence != "" {
 			item["next_occurrence_at"] = nextOccurrence
 			if stringValue(item, "due_at") == "" {
 				item["due_at"] = nextOccurrence
 			}
 		}
-	case "scope":
+	case "scope", "effective_scope":
 		item["effective_scope"] = value
-	case "status":
+	case "status", "recent_instance_status":
 		item["recent_instance_status"] = value
 	case "resource":
 		resources := cloneMapSlice(resourceListValue(item["related_resources"]))
@@ -522,10 +522,15 @@ func applyNotepadMetadataLine(item map[string]any, line string, now time.Time) b
 		item["related_resources"] = resources
 	case "tags":
 		item["tags"] = splitTagList(value)
-	case "note":
+	case "note", "note_text":
 		item["note_text"] = value
-	case "reminder":
+	case "reminder", "reminder_strategy":
 		item["reminder_strategy"] = value
+	case "created_at", "updated_at", "ended_at", "planned_at", "item_id", "linked_task_id", "source_path", "source_line", "note_text_origin", "related_resources", "resource_origin", "recurring_enabled":
+		// Exported runtime fields must not be re-ingested as authored note text.
+		// Swallowing them here keeps source-backed notes, generated titles, and
+		// convert_to_task snapshots anchored on user-owned content only.
+		return true
 	default:
 		return false
 	}

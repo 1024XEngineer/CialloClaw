@@ -1,6 +1,8 @@
 package orchestrator
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -264,6 +266,77 @@ func TestServiceNotepadConvertToTaskUsesGeneratedTaskTitleFromFullContext(t *tes
 	}
 	record, _ := service.runEngine.GetTask(taskID)
 	t.Fatalf("expected notepad conversion to schedule async task title refinement, got %+v", record)
+}
+
+func TestServiceNotepadConvertToTaskIgnoresExportedRuntimeMetadataInAsyncTitleRefresh(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			if isTaskTitleGenerationRequest(request) {
+				title := "创新创业文档总结"
+				if strings.Contains(request.Input, "created_at:") || strings.Contains(request.Input, "linked_task_id:") {
+					title = "created_at: 2026-05-12..."
+				}
+				return model.GenerateTextResponse{
+					OutputText: `{"title":"` + title + `"}`,
+					RequestID:  "req_notepad_exported_title",
+					Provider:   "openai",
+					ModelID:    "gpt-title",
+					Usage:      model.TokenUsage{InputTokens: 13, OutputTokens: 4, TotalTokens: 17},
+					LatencyMS:  35,
+				}, nil
+			}
+			return model.GenerateTextResponse{OutputText: "Converted notepad task finished."}, nil
+		},
+	})
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("mkdir todos: %v", err)
+	}
+	content := strings.Join([]string{
+		"- [ ] 理解创新创业基础文档",
+		"  附件:2025创新创业基础知行汇(4).doc，说明:我不太明白这个文档在讲什么，帮我总结一下下",
+		"  created_at: 2026-05-12T01:00:00Z",
+		"  updated_at: 2026-05-12T01:05:00Z",
+		"  linked_task_id: task_old",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "exported.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write exported note: %v", err)
+	}
+
+	if _, err := service.TaskInspectorRun(map[string]any{
+		"target_sources": []any{"workspace/todos"},
+	}); err != nil {
+		t.Fatalf("TaskInspectorRun failed: %v", err)
+	}
+
+	items, total := service.runEngine.NotepadItems("upcoming", 10, 0)
+	if total != 1 || len(items) != 1 {
+		t.Fatalf("expected one synced note item, got total=%d items=%+v", total, items)
+	}
+	if strings.Contains(stringValue(items[0], "note_text", ""), "created_at:") {
+		t.Fatalf("expected synced note_text to exclude exported runtime metadata, got %+v", items[0])
+	}
+
+	result, err := service.NotepadConvertToTask(map[string]any{
+		"item_id":   stringValue(items[0], "item_id", ""),
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("notepad convert failed: %v", err)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		record, ok := service.runEngine.GetTask(taskID)
+		if ok && record.Title == "创新创业文档总结" {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	record, _ := service.runEngine.GetTask(taskID)
+	t.Fatalf("expected async title refresh to ignore exported runtime metadata, got %+v", record)
 }
 
 func hasTaskTitleAuditRecord(records []map[string]any) bool {

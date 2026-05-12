@@ -269,6 +269,48 @@ func TestServiceRunCachesGeneratedNoteTitlesUntilContentChanges(t *testing.T) {
 	}
 }
 
+func TestServiceRunIgnoresExportedRuntimeMetadataInNoteBody(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	content := strings.Join([]string{
+		"- [ ] 理解创新创业基础文档",
+		"  附件:2025创新创业基础知行汇(4).doc，说明:我不太明白这个文档在讲什么，帮我总结一下下",
+		"  created_at: 2026-05-12T01:00:00Z",
+		"  updated_at: 2026-05-12T01:05:00Z",
+		"  linked_task_id: task_old",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "exported.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem)
+	result, err := service.Run(RunInput{
+		Config: map[string]any{"task_sources": []string{"workspace/todos"}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if len(result.NotepadItems) != 1 {
+		t.Fatalf("expected one parsed note, got %+v", result.NotepadItems)
+	}
+
+	item := result.NotepadItems[0]
+	noteText := stringValue(item, "note_text")
+	if strings.Contains(noteText, "created_at:") || strings.Contains(noteText, "updated_at:") || strings.Contains(noteText, "linked_task_id:") {
+		t.Fatalf("expected runtime metadata to stay out of note_text, got %+v", item)
+	}
+	if !strings.Contains(noteText, "附件:2025创新创业基础知行汇(4).doc") {
+		t.Fatalf("expected authored note text to remain, got %+v", item)
+	}
+}
+
 func TestServiceRunReturnsTitleGenerationAuditDataWithInspectionOwner(t *testing.T) {
 	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
 	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
