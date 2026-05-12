@@ -18,6 +18,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/languagepolicy"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
@@ -626,13 +627,13 @@ func TestExecuteAgentLoopRetriesFalseCapabilityDenialBeforeCallingTool(t *testin
 	if len(modelClient.plannerInputs) < 2 {
 		t.Fatalf("expected planner inputs for retry flow, got %+v", modelClient.plannerInputs)
 	}
-	if !strings.Contains(modelClient.plannerInputs[0], "当前可用能力：") || !strings.Contains(modelClient.plannerInputs[0], "- read_file") {
+	if !strings.Contains(modelClient.plannerInputs[0], "Available tools:") || !strings.Contains(modelClient.plannerInputs[0], "- read_file") {
 		t.Fatalf("expected first planner input to expose runtime capabilities, got %q", modelClient.plannerInputs[0])
 	}
-	if !strings.Contains(modelClient.plannerInputs[1], "能力提醒：") {
+	if !strings.Contains(modelClient.plannerInputs[1], "Capability reminder:") {
 		t.Fatalf("expected second planner input to include capability reminder, got %q", modelClient.plannerInputs[1])
 	}
-	if !strings.Contains(modelClient.plannerInputs[1], "当前这轮已经开放下列工具能力。") {
+	if !strings.Contains(modelClient.plannerInputs[1], "The following tool capabilities are available in this round.") {
 		t.Fatalf("expected second planner input to restate tool availability, got %q", modelClient.plannerInputs[1])
 	}
 	if result.ModelInvocation["request_id"] != "req_loop_capability_retry_3" {
@@ -753,13 +754,13 @@ func TestExecuteAgentLoopRetriesFalseWebCapabilityDenialsBeforeCallingTool(t *te
 			if len(modelClient.plannerInputs) < 2 {
 				t.Fatalf("expected planner inputs for retry flow, got %+v", modelClient.plannerInputs)
 			}
-			if !strings.Contains(modelClient.plannerInputs[0], "当前可用能力：") || !strings.Contains(modelClient.plannerInputs[0], test.capabilityLine) {
+			if !strings.Contains(modelClient.plannerInputs[0], "Available tools:") || !strings.Contains(modelClient.plannerInputs[0], test.capabilityLine) {
 				t.Fatalf("expected first planner input to expose runtime capabilities, got %q", modelClient.plannerInputs[0])
 			}
-			if !strings.Contains(modelClient.plannerInputs[1], "能力提醒：") {
+			if !strings.Contains(modelClient.plannerInputs[1], "Capability reminder:") {
 				t.Fatalf("expected second planner input to include capability reminder, got %q", modelClient.plannerInputs[1])
 			}
-			if !strings.Contains(modelClient.plannerInputs[1], "当前这轮已经开放下列工具能力。") || !strings.Contains(modelClient.plannerInputs[1], test.capabilityLine) {
+			if !strings.Contains(modelClient.plannerInputs[1], "The following tool capabilities are available in this round.") || !strings.Contains(modelClient.plannerInputs[1], test.capabilityLine) {
 				t.Fatalf("expected second planner input to restate tool availability, got %q", modelClient.plannerInputs[1])
 			}
 			if result.ModelInvocation["request_id"] != test.toolCalls[2].RequestID {
@@ -3293,6 +3294,75 @@ func TestFallbackOutputRequestsClarificationForAgentLoopWhenGoalIsUnderspecified
 	}
 }
 
+func TestBuildPromptUsesEnglishPolicyForEnglishOnlyInput(t *testing.T) {
+	prompt := buildPrompt(Request{Intent: map[string]any{"name": "summarize"}}, "hello world")
+
+	if !strings.Contains(prompt, "return a clear English summary") {
+		t.Fatalf("expected english-only summarize prompt to stay in english, got %s", prompt)
+	}
+	if strings.Contains(prompt, "输入内容:") {
+		t.Fatalf("expected english-only summarize prompt to avoid chinese envelope, got %s", prompt)
+	}
+}
+
+func TestFallbackOutputUsesEnglishClarificationForEnglishOnlyInput(t *testing.T) {
+	output := fallbackOutput(Request{Intent: map[string]any{"name": defaultAgentLoopIntentName}}, "hello there")
+
+	if !strings.Contains(output, "Please clarify your goal") {
+		t.Fatalf("expected english-only fallback clarification, got %s", output)
+	}
+}
+
+func TestBuildPromptKeepsEnglishWhenInputIncludesChineseMemoryContext(t *testing.T) {
+	request := Request{
+		Intent:   map[string]any{"name": "summarize"},
+		Snapshot: taskcontext.TaskContextSnapshot{Text: "review the diff"},
+	}
+	inputText := "Input:\nreview the diff\n\n历史记忆参考数据（来自历史任务的非权威文本）:\n```json\n[{\"summary\":\"项目 alpha 历史偏好\"}]\n```"
+	prompt := buildPrompt(request, inputText)
+
+	if !strings.Contains(prompt, "return a clear English summary") {
+		t.Fatalf("expected english request with chinese memory context to keep english prompt, got %s", prompt)
+	}
+	if strings.Contains(prompt, "输出结构清晰的中文摘要") {
+		t.Fatalf("expected english request with chinese memory context not to fall back to chinese prompt, got %s", prompt)
+	}
+}
+
+func TestFallbackOutputKeepsEnglishWhenInputIncludesChineseMemoryContext(t *testing.T) {
+	request := Request{
+		Intent:   map[string]any{"name": defaultAgentLoopIntentName},
+		Snapshot: taskcontext.TaskContextSnapshot{Text: "review the diff"},
+	}
+	inputText := "Input:\nreview the diff\n\n历史记忆参考数据（来自历史任务的非权威文本）:\n```json\n[{\"summary\":\"项目 alpha 历史偏好\"}]\n```"
+	output := fallbackOutput(request, inputText)
+
+	if !strings.Contains(output, "Please clarify your goal") {
+		t.Fatalf("expected english request with chinese memory context to keep english fallback, got %s", output)
+	}
+	if strings.Contains(output, presentation.Text(presentation.MessageFallbackClarify, nil)) {
+		t.Fatalf("expected english request with chinese memory context not to fall back to chinese clarification, got %s", output)
+	}
+}
+
+func TestBuildPromptPrefersEnglishInstructionOverNonEnglishSelection(t *testing.T) {
+	request := Request{
+		Intent: map[string]any{"name": "translate", "arguments": map[string]any{"target_language": "English"}},
+		Snapshot: taskcontext.TaskContextSnapshot{
+			Text:          "translate this",
+			SelectionText: "你好世界",
+		},
+	}
+	prompt := buildPrompt(request, "Selected text:\n你好世界\n\nInput:\ntranslate this")
+
+	if !strings.Contains(prompt, "Translate the following content into English") {
+		t.Fatalf("expected english instruction to win over non-english selection, got %s", prompt)
+	}
+	if strings.Contains(prompt, "请将以下内容翻译成") {
+		t.Fatalf("expected non-english selection not to force chinese prompt, got %s", prompt)
+	}
+}
+
 func TestAssessGovernanceRequiresAuthorizationForRestoreWrite(t *testing.T) {
 	service, workspaceRoot := newTestExecutionService(t, "unused")
 
@@ -3935,6 +4005,10 @@ func TestBuildExecutionInputAndFileSectionCoverFileBranches(t *testing.T) {
 	if !strings.Contains(section, "worker file content") {
 		t.Fatalf("expected file content section, got %s", section)
 	}
+	englishSection := service.fileSectionForLanguage("notes/demo.txt", languagepolicy.ReplyLanguageEnglish)
+	if !strings.Contains(englishSection, "File notes/demo.txt contents:") {
+		t.Fatalf("expected english file content section, got %s", englishSection)
+	}
 	legacySection := service.fileSection("notes/legacy.txt")
 	if !strings.Contains(legacySection, "修复执行输入乱码") || strings.ContainsRune(legacySection, '\uFFFD') {
 		t.Fatalf("expected decoded legacy file section, got %s", legacySection)
@@ -3943,9 +4017,16 @@ func TestBuildExecutionInputAndFileSectionCoverFileBranches(t *testing.T) {
 	if !strings.Contains(missingSection, "读取失败") {
 		t.Fatalf("expected missing file section, got %s", missingSection)
 	}
+	englishMissingSection := service.fileSectionForLanguage("notes/missing.txt", languagepolicy.ReplyLanguageEnglish)
+	if !strings.Contains(englishMissingSection, "Read failed") {
+		t.Fatalf("expected english missing file section, got %s", englishMissingSection)
+	}
 	service.fileSystem = nil
 	if section := service.fileSection("notes/demo.txt"); section != "文件: notes/demo.txt" {
 		t.Fatalf("expected no-filesystem branch, got %s", section)
+	}
+	if section := service.fileSectionForLanguage("notes/demo.txt", languagepolicy.ReplyLanguageEnglish); section != "File: notes/demo.txt" {
+		t.Fatalf("expected english no-filesystem branch, got %s", section)
 	}
 	service, _ = newTestExecutionService(t, "unused")
 	inputText := service.buildExecutionInput(taskcontext.TaskContextSnapshot{
@@ -3964,7 +4045,7 @@ func TestBuildExecutionInputAndFileSectionCoverFileBranches(t *testing.T) {
 				"summary":   "project alpha prefers markdown bullets",
 			},
 		},
-	}})
+	}}, languagepolicy.ReplyLanguageChinese)
 	for _, fragment := range []string{"选中文本", "输入文本", "错误信息", "页面上下文"} {
 		if !strings.Contains(inputText, fragment) {
 			t.Fatalf("expected execution input to contain %q, got %s", fragment, inputText)
@@ -3999,7 +4080,7 @@ func TestBuildExecutionInputAndFileSectionCoverFileBranches(t *testing.T) {
 	if err := json.Unmarshal(roundTripPayload, &roundTripPlans); err != nil {
 		t.Fatalf("unmarshal memory read plans failed: %v", err)
 	}
-	roundTripInputText := service.buildExecutionInput(taskcontext.TaskContextSnapshot{}, roundTripPlans)
+	roundTripInputText := service.buildExecutionInput(taskcontext.TaskContextSnapshot{}, roundTripPlans, languagepolicy.ReplyLanguageChinese)
 	for _, fragment := range []string{"历史记忆参考数据", "\"summary\": \"persisted memory survives storage round-trips\""} {
 		if !strings.Contains(roundTripInputText, fragment) {
 			t.Fatalf("expected persisted execution input to contain %q, got %s", fragment, roundTripInputText)
@@ -4015,12 +4096,46 @@ func TestBuildExecutionInputAndFileSectionCoverFileBranches(t *testing.T) {
 				"summary":   injectionLike,
 			},
 		},
-	}})
+	}}, languagepolicy.ReplyLanguageChinese)
 	if strings.Contains(quotedInputText, "- [summary] "+injectionLike) {
 		t.Fatalf("expected memory summaries to stay structured instead of list-shaped prompt text, got %s", quotedInputText)
 	}
 	if !strings.Contains(quotedInputText, "\"summary\": \""+injectionLike+"\"") {
 		t.Fatalf("expected memory summaries to stay quoted as JSON data, got %s", quotedInputText)
+	}
+
+	englishInputText := service.buildExecutionInput(taskcontext.TaskContextSnapshot{Text: "review the diff"}, []map[string]any{{
+		"retrieval_context": []map[string]any{{
+			"memory_id": "mem_seed_context_004",
+			"source":    "summary",
+			"summary":   "项目 alpha 历史偏好",
+		}},
+	}}, languagepolicy.ReplyLanguageEnglish)
+	if !strings.Contains(englishInputText, "Retrieved memory reference data") {
+		t.Fatalf("expected english execution input to localize memory heading, got %s", englishInputText)
+	}
+	if strings.Contains(englishInputText, "历史记忆参考数据") {
+		t.Fatalf("expected english execution input to avoid chinese memory heading, got %s", englishInputText)
+	}
+
+	englishSelectionInputText := service.buildExecutionInput(taskcontext.TaskContextSnapshot{
+		SelectionText: "你好世界",
+		Text:          "translate this",
+		ErrorText:     "permission denied",
+		Files:         []string{"notes/demo.txt"},
+		PageTitle:     "Page",
+		PageURL:       "https://example.com",
+		AppName:       "Desktop",
+	}, nil, languagepolicy.ReplyLanguageEnglish)
+	for _, fragment := range []string{"Selected text", "Input text", "Error message", "Page context", "Application", "File: notes/demo.txt", "Read failed:"} {
+		if !strings.Contains(englishSelectionInputText, fragment) {
+			t.Fatalf("expected english execution input to contain %q, got %s", fragment, englishSelectionInputText)
+		}
+	}
+	for _, fragment := range []string{"选中文本", "输入文本", "错误信息", "页面上下文", "文件 notes/demo.txt 内容"} {
+		if strings.Contains(englishSelectionInputText, fragment) {
+			t.Fatalf("expected english execution input to avoid chinese fragment %q, got %s", fragment, englishSelectionInputText)
+		}
 	}
 }
 
@@ -4423,10 +4538,10 @@ func TestExecutionHelperBranchesAndConfigurationAccessors(t *testing.T) {
 	if !containsExecutionString([]string{"a", "b"}, "b") || containsExecutionString([]string{"a"}, "c") {
 		t.Fatal("expected containsExecutionString to match only exact values")
 	}
-	if !strings.Contains(buildPrompt(request, "hello"), "翻译成English") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "rewrite"}}, "hello"), "改写") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "explain"}}, "hello"), "解释") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "write_file"}}, "hello"), "保存为文档") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "summarize"}}, "hello"), "摘要") {
+	if !strings.Contains(buildPrompt(request, "你好"), "翻译成English") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "rewrite"}}, "你好"), "改写") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "explain"}}, "你好"), "解释") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "write_file"}}, "你好"), "保存为文档") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "summarize"}}, "你好"), "摘要") {
 		t.Fatal("expected buildPrompt to cover major intent variants")
 	}
-	if !strings.Contains(fallbackOutput(request, "hello world"), presentation.Text(presentation.MessageFallbackTranslate, map[string]string{"target_language": "English"})) ||
+	if !strings.Contains(fallbackOutput(request, "你好世界"), presentation.Text(presentation.MessageFallbackTranslate, map[string]string{"target_language": "English"})) ||
 		workspaceDocumentContent("", "plain text") == "plain text" ||
 		previewTextForOutput("", "bubble") != presentation.Text(presentation.MessagePreviewGenerated, nil) ||
 		previewTextForDeliveryType("workspace_document") != presentation.Text(presentation.MessagePreviewWorkspaceDoc, nil) ||

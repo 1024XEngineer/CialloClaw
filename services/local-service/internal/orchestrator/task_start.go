@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/memory"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
@@ -71,6 +72,7 @@ func (s *Service) maybeContinueStartTask(flow *taskEntryFlow) (map[string]any, b
 	if strings.TrimSpace(resolvedSessionID) != "" {
 		flow.Params = withResolvedSessionID(flow.Params, resolvedSessionID)
 	}
+	flow.Snapshot = s.applySessionInputContext(flow.Params, flow.Snapshot)
 	return nil, false, nil
 }
 
@@ -120,13 +122,14 @@ func (s *Service) createTaskFromEntryFlow(flow taskEntryFlow) runengine.TaskReco
 		Timeline:          initialTimeline(status, currentStep),
 		Snapshot:          flow.Snapshot,
 	})
+	s.clearSessionInputContext(task.SessionID)
 	s.publishTaskStart(task.TaskID, task.SessionID, requestTraceID(flow.Params))
 	s.attachMemoryReadPlans(task.TaskID, task.RunID, flow.Snapshot, flow.Suggestion.Intent)
 	return task
 }
 
 func (s *Service) finishStartTask(flow taskEntryFlow, task runengine.TaskRecord) (map[string]any, error) {
-	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(flow.Suggestion.RequiresConfirm), bubbleTextForStart(flow.Suggestion), task.StartedAt.Format(dateTimeLayout))
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(flow.Suggestion.RequiresConfirm), bubbleTextForStart(flow.Snapshot, flow.Suggestion, previewClarificationHits(s, task, flow.Snapshot, flow.Suggestion), flow.Snapshot.SessionReplyLanguage), task.StartedAt.Format(dateTimeLayout))
 	if flow.Suggestion.RequiresConfirm {
 		task = s.persistTaskPresentation(task, bubble)
 		return buildTaskEntryResponse(task, bubble, nil), nil
@@ -209,42 +212,33 @@ func bubbleTypeForSuggestion(requiresConfirm bool) string {
 }
 
 // bubbleTextForInput returns the bubble text for agent.input.submit flows.
-func bubbleTextForInput(suggestion intent.Suggestion) string {
+func bubbleTextForInput(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, hits []memory.RetrievalHit, replyLanguage string) string {
 	if suggestion.RequiresConfirm {
 		if !suggestion.IntentConfirmed {
-			return presentation.Text(presentation.MessageBubbleInputConfirmUnknown, nil)
+			return initialClarificationPromptForLanguage(snapshot, false, replyLanguage)
 		}
-		return confirmIntentText(suggestion.Intent)
+		return clarificationBubbleTextForLanguage(suggestion.Intent, hits, clarificationReplyLanguage(snapshot))
 	}
 	return suggestion.ResultBubbleText
 }
 
 // bubbleTextForStart returns the bubble text for agent.task.start flows.
-func bubbleTextForStart(suggestion intent.Suggestion) string {
+func bubbleTextForStart(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, hits []memory.RetrievalHit, replyLanguage string) string {
 	if suggestion.RequiresConfirm {
 		if !suggestion.IntentConfirmed {
-			return presentation.Text(presentation.MessageBubbleStartConfirmUnknown, nil)
+			return initialClarificationPromptForLanguage(snapshot, true, replyLanguage)
 		}
-		return confirmIntentText(suggestion.Intent)
+		return clarificationBubbleTextForLanguage(suggestion.Intent, hits, clarificationReplyLanguage(snapshot))
 	}
 	return suggestion.ResultBubbleText
 }
 
-func confirmIntentText(taskIntent map[string]any) string {
-	switch stringValue(taskIntent, "name", "") {
-	case "translate":
-		return presentation.Text(presentation.MessageBubbleConfirmTranslate, nil)
-	case "rewrite":
-		return presentation.Text(presentation.MessageBubbleConfirmRewrite, nil)
-	case "explain":
-		return presentation.Text(presentation.MessageBubbleConfirmExplain, nil)
-	case "summarize":
-		return presentation.Text(presentation.MessageBubbleConfirmSummarize, nil)
-	case "write_file":
-		return presentation.Text(presentation.MessageBubbleConfirmWriteFile, nil)
-	default:
-		return presentation.Text(presentation.MessageBubbleConfirmDefault, nil)
+func previewClarificationHits(s *Service, task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) []memory.RetrievalHit {
+	if s == nil || !suggestion.RequiresConfirm || !suggestion.IntentConfirmed {
+		return nil
 	}
+
+	return s.clarificationPreviewHits(task, snapshot)
 }
 
 // initialTimeline creates the first timeline step for a new task and derives

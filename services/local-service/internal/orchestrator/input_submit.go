@@ -4,8 +4,10 @@ import (
 	"context"
 	"strings"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 // SubmitInput adapts free-form user input into the task-centric execution path.
@@ -57,6 +59,8 @@ func (s *Service) maybeContinueInputSubmit(flow *taskEntryFlow) (map[string]any,
 	if strings.TrimSpace(resolvedSessionID) != "" {
 		flow.Params = withResolvedSessionID(flow.Params, resolvedSessionID)
 	}
+	flow.Snapshot = s.applySessionInputContext(flow.Params, flow.Snapshot)
+	flow.Snapshot, flow.Suggestion = s.applyRememberedSessionFollowUp(flow.Params, flow.Snapshot, flow.Suggestion, flow.ConfirmRequired)
 	return nil, false, nil
 }
 
@@ -65,15 +69,33 @@ func (s *Service) maybeHandleSuggestedInputScreen(flow taskEntryFlow) (map[strin
 }
 
 func (s *Service) maybeRouteUnanchoredInput(flow *taskEntryFlow) (map[string]any, bool) {
+	if decision, ok := s.rememberedSessionRecallDecision(stringValue(flow.Params, "session_id", ""), flow.Snapshot); ok {
+		s.rememberSessionInputTurn(stringValue(flow.Params, "session_id", ""), flow.Snapshot, decision.Reply)
+		return s.socialChatInputResponse(decision), true
+	}
 	decision, ok := s.routeUnanchoredSubmitInput(context.Background(), flow.Snapshot, flow.Suggestion, flow.ConfirmRequired)
 	if !ok {
 		return nil, false
 	}
 	if decision.Route == inputRouteSocialChat {
+		s.rememberSessionInputTurn(stringValue(flow.Params, "session_id", ""), flow.Snapshot, decision.Reply)
 		return s.socialChatInputResponse(decision), true
 	}
-	flow.Suggestion = applyInputRouteDecision(flow.Suggestion, decision)
+	flow.Suggestion = s.applyInputRouteDecision(flow.Snapshot, flow.Suggestion, decision)
 	return nil, false
+}
+
+func (s *Service) applyInputRouteDecision(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, decision inputRouteDecision) intent.Suggestion {
+	if decision.Route != inputRouteClarificationNeeded {
+		return suggestion
+	}
+	if len(decision.Intent) > 0 {
+		updated := s.intent.Suggest(snapshot, decision.Intent, true)
+		return s.normalizeSuggestedIntentForAvailability(snapshot, updated, true)
+	}
+	updated := suggestion
+	updated.RequiresConfirm = true
+	return updated
 }
 
 func inputSubmitDeliveryPreference(flow taskEntryFlow) (string, string) {
@@ -103,6 +125,7 @@ func (s *Service) maybeCreateWaitingInputTask(flow taskEntryFlow) (map[string]an
 		Timeline:          initialTimeline("waiting_input", "collect_input"),
 		Snapshot:          flow.Snapshot,
 	})
+	s.clearSessionInputContext(task.SessionID)
 
 	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleInputNeedGoal, nil), task.StartedAt.Format(dateTimeLayout))
 	task = s.persistTaskPresentation(task, bubble)
@@ -110,7 +133,7 @@ func (s *Service) maybeCreateWaitingInputTask(flow taskEntryFlow) (map[string]an
 }
 
 func (s *Service) finishInputSubmit(flow taskEntryFlow, task runengine.TaskRecord) (map[string]any, error) {
-	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(flow.Suggestion.RequiresConfirm), bubbleTextForInput(flow.Suggestion), task.StartedAt.Format(dateTimeLayout))
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(flow.Suggestion.RequiresConfirm), bubbleTextForInput(flow.Snapshot, flow.Suggestion, previewClarificationHits(s, task, flow.Snapshot, flow.Suggestion), flow.Snapshot.SessionReplyLanguage), task.StartedAt.Format(dateTimeLayout))
 	if flow.Suggestion.RequiresConfirm {
 		task = s.persistTaskPresentation(task, bubble)
 		return buildTaskEntryResponse(task, bubble, nil), nil

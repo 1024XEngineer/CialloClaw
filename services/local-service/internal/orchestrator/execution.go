@@ -214,7 +214,11 @@ func firstNonEmptyString(primary, fallback string) string {
 }
 
 func (s *Service) executeTask(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, []map[string]any, error) {
-	return s.executeTaskAttempt(task, task, snapshot, taskIntent)
+	return s.executeTaskWithReplyLanguage(task, snapshot, taskIntent, "")
+}
+
+func (s *Service) executeTaskWithReplyLanguage(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any, replyLanguage string) (runengine.TaskRecord, map[string]any, map[string]any, []map[string]any, error) {
+	return s.executeTaskAttemptWithReplyLanguage(task, task, snapshot, taskIntent, replyLanguage)
 }
 
 // executeTaskAttempt runs the current task state while preserving the previous
@@ -222,6 +226,10 @@ func (s *Service) executeTask(task runengine.TaskRecord, snapshot taskcontext.Ta
 // the new run must execute, but the executor still needs the old run_id to mark
 // the segment as restart instead of initial.
 func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any) (runengine.TaskRecord, map[string]any, map[string]any, []map[string]any, error) {
+	return s.executeTaskAttemptWithReplyLanguage(previousTask, task, snapshot, taskIntent, "")
+}
+
+func (s *Service) executeTaskAttemptWithReplyLanguage(previousTask, task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any, replyLanguage string) (runengine.TaskRecord, map[string]any, map[string]any, []map[string]any, error) {
 	var processingTask runengine.TaskRecord
 	ok := false
 	if s.isPreparedRestartAttempt(task) {
@@ -296,6 +304,7 @@ func (s *Service) executeTaskAttempt(previousTask, task runengine.TaskRecord, sn
 		AttemptIndex:         executionAttemptIndex(previousTask, processingTask),
 		SegmentKind:          executionSegmentKind(previousTask, processingTask),
 		Snapshot:             snapshot,
+		ReplyLanguage:        strings.TrimSpace(replyLanguage),
 		MemoryReadPlans:      cloneMapSlice(processingTask.MemoryReadPlans),
 		SteeringMessages:     append([]string(nil), processingTask.SteeringMessages...),
 		DeliveryType:         deliveryType,
