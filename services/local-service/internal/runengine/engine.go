@@ -1647,12 +1647,14 @@ func (e *Engine) EscalateHumanLoop(taskID string, escalation map[string]any, bub
 		return TaskRecord{}, false
 	}
 
+	resumeStep := firstNonEmpty(resumeStepForTask(record), "generate_output")
 	record.Status = "blocked"
 	record.CurrentStep = "human_in_loop"
 	e.reserveTitleRefreshLocked(record)
 	record.PendingExecution = map[string]any{
-		"kind":       "human_in_loop",
-		"escalation": cloneMap(escalation),
+		"kind":        "human_in_loop",
+		"resume_step": resumeStep,
+		"escalation":  cloneMap(escalation),
 	}
 	record.UpdatedAt = e.now()
 	record.BubbleMessage = cloneMap(bubbleMessage)
@@ -1678,6 +1680,9 @@ func (r TaskRecord) isBlockedHumanLoop() bool {
 func resumeStepForTask(record *TaskRecord) string {
 	if record == nil {
 		return "generate_output"
+	}
+	if resumeStep := strings.TrimSpace(stringValue(record.PendingExecution, "resume_step", "")); resumeStep != "" {
+		return resumeStep
 	}
 	if currentStep := strings.TrimSpace(record.CurrentStep); currentStep != "" && currentStep != "human_in_loop" {
 		// Pause/resume must preserve the step that was actually running. Intent

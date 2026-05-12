@@ -151,15 +151,15 @@ type successfulExecutionBackend struct {
 }
 
 type stubPlaywrightClient struct {
-	readResult       tools.BrowserPageReadResult
-	searchResult     tools.BrowserPageSearchResult
-	interactResult   tools.BrowserPageInteractResult
-	structuredResult tools.BrowserStructuredDOMResult
-	attachResult     tools.BrowserAttachedPageResult
-	snapshotResult   tools.BrowserSnapshotResult
-	navigateResult   tools.BrowserNavigationResult
-	tabsResult       tools.BrowserTabsListResult
-	err              error
+	readResult      tools.BrowserPageReadResult
+	searchResult    tools.BrowserPageSearchResult
+	webSearchResult tools.BrowserWebSearchResult
+	interactResult  tools.BrowserPageInteractResult
+	attachResult    tools.BrowserAttachedPageResult
+	snapshotResult  tools.BrowserSnapshotResult
+	navigateResult  tools.BrowserNavigationResult
+	tabsResult      tools.BrowserTabsListResult
+	err             error
 }
 
 type localHTTPPlaywrightClient struct{}
@@ -173,6 +173,48 @@ type stubMediaWorkerClient struct {
 	transcodeResult tools.MediaTranscodeResult
 	framesResult    tools.MediaFrameExtractResult
 	err             error
+}
+
+type sequentialMemoryStore struct {
+	mu            sync.Mutex
+	searchResults [][]memory.RetrievalHit
+	searchCalls   int
+	savedHits     []memory.RetrievalHit
+}
+
+func (s *sequentialMemoryStore) SaveSummary(context.Context, memory.MemorySummary) error {
+	return nil
+}
+
+func (s *sequentialMemoryStore) SaveRetrievalHits(_ context.Context, hits []memory.RetrievalHit) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.savedHits = append(s.savedHits, append([]memory.RetrievalHit(nil), hits...)...)
+	return nil
+}
+
+func (s *sequentialMemoryStore) Search(context.Context, memory.RetrievalQuery) ([]memory.RetrievalHit, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.searchCalls++
+	if len(s.searchResults) == 0 {
+		return nil, nil
+	}
+	index := s.searchCalls - 1
+	if index >= len(s.searchResults) {
+		index = len(s.searchResults) - 1
+	}
+	return append([]memory.RetrievalHit(nil), s.searchResults[index]...), nil
+}
+
+func (s *sequentialMemoryStore) ListSummaries(context.Context, int) ([]memory.MemorySummary, error) {
+	return nil, nil
+}
+
+func (s *sequentialMemoryStore) SearchCalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.searchCalls
 }
 
 type screenSessionAction struct {
@@ -252,6 +294,10 @@ func (localHTTPPlaywrightClient) SearchPageAttached(_ context.Context, _, _ stri
 	return tools.BrowserPageSearchResult{}, tools.ErrPlaywrightSidecarFailed
 }
 
+func (localHTTPPlaywrightClient) SearchWeb(_ context.Context, _ tools.BrowserWebSearchRequest) (tools.BrowserWebSearchResult, error) {
+	return tools.BrowserWebSearchResult{}, tools.ErrPlaywrightSidecarFailed
+}
+
 func (s stubPlaywrightClient) SearchPageAttached(ctx context.Context, url, query string, limit int, _ tools.BrowserAttachConfig) (tools.BrowserPageSearchResult, error) {
 	return s.SearchPage(ctx, url, query, limit)
 }
@@ -266,18 +312,6 @@ func (localHTTPPlaywrightClient) InteractPageAttached(_ context.Context, _ strin
 
 func (s stubPlaywrightClient) InteractPageAttached(ctx context.Context, url string, actions []map[string]any, _ tools.BrowserAttachConfig) (tools.BrowserPageInteractResult, error) {
 	return s.InteractPage(ctx, url, actions)
-}
-
-func (localHTTPPlaywrightClient) StructuredDOM(_ context.Context, _ string) (tools.BrowserStructuredDOMResult, error) {
-	return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
-}
-
-func (localHTTPPlaywrightClient) StructuredDOMAttached(_ context.Context, _ string, _ tools.BrowserAttachConfig) (tools.BrowserStructuredDOMResult, error) {
-	return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
-}
-
-func (s stubPlaywrightClient) StructuredDOMAttached(ctx context.Context, url string, _ tools.BrowserAttachConfig) (tools.BrowserStructuredDOMResult, error) {
-	return s.StructuredDOM(ctx, url)
 }
 
 func (localHTTPPlaywrightClient) AttachCurrentPage(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserAttachedPageResult, error) {
@@ -362,22 +396,29 @@ func (s stubPlaywrightClient) SearchPage(_ context.Context, url, query string, l
 	return result, nil
 }
 
+func (s stubPlaywrightClient) SearchWeb(_ context.Context, request tools.BrowserWebSearchRequest) (tools.BrowserWebSearchResult, error) {
+	if s.err != nil {
+		return tools.BrowserWebSearchResult{}, s.err
+	}
+	result := s.webSearchResult
+	if result.Query == "" {
+		result.Query = request.Query
+	}
+	if result.SearchURL == "" {
+		result.SearchURL = request.URL
+	}
+	if request.Limit > 0 && len(result.Results) > request.Limit {
+		result.Results = result.Results[:request.Limit]
+		result.ResultCount = len(result.Results)
+	}
+	return result, nil
+}
+
 func (s stubPlaywrightClient) InteractPage(_ context.Context, url string, _ []map[string]any) (tools.BrowserPageInteractResult, error) {
 	if s.err != nil {
 		return tools.BrowserPageInteractResult{}, s.err
 	}
 	result := s.interactResult
-	if result.URL == "" {
-		result.URL = url
-	}
-	return result, nil
-}
-
-func (s stubPlaywrightClient) StructuredDOM(_ context.Context, url string) (tools.BrowserStructuredDOMResult, error) {
-	if s.err != nil {
-		return tools.BrowserStructuredDOMResult{}, s.err
-	}
-	result := s.structuredResult
 	if result.URL == "" {
 		result.URL = url
 	}
@@ -1554,6 +1595,476 @@ func TestServiceSubmitInputRoutesUnanchoredAmbiguousTextToConfirmation(t *testin
 	}
 }
 
+func TestServiceSubmitInputUsesEnglishSocialChatFallbackReply(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		output: `{"route":"social_chat","reply":""}`,
+	})
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_social_english",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "hello there",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["text"] != "I'm here." {
+		t.Fatalf("expected english social chat fallback reply, got %+v", bubble)
+	}
+}
+
+func TestServiceSubmitInputUsesEnglishSocialChatFallbackReplyForSmartApostrophe(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		output: `{"route":"social_chat","reply":""}`,
+	})
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_social_english_ready",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "I" + "\u2019" + "m ready",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["text"] != "I'm here." {
+		t.Fatalf("expected smart-apostrophe english fallback reply, got %+v", bubble)
+	}
+}
+
+func TestServiceSubmitInputUsesEnglishClarificationForShortEnglishInput(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		output: `{"route":"clarification_needed","reply":""}`,
+	})
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_english_clarify_short",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "hi",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	bubble := result["bubble_message"].(map[string]any)
+	text := stringValue(bubble, "text", "")
+	if !strings.Contains(text, "what would you like me to do next?") {
+		t.Fatalf("expected short english clarification bubble, got %+v", bubble)
+	}
+}
+
+func TestServiceSubmitInputSessionRecallReturnsPreviousUserTurn(t *testing.T) {
+	modelCalls := 0
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			modelCalls++
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_session_recall_classifier",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: `{"route":"social_chat","reply":"I'm here."}`,
+			}, nil
+		},
+	})
+
+	_, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_recall_previous_turn",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "first cached line",
+		},
+	})
+	if err != nil {
+		t.Fatalf("first submit input failed: %v", err)
+	}
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_recall_previous_turn",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "what was my last message",
+		},
+	})
+	if err != nil {
+		t.Fatalf("second submit input failed: %v", err)
+	}
+	if modelCalls != 1 {
+		t.Fatalf("expected recall question to bypass model after first remembered turn, got %d calls", modelCalls)
+	}
+	if result["task"] != nil {
+		t.Fatalf("expected recall question to remain detached social chat, got %+v", result["task"])
+	}
+
+	bubble := result["bubble_message"].(map[string]any)
+	text := stringValue(bubble, "text", "")
+	if !strings.Contains(text, "first cached line") {
+		t.Fatalf("expected recall bubble to include previous user turn, got %+v", bubble)
+	}
+}
+
+func TestServiceSubmitInputSessionRecallReturnsRecentHistorySummary(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		output: `{"route":"social_chat","reply":"Got it."}`,
+	})
+
+	for _, text := range []string{"first line", "second line", "third line"} {
+		if _, err := service.SubmitInput(map[string]any{
+			"session_id": "sess_recall_history",
+			"source":     "floating_ball",
+			"trigger":    "hover_text_input",
+			"input": map[string]any{
+				"type": "text",
+				"text": text,
+			},
+		}); err != nil {
+			t.Fatalf("seed submit input failed: %v", err)
+		}
+	}
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_recall_history",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "what have i said",
+		},
+	})
+	if err != nil {
+		t.Fatalf("history recall submit input failed: %v", err)
+	}
+
+	bubble := result["bubble_message"].(map[string]any)
+	text := stringValue(bubble, "text", "")
+	for _, fragment := range []string{"first line", "second line", "third line"} {
+		if !strings.Contains(text, fragment) {
+			t.Fatalf("expected history recall bubble to include %q, got %+v", fragment, bubble)
+		}
+	}
+}
+
+func TestServiceSubmitInputSessionRecallSurvivesFormalTaskStart(t *testing.T) {
+	modelCalls := 0
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			modelCalls++
+			output := "Translated output."
+			if modelCalls == 1 {
+				output = `{"route":"social_chat","reply":"I can translate that when you want."}`
+			}
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  fmt.Sprintf("req_session_recall_after_task_%d", modelCalls),
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: output,
+			}, nil
+		},
+	})
+
+	_, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_recall_after_task",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "first cached line",
+		},
+	})
+	if err != nil {
+		t.Fatalf("seed submit input failed: %v", err)
+	}
+
+	_, err = service.StartTask(map[string]any{
+		"session_id": "sess_recall_after_task",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "translate that paragraph",
+		},
+		"intent": map[string]any{
+			"name":      "translate",
+			"arguments": map[string]any{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_recall_after_task",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "what was my last message",
+		},
+	})
+	if err != nil {
+		t.Fatalf("recall submit input failed: %v", err)
+	}
+	if modelCalls != 2 {
+		t.Fatalf("expected recall after formal task start to bypass model, got %d calls", modelCalls)
+	}
+	if result["task"] != nil {
+		t.Fatalf("expected recall after formal task start to stay detached, got %+v", result["task"])
+	}
+
+	bubble := result["bubble_message"].(map[string]any)
+	text := stringValue(bubble, "text", "")
+	if !strings.Contains(text, "first cached line") {
+		t.Fatalf("expected recall after formal task start to include previous user turn, got %+v", bubble)
+	}
+}
+
+func TestServiceSubmitInputRecentHistoryRecallSurvivesFormalTaskStart(t *testing.T) {
+	modelCalls := 0
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			modelCalls++
+			output := `{"route":"social_chat","reply":"Got it."}`
+			if modelCalls == 4 {
+				output = "Task finished."
+			}
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  fmt.Sprintf("req_session_history_after_task_%d", modelCalls),
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: output,
+			}, nil
+		},
+	})
+
+	for _, text := range []string{"first line", "second line", "third line"} {
+		if _, err := service.SubmitInput(map[string]any{
+			"session_id": "sess_history_after_task",
+			"source":     "floating_ball",
+			"trigger":    "hover_text_input",
+			"input": map[string]any{
+				"type": "text",
+				"text": text,
+			},
+		}); err != nil {
+			t.Fatalf("seed submit input failed: %v", err)
+		}
+	}
+
+	_, err := service.StartTask(map[string]any{
+		"session_id": "sess_history_after_task",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "translate the previous paragraph",
+		},
+		"intent": map[string]any{
+			"name":      "translate",
+			"arguments": map[string]any{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_history_after_task",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "what have i said",
+		},
+	})
+	if err != nil {
+		t.Fatalf("history recall submit input failed: %v", err)
+	}
+	if modelCalls != 4 {
+		t.Fatalf("expected recent-history recall after formal task start to bypass model, got %d calls", modelCalls)
+	}
+
+	bubble := result["bubble_message"].(map[string]any)
+	text := stringValue(bubble, "text", "")
+	for _, fragment := range []string{"first line", "second line", "third line"} {
+		if !strings.Contains(text, fragment) {
+			t.Fatalf("expected history recall after formal task start to include %q, got %+v", fragment, bubble)
+		}
+	}
+}
+
+func TestServiceSubmitInputRememberedSessionTranslateExecutesDirectly(t *testing.T) {
+	sourceText := "Don't be afraid to ask questions. Ask for help when you need it."
+	modelCalls := 0
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			modelCalls++
+			if request.TaskID == "" {
+				return model.GenerateTextResponse{
+					TaskID:     request.TaskID,
+					RunID:      request.RunID,
+					RequestID:  "req_session_follow_up_classifier",
+					Provider:   "openai_responses",
+					ModelID:    "gpt-5.4",
+					OutputText: `{"route":"social_chat","reply":"Wise words."}`,
+				}, nil
+			}
+			if !strings.Contains(request.Input, sourceText) {
+				t.Fatalf("expected remembered source text in execution prompt, got %q", request.Input)
+			}
+			if !strings.Contains(request.Input, "翻译这段话") {
+				t.Fatalf("expected follow-up translation instruction in execution prompt, got %q", request.Input)
+			}
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_session_follow_up_execute",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: "不要害怕提问。在需要帮助的时候就去寻求帮助。",
+			}, nil
+		},
+	})
+
+	_, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_follow_up_translate_direct",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": sourceText,
+		},
+	})
+	if err != nil {
+		t.Fatalf("seed social chat submit input failed: %v", err)
+	}
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_follow_up_translate_direct",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "翻译这段话",
+		},
+	})
+	if err != nil {
+		t.Fatalf("follow-up translate submit input failed: %v", err)
+	}
+	if modelCalls != 2 {
+		t.Fatalf("expected one detached chat classification plus one translate execution call, got %d", modelCalls)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] != "completed" {
+		t.Fatalf("expected remembered translate follow-up to execute directly, got %+v", task)
+	}
+	intentValue, ok := task["intent"].(map[string]any)
+	if !ok || intentValue["name"] != "translate" {
+		t.Fatalf("expected remembered translate follow-up to persist translate intent, got %+v", task["intent"])
+	}
+
+	taskID := task["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected translate follow-up task to remain in runtime")
+	}
+	if record.Snapshot.SelectionText != sourceText {
+		t.Fatalf("expected remembered translate follow-up to reuse previous user text as selection target, got %+v", record.Snapshot)
+	}
+}
+
+func TestServiceSubmitInputRememberedSessionTranslateCarriesTargetIntoConfirmation(t *testing.T) {
+	sourceText := "Don't be afraid to ask questions. Ask for help when you need it."
+	modelCalls := 0
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			modelCalls++
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_session_follow_up_confirm_classifier",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: `{"route":"social_chat","reply":"Wise words."}`,
+			}, nil
+		},
+	})
+
+	_, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_follow_up_translate_confirm",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": sourceText,
+		},
+	})
+	if err != nil {
+		t.Fatalf("seed social chat submit input failed: %v", err)
+	}
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_follow_up_translate_confirm",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "翻译这段话",
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("confirm-required follow-up translate submit input failed: %v", err)
+	}
+	if modelCalls != 1 {
+		t.Fatalf("expected confirm-required remembered follow-up not to execute yet, got %d model calls", modelCalls)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["status"] != "confirming_intent" || task["current_step"] != "intent_confirmation" {
+		t.Fatalf("expected confirm-required remembered translate follow-up to remain in confirmation, got %+v", task)
+	}
+	intentValue, ok := task["intent"].(map[string]any)
+	if !ok || intentValue["name"] != "translate" {
+		t.Fatalf("expected confirm-required remembered follow-up to keep translate intent, got %+v", task["intent"])
+	}
+
+	taskID := task["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected confirm-required translate follow-up task to remain in runtime")
+	}
+	if record.Snapshot.SelectionText != sourceText {
+		t.Fatalf("expected confirm-required remembered follow-up to retain previous user text as selection target, got %+v", record.Snapshot)
+	}
+}
+
 func TestServiceSubmitInputKeepsTaskRequestAfterClassifier(t *testing.T) {
 	callCount := 0
 	service, _ := newTestServiceWithModelClient(t, stubModelClient{
@@ -1666,6 +2177,50 @@ func TestServiceSubmitInputRespectsExplicitConfirmationForFreeText(t *testing.T)
 	}
 	if result["delivery_result"] != nil {
 		t.Fatalf("expected explicit confirmation flow to defer delivery_result, got %+v", result["delivery_result"])
+	}
+}
+
+func TestServiceSubmitInputPrefersEnglishInstructionOverNonEnglishSelection(t *testing.T) {
+	service := newTestService()
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_confirm_english_selection",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text",
+			"text": "translate this",
+		},
+		"context": map[string]any{
+			"selection": map[string]any{
+				"text": "你好世界",
+			},
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	startBubble := result["bubble_message"].(map[string]any)
+	if text := stringValue(startBubble, "text", ""); !strings.Contains(text, "what would you like me to do next?") {
+		t.Fatalf("expected english clarification bubble even with non-english selection, got %+v", startBubble)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	confirmResult, err := service.ConfirmTask(map[string]any{
+		"task_id":   taskID,
+		"confirmed": false,
+	})
+	if err != nil {
+		t.Fatalf("confirm task failed: %v", err)
+	}
+
+	confirmBubble := confirmResult["bubble_message"].(map[string]any)
+	if text := stringValue(confirmBubble, "text", ""); !strings.Contains(text, "That is not the right handling path.") {
+		t.Fatalf("expected english confirm clarification even with non-english selection, got %+v", confirmBubble)
 	}
 }
 
@@ -2619,6 +3174,76 @@ func TestServiceConfirmTaskRejectsCorrectionPayloadConflicts(t *testing.T) {
 	})
 	if err == nil || !errors.Is(err, errTaskConfirmCorrectionPayloadInvalid) {
 		t.Fatalf("expected correction_text and corrected_intent conflict to be rejected, got %v", err)
+	}
+}
+
+func TestServiceConfirmTaskCorrectionTextUsesLatestEnglishReplyLanguage(t *testing.T) {
+	calls := 0
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			calls++
+			switch calls {
+			case 1:
+				if !strings.Contains(request.Input, "Explain this selected paragraph instead.") {
+					t.Fatalf("expected correction text in reinference prompt, got %q", request.Input)
+				}
+				return model.GenerateTextResponse{
+					TaskID:     request.TaskID,
+					RunID:      request.RunID,
+					RequestID:  "req_correction_language",
+					Provider:   "openai_responses",
+					ModelID:    "gpt-5.4",
+					OutputText: `{"intent":{"name":"explain","arguments":{"detail":"brief"}},"reason":"user corrected the target action"}`,
+				}, nil
+			case 2:
+				for _, fragment := range []string{"Explain the following content in concise English", "Input:", "Input text:"} {
+					if !strings.Contains(request.Input, fragment) {
+						t.Fatalf("expected english execution prompt to contain %q, got %q", fragment, request.Input)
+					}
+				}
+				for _, fragment := range []string{"请用简洁中文解释以下内容", "输入内容:", "选中文本"} {
+					if strings.Contains(request.Input, fragment) {
+						t.Fatalf("expected english correction to avoid chinese execution fragment %q, got %q", fragment, request.Input)
+					}
+				}
+				return model.GenerateTextResponse{
+					TaskID:     request.TaskID,
+					RunID:      request.RunID,
+					RequestID:  "req_execution_language",
+					Provider:   "openai_responses",
+					ModelID:    "gpt-5.4",
+					OutputText: "Explanation ready.",
+				}, nil
+			default:
+				t.Fatalf("unexpected GenerateText call %d", calls)
+				return model.GenerateTextResponse{}, nil
+			}
+		},
+	})
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_confirm_correction_language",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "你好世界",
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+
+	if _, err := service.ConfirmTask(map[string]any{
+		"task_id":         taskID,
+		"confirmed":       false,
+		"correction_text": "Explain this selected paragraph instead.",
+	}); err != nil {
+		t.Fatalf("confirm task correction failed: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("expected correction reinference plus execution call, got %d", calls)
 	}
 }
 
@@ -4647,6 +5272,54 @@ func TestServiceTaskControlResumeExecutesHumanLoopTask(t *testing.T) {
 	}
 }
 
+func TestServiceTaskControlResumeExecutesHumanLoopPromptFallbackTask(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Recovered after review.")
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_hitl_prompt_fallback_resume",
+		Title:       "Polish this response after review",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "agent_loop", "arguments": map[string]any{}},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+		Snapshot: taskcontext.TaskContextSnapshot{
+			Text:      "Polish this response after review",
+			InputType: "text",
+			Trigger:   "hover_text_input",
+		},
+	})
+	taskID := task.TaskID
+	if _, ok := service.runEngine.EscalateHumanLoop(taskID, map[string]any{"reason": "doom_loop", "status": "pending"}, map[string]any{"task_id": taskID, "type": "status", "text": "需要人工介入"}); !ok {
+		t.Fatal("expected human escalation to succeed")
+	}
+
+	result, err := service.TaskControl(map[string]any{
+		"task_id": taskID,
+		"action":  "resume",
+		"arguments": map[string]any{
+			"review": map[string]any{
+				"decision":    "approve",
+				"reviewer_id": "reviewer_prompt_fallback",
+				"notes":       "continue with prompt fallback",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("task control resume failed: %v", err)
+	}
+	updatedTask := result["task"].(map[string]any)
+	if updatedTask["status"] != "completed" {
+		t.Fatalf("expected prompt fallback human loop resume to finish task, got %+v", updatedTask)
+	}
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected resumed task to remain in runtime")
+	}
+	if record.PendingExecution != nil {
+		t.Fatalf("expected resumed prompt fallback task to clear pending execution, got %+v", record.PendingExecution)
+	}
+}
+
 func TestExecutionSegmentKindClassifiesInitialResumeAndRestart(t *testing.T) {
 	initialTask := runengine.TaskRecord{RunID: "run_same", Status: "processing", ExecutionAttempt: 1}
 	initialProcessing := runengine.TaskRecord{RunID: "run_same", Status: "processing", ExecutionAttempt: 1}
@@ -6021,6 +6694,116 @@ func TestServiceStartTaskFileWithoutInstructionStillRequiresConfirmation(t *test
 	bubble := result["bubble_message"].(map[string]any)
 	if bubble["type"] != "intent_confirm" {
 		t.Fatalf("expected bare file task to return intent confirmation bubble, got %+v", bubble)
+	}
+}
+
+func TestServiceStartTaskIntentConfirmationUsesModelAuthoredQuestionWhenAvailable(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			if !strings.Contains(request.Input, `"name":"write_file"`) {
+				t.Fatalf("expected confirmation prompt to include write_file intent payload, got %q", request.Input)
+			}
+			if !strings.Contains(request.Input, `"target_path":"workspace/release-notes.md"`) {
+				t.Fatalf("expected confirmation prompt to include write target, got %q", request.Input)
+			}
+			return model.GenerateTextResponse{
+				OutputText: "你现在是希望我把内容整理后写入「workspace/release-notes.md」吗？",
+			}, nil
+		},
+	})
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_confirm_question_model",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "整理本次发布说明并保存成文档",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"target_path": "workspace/release-notes.md",
+			},
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("start confirm-required write_file task failed: %v", err)
+	}
+
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["type"] != "intent_confirm" {
+		t.Fatalf("expected write_file task to return intent confirmation bubble, got %+v", bubble)
+	}
+	if bubble["text"] != "你现在是希望我把内容整理后写入「workspace/release-notes.md」吗？" {
+		t.Fatalf("expected model-authored confirmation question, got %+v", bubble)
+	}
+}
+
+func TestServiceStartTaskIntentConfirmationFallsBackToDeterministicQuestion(t *testing.T) {
+	service := newTestService()
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_confirm_question_specific",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "请尽快同步到海外发布渠道。",
+		},
+		"intent": map[string]any{
+			"name": "translate",
+			"arguments": map[string]any{
+				"target_language": "en",
+			},
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("start confirm-required translate task failed: %v", err)
+	}
+
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["type"] != "intent_confirm" {
+		t.Fatalf("expected translate task to return intent confirmation bubble, got %+v", bubble)
+	}
+	if bubble["text"] != "你现在是希望我翻译「请尽快同步到海外发布渠道。」吗？" {
+		t.Fatalf("expected deterministic confirmation question, got %+v", bubble)
+	}
+}
+
+func TestServiceStartTaskIntentConfirmationFallbackUsesIntentTargetWhenContextLacksSubject(t *testing.T) {
+	service := newTestService()
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_confirm_question_fallback",
+		"source":     "floating_ball",
+		"trigger":    "recommendation_click",
+		"input": map[string]any{
+			"type": "text",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"target_path": "workspace/release-notes.md",
+			},
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("start confirm-required write_file task without model failed: %v", err)
+	}
+
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["text"] != "你现在是希望我处理「workspace/release-notes.md」吗？" {
+		t.Fatalf("expected fallback confirmation question to use intent target, got %+v", bubble)
 	}
 }
 
@@ -10454,7 +11237,7 @@ func TestServiceStartTaskInjectsRetrievedMemoryIntoExecutionInput(t *testing.T) 
 	}
 }
 
-func TestServiceConfirmTaskPersistsRetrievalHitOncePerConfirmation(t *testing.T) {
+func TestServiceConfirmTaskReusesRetrievalHitsAfterConfirmation(t *testing.T) {
 	service, _ := newTestServiceWithExecution(t, "确认后的执行结果。")
 	if service.storage == nil {
 		t.Fatal("expected storage service to be wired")
@@ -10514,8 +11297,186 @@ func TestServiceConfirmTaskPersistsRetrievalHitOncePerConfirmation(t *testing.T)
 		t.Fatalf("confirm task failed: %v", err)
 	}
 
-	if querySQLiteInt(t, db, `SELECT write_count FROM retrieval_hit_audit WHERE id = 1`) != 2 {
-		t.Fatalf("expected confirmation to add exactly one retrieval-hit write for task %s", taskID)
+	if querySQLiteInt(t, db, `SELECT write_count FROM retrieval_hit_audit WHERE id = 1`) != 1 {
+		t.Fatalf("expected confirmation to reuse the existing retrieval hits for task %s", taskID)
+	}
+}
+
+func TestServiceSubmitInputClarificationIncludesRetrievedMemoryContext(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		output: `{"route":"clarification_needed","reply":""}`,
+	})
+
+	if err := service.memory.WriteSummary(context.Background(), memory.MemorySummary{
+		MemorySummaryID: "mem_seed_clarify_001",
+		TaskID:          "task_seed_clarify_001",
+		RunID:           "run_seed_clarify_001",
+		Summary:         "project alpha focuses on rollout notes and concise status updates",
+		CreatedAt:       time.Date(2026, 4, 9, 10, 0, 0, 0, time.UTC).Format(time.RFC3339),
+	}); err != nil {
+		t.Fatalf("seed memory summary failed: %v", err)
+	}
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_clarify_memory",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "project alpha rollout",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	bubble := result["bubble_message"].(map[string]any)
+	text := stringValue(bubble, "text", "")
+	if !strings.Contains(text, "Based on your earlier context") {
+		t.Fatalf("expected clarification bubble to mention prior memory context, got %+v", bubble)
+	}
+	if !strings.Contains(text, "project alpha focuses on rollout notes") {
+		t.Fatalf("expected clarification bubble to include retrieved summary, got %+v", bubble)
+	}
+}
+
+func TestServiceClarificationReusesMaterializedMemoryHits(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		output: `{"route":"clarification_needed","reply":""}`,
+	})
+	memoryStore := &sequentialMemoryStore{searchResults: [][]memory.RetrievalHit{
+		{{
+			MemoryID: "mem_materialized_001",
+			Source:   "summary",
+			Summary:  "first retrieved summary should stay stable",
+			Score:    0.91,
+		}},
+		{{
+			MemoryID: "mem_drift_002",
+			Source:   "summary",
+			Summary:  "second search result should not replace clarification context",
+			Score:    0.99,
+		}},
+	}}
+	service.memory = memory.NewService(memoryStore)
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_clarify_memory_reuse",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "project alpha rollout",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	startBubble := result["bubble_message"].(map[string]any)
+	startText := stringValue(startBubble, "text", "")
+	if !strings.Contains(startText, "first retrieved summary should stay stable") {
+		t.Fatalf("expected start clarification bubble to reuse stored retrieval hit, got %+v", startBubble)
+	}
+	if strings.Contains(startText, "second search result should not replace clarification context") {
+		t.Fatalf("expected start clarification bubble to avoid fresh search drift, got %+v", startBubble)
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	confirmResult, err := service.ConfirmTask(map[string]any{
+		"task_id":   taskID,
+		"confirmed": false,
+	})
+	if err != nil {
+		t.Fatalf("confirm task failed: %v", err)
+	}
+
+	confirmBubble := confirmResult["bubble_message"].(map[string]any)
+	confirmText := stringValue(confirmBubble, "text", "")
+	if !strings.Contains(confirmText, "first retrieved summary should stay stable") {
+		t.Fatalf("expected confirm clarification bubble to reuse stored retrieval hit, got %+v", confirmBubble)
+	}
+	if strings.Contains(confirmText, "second search result should not replace clarification context") {
+		t.Fatalf("expected confirm clarification bubble to avoid fresh search drift, got %+v", confirmBubble)
+	}
+	if memoryStore.SearchCalls() != 1 {
+		t.Fatalf("expected clarification flow to reuse materialized hits without re-searching, calls=%d", memoryStore.SearchCalls())
+	}
+}
+
+func TestServiceConfirmTaskAcceptedReusesMaterializedMemoryHits(t *testing.T) {
+	service, _ := newTestServiceWithExecution(t, "Confirmed output.")
+	memoryStore := &sequentialMemoryStore{searchResults: [][]memory.RetrievalHit{
+		{{
+			MemoryID: "mem_materialized_accept_001",
+			Source:   "summary",
+			Summary:  "first retrieved summary should stay stable",
+			Score:    0.91,
+		}},
+		{{
+			MemoryID: "mem_drift_accept_002",
+			Source:   "summary",
+			Summary:  "second search result should not replace execution context",
+			Score:    0.99,
+		}},
+	}}
+	service.memory = memory.NewService(memoryStore)
+
+	startResult, err := service.StartTask(map[string]any{
+		"session_id": "sess_confirm_memory_reuse",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "project alpha rollout",
+		},
+		"intent": map[string]any{
+			"name": "agent_loop",
+			"arguments": map[string]any{
+				"goal": "project alpha rollout",
+			},
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	if startResult["task"].(map[string]any)["status"] != "confirming_intent" {
+		t.Fatalf("expected confirmation gate before execution, got %+v", startResult["task"])
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+
+	confirmResult, err := service.ConfirmTask(map[string]any{
+		"task_id":   taskID,
+		"confirmed": true,
+	})
+	if err != nil {
+		t.Fatalf("confirm task failed: %v", err)
+	}
+	if confirmResult["delivery_result"] == nil {
+		t.Fatalf("expected accepted confirmation to execute task, got %+v", confirmResult)
+	}
+
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected confirmed task to remain in runtime")
+	}
+	hits := taskReadPlanRetrievalHits(record)
+	if len(hits) == 0 {
+		t.Fatalf("expected confirmed task to keep materialized retrieval hits, got %+v", record.MemoryReadPlans)
+	}
+	if hits[0].Summary != "first retrieved summary should stay stable" {
+		t.Fatalf("expected execution to reuse the first materialized hit, got %+v", hits)
+	}
+	for _, hit := range hits {
+		if hit.Summary == "second search result should not replace execution context" {
+			t.Fatalf("expected execution to avoid memory hit drift, got %+v", hits)
+		}
+	}
+	if memoryStore.SearchCalls() != 1 {
+		t.Fatalf("expected accepted confirmation to reuse materialized hits without re-searching, calls=%d", memoryStore.SearchCalls())
 	}
 }
 
@@ -18824,6 +19785,59 @@ func TestServiceStartTaskWithExecutorReturnsGeneratedBubble(t *testing.T) {
 	}
 	if output["audit_record"] == nil {
 		t.Fatalf("expected latest tool call to include audit record, got %+v", output)
+	}
+}
+
+func TestServiceStartTaskWithExecutorPromotesLongAgentLoopOutputToWorkspaceDocument(t *testing.T) {
+	longOutput := strings.Repeat("This is a long-form agent loop section that should land in a workspace document. ", 8)
+	service, workspaceRoot := newTestServiceWithModelClient(t, &stubToolCallingModelClient{toolCalls: []model.ToolCallResult{{
+		RequestID:  "req_orchestrator_loop_workspace_doc",
+		Provider:   "openai_responses",
+		ModelID:    "gpt-5.4",
+		OutputText: longOutput,
+	}}})
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_loop_doc",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "Draft a long-form migration plan.",
+		},
+		"intent": map[string]any{
+			"name":      "agent_loop",
+			"arguments": map[string]any{},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+
+	deliveryResult := result["delivery_result"].(map[string]any)
+	if deliveryResult["type"] != "workspace_document" {
+		t.Fatalf("expected long agent_loop output to promote to workspace_document, got %+v", deliveryResult)
+	}
+	payload := deliveryResult["payload"].(map[string]any)
+	outputPath := stringValue(payload, "path", "")
+	if outputPath == "" {
+		t.Fatalf("expected promoted delivery payload path, got %+v", payload)
+	}
+	content, err := os.ReadFile(filepath.Join(workspaceRoot, strings.TrimPrefix(outputPath, "workspace/")))
+	if err != nil {
+		t.Fatalf("read promoted workspace document: %v", err)
+	}
+	if !strings.Contains(string(content), longOutput[:64]) {
+		t.Fatalf("expected promoted workspace document to contain model output, got %q", string(content))
+	}
+
+	taskID := result["task"].(map[string]any)["task_id"].(string)
+	record, ok := service.runEngine.GetTask(taskID)
+	if !ok {
+		t.Fatal("expected task to remain in runtime")
+	}
+	if record.LatestToolCall["tool_name"] != "write_file" {
+		t.Fatalf("expected promoted agent_loop task to record write_file, got %v", record.LatestToolCall["tool_name"])
 	}
 }
 

@@ -45,10 +45,13 @@ type Service struct {
 	titleGenerator   *titlegen.Service
 	modelMu          sync.RWMutex
 	runtimeMu        sync.RWMutex
+	sessionInputMu   sync.RWMutex
 	executionTimeout time.Duration
 	runtimeNextID    uint64
 	runtimeTaps      map[uint64]func(taskID, method string, params map[string]any)
 	taskStartTaps    map[uint64]func(taskID, sessionID, traceID string)
+	sessionInputs    map[string]freeInputSessionState
+	sessionRecalls   map[string]freeInputSessionState
 }
 
 // NewService builds the task-centric orchestrator from one explicit dependency
@@ -76,6 +79,8 @@ func NewService(deps Deps) (*Service, error) {
 		executionTimeout: deps.resolvedExecutionTimeout(),
 		runtimeTaps:      map[uint64]func(taskID, method string, params map[string]any){},
 		taskStartTaps:    map[uint64]func(taskID, sessionID, traceID string){},
+		sessionInputs:    map[string]freeInputSessionState{},
+		sessionRecalls:   map[string]freeInputSessionState{},
 	}
 	service.attachExecutor(deps.Executor)
 	return service, nil

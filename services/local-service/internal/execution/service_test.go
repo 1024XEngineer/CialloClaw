@@ -18,6 +18,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/checkpoint"
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/languagepolicy"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
@@ -567,6 +568,57 @@ func TestExecuteAgentLoopReadsFileBeforeReturningAnswer(t *testing.T) {
 	if result.ModelInvocation["request_id"] != "req_loop_2" {
 		t.Fatalf("expected final planning turn metadata, got %+v", result.ModelInvocation)
 	}
+	if result.DeliveryResult["type"] != "bubble" {
+		t.Fatalf("expected short agent_loop answer to remain bubble delivery, got %+v", result.DeliveryResult)
+	}
+	if len(result.Artifacts) != 0 {
+		t.Fatalf("expected short agent_loop answer not to create artifacts, got %+v", result.Artifacts)
+	}
+}
+
+func TestExecuteAgentLoopPromotesLongBubbleOutputToWorkspaceDocument(t *testing.T) {
+	longOutput := strings.Repeat("This is a long-form planning paragraph that should be delivered as a workspace document. ", 8)
+	service, workspaceRoot := newTestExecutionServiceWithModelClient(t, &stubModelClient{toolCalls: []model.ToolCallResult{{
+		RequestID:  "req_loop_workspace_doc",
+		Provider:   "openai_responses",
+		ModelID:    "gpt-5.4",
+		OutputText: longOutput,
+	}}})
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_loop_workspace_doc",
+		RunID:        "run_loop_workspace_doc",
+		Title:        "Loop workspace delivery",
+		Intent:       map[string]any{"name": defaultAgentLoopIntentName, "arguments": map[string]any{}},
+		Snapshot:     taskcontext.TaskContextSnapshot{InputType: "text", Text: "Draft a long-form migration plan."},
+		DeliveryType: "bubble",
+		ResultTitle:  "Loop document result",
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+
+	if result.DeliveryResult["type"] != "workspace_document" {
+		t.Fatalf("expected long agent_loop output to promote to workspace_document, got %+v", result.DeliveryResult)
+	}
+	if result.ToolName != "write_file" {
+		t.Fatalf("expected write_file to become the latest tool, got %s", result.ToolName)
+	}
+	if len(result.Artifacts) != 1 {
+		t.Fatalf("expected promoted agent_loop output to persist one artifact, got %+v", result.Artifacts)
+	}
+	outputPath := deliveryPayloadPath(result.DeliveryResult)
+	if outputPath == "" {
+		t.Fatalf("expected promoted workspace document to expose a payload path, got %+v", result.DeliveryResult)
+	}
+	writtenPath := filepath.Join(workspaceRoot, strings.TrimPrefix(outputPath, "workspace/"))
+	content, err := os.ReadFile(writtenPath)
+	if err != nil {
+		t.Fatalf("read promoted workspace document: %v", err)
+	}
+	if !strings.Contains(string(content), longOutput[:64]) {
+		t.Fatalf("expected promoted workspace document to contain model output, got %q", string(content))
+	}
 }
 
 func TestExecuteAgentLoopRetriesFalseCapabilityDenialBeforeCallingTool(t *testing.T) {
@@ -626,13 +678,13 @@ func TestExecuteAgentLoopRetriesFalseCapabilityDenialBeforeCallingTool(t *testin
 	if len(modelClient.plannerInputs) < 2 {
 		t.Fatalf("expected planner inputs for retry flow, got %+v", modelClient.plannerInputs)
 	}
-	if !strings.Contains(modelClient.plannerInputs[0], "当前可用能力：") || !strings.Contains(modelClient.plannerInputs[0], "- read_file") {
+	if !strings.Contains(modelClient.plannerInputs[0], "Available tools:") || !strings.Contains(modelClient.plannerInputs[0], "- read_file") {
 		t.Fatalf("expected first planner input to expose runtime capabilities, got %q", modelClient.plannerInputs[0])
 	}
-	if !strings.Contains(modelClient.plannerInputs[1], "能力提醒：") {
+	if !strings.Contains(modelClient.plannerInputs[1], "Capability reminder:") {
 		t.Fatalf("expected second planner input to include capability reminder, got %q", modelClient.plannerInputs[1])
 	}
-	if !strings.Contains(modelClient.plannerInputs[1], "当前这轮已经开放下列工具能力。") {
+	if !strings.Contains(modelClient.plannerInputs[1], "The following tool capabilities are available in this round.") {
 		t.Fatalf("expected second planner input to restate tool availability, got %q", modelClient.plannerInputs[1])
 	}
 	if result.ModelInvocation["request_id"] != "req_loop_capability_retry_3" {
@@ -753,13 +805,13 @@ func TestExecuteAgentLoopRetriesFalseWebCapabilityDenialsBeforeCallingTool(t *te
 			if len(modelClient.plannerInputs) < 2 {
 				t.Fatalf("expected planner inputs for retry flow, got %+v", modelClient.plannerInputs)
 			}
-			if !strings.Contains(modelClient.plannerInputs[0], "当前可用能力：") || !strings.Contains(modelClient.plannerInputs[0], test.capabilityLine) {
+			if !strings.Contains(modelClient.plannerInputs[0], "Available tools:") || !strings.Contains(modelClient.plannerInputs[0], test.capabilityLine) {
 				t.Fatalf("expected first planner input to expose runtime capabilities, got %q", modelClient.plannerInputs[0])
 			}
-			if !strings.Contains(modelClient.plannerInputs[1], "能力提醒：") {
+			if !strings.Contains(modelClient.plannerInputs[1], "Capability reminder:") {
 				t.Fatalf("expected second planner input to include capability reminder, got %q", modelClient.plannerInputs[1])
 			}
-			if !strings.Contains(modelClient.plannerInputs[1], "当前这轮已经开放下列工具能力。") || !strings.Contains(modelClient.plannerInputs[1], test.capabilityLine) {
+			if !strings.Contains(modelClient.plannerInputs[1], "The following tool capabilities are available in this round.") || !strings.Contains(modelClient.plannerInputs[1], test.capabilityLine) {
 				t.Fatalf("expected second planner input to restate tool availability, got %q", modelClient.plannerInputs[1])
 			}
 			if result.ModelInvocation["request_id"] != test.toolCalls[2].RequestID {
@@ -2014,6 +2066,50 @@ func TestExecuteDirectSidecarPageSearchUsesToolExecutor(t *testing.T) {
 	}
 }
 
+func TestExecuteDirectSidecarWebSearchUsesToolExecutor(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", stubPlaywrightClient{webSearchResult: tools.BrowserWebSearchResult{
+		Query:       "release notes",
+		SearchURL:   "https://duckduckgo.com/html/?q=release+notes",
+		ResultCount: 2,
+		Results: []tools.BrowserSearchResultItem{
+			{Title: "Release Notes", URL: "https://example.com/release-notes", Snippet: "Latest release notes"},
+			{Title: "Docs", URL: "https://example.com/docs", Snippet: "Documentation home"},
+		},
+		Source: "playwright_sidecar",
+	}})
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:               "task_006_web",
+		RunID:                "run_006_web",
+		Title:                "联网搜索",
+		Intent:               map[string]any{"name": "web_search", "arguments": map[string]any{"query": "release notes", "limit": 2}},
+		Snapshot:             taskcontext.TaskContextSnapshot{InputType: "text", Text: "搜索 release notes"},
+		DeliveryType:         "bubble",
+		ResultTitle:          "联网搜索结果",
+		ApprovalGranted:      true,
+		ApprovedOperation:    "web_search",
+		ApprovedTargetObject: "https://duckduckgo.com/html/?q=release+notes",
+	})
+	if err != nil {
+		t.Fatalf("execute failed: %v", err)
+	}
+	if result.ToolName != "web_search" {
+		t.Fatalf("expected web_search tool, got %s", result.ToolName)
+	}
+	if result.ToolOutput["summary_output"] == nil {
+		t.Fatalf("expected web_search summary output, got %+v", result.ToolOutput)
+	}
+	if result.ToolInput["url"] != "https://duckduckgo.com/html/?q=release+notes" {
+		t.Fatalf("expected derived search url in tool input, got %+v", result.ToolInput)
+	}
+	if explicit, ok := result.ToolInput["url_is_explicit"].(bool); !ok || explicit {
+		t.Fatalf("expected derived search url to stay implicit, got %+v", result.ToolInput)
+	}
+	if !strings.Contains(result.BubbleText, "Release Notes") {
+		t.Fatalf("expected bubble text to include search preview, got %s", result.BubbleText)
+	}
+}
+
 func TestExecuteDirectSidecarPageInteractUsesToolExecutor(t *testing.T) {
 	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", stubPlaywrightClient{interactResult: tools.BrowserPageInteractResult{
 		Title:          "Interactive Page",
@@ -2042,39 +2138,6 @@ func TestExecuteDirectSidecarPageInteractUsesToolExecutor(t *testing.T) {
 	}
 	if result.ToolOutput["actions_applied"] != 2 {
 		t.Fatalf("expected action count in tool output, got %+v", result.ToolOutput)
-	}
-}
-
-func TestExecuteDirectSidecarStructuredDOMUsesToolExecutor(t *testing.T) {
-	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", stubPlaywrightClient{structuredResult: tools.BrowserStructuredDOMResult{
-		Title:    "Structured Page",
-		Headings: []string{"Heading A"},
-		Links:    []string{"Link A"},
-		Buttons:  []string{"Submit"},
-		Inputs:   []string{"email"},
-		Source:   "playwright_sidecar",
-	}})
-
-	result, err := service.Execute(context.Background(), Request{
-		TaskID:               "task_006b",
-		RunID:                "run_006b",
-		Title:                "结构化页面",
-		Intent:               map[string]any{"name": "structured_dom", "arguments": map[string]any{"url": "https://example.com"}},
-		Snapshot:             taskcontext.TaskContextSnapshot{InputType: "text", Text: "请提取页面结构"},
-		DeliveryType:         "bubble",
-		ResultTitle:          "页面结构结果",
-		ApprovalGranted:      true,
-		ApprovedOperation:    "structured_dom",
-		ApprovedTargetObject: "https://example.com",
-	})
-	if err != nil {
-		t.Fatalf("execute failed: %v", err)
-	}
-	if result.ToolName != "structured_dom" {
-		t.Fatalf("expected structured_dom tool, got %s", result.ToolName)
-	}
-	if result.ToolOutput["summary_output"] == nil {
-		t.Fatalf("expected summary output, got %+v", result.ToolOutput)
 	}
 }
 
@@ -2194,6 +2257,22 @@ func TestResolvePageToolInputMatchesEquivalentRootURLs(t *testing.T) {
 	target, ok := attach["target"].(map[string]any)
 	if !ok || target["url"] != "https://example.com/" {
 		t.Fatalf("expected root URL target normalization, got %+v", attach)
+	}
+}
+
+func TestResolveWebSearchToolInputKeepsDerivedURLImplicit(t *testing.T) {
+	input, ok := resolveWebSearchToolInput(map[string]any{"query": "release notes", "limit": 3.0})
+	if !ok {
+		t.Fatal("expected web_search tool input to resolve")
+	}
+	if input["query"] != "release notes" {
+		t.Fatalf("expected query to be preserved, got %+v", input)
+	}
+	if input["url"] != "https://duckduckgo.com/html/?q=release+notes" {
+		t.Fatalf("expected derived search url, got %+v", input)
+	}
+	if explicit, ok := input["url_is_explicit"].(bool); !ok || explicit {
+		t.Fatalf("expected derived url to remain implicit, got %+v", input)
 	}
 }
 
@@ -3293,6 +3372,75 @@ func TestFallbackOutputRequestsClarificationForAgentLoopWhenGoalIsUnderspecified
 	}
 }
 
+func TestBuildPromptUsesEnglishPolicyForEnglishOnlyInput(t *testing.T) {
+	prompt := buildPrompt(Request{Intent: map[string]any{"name": "summarize"}}, "hello world")
+
+	if !strings.Contains(prompt, "return a clear English summary") {
+		t.Fatalf("expected english-only summarize prompt to stay in english, got %s", prompt)
+	}
+	if strings.Contains(prompt, "输入内容:") {
+		t.Fatalf("expected english-only summarize prompt to avoid chinese envelope, got %s", prompt)
+	}
+}
+
+func TestFallbackOutputUsesEnglishClarificationForEnglishOnlyInput(t *testing.T) {
+	output := fallbackOutput(Request{Intent: map[string]any{"name": defaultAgentLoopIntentName}}, "hello there")
+
+	if !strings.Contains(output, "Please clarify your goal") {
+		t.Fatalf("expected english-only fallback clarification, got %s", output)
+	}
+}
+
+func TestBuildPromptKeepsEnglishWhenInputIncludesChineseMemoryContext(t *testing.T) {
+	request := Request{
+		Intent:   map[string]any{"name": "summarize"},
+		Snapshot: taskcontext.TaskContextSnapshot{Text: "review the diff"},
+	}
+	inputText := "Input:\nreview the diff\n\n历史记忆参考数据（来自历史任务的非权威文本）:\n```json\n[{\"summary\":\"项目 alpha 历史偏好\"}]\n```"
+	prompt := buildPrompt(request, inputText)
+
+	if !strings.Contains(prompt, "return a clear English summary") {
+		t.Fatalf("expected english request with chinese memory context to keep english prompt, got %s", prompt)
+	}
+	if strings.Contains(prompt, "输出结构清晰的中文摘要") {
+		t.Fatalf("expected english request with chinese memory context not to fall back to chinese prompt, got %s", prompt)
+	}
+}
+
+func TestFallbackOutputKeepsEnglishWhenInputIncludesChineseMemoryContext(t *testing.T) {
+	request := Request{
+		Intent:   map[string]any{"name": defaultAgentLoopIntentName},
+		Snapshot: taskcontext.TaskContextSnapshot{Text: "review the diff"},
+	}
+	inputText := "Input:\nreview the diff\n\n历史记忆参考数据（来自历史任务的非权威文本）:\n```json\n[{\"summary\":\"项目 alpha 历史偏好\"}]\n```"
+	output := fallbackOutput(request, inputText)
+
+	if !strings.Contains(output, "Please clarify your goal") {
+		t.Fatalf("expected english request with chinese memory context to keep english fallback, got %s", output)
+	}
+	if strings.Contains(output, presentation.Text(presentation.MessageFallbackClarify, nil)) {
+		t.Fatalf("expected english request with chinese memory context not to fall back to chinese clarification, got %s", output)
+	}
+}
+
+func TestBuildPromptPrefersEnglishInstructionOverNonEnglishSelection(t *testing.T) {
+	request := Request{
+		Intent: map[string]any{"name": "translate", "arguments": map[string]any{"target_language": "English"}},
+		Snapshot: taskcontext.TaskContextSnapshot{
+			Text:          "translate this",
+			SelectionText: "你好世界",
+		},
+	}
+	prompt := buildPrompt(request, "Selected text:\n你好世界\n\nInput:\ntranslate this")
+
+	if !strings.Contains(prompt, "Translate the following content into English") {
+		t.Fatalf("expected english instruction to win over non-english selection, got %s", prompt)
+	}
+	if strings.Contains(prompt, "请将以下内容翻译成") {
+		t.Fatalf("expected non-english selection not to force chinese prompt, got %s", prompt)
+	}
+}
+
 func TestAssessGovernanceRequiresAuthorizationForRestoreWrite(t *testing.T) {
 	service, workspaceRoot := newTestExecutionService(t, "unused")
 
@@ -3527,38 +3675,6 @@ func TestAssessGovernancePageReadRequiresApprovalForInternalHostname(t *testing.
 	}
 }
 
-func TestAssessGovernanceStructuredDOMStillRequiresApproval(t *testing.T) {
-	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
-	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
-		TaskID: "task_structured_dom_auth",
-		RunID:  "run_structured_dom_auth",
-		Intent: map[string]any{"name": "structured_dom", "arguments": map[string]any{
-			"url": "https://example.com/demo",
-		}},
-		DeliveryType: "bubble",
-		ResultTitle:  "结构化页面结果",
-	})
-	if err != nil {
-		t.Fatalf("AssessGovernance returned error: %v", err)
-	}
-	if !handled {
-		t.Fatal("expected structured_dom governance path to be handled")
-	}
-	if assessment.OperationName != "structured_dom" || assessment.TargetObject != "https://example.com/demo" {
-		t.Fatalf("unexpected structured_dom assessment: %+v", assessment)
-	}
-	if !assessment.ApprovalRequired {
-		t.Fatalf("expected structured_dom to remain approval-gated, got %+v", assessment)
-	}
-	if assessment.RiskLevel != string(risk.RiskLevelYellow) {
-		t.Fatalf("expected structured_dom yellow risk level, got %+v", assessment)
-	}
-	webpages, _ := assessment.ImpactScope["webpages"].([]string)
-	if len(webpages) != 1 || webpages[0] != "https://example.com/demo" {
-		t.Fatalf("expected structured_dom impact scope to include target URL, got %+v", assessment.ImpactScope)
-	}
-}
-
 func TestAssessGovernanceBrowserSnapshotUsesAttachedPageTarget(t *testing.T) {
 	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
 	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
@@ -3774,7 +3890,7 @@ func TestResolveToolExecutionSupportsWorkerAndInteractiveIntents(t *testing.T) {
 		{name: "browser_navigate", request: Request{Intent: map[string]any{"name": "browser_navigate", "arguments": map[string]any{"url": "https://example.com/docs"}}, Snapshot: taskcontext.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "browser_navigate", wantKey: "url", wantAttach: true},
 		{name: "browser_interact", request: Request{Intent: map[string]any{"name": "browser_interact", "arguments": map[string]any{"actions": []any{map[string]any{"type": "click", "selector": "button"}}}}, Snapshot: taskcontext.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "browser_interact", wantKey: "actions", wantAttach: true},
 		{name: "page_interact", request: Request{Intent: map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com", "actions": []any{map[string]any{"type": "click", "selector": "button"}}}}, Snapshot: taskcontext.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "page_interact", wantKey: "url", wantAttach: true},
-		{name: "structured_dom", request: Request{Intent: map[string]any{"name": "structured_dom", "arguments": map[string]any{"url": "https://example.com"}}, Snapshot: taskcontext.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "structured_dom", wantKey: "url", wantAttach: true},
+		{name: "web_search", request: Request{Intent: map[string]any{"name": "web_search", "arguments": map[string]any{"query": "release notes", "limit": 3.0}}}, wantTool: "web_search", wantKey: "query"},
 		{name: "extract_text", request: Request{Intent: map[string]any{"name": "extract_text", "arguments": map[string]any{"path": "notes/demo.txt"}}}, wantTool: "extract_text", wantKey: "path"},
 		{name: "transcode_media", request: Request{Intent: map[string]any{"name": "transcode_media", "arguments": map[string]any{"path": "clips/demo.mov", "output_path": "clips/demo.mp4", "format": "mp4"}}}, wantTool: "transcode_media", wantKey: "output_path"},
 		{name: "extract_frames", request: Request{Intent: map[string]any{"name": "extract_frames", "arguments": map[string]any{"path": "clips/demo.mov", "output_dir": "frames", "limit": 2.0}}}, wantTool: "extract_frames", wantKey: "output_dir"},
@@ -3807,7 +3923,6 @@ func TestResolveGovernanceToolExecutionSupportsWorkerAndInteractiveIntents(t *te
 		{name: "browser_snapshot", request: Request{TaskID: "task_000", RunID: "run_000", DeliveryType: "bubble", ResultTitle: "浏览器快照结果", Intent: map[string]any{"name": "browser_snapshot", "arguments": map[string]any{}}, Snapshot: taskcontext.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "browser_snapshot", wantAttach: true},
 		{name: "browser_navigate", request: Request{TaskID: "task_000a", RunID: "run_000a", DeliveryType: "bubble", ResultTitle: "浏览器导航结果", Intent: map[string]any{"name": "browser_navigate", "arguments": map[string]any{"url": "https://example.com/docs"}}, Snapshot: taskcontext.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "browser_navigate", wantAttach: true},
 		{name: "page_interact", request: Request{TaskID: "task_001", RunID: "run_001", DeliveryType: "bubble", ResultTitle: "页面交互结果", Intent: map[string]any{"name": "page_interact", "arguments": map[string]any{"url": "https://example.com", "actions": []any{map[string]any{"type": "click", "selector": "button"}}}}, Snapshot: taskcontext.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "page_interact", wantAttach: true},
-		{name: "structured_dom", request: Request{TaskID: "task_002", RunID: "run_002", DeliveryType: "bubble", ResultTitle: "结构化结果", Intent: map[string]any{"name": "structured_dom", "arguments": map[string]any{"url": "https://example.com"}}, Snapshot: taskcontext.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"}}, wantTool: "structured_dom", wantAttach: true},
 		{name: "ocr_pdf", request: Request{TaskID: "task_003", RunID: "run_003", DeliveryType: "bubble", ResultTitle: "OCR 结果", Intent: map[string]any{"name": "ocr_pdf", "arguments": map[string]any{"path": "docs/demo.pdf", "language": "eng"}}}, wantTool: "ocr_pdf"},
 		{name: "normalize_recording", request: Request{TaskID: "task_004", RunID: "run_004", DeliveryType: "bubble", ResultTitle: "归一化结果", Intent: map[string]any{"name": "normalize_recording", "arguments": map[string]any{"path": "clips/demo.mov", "output_path": "clips/demo.mp4"}}}, wantTool: "normalize_recording"},
 	}
@@ -3935,6 +4050,10 @@ func TestBuildExecutionInputAndFileSectionCoverFileBranches(t *testing.T) {
 	if !strings.Contains(section, "worker file content") {
 		t.Fatalf("expected file content section, got %s", section)
 	}
+	englishSection := service.fileSectionForLanguage("notes/demo.txt", languagepolicy.ReplyLanguageEnglish)
+	if !strings.Contains(englishSection, "File notes/demo.txt contents:") {
+		t.Fatalf("expected english file content section, got %s", englishSection)
+	}
 	legacySection := service.fileSection("notes/legacy.txt")
 	if !strings.Contains(legacySection, "修复执行输入乱码") || strings.ContainsRune(legacySection, '\uFFFD') {
 		t.Fatalf("expected decoded legacy file section, got %s", legacySection)
@@ -3943,9 +4062,16 @@ func TestBuildExecutionInputAndFileSectionCoverFileBranches(t *testing.T) {
 	if !strings.Contains(missingSection, "读取失败") {
 		t.Fatalf("expected missing file section, got %s", missingSection)
 	}
+	englishMissingSection := service.fileSectionForLanguage("notes/missing.txt", languagepolicy.ReplyLanguageEnglish)
+	if !strings.Contains(englishMissingSection, "Read failed") {
+		t.Fatalf("expected english missing file section, got %s", englishMissingSection)
+	}
 	service.fileSystem = nil
 	if section := service.fileSection("notes/demo.txt"); section != "文件: notes/demo.txt" {
 		t.Fatalf("expected no-filesystem branch, got %s", section)
+	}
+	if section := service.fileSectionForLanguage("notes/demo.txt", languagepolicy.ReplyLanguageEnglish); section != "File: notes/demo.txt" {
+		t.Fatalf("expected english no-filesystem branch, got %s", section)
 	}
 	service, _ = newTestExecutionService(t, "unused")
 	inputText := service.buildExecutionInput(taskcontext.TaskContextSnapshot{
@@ -3964,7 +4090,7 @@ func TestBuildExecutionInputAndFileSectionCoverFileBranches(t *testing.T) {
 				"summary":   "project alpha prefers markdown bullets",
 			},
 		},
-	}})
+	}}, languagepolicy.ReplyLanguageChinese)
 	for _, fragment := range []string{"选中文本", "输入文本", "错误信息", "页面上下文"} {
 		if !strings.Contains(inputText, fragment) {
 			t.Fatalf("expected execution input to contain %q, got %s", fragment, inputText)
@@ -3999,7 +4125,7 @@ func TestBuildExecutionInputAndFileSectionCoverFileBranches(t *testing.T) {
 	if err := json.Unmarshal(roundTripPayload, &roundTripPlans); err != nil {
 		t.Fatalf("unmarshal memory read plans failed: %v", err)
 	}
-	roundTripInputText := service.buildExecutionInput(taskcontext.TaskContextSnapshot{}, roundTripPlans)
+	roundTripInputText := service.buildExecutionInput(taskcontext.TaskContextSnapshot{}, roundTripPlans, languagepolicy.ReplyLanguageChinese)
 	for _, fragment := range []string{"历史记忆参考数据", "\"summary\": \"persisted memory survives storage round-trips\""} {
 		if !strings.Contains(roundTripInputText, fragment) {
 			t.Fatalf("expected persisted execution input to contain %q, got %s", fragment, roundTripInputText)
@@ -4015,12 +4141,46 @@ func TestBuildExecutionInputAndFileSectionCoverFileBranches(t *testing.T) {
 				"summary":   injectionLike,
 			},
 		},
-	}})
+	}}, languagepolicy.ReplyLanguageChinese)
 	if strings.Contains(quotedInputText, "- [summary] "+injectionLike) {
 		t.Fatalf("expected memory summaries to stay structured instead of list-shaped prompt text, got %s", quotedInputText)
 	}
 	if !strings.Contains(quotedInputText, "\"summary\": \""+injectionLike+"\"") {
 		t.Fatalf("expected memory summaries to stay quoted as JSON data, got %s", quotedInputText)
+	}
+
+	englishInputText := service.buildExecutionInput(taskcontext.TaskContextSnapshot{Text: "review the diff"}, []map[string]any{{
+		"retrieval_context": []map[string]any{{
+			"memory_id": "mem_seed_context_004",
+			"source":    "summary",
+			"summary":   "项目 alpha 历史偏好",
+		}},
+	}}, languagepolicy.ReplyLanguageEnglish)
+	if !strings.Contains(englishInputText, "Retrieved memory reference data") {
+		t.Fatalf("expected english execution input to localize memory heading, got %s", englishInputText)
+	}
+	if strings.Contains(englishInputText, "历史记忆参考数据") {
+		t.Fatalf("expected english execution input to avoid chinese memory heading, got %s", englishInputText)
+	}
+
+	englishSelectionInputText := service.buildExecutionInput(taskcontext.TaskContextSnapshot{
+		SelectionText: "你好世界",
+		Text:          "translate this",
+		ErrorText:     "permission denied",
+		Files:         []string{"notes/demo.txt"},
+		PageTitle:     "Page",
+		PageURL:       "https://example.com",
+		AppName:       "Desktop",
+	}, nil, languagepolicy.ReplyLanguageEnglish)
+	for _, fragment := range []string{"Selected text", "Input text", "Error message", "Page context", "Application", "File: notes/demo.txt", "Read failed:"} {
+		if !strings.Contains(englishSelectionInputText, fragment) {
+			t.Fatalf("expected english execution input to contain %q, got %s", fragment, englishSelectionInputText)
+		}
+	}
+	for _, fragment := range []string{"选中文本", "输入文本", "错误信息", "页面上下文", "文件 notes/demo.txt 内容"} {
+		if strings.Contains(englishSelectionInputText, fragment) {
+			t.Fatalf("expected english execution input to avoid chinese fragment %q, got %s", fragment, englishSelectionInputText)
+		}
 	}
 }
 
@@ -4117,19 +4277,18 @@ type stubExecutionCapability struct {
 }
 
 type stubPlaywrightClient struct {
-	readResult               tools.BrowserPageReadResult
-	searchResult             tools.BrowserPageSearchResult
-	interactResult           tools.BrowserPageInteractResult
-	structuredResult         tools.BrowserStructuredDOMResult
-	attachedReadResult       tools.BrowserPageReadResult
-	attachedSearchResult     tools.BrowserPageSearchResult
-	attachedInteractResult   tools.BrowserPageInteractResult
-	attachedStructuredResult tools.BrowserStructuredDOMResult
-	attachResult             tools.BrowserAttachedPageResult
-	snapshotResult           tools.BrowserSnapshotResult
-	navigateResult           tools.BrowserNavigationResult
-	tabsResult               tools.BrowserTabsListResult
-	err                      error
+	readResult             tools.BrowserPageReadResult
+	searchResult           tools.BrowserPageSearchResult
+	webSearchResult        tools.BrowserWebSearchResult
+	interactResult         tools.BrowserPageInteractResult
+	attachedReadResult     tools.BrowserPageReadResult
+	attachedSearchResult   tools.BrowserPageSearchResult
+	attachedInteractResult tools.BrowserPageInteractResult
+	attachResult           tools.BrowserAttachedPageResult
+	snapshotResult         tools.BrowserSnapshotResult
+	navigateResult         tools.BrowserNavigationResult
+	tabsResult             tools.BrowserTabsListResult
+	err                    error
 }
 
 type stubOCRWorkerClient struct {
@@ -4172,22 +4331,29 @@ func (s stubPlaywrightClient) SearchPage(_ context.Context, url, query string, l
 	return result, nil
 }
 
+func (s stubPlaywrightClient) SearchWeb(_ context.Context, request tools.BrowserWebSearchRequest) (tools.BrowserWebSearchResult, error) {
+	if s.err != nil {
+		return tools.BrowserWebSearchResult{}, s.err
+	}
+	result := s.webSearchResult
+	if result.Query == "" {
+		result.Query = request.Query
+	}
+	if result.SearchURL == "" {
+		result.SearchURL = request.URL
+	}
+	if request.Limit > 0 && len(result.Results) > request.Limit {
+		result.Results = result.Results[:request.Limit]
+		result.ResultCount = len(result.Results)
+	}
+	return result, nil
+}
+
 func (s stubPlaywrightClient) InteractPage(_ context.Context, url string, _ []map[string]any) (tools.BrowserPageInteractResult, error) {
 	if s.err != nil {
 		return tools.BrowserPageInteractResult{}, s.err
 	}
 	result := s.interactResult
-	if result.URL == "" {
-		result.URL = url
-	}
-	return result, nil
-}
-
-func (s stubPlaywrightClient) StructuredDOM(_ context.Context, url string) (tools.BrowserStructuredDOMResult, error) {
-	if s.err != nil {
-		return tools.BrowserStructuredDOMResult{}, s.err
-	}
-	result := s.structuredResult
 	if result.URL == "" {
 		result.URL = url
 	}
@@ -4236,21 +4402,6 @@ func (s stubPlaywrightClient) InteractPageAttached(_ context.Context, url string
 		return tools.BrowserPageInteractResult{}, s.err
 	}
 	result := s.attachedInteractResult
-	if result.URL == "" {
-		result.URL = url
-	}
-	result.Attached = true
-	if result.BrowserKind == "" {
-		result.BrowserKind = attach.BrowserKind
-	}
-	return result, nil
-}
-
-func (s stubPlaywrightClient) StructuredDOMAttached(_ context.Context, url string, attach tools.BrowserAttachConfig) (tools.BrowserStructuredDOMResult, error) {
-	if s.err != nil {
-		return tools.BrowserStructuredDOMResult{}, s.err
-	}
-	result := s.attachedStructuredResult
 	if result.URL == "" {
 		result.URL = url
 	}
@@ -4423,10 +4574,10 @@ func TestExecutionHelperBranchesAndConfigurationAccessors(t *testing.T) {
 	if !containsExecutionString([]string{"a", "b"}, "b") || containsExecutionString([]string{"a"}, "c") {
 		t.Fatal("expected containsExecutionString to match only exact values")
 	}
-	if !strings.Contains(buildPrompt(request, "hello"), "翻译成English") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "rewrite"}}, "hello"), "改写") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "explain"}}, "hello"), "解释") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "write_file"}}, "hello"), "保存为文档") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "summarize"}}, "hello"), "摘要") {
+	if !strings.Contains(buildPrompt(request, "你好"), "翻译成English") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "rewrite"}}, "你好"), "改写") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "explain"}}, "你好"), "解释") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "write_file"}}, "你好"), "保存为文档") || !strings.Contains(buildPrompt(Request{Intent: map[string]any{"name": "summarize"}}, "你好"), "摘要") {
 		t.Fatal("expected buildPrompt to cover major intent variants")
 	}
-	if !strings.Contains(fallbackOutput(request, "hello world"), presentation.Text(presentation.MessageFallbackTranslate, map[string]string{"target_language": "English"})) ||
+	if !strings.Contains(fallbackOutput(request, "你好世界"), presentation.Text(presentation.MessageFallbackTranslate, map[string]string{"target_language": "English"})) ||
 		workspaceDocumentContent("", "plain text") == "plain text" ||
 		previewTextForOutput("", "bubble") != presentation.Text(presentation.MessagePreviewGenerated, nil) ||
 		previewTextForDeliveryType("workspace_document") != presentation.Text(presentation.MessagePreviewWorkspaceDoc, nil) ||

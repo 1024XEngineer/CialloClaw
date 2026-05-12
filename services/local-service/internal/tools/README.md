@@ -45,8 +45,8 @@
 
 - `page_read`
 - `page_search`
+- `web_search`
 - `page_interact`
-- `structured_dom`
 - `browser_attach_current`
 - `browser_snapshot`
 - `browser_navigate`
@@ -299,7 +299,7 @@
 
 当前主分支本地执行线中，`execution / orchestrator` 已经开始真实调用 `ToolExecutor`，因此 tools 不再只是模块内骨架，而是已经进入后端运行时路径。
 
-当前在本分支中，`page_read / page_search` 也已经进入：
+当前在本分支中，`page_read / page_search / web_search` 也已经进入：
 
 - ToolRegistry 注册
 - bootstrap 装配

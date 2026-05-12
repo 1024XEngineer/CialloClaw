@@ -104,11 +104,6 @@ const (
 	MessageBubbleInputNeedGoal         MessageKey = "bubble.input.need_goal"
 	MessageBubbleInputConfirmUnknown   MessageKey = "bubble.input.confirm_unknown"
 	MessageBubbleStartConfirmUnknown   MessageKey = "bubble.start.confirm_unknown"
-	MessageBubbleConfirmTranslate      MessageKey = "bubble.confirm.translate"
-	MessageBubbleConfirmRewrite        MessageKey = "bubble.confirm.rewrite"
-	MessageBubbleConfirmExplain        MessageKey = "bubble.confirm.explain"
-	MessageBubbleConfirmSummarize      MessageKey = "bubble.confirm.summarize"
-	MessageBubbleConfirmWriteFile      MessageKey = "bubble.confirm.write_file"
 	MessageBubbleConfirmDefault        MessageKey = "bubble.confirm.default"
 	MessageBubbleConfirmRejected       MessageKey = "bubble.confirm.rejected"
 	MessageBubbleConfirmMissingIntent  MessageKey = "bubble.confirm.missing_intent"
@@ -252,11 +247,6 @@ var zhCNMessages = map[MessageKey]string{
 	MessageBubbleInputNeedGoal:         "请先告诉我你希望我处理什么内容。",
 	MessageBubbleInputConfirmUnknown:   "我还不确定你想如何处理这段内容，请确认目标。",
 	MessageBubbleStartConfirmUnknown:   "我还不确定你想如何处理当前对象，请先确认。",
-	MessageBubbleConfirmTranslate:      "你是想翻译这段内容吗？",
-	MessageBubbleConfirmRewrite:        "你是想改写这段内容吗？",
-	MessageBubbleConfirmExplain:        "你是想解释这段内容吗？",
-	MessageBubbleConfirmSummarize:      "你是想总结这段内容吗？",
-	MessageBubbleConfirmWriteFile:      "你是想把结果整理成文档吗？",
 	MessageBubbleConfirmDefault:        "请确认你希望我如何处理当前内容。",
 	MessageBubbleConfirmRejected:       "这不是我该做的处理方式。请重新说明你的目标，或给我一个更准确的处理意图。",
 	MessageBubbleConfirmMissingIntent:  "请先明确告诉我你希望执行的处理方式。",
@@ -485,6 +475,8 @@ func ResultSpecMessagesForIntent(intentName string) ResultSpecMessages {
 	case "page_read":
 		return resultSpecMessages(MessageResultTitlePageRead, MessagePreviewBubble, MessageBubbleResultPageRead)
 	case "page_search":
+		return resultSpecMessages(MessageResultTitlePageSearch, MessagePreviewBubble, MessageBubbleResultPageSearch)
+	case "web_search":
 		return resultSpecMessages(MessageResultTitlePageSearch, MessagePreviewBubble, MessageBubbleResultPageSearch)
 	case "browser_attach_current":
 		return resultSpecMessages(MessageResultTitleBrowserAttach, MessagePreviewBubble, MessageBubbleResultBrowserAttach)

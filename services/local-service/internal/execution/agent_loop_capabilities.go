@@ -51,6 +51,24 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 		},
 	},
 	{
+		Name:      "extract_text",
+		UseWhen:   "Need readable text from a document, PDF, image, or another file that is not safe to consume through read_file directly.",
+		AvoidWhen: "The target is already a small plain-text file and read_file can return the exact content safely.",
+		Constraints: []string{
+			"Workspace files only",
+			"Returns extracted text instead of raw binary bytes",
+			"Prefer read_file for exact plain-text content and fall back to extract_text for document-style inputs",
+		},
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{"type": "string", "description": "Workspace-relative path to a document, image, or PDF."},
+			},
+			"required":             []string{"path"},
+			"additionalProperties": false,
+		},
+	},
+	{
 		Name:                   "browser_attach_current",
 		RequiresCurrentBrowser: true,
 		UseWhen:                "需要附着当前真实浏览器标签页，并确认当前页面 URL 或标题",
@@ -123,20 +141,21 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 		},
 	},
 	{
-		Name:      "structured_dom",
-		UseWhen:   "需要快速了解页面的标题层级、链接、按钮和输入框结构",
-		AvoidWhen: "用户只需要通读正文，或只需要确认某个关键词是否出现",
+		Name:      "web_search",
+		UseWhen:   "Need to search the web for sources before reading specific pages.",
+		AvoidWhen: "You already have the exact page URL and only need to read or search within that page.",
 		Constraints: []string{
-			"页面结构读取可能触发审批",
-			"一次只提取一个绝对 URL 的结构摘要",
-			"不会执行页面交互",
+			"Read-only search over public web pages",
+			"Returns structured search hits rather than a full page transcript",
+			"Follow up with page_read after choosing a promising result",
 		},
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"url": map[string]any{"type": "string", "description": "Absolute URL to inspect."},
+				"query": map[string]any{"type": "string", "description": "Search query to look up on the web."},
+				"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 10},
 			},
-			"required":             []string{"url"},
+			"required":             []string{"query"},
 			"additionalProperties": false,
 		},
 	},

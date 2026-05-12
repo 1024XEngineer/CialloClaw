@@ -24,6 +24,7 @@ import type {
   AgentTaskListParams,
   AgentTaskListResult,
   ApprovalRequest,
+  DeliveryResult,
   RecoveryPoint,
   Task,
 } from "@cialloclaw/protocol";
