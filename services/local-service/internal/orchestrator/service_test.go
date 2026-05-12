@@ -5472,6 +5472,71 @@ func TestServiceStartTaskFileWithoutInstructionStillRequiresConfirmation(t *test
 	}
 }
 
+func TestServiceStartTaskIntentConfirmationUsesSpecificTaskTitleQuestion(t *testing.T) {
+	service := newTestService()
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_confirm_question_specific",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "请尽快同步到海外发布渠道。",
+		},
+		"intent": map[string]any{
+			"name": "translate",
+			"arguments": map[string]any{
+				"target_language": "en",
+			},
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("start confirm-required translate task failed: %v", err)
+	}
+
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["type"] != "intent_confirm" {
+		t.Fatalf("expected translate task to return intent confirmation bubble, got %+v", bubble)
+	}
+	if bubble["text"] != "你现在是希望我翻译「请尽快同步到海外发布渠道。」吗？" {
+		t.Fatalf("expected specific confirmation question, got %+v", bubble)
+	}
+}
+
+func TestServiceStartTaskIntentConfirmationFallsBackToTaskTitleQuestion(t *testing.T) {
+	service := newTestService()
+
+	result, err := service.StartTask(map[string]any{
+		"session_id": "sess_confirm_question_fallback",
+		"source":     "floating_ball",
+		"trigger":    "text_selected_click",
+		"input": map[string]any{
+			"type": "text_selection",
+			"text": "发布说明",
+		},
+		"intent": map[string]any{
+			"name": "translate",
+			"arguments": map[string]any{
+				"target_language": "en",
+			},
+		},
+		"options": map[string]any{
+			"confirm_required": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("start confirm-required translate task without model failed: %v", err)
+	}
+
+	bubble := result["bubble_message"].(map[string]any)
+	if bubble["text"] != "你现在是希望我翻译「发布说明」吗？" {
+		t.Fatalf("expected task-title fallback confirmation question, got %+v", bubble)
+	}
+}
+
 func TestServiceStartTaskPersistsFormalReadFileSampleChain(t *testing.T) {
 	service, workspaceRoot := newTestServiceWithExecution(t, "unused")
 	readPath := filepath.Join(workspaceRoot, "notes", "source.txt")
