@@ -305,7 +305,7 @@ export function TaskDetailPanel({
           />
         </label>
         <label className="task-detail-runtime-filters__field">
-          <span>Run ID</span>
+          <span>运行编号</span>
           <input
             className="task-detail-runtime-filters__input"
             onChange={(event) =>
@@ -597,7 +597,7 @@ export function TaskDetailPanel({
           <p className="task-detail-card__eyebrow">运行事件</p>
           <h3 className="task-detail-card__title">执行事件与循环回流</h3>
         </div>
-        <p className="task-detail-card__hint">通过任务运行事件列表查看当前任务的运行时事件，可按事件类型、Run ID 与时间范围筛选。</p>
+        <p className="task-detail-card__hint">通过任务运行事件列表查看当前任务的运行时事件，可按事件类型、运行编号与时间范围筛选。</p>
         {renderRuntimeSummarySection()}
         {renderRuntimeEventFilters()}
         {eventErrorMessage ? <p className="task-detail-card__hint">{eventErrorMessage}</p> : null}

@@ -135,7 +135,7 @@ function MirrorHistoryDetail({
             <p className="mirror-page__summary-copy">{conversationSummary.latest_agent_text ?? conversationSummary.latest_user_text ?? "下一条本地记录会显示在这里。"}</p>
           </article>
           <article className="mirror-page__continuity-card">
-            <p className="mirror-page__micro-label">挂载任务记录</p>
+            <p className="mirror-page__micro-label">关联任务记录</p>
             <p className="mirror-page__stage-headline">{taskLinkedConversationCount} 条</p>
             <p className="mirror-page__summary-copy">这些记录可以直接回跳到对应任务详情，不需要把镜子当成聊天历史翻页。</p>
           </article>

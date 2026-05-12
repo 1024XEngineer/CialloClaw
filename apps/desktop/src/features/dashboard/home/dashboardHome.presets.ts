@@ -366,7 +366,7 @@ export const dashboardHomeStates: Record<DashboardHomeEventStateKey, DashboardHo
     signals: [
       { iconKey: "shield", label: "风险等级", value: "中", level: "warn", translation: "建议先确认再继续" },
       { iconKey: "lock", label: "待授权", value: "1", level: "critical", translation: "存在一个待确认操作" },
-      { iconKey: "history", label: "恢复点", value: "可用", level: "normal", translation: "当前已挂载回退点" },
+      { iconKey: "history", label: "恢复点", value: "可用", level: "normal", translation: "当前已有回退点" },
     ],
     anomaly: {
       title: "检测到边界风险",
