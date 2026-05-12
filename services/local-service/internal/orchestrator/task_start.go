@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
-	"github.com/cialloclaw/cialloclaw/services/local-service/internal/memory"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
@@ -24,6 +23,7 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	}
 
 	flow.Suggestion = s.suggestStartTaskIntent(flow)
+	flow.Suggestion.TaskTitle = s.fallbackTaskTitle(flow.Snapshot, flow.Suggestion.Intent, flow.Suggestion.TaskTitle)
 	if response, handled, err := s.maybeHandleSuggestedScreenStart(flow); err != nil || handled {
 		return response, err
 	}
@@ -129,7 +129,7 @@ func (s *Service) createTaskFromEntryFlow(flow taskEntryFlow) runengine.TaskReco
 }
 
 func (s *Service) finishStartTask(flow taskEntryFlow, task runengine.TaskRecord) (map[string]any, error) {
-	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(flow.Suggestion.RequiresConfirm), bubbleTextForStart(flow.Snapshot, flow.Suggestion, previewClarificationHits(s, task, flow.Snapshot, flow.Suggestion), flow.Snapshot.SessionReplyLanguage), task.StartedAt.Format(dateTimeLayout))
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(flow.Suggestion.RequiresConfirm), s.bubbleTextForStart(task, flow.Snapshot, flow.Suggestion), task.StartedAt.Format(dateTimeLayout))
 	if flow.Suggestion.RequiresConfirm {
 		task = s.persistTaskPresentation(task, bubble)
 		return buildTaskEntryResponse(task, bubble, nil), nil
@@ -149,6 +149,7 @@ func (s *Service) finishStartTask(flow taskEntryFlow, task runengine.TaskRecord)
 		return governedResponse, nil
 	}
 	task = governedTask
+	s.refreshTitleAfterGovernance(task, flow.Snapshot, flow.Suggestion.Intent)
 
 	deliveryResult := map[string]any(nil)
 	var execErr error
@@ -209,36 +210,6 @@ func bubbleTypeForSuggestion(requiresConfirm bool) string {
 		return "intent_confirm"
 	}
 	return "result"
-}
-
-// bubbleTextForInput returns the bubble text for agent.input.submit flows.
-func bubbleTextForInput(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, hits []memory.RetrievalHit, replyLanguage string) string {
-	if suggestion.RequiresConfirm {
-		if !suggestion.IntentConfirmed {
-			return initialClarificationPromptForLanguage(snapshot, false, replyLanguage)
-		}
-		return clarificationBubbleTextForLanguage(suggestion.Intent, hits, clarificationReplyLanguage(snapshot))
-	}
-	return suggestion.ResultBubbleText
-}
-
-// bubbleTextForStart returns the bubble text for agent.task.start flows.
-func bubbleTextForStart(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, hits []memory.RetrievalHit, replyLanguage string) string {
-	if suggestion.RequiresConfirm {
-		if !suggestion.IntentConfirmed {
-			return initialClarificationPromptForLanguage(snapshot, true, replyLanguage)
-		}
-		return clarificationBubbleTextForLanguage(suggestion.Intent, hits, clarificationReplyLanguage(snapshot))
-	}
-	return suggestion.ResultBubbleText
-}
-
-func previewClarificationHits(s *Service, task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) []memory.RetrievalHit {
-	if s == nil || !suggestion.RequiresConfirm || !suggestion.IntentConfirmed {
-		return nil
-	}
-
-	return s.clarificationPreviewHits(task, snapshot)
 }
 
 // initialTimeline creates the first timeline step for a new task and derives

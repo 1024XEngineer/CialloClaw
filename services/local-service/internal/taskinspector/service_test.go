@@ -1,20 +1,49 @@
 package taskinspector
 
 import (
+	"context"
 	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/titlegen"
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/transform"
 )
+
+type stubModelClient struct {
+	output string
+	calls  *atomic.Int32
+	wait   bool
+}
+
+func (s stubModelClient) GenerateText(ctx context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	if s.calls != nil {
+		s.calls.Add(1)
+	}
+	if s.wait {
+		<-ctx.Done()
+		return model.GenerateTextResponse{}, ctx.Err()
+	}
+	return model.GenerateTextResponse{
+		TaskID:     request.TaskID,
+		RunID:      request.RunID,
+		RequestID:  "req_taskinspector_title",
+		Provider:   "openai_responses",
+		ModelID:    "gpt-5.4",
+		OutputText: s.output,
+	}, nil
+}
 
 type readFileErrorAdapter struct {
 	platform.FileSystemAdapter
@@ -57,10 +86,13 @@ func TestServiceRunAggregatesWorkspaceNotepadAndRuntimeState(t *testing.T) {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 
-	service := NewService(fileSystem)
+	service := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"每周复盘阻塞项"}`,
+	})))
 	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
 
 	result, err := service.Run(RunInput{
+		AllowGeneratedTitles: true,
 		Config: map[string]any{
 			"task_sources":           []string{"workspace/todos"},
 			"inspection_interval":    map[string]any{"unit": "minute", "value": 15},
@@ -136,9 +168,14 @@ func TestServiceRunParsesMarkdownIntoRichNotepadFoundation(t *testing.T) {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 
-	service := NewService(fileSystem)
+	service := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"每周复盘阻塞项"}`,
+	})))
 	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
-	result, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	result, err := service.Run(RunInput{
+		AllowGeneratedTitles: true,
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+	})
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -148,6 +185,9 @@ func TestServiceRunParsesMarkdownIntoRichNotepadFoundation(t *testing.T) {
 	retro := result.NotepadItems[0]
 	if retro["bucket"] != notepadBucketRecurringRule || retro["type"] != "recurring" {
 		t.Fatalf("expected weekly retro to become recurring rule item, got %+v", retro)
+	}
+	if retro["title"] != "每周复盘阻塞项" {
+		t.Fatalf("expected note body to use generated notepad title, got %+v", retro)
 	}
 	if retro["repeat_rule_text"] != "every 2 weeks" || retro["prerequisite"] != "collect status updates" {
 		t.Fatalf("expected recurring metadata to be parsed, got %+v", retro)
@@ -162,6 +202,622 @@ func TestServiceRunParsesMarkdownIntoRichNotepadFoundation(t *testing.T) {
 	later := result.NotepadItems[1]
 	if later["bucket"] != notepadBucketLater {
 		t.Fatalf("expected explicit bucket metadata to win, got %+v", later)
+	}
+}
+
+func TestServiceRunCachesGeneratedNoteTitlesUntilContentChanges(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	notePath := filepath.Join(workspaceRoot, "todos", "weekly.md")
+	if err := os.WriteFile(notePath, []byte("- [ ] Weekly retro\n  note: review blockers and next steps\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	callCount := &atomic.Int32{}
+	service := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"每周复盘阻塞项"}`,
+		calls:  callCount,
+	})))
+	service.now = func() time.Time { return time.Date(2026, 4, 10, 9, 30, 0, 0, time.UTC) }
+
+	firstResult, err := service.Run(RunInput{
+		AllowGeneratedTitles: true,
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+	})
+	if err != nil {
+		t.Fatalf("first Run returned error: %v", err)
+	}
+	if len(firstResult.NotepadItems) != 1 || firstResult.NotepadItems[0]["title"] != "每周复盘阻塞项" {
+		t.Fatalf("expected generated note title on first run, got %+v", firstResult.NotepadItems)
+	}
+	if got := callCount.Load(); got != 1 {
+		t.Fatalf("expected one title generation call on first run, got %d", got)
+	}
+
+	secondResult, err := service.Run(RunInput{
+		AllowGeneratedTitles: true,
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+	})
+	if err != nil {
+		t.Fatalf("second Run returned error: %v", err)
+	}
+	if len(secondResult.NotepadItems) != 1 || secondResult.NotepadItems[0]["title"] != "每周复盘阻塞项" {
+		t.Fatalf("expected cached note title on second run, got %+v", secondResult.NotepadItems)
+	}
+	if got := callCount.Load(); got != 1 {
+		t.Fatalf("expected unchanged note content to reuse cached title, got %d calls", got)
+	}
+
+	if err := os.WriteFile(notePath, []byte("- [ ] Weekly retro\n  note: review blockers, risks, and owners\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+	if _, err := service.Run(RunInput{
+		AllowGeneratedTitles: true,
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+	}); err != nil {
+		t.Fatalf("third Run returned error: %v", err)
+	}
+	if got := callCount.Load(); got != 2 {
+		t.Fatalf("expected changed note content to refresh generated title, got %d calls", got)
+	}
+}
+
+func TestServiceRunIgnoresExportedRuntimeMetadataInNoteBody(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	content := strings.Join([]string{
+		"- [ ] 理解创新创业基础文档",
+		"  附件:2025创新创业基础知行汇(4).doc，说明:我不太明白这个文档在讲什么，帮我总结一下下",
+		"  created_at: 2026-05-12T01:00:00Z",
+		"  updated_at: 2026-05-12T01:05:00Z",
+		"  linked_task_id: task_old",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "exported.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem)
+	result, err := service.Run(RunInput{
+		Config: map[string]any{"task_sources": []string{"workspace/todos"}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if len(result.NotepadItems) != 1 {
+		t.Fatalf("expected one parsed note, got %+v", result.NotepadItems)
+	}
+
+	item := result.NotepadItems[0]
+	noteText := stringValue(item, "note_text")
+	if strings.Contains(noteText, "created_at:") || strings.Contains(noteText, "updated_at:") || strings.Contains(noteText, "linked_task_id:") {
+		t.Fatalf("expected runtime metadata to stay out of note_text, got %+v", item)
+	}
+	if !strings.Contains(noteText, "附件:2025创新创业基础知行汇(4).doc") {
+		t.Fatalf("expected authored note text to remain, got %+v", item)
+	}
+}
+
+func TestServiceRunReturnsTitleGenerationAuditDataWithInspectionOwner(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "weekly.md"), []byte("- [ ] Weekly retro\n  note: review blockers and next steps\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"每周复盘阻塞项"}`,
+	})))
+
+	result, err := service.Run(RunInput{
+		InspectionID:         "insp_manual_titles",
+		AllowGeneratedTitles: true,
+		TitleGenerationOwner: titlegen.GenerationOwner{TaskID: "insp_manual_titles", RunID: "insp_manual_titles"},
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if len(result.TitleGenerationAuditData) != 1 {
+		t.Fatalf("expected one title-generation invocation, got %+v", result.TitleGenerationAuditData)
+	}
+	if result.TitleGenerationAuditData[0].Invocation.TaskID != "insp_manual_titles" || result.TitleGenerationAuditData[0].Invocation.RunID != "insp_manual_titles" {
+		t.Fatalf("expected title generation owner attribution to use inspection owner, got %+v", result.TitleGenerationAuditData[0])
+	}
+	if !result.TitleGenerationAuditData[0].Generated {
+		t.Fatalf("expected successful generation record, got %+v", result.TitleGenerationAuditData[0])
+	}
+}
+
+func TestServiceRunMarksFallbackAuditDataWhenModelOutputIsUnusable(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "weekly.md"), []byte("- [ ] Weekly retro\n  note: review blockers and next steps\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: "{}",
+	})))
+
+	result, err := service.Run(RunInput{
+		InspectionID:         "insp_manual_titles",
+		AllowGeneratedTitles: true,
+		TitleGenerationOwner: titlegen.GenerationOwner{TaskID: "insp_manual_titles", RunID: "insp_manual_titles"},
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if len(result.TitleGenerationAuditData) != 1 {
+		t.Fatalf("expected one title-generation invocation, got %+v", result.TitleGenerationAuditData)
+	}
+	if result.TitleGenerationAuditData[0].Generated {
+		t.Fatalf("expected unusable model output to be marked as fallback, got %+v", result.TitleGenerationAuditData[0])
+	}
+}
+
+func TestServiceRunLimitsGeneratedNoteTitlesPerManualPass(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	content := strings.Join([]string{
+		"- [ ] Weekly retro",
+		"  note: review blockers and next steps",
+		"- [ ] Release checklist",
+		"  note: verify owners and rollback steps",
+		"- [ ] Hiring sync",
+		"  note: gather open questions and decisions",
+		"- [ ] Infra backlog",
+		"  note: clean stale alerts and ticket links",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "weekly.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	callCount := &atomic.Int32{}
+	service := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"模型标题"}`,
+		calls:  callCount,
+	})))
+
+	result, err := service.Run(RunInput{
+		AllowGeneratedTitles: true,
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if got := callCount.Load(); got != defaultGeneratedTitleLimit {
+		t.Fatalf("expected manual generation budget %d, got %d", defaultGeneratedTitleLimit, got)
+	}
+	if len(result.NotepadItems) != 4 {
+		t.Fatalf("expected four parsed notes, got %+v", result.NotepadItems)
+	}
+	if result.NotepadItems[3]["title"] == "模型标题" {
+		t.Fatalf("expected notes beyond the generation budget to keep local fallback titles, got %+v", result.NotepadItems[3])
+	}
+}
+
+func TestServiceRunDoesNotSpendGenerationBudgetOnFallbackOnlyNotes(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	content := strings.Join([]string{
+		"- [ ] plain checklist one",
+		"- [ ] plain checklist two",
+		"- [ ] plain checklist three",
+		"- [ ] Weekly retro",
+		"  note: review blockers and next steps",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "mixed.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	callCount := &atomic.Int32{}
+	service := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"每周复盘阻塞项"}`,
+		calls:  callCount,
+	})))
+
+	result, err := service.Run(RunInput{
+		AllowGeneratedTitles: true,
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if got := callCount.Load(); got != 1 {
+		t.Fatalf("expected only the rich-context note to consume generation budget, got %d calls", got)
+	}
+	if len(result.NotepadItems) != 4 {
+		t.Fatalf("expected four parsed notes, got %+v", result.NotepadItems)
+	}
+	if result.NotepadItems[3]["title"] != "每周复盘阻塞项" {
+		t.Fatalf("expected later rich-context note to still receive generated title, got %+v", result.NotepadItems[3])
+	}
+}
+
+func TestServiceRunDoesNotSpendGenerationBudgetOnCachedNoteTitles(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	notePath := filepath.Join(workspaceRoot, "todos", "weekly.md")
+	initialContent := strings.Join([]string{
+		"- [ ] Weekly retro",
+		"  note: review blockers and next steps",
+		"- [ ] Release checklist",
+		"  note: verify owners and rollback steps",
+		"- [ ] Hiring sync",
+		"  note: gather open questions and decisions",
+	}, "\n")
+	if err := os.WriteFile(notePath, []byte(initialContent), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	callCount := &atomic.Int32{}
+	service := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"模型标题"}`,
+		calls:  callCount,
+	})))
+
+	if _, err := service.Run(RunInput{
+		AllowGeneratedTitles: true,
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+	}); err != nil {
+		t.Fatalf("first Run returned error: %v", err)
+	}
+	if got := callCount.Load(); got != defaultGeneratedTitleLimit {
+		t.Fatalf("expected first pass to consume budget on the first %d notes, got %d", defaultGeneratedTitleLimit, got)
+	}
+
+	updatedContent := initialContent + "\n- [ ] Infra backlog\n  note: clean stale alerts and ticket links\n"
+	if err := os.WriteFile(notePath, []byte(updatedContent), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	result, err := service.Run(RunInput{
+		AllowGeneratedTitles: true,
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+	})
+	if err != nil {
+		t.Fatalf("second Run returned error: %v", err)
+	}
+	if got := callCount.Load(); got != defaultGeneratedTitleLimit+1 {
+		t.Fatalf("expected cached titles to preserve budget for one new note, got %d calls", got)
+	}
+	if len(result.NotepadItems) != 4 {
+		t.Fatalf("expected four parsed notes, got %+v", result.NotepadItems)
+	}
+	if result.NotepadItems[3]["title"] != "模型标题" {
+		t.Fatalf("expected later uncached note to still receive generated title, got %+v", result.NotepadItems[3])
+	}
+}
+
+func TestServiceRunUsesNoteTextAsFallbackWhenGeneratorUnavailable(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	content := strings.Join([]string{
+		"- [ ] Weekly retro",
+		"  note: 补齐风险项、责任人和发布时间",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "weekly.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem)
+	result, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if len(result.NotepadItems) != 1 {
+		t.Fatalf("expected one parsed note, got %+v", result.NotepadItems)
+	}
+	if got := result.NotepadItems[0]["title"]; got != "补齐风险项、责任人和发布时间" {
+		t.Fatalf("expected fallback title to prefer note body context, got %+v", got)
+	}
+}
+
+func TestServiceRunKeepsFallbackTitlesUnlessGenerationIsExplicitlyAllowed(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	content := strings.Join([]string{
+		"- [ ] Weekly retro",
+		"  note: review blockers",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "weekly.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	callCount := &atomic.Int32{}
+	service := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"每周复盘阻塞项"}`,
+		calls:  callCount,
+	})))
+
+	result, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if len(result.NotepadItems) != 1 || result.NotepadItems[0]["title"] != "review blockers" {
+		t.Fatalf("expected local fallback title on default inspection path, got %+v", result.NotepadItems)
+	}
+	if got := callCount.Load(); got != 0 {
+		t.Fatalf("expected default inspection path to skip title model calls, got %d", got)
+	}
+}
+
+func TestServiceRunSkipsModelForPlainChecklistTitles(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "simple.md"), []byte("- [ ] review report\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	callCount := &atomic.Int32{}
+	service := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"报告复盘"}`,
+		calls:  callCount,
+	})))
+	result, err := service.Run(RunInput{Config: map[string]any{"task_sources": []string{"workspace/todos"}}})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if len(result.NotepadItems) != 1 || result.NotepadItems[0]["title"] != "review report" {
+		t.Fatalf("expected plain checklist item to keep direct fallback title, got %+v", result.NotepadItems)
+	}
+	if got := callCount.Load(); got != 0 {
+		t.Fatalf("expected plain checklist item to skip title model call, got %d calls", got)
+	}
+}
+
+func TestServiceRunPreservesGeneratedTitlesAcrossAutomaticSync(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "weekly.md"), []byte("- [ ] Weekly retro\n  note: review blockers and next steps\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"每周复盘阻塞项"}`,
+	})))
+
+	manualResult, err := service.Run(RunInput{
+		AllowGeneratedTitles: true,
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+	})
+	if err != nil {
+		t.Fatalf("manual Run returned error: %v", err)
+	}
+	if manualResult.NotepadItems[0]["title"] != "每周复盘阻塞项" {
+		t.Fatalf("expected manual run to generate note title, got %+v", manualResult.NotepadItems)
+	}
+
+	autoResult, err := service.Run(RunInput{
+		Config:       map[string]any{"task_sources": []string{"workspace/todos"}},
+		NotepadItems: manualResult.NotepadItems,
+	})
+	if err != nil {
+		t.Fatalf("automatic Run returned error: %v", err)
+	}
+	if autoResult.NotepadItems[0]["title"] != "每周复盘阻塞项" {
+		t.Fatalf("expected automatic sync to preserve unchanged generated title, got %+v", autoResult.NotepadItems)
+	}
+}
+
+func TestServiceRunReusesPersistedGeneratedTitlesBeforeCallingModel(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "weekly.md"), []byte("- [ ] Weekly retro\n  note: review blockers and next steps\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	initialCalls := &atomic.Int32{}
+	initialService := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"每周复盘阻塞项"}`,
+		calls:  initialCalls,
+	})))
+	manualResult, err := initialService.Run(RunInput{
+		AllowGeneratedTitles: true,
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+	})
+	if err != nil {
+		t.Fatalf("initial Run returned error: %v", err)
+	}
+	if got := initialCalls.Load(); got != 1 {
+		t.Fatalf("expected initial manual run to call the model once, got %d", got)
+	}
+
+	reuseCalls := &atomic.Int32{}
+	reuseService := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"不该再次生成"}`,
+		calls:  reuseCalls,
+	})))
+	reusedResult, err := reuseService.Run(RunInput{
+		AllowGeneratedTitles: true,
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+		NotepadItems:         manualResult.NotepadItems,
+	})
+	if err != nil {
+		t.Fatalf("reuse Run returned error: %v", err)
+	}
+	if len(reusedResult.NotepadItems) != 1 || reusedResult.NotepadItems[0]["title"] != "每周复盘阻塞项" {
+		t.Fatalf("expected persisted generated title to be reused, got %+v", reusedResult.NotepadItems)
+	}
+	if got := reuseCalls.Load(); got != 0 {
+		t.Fatalf("expected persisted generated title to avoid a second model call, got %d", got)
+	}
+}
+
+func TestServiceRunResetsPreservedGeneratedTitlesWhenSourceChanges(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	notePath := filepath.Join(workspaceRoot, "todos", "weekly.md")
+	if err := os.WriteFile(notePath, []byte("- [ ] Weekly retro\n  note: review blockers and next steps\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	service := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		output: `{"title":"每周复盘阻塞项"}`,
+	})))
+
+	manualResult, err := service.Run(RunInput{
+		AllowGeneratedTitles: true,
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+	})
+	if err != nil {
+		t.Fatalf("manual Run returned error: %v", err)
+	}
+
+	if err := os.WriteFile(notePath, []byte("- [ ] Weekly retro\n  note: owners and rollback plan\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	autoResult, err := service.Run(RunInput{
+		Config:       map[string]any{"task_sources": []string{"workspace/todos"}},
+		NotepadItems: manualResult.NotepadItems,
+	})
+	if err != nil {
+		t.Fatalf("automatic Run returned error: %v", err)
+	}
+	if autoResult.NotepadItems[0]["title"] != "owners and rollback p..." {
+		t.Fatalf("expected changed note content to drop preserved generated title, got %+v", autoResult.NotepadItems)
+	}
+}
+
+func TestServiceRunBoundsManualGeneratedTitleLatency(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalPathPolicy returned error: %v", err)
+	}
+	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "todos"), 0o755); err != nil {
+		t.Fatalf("MkdirAll returned error: %v", err)
+	}
+	content := strings.Join([]string{
+		"- [ ] Weekly retro",
+		"  note: review blockers and next steps",
+		"- [ ] Release checklist",
+		"  note: verify owners and rollback steps",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(workspaceRoot, "todos", "weekly.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	previousTimeout := manualGeneratedTitleTimeout
+	manualGeneratedTitleTimeout = 5 * time.Millisecond
+	defer func() {
+		manualGeneratedTitleTimeout = previousTimeout
+	}()
+
+	service := NewService(fileSystem).WithTitleGenerator(titlegen.NewService(model.NewService(serviceconfig.ModelConfig{}, stubModelClient{
+		wait: true,
+	})))
+
+	start := time.Now()
+	result, err := service.Run(RunInput{
+		AllowGeneratedTitles: true,
+		Config:               map[string]any{"task_sources": []string{"workspace/todos"}},
+	})
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if len(result.NotepadItems) != 2 {
+		t.Fatalf("expected parsed notes, got %+v", result.NotepadItems)
+	}
+	if elapsed := time.Since(start); elapsed > 80*time.Millisecond {
+		t.Fatalf("expected manual generation path to honor the shorter request timeout, got %s", elapsed)
+	}
+	if result.NotepadItems[0]["title"] != "review blockers and n..." {
+		t.Fatalf("expected first timed-out note to keep fallback title, got %+v", result.NotepadItems[0])
 	}
 }
 

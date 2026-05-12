@@ -83,6 +83,7 @@ type TaskRecord struct {
 	LoopStopReason    string
 	SteeringMessages  []string
 	CurrentStepStatus string
+	TitleRefreshToken uint64
 }
 
 // TaskStepRecord represents one task-facing timeline step.
@@ -175,6 +176,8 @@ type Engine struct {
 	tasks         map[string]*TaskRecord
 	taskOrder     []string
 	sessionOrder  []string
+	titleRefresh  uint64
+	titleCancels  map[string]context.CancelFunc
 	inspector     InspectorConfig
 	settings      map[string]any
 	notepadItems  []map[string]any
@@ -256,6 +259,7 @@ func newEngine(taskStore storage.TaskRunStore) (*Engine, error) {
 		tasks:         map[string]*TaskRecord{},
 		taskOrder:     []string{},
 		sessionOrder:  []string{},
+		titleCancels:  map[string]context.CancelFunc{},
 		notepadClaims: map[string]struct{}{},
 		inspector: InspectorConfig{
 			TaskSources:          []string{defaultSettingsTaskSourcePath()},
@@ -346,6 +350,7 @@ func (e *Engine) CreateTask(input CreateTaskInput) TaskRecord {
 		SecuritySummary:   buildSecuritySummary(input.RiskLevel, nil),
 		CurrentStepStatus: currentTimelineStatus(stepTimeline),
 	}
+	e.reserveTitleRefreshLocked(record)
 
 	record.LatestEvent = e.buildEvent(record, "task.updated")
 	record.queueNotification("task.updated", taskUpdatedNotificationParams(record))
@@ -381,6 +386,7 @@ func (e *Engine) DeleteTask(taskID string) error {
 		}
 	}
 
+	e.cancelTitleRefreshLocked(taskID)
 	delete(e.tasks, taskID)
 	e.taskOrder = removeStringValue(e.taskOrder, taskID)
 	e.untrackSessionLocked(record.SessionID)
@@ -506,6 +512,7 @@ func (e *Engine) ConfirmTask(taskID, title string, intent map[string]any, bubble
 	record.Intent = cloneMap(intent)
 	record.Status = "processing"
 	record.CurrentStep = "generate_output"
+	e.reserveTitleRefreshLocked(record)
 	record.UpdatedAt = e.now()
 	record.BubbleMessage = cloneMap(bubbleMessage)
 	record.Timeline = advanceTimeline(record.Timeline, "generate_output", "running", "生成输出开始")
@@ -580,12 +587,73 @@ func (e *Engine) UpdateIntent(taskID, title string, intent map[string]any) (Task
 
 	record.Title = firstNonEmpty(title, record.Title)
 	record.Intent = cloneMap(intent)
+	e.reserveTitleRefreshLocked(record)
 	record.UpdatedAt = e.now()
 	record.LatestEvent = e.buildEvent(record, "task.updated")
 	record.queueNotification("task.updated", taskUpdatedNotificationParams(record))
 	e.persistTaskLocked(record)
 
 	return record.clone(), true
+}
+
+// ReserveTitleRefresh records the latest async title-refresh attempt that is
+// allowed to update a task and returns a cancellation-aware context tied to that
+// reservation. Each new reservation invalidates older goroutines so equal
+// fallback titles cannot let stale model output win races or keep spending model
+// quota after newer task state supersedes them.
+func (e *Engine) ReserveTitleRefresh(taskID, expectedTitle string) (uint64, context.Context, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return 0, nil, false
+	}
+	if strings.TrimSpace(expectedTitle) == "" || strings.TrimSpace(record.Title) != strings.TrimSpace(expectedTitle) {
+		return 0, nil, false
+	}
+
+	e.reserveTitleRefreshLocked(record)
+	ctx, cancel := context.WithCancel(context.Background())
+	e.titleCancels[record.TaskID] = cancel
+	return record.TitleRefreshToken, ctx, true
+}
+
+// UpdateTitleIfCurrent applies an asynchronously generated title only when the
+// task still presents the expected fallback title and the caller still owns the
+// latest refresh reservation. This prevents stale model responses from
+// overwriting newer continuation- or confirmation-driven refreshes.
+func (e *Engine) UpdateTitleIfCurrent(taskID, expectedTitle string, expectedToken uint64, title string) (TaskRecord, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	record, ok := e.tasks[taskID]
+	if !ok {
+		return TaskRecord{}, false
+	}
+	if strings.TrimSpace(title) == "" ||
+		strings.TrimSpace(record.Title) != strings.TrimSpace(expectedTitle) ||
+		expectedToken == 0 ||
+		record.TitleRefreshToken != expectedToken {
+		return TaskRecord{}, false
+	}
+
+	record.Title = title
+	e.finishTitleRefreshLocked(taskID, expectedToken)
+	record.UpdatedAt = e.now()
+	record.LatestEvent = e.buildEvent(record, "task.updated")
+	record.queueNotification("task.updated", taskUpdatedNotificationParams(record))
+	e.persistTaskLocked(record)
+
+	return record.clone(), true
+}
+
+// FinishTitleRefresh clears the live cancellation handle after an async title
+// refresh concludes without updating the task.
+func (e *Engine) FinishTitleRefresh(taskID string, expectedToken uint64) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.finishTitleRefreshLocked(taskID, expectedToken)
 }
 
 // ReopenIntentConfirmation moves a reviewed task back into confirming_intent
@@ -605,6 +673,7 @@ func (e *Engine) ReopenIntentConfirmation(taskID, title string, intent map[strin
 	record.Intent = cloneMap(intent)
 	record.Status = "confirming_intent"
 	record.CurrentStep = "confirming_intent"
+	e.reserveTitleRefreshLocked(record)
 	record.UpdatedAt = e.now()
 	record.FinishedAt = nil
 	record.DeliveryResult = nil
@@ -648,6 +717,7 @@ func (e *Engine) ReopenWaitingInput(taskID, title string, intent map[string]any,
 	record.Intent = cloneMap(intent)
 	record.Status = "waiting_input"
 	record.CurrentStep = "collect_input"
+	e.reserveTitleRefreshLocked(record)
 	record.UpdatedAt = e.now()
 	record.FinishedAt = nil
 	record.DeliveryResult = nil
@@ -873,6 +943,7 @@ func (e *Engine) ContinueTask(taskID string, update ContinuationUpdate) (TaskRec
 	if strings.TrimSpace(update.CurrentStep) != "" {
 		record.CurrentStep = strings.TrimSpace(update.CurrentStep)
 	}
+	e.reserveTitleRefreshLocked(record)
 	trimmedSteering := strings.TrimSpace(update.SteeringMessage)
 	if nextStep := strings.TrimSpace(update.CurrentStep); nextStep != "" {
 		record.Timeline = advanceTimeline(record.Timeline, nextStep, timelineStatusForTaskStatus(record.Status), continuationOutputSummary(update.BubbleMessage, trimmedSteering))
@@ -973,6 +1044,7 @@ func (e *Engine) BlockTaskByPolicy(taskID, riskLevel, outputSummary string, impa
 	now := e.now()
 	record.Status = "cancelled"
 	record.CurrentStep = "risk_blocked"
+	e.reserveTitleRefreshLocked(record)
 	record.UpdatedAt = now
 	record.FinishedAt = &now
 	record.PendingExecution = nil
@@ -1011,6 +1083,7 @@ func (e *Engine) BlockPreparedTaskByPolicy(task TaskRecord, riskLevel, outputSum
 	now := e.now()
 	record.Status = "cancelled"
 	record.CurrentStep = "risk_blocked"
+	e.reserveTitleRefreshLocked(record)
 	record.UpdatedAt = now
 	record.FinishedAt = &now
 	record.PendingExecution = nil
@@ -1152,6 +1225,7 @@ func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any
 			return TaskRecord{}, ErrTaskStatusInvalid
 		}
 		record.Status = "paused"
+		e.reserveTitleRefreshLocked(record)
 	case "resume":
 		if record.isFinished() {
 			return TaskRecord{}, ErrTaskAlreadyFinished
@@ -1161,6 +1235,7 @@ func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any
 		}
 		record.Status = "processing"
 		record.CurrentStep = firstNonEmpty(resumeStepForTask(record), record.CurrentStep)
+		e.reserveTitleRefreshLocked(record)
 		if !wasHumanLoop {
 			record.PendingExecution = nil
 		}
@@ -1169,6 +1244,7 @@ func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any
 			return TaskRecord{}, ErrTaskAlreadyFinished
 		}
 		record.Status = "cancelled"
+		e.reserveTitleRefreshLocked(record)
 		record.FinishedAt = &now
 		record.ApprovalRequest = nil
 		record.PendingExecution = nil
@@ -1187,6 +1263,7 @@ func (e *Engine) ControlTask(taskID, action string, bubbleMessage map[string]any
 		// until queue/governance preflight decides the first persisted state.
 		e.prepareRestartRecordLocked(record, now, bubbleMessage)
 		record.Status = "processing"
+		e.reserveTitleRefreshLocked(record)
 		record.Timeline = advanceTimeline(record.Timeline, "generate_output", "running", "任务已重新开始")
 	default:
 		return TaskRecord{}, ErrTaskStatusInvalid
@@ -1269,6 +1346,7 @@ func (e *Engine) commitPreparedTaskLocked(task TaskRecord) (*TaskRecord, bool) {
 		return nil, false
 	}
 	prepared := task.clone()
+	e.reserveTitleRefreshLocked(&prepared)
 	*record = prepared
 	return record, true
 }
@@ -1296,6 +1374,7 @@ func (e *Engine) MarkWaitingApprovalWithPlan(taskID string, approvalRequest map[
 	now := e.now()
 	record.Status = "waiting_auth"
 	record.CurrentStep = "waiting_authorization"
+	e.reserveTitleRefreshLocked(record)
 	record.UpdatedAt = now
 	record.ApprovalRequest = cloneMap(approvalRequest)
 	record.PendingExecution = cloneMap(pendingExecution)
@@ -1338,6 +1417,7 @@ func (e *Engine) MarkPreparedTaskWaitingApprovalWithPlan(task TaskRecord, approv
 	now := e.now()
 	record.Status = "waiting_auth"
 	record.CurrentStep = "waiting_authorization"
+	e.reserveTitleRefreshLocked(record)
 	record.UpdatedAt = now
 	record.ApprovalRequest = cloneMap(approvalRequest)
 	record.PendingExecution = cloneMap(pendingExecution)
@@ -1413,6 +1493,7 @@ func (e *Engine) ResumeAfterApproval(taskID string, authorization map[string]any
 	now := e.now()
 	record.Status = "processing"
 	record.CurrentStep = "authorized_execution"
+	e.reserveTitleRefreshLocked(record)
 	record.UpdatedAt = now
 	record.Authorization = cloneMap(authorization)
 	record.ImpactScope = cloneMap(impactScope)
@@ -1448,6 +1529,7 @@ func (e *Engine) DenyAfterApproval(taskID string, authorization map[string]any, 
 	now := e.now()
 	record.Status = "cancelled"
 	record.CurrentStep = "authorization_denied"
+	e.reserveTitleRefreshLocked(record)
 	record.UpdatedAt = now
 	record.FinishedAt = &now
 	record.Authorization = cloneMap(authorization)
@@ -1500,6 +1582,7 @@ func (e *Engine) QueueTaskForSession(taskID, blockingTaskID string, bubbleMessag
 
 	record.Status = "blocked"
 	record.CurrentStep = "session_queue"
+	e.reserveTitleRefreshLocked(record)
 	record.UpdatedAt = e.now()
 	record.BubbleMessage = cloneMap(bubbleMessage)
 	record.Timeline = advanceTimeline(record.Timeline, "session_queue", "pending", "等待同一会话中的前序任务完成")
@@ -1532,6 +1615,7 @@ func (e *Engine) QueuePreparedTaskForSession(task TaskRecord, blockingTaskID str
 
 	record.Status = "blocked"
 	record.CurrentStep = "session_queue"
+	e.reserveTitleRefreshLocked(record)
 	record.UpdatedAt = e.now()
 	record.BubbleMessage = cloneMap(bubbleMessage)
 	record.Timeline = advanceTimeline(record.Timeline, "session_queue", "pending", "等待同一会话中的前序任务完成")
@@ -1566,6 +1650,7 @@ func (e *Engine) EscalateHumanLoop(taskID string, escalation map[string]any, bub
 	resumeStep := firstNonEmpty(resumeStepForTask(record), "generate_output")
 	record.Status = "blocked"
 	record.CurrentStep = "human_in_loop"
+	e.reserveTitleRefreshLocked(record)
 	record.PendingExecution = map[string]any{
 		"kind":        "human_in_loop",
 		"resume_step": resumeStep,
@@ -1653,6 +1738,7 @@ func (e *Engine) ResumeQueuedTask(taskID, stepName string, bubbleMessage map[str
 
 	record.Status = "processing"
 	record.CurrentStep = firstNonEmpty(stepName, "generate_output")
+	e.reserveTitleRefreshLocked(record)
 	record.UpdatedAt = e.now()
 	record.BubbleMessage = cloneMap(bubbleMessage)
 	record.Timeline = advanceTimeline(record.Timeline, record.CurrentStep, "running", "前序任务完成，当前会话任务开始执行")
@@ -2167,11 +2253,136 @@ func (e *Engine) AppendAuditData(taskID string, auditRecords []map[string]any, t
 		record.AuditRecords = append(record.AuditRecords, cloneMapSlice(auditRecords)...)
 	}
 	if len(tokenUsage) > 0 {
-		record.TokenUsage = cloneMap(tokenUsage)
+		record.TokenUsage = mergeTaskTokenUsage(record.TokenUsage, tokenUsage)
 	}
 	record.UpdatedAt = e.now()
 	e.persistTaskLocked(record)
 	return record.clone(), true
+}
+
+func mergeTaskTokenUsage(current map[string]any, update map[string]any) map[string]any {
+	if len(update) == 0 {
+		return cloneMap(current)
+	}
+	if len(current) == 0 {
+		return cloneMap(update)
+	}
+	merged := cloneMap(current)
+	for _, key := range []string{"input_tokens", "output_tokens", "total_tokens"} {
+		merged[key] = tokenUsageInt(current[key]) + tokenUsageInt(update[key])
+	}
+	merged["estimated_cost"] = tokenUsageFloat(current["estimated_cost"]) + tokenUsageFloat(update["estimated_cost"])
+	for _, key := range []string{"request_id", "provider", "model_id"} {
+		// Preserve the representative execution request metadata once the task
+		// has one. Auxiliary appends, such as async title refresh accounting,
+		// should only contribute token totals instead of replacing the primary
+		// provider/request identity shown in governance and dashboard views.
+		if strings.TrimSpace(tokenUsageString(current[key])) != "" {
+			continue
+		}
+		if value := strings.TrimSpace(tokenUsageString(update[key])); value != "" {
+			merged[key] = value
+		}
+	}
+	if tokenUsageInt64(current["latency_ms"]) <= 0 {
+		if latency := tokenUsageInt64(update["latency_ms"]); latency > 0 {
+			merged["latency_ms"] = latency
+		}
+	}
+	if fallback, ok := update["fallback"].(bool); ok {
+		merged["fallback"] = fallback
+	}
+	return merged
+}
+
+func tokenUsageInt(value any) int {
+	switch typed := value.(type) {
+	case int:
+		return typed
+	case int32:
+		return int(typed)
+	case int64:
+		return int(typed)
+	case float64:
+		return int(typed)
+	case float32:
+		return int(typed)
+	default:
+		return 0
+	}
+}
+
+func tokenUsageInt64(value any) int64 {
+	switch typed := value.(type) {
+	case int:
+		return int64(typed)
+	case int32:
+		return int64(typed)
+	case int64:
+		return typed
+	case float64:
+		return int64(typed)
+	case float32:
+		return int64(typed)
+	default:
+		return 0
+	}
+}
+
+func tokenUsageFloat(value any) float64 {
+	switch typed := value.(type) {
+	case float64:
+		return typed
+	case float32:
+		return float64(typed)
+	case int:
+		return float64(typed)
+	case int32:
+		return float64(typed)
+	case int64:
+		return float64(typed)
+	default:
+		return 0
+	}
+}
+
+func tokenUsageString(value any) string {
+	if typed, ok := value.(string); ok {
+		return typed
+	}
+	return ""
+}
+
+func (e *Engine) reserveTitleRefreshLocked(record *TaskRecord) {
+	if e == nil || record == nil {
+		return
+	}
+	e.cancelTitleRefreshLocked(record.TaskID)
+	e.titleRefresh++
+	record.TitleRefreshToken = e.titleRefresh
+}
+
+func (e *Engine) cancelTitleRefreshLocked(taskID string) {
+	if e == nil {
+		return
+	}
+	cancel, ok := e.titleCancels[taskID]
+	if !ok {
+		return
+	}
+	delete(e.titleCancels, taskID)
+	cancel()
+}
+
+func (e *Engine) finishTitleRefreshLocked(taskID string, expectedToken uint64) {
+	if e == nil {
+		return
+	}
+	record, ok := e.tasks[taskID]
+	if !ok || expectedToken == 0 || record.TitleRefreshToken != expectedToken {
+		return
+	}
+	delete(e.titleCancels, taskID)
 }
 
 // UpdateSecuritySummary writes task-facing governance metadata back into the

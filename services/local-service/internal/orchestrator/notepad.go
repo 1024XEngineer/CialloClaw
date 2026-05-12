@@ -176,7 +176,7 @@ func (s *Service) createNotepadTask(snapshot taskcontext.TaskContextSnapshot, su
 }
 
 func (s *Service) finishNotepadTask(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, task runengine.TaskRecord) (map[string]any, error) {
-	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForStart(snapshot, suggestion, previewClarificationHits(s, task, snapshot, suggestion), snapshot.SessionReplyLanguage), task.StartedAt.Format(dateTimeLayout))
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), s.bubbleTextForStart(task, snapshot, suggestion), task.StartedAt.Format(dateTimeLayout))
 	if suggestion.RequiresConfirm {
 		task = s.persistTaskPresentation(task, bubble)
 		return buildTaskEntryResponse(task, bubble, nil), nil
@@ -196,6 +196,7 @@ func (s *Service) finishNotepadTask(snapshot taskcontext.TaskContextSnapshot, su
 		return governedResponse, nil
 	}
 	task = governedTask
+	s.refreshTitleAfterGovernance(task, snapshot, suggestion.Intent)
 
 	deliveryResult := map[string]any(nil)
 	var execErr error

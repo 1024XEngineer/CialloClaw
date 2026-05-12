@@ -288,6 +288,33 @@ type BrowserPageSearchResult struct {
 	Source     string
 }
 
+// BrowserSearchResultItem describes one internet search hit returned by the
+// browser worker.
+type BrowserSearchResultItem struct {
+	Title   string
+	URL     string
+	Snippet string
+}
+
+// BrowserWebSearchRequest is the normalized request shape for internet search.
+type BrowserWebSearchRequest struct {
+	Query         string
+	URL           string
+	URLIsExplicit *bool
+	Engine        string
+	Limit         int
+}
+
+// BrowserWebSearchResult describes one internet search result page.
+type BrowserWebSearchResult struct {
+	BrowserExecutionMetadata
+	Query       string
+	SearchURL   string
+	ResultCount int
+	Results     []BrowserSearchResultItem
+	Source      string
+}
+
 // BrowserPageInteractResult describes one page interaction run.
 type BrowserPageInteractResult struct {
 	BrowserExecutionMetadata
@@ -296,18 +323,6 @@ type BrowserPageInteractResult struct {
 	TextContent    string
 	ActionsApplied int
 	Source         string
-}
-
-// BrowserStructuredDOMResult describes a structured DOM snapshot.
-type BrowserStructuredDOMResult struct {
-	BrowserExecutionMetadata
-	URL      string
-	Title    string
-	Headings []string
-	Links    []string
-	Buttons  []string
-	Inputs   []string
-	Source   string
 }
 
 // BrowserAttachedPageResult identifies one attached browser tab selection.
@@ -518,10 +533,9 @@ type PlaywrightSidecarClient interface {
 	ReadPageAttached(ctx context.Context, url string, attach BrowserAttachConfig) (BrowserPageReadResult, error)
 	SearchPage(ctx context.Context, url, query string, limit int) (BrowserPageSearchResult, error)
 	SearchPageAttached(ctx context.Context, url, query string, limit int, attach BrowserAttachConfig) (BrowserPageSearchResult, error)
+	SearchWeb(ctx context.Context, request BrowserWebSearchRequest) (BrowserWebSearchResult, error)
 	InteractPage(ctx context.Context, url string, actions []map[string]any) (BrowserPageInteractResult, error)
 	InteractPageAttached(ctx context.Context, url string, actions []map[string]any, attach BrowserAttachConfig) (BrowserPageInteractResult, error)
-	StructuredDOM(ctx context.Context, url string) (BrowserStructuredDOMResult, error)
-	StructuredDOMAttached(ctx context.Context, url string, attach BrowserAttachConfig) (BrowserStructuredDOMResult, error)
 	AttachCurrentPage(ctx context.Context, attach BrowserAttachConfig) (BrowserAttachedPageResult, error)
 	SnapshotBrowser(ctx context.Context, attach BrowserAttachConfig) (BrowserSnapshotResult, error)
 	NavigateBrowser(ctx context.Context, request BrowserNavigateRequest) (BrowserNavigationResult, error)

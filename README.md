@@ -71,6 +71,7 @@ scripts/
 - `docs/module-design.md`
 - `docs/work-priority-plan.md`
 - `docs/atomic-features.md`
+- `docs/user-guide.md`
 
 ### 产品设计文档
 

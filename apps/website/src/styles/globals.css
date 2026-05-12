@@ -1,0 +1,125 @@
+@import "../../../desktop/src/styles/desktopTheme.css";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+  --font-sans: var(--cc-font-ui);
+  --font-display: var(--cc-font-display);
+  --cc-bg: #edf2fb;
+  --cc-surface: rgba(255, 255, 255, 0.72);
+  --cc-surface-strong: rgba(255, 255, 255, 0.88);
+  --cc-surface-overlay: rgba(255, 255, 255, 0.82);
+  --cc-surface-popover: rgba(255, 255, 255, 0.94);
+  --cc-overlay-bg: rgba(237, 242, 251, 0.52);
+  --cc-ink: #09111f;
+  --cc-ink-soft: rgba(9, 17, 31, 0.72);
+  --cc-ink-muted: rgba(9, 17, 31, 0.44);
+  --cc-line: rgba(9, 17, 31, 0.12);
+  --cc-line-strong: rgba(9, 17, 31, 0.2);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --cc-bg: #06070c;
+  --cc-surface: rgba(17, 19, 28, 0.62);
+  --cc-surface-strong: rgba(24, 28, 41, 0.82);
+  --cc-surface-overlay: rgba(11, 14, 24, 0.82);
+  --cc-surface-popover: rgba(11, 14, 24, 0.94);
+  --cc-overlay-bg: rgba(4, 6, 12, 0.46);
+  --cc-ink: #f7f9ff;
+  --cc-ink-soft: rgba(236, 241, 255, 0.78);
+  --cc-ink-muted: rgba(210, 219, 242, 0.46);
+  --cc-line: rgba(255, 255, 255, 0.1);
+  --cc-line-strong: rgba(255, 255, 255, 0.18);
+}
+
+* {
+  box-sizing: border-box;
+  cursor: default;
+}
+
+a,
+button,
+input,
+textarea,
+select,
+label,
+[role="button"] {
+  cursor: default;
+}
+
+html {
+  width: 100%;
+  height: 100%;
+  scroll-behavior: smooth;
+  background: var(--cc-bg);
+  overflow: hidden;
+}
+
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--cc-bg);
+  overflow: hidden;
+}
+
+:root:not([data-theme="dark"]) body,
+:root[data-theme="light"] body {
+  background: #ffffff;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+input::-webkit-search-cancel-button {
+  display: none;
+}
+
+#root {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Main hero title - Fredoka One is the special font that must NOT be changed */
+.cc-home-hero-title {
+  font-family: 'Fredoka One', cursive;
+}
+
+/* English text uses Montserrat by default, but NOT the main hero title */
+html[lang="en"] body,
+html[lang="en"] .docs-page,
+html[lang="en"] p:not(.cc-home-hero-title),
+html[lang="en"] span:not(.cc-home-hero-title),
+html[lang="en"] h1:not(.cc-home-hero-title),
+html[lang="en"] h2:not(.cc-home-hero-title),
+html[lang="en"] h3:not(.cc-home-hero-title),
+html[lang="en"] h4:not(.cc-home-hero-title),
+html[lang="en"] li:not(.cc-home-hero-title),
+html[lang="en"] a:not(.cc-home-hero-title) {
+  font-family: 'Montserrat', sans-serif;
+}
+
+:root[data-theme="dark"] .cc-home-hero-title,
+:root[data-theme="dark"] .cc-home-hero-subtitle {
+  background: linear-gradient(90deg, #6db8ff 0%, #8c7cff 52%, #c06bff 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+::selection {
+  background: rgba(142, 171, 255, 0.32);
+}

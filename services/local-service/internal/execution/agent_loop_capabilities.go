@@ -51,6 +51,24 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 		},
 	},
 	{
+		Name:      "extract_text",
+		UseWhen:   "Need readable text from a document, PDF, image, or another file that is not safe to consume through read_file directly.",
+		AvoidWhen: "The target is already a small plain-text file and read_file can return the exact content safely.",
+		Constraints: []string{
+			"Workspace files only",
+			"Returns extracted text instead of raw binary bytes",
+			"Prefer read_file for exact plain-text content and fall back to extract_text for document-style inputs",
+		},
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{"type": "string", "description": "Workspace-relative path to a document, image, or PDF."},
+			},
+			"required":             []string{"path"},
+			"additionalProperties": false,
+		},
+	},
+	{
 		Name:                   "browser_attach_current",
 		RequiresCurrentBrowser: true,
 		UseWhen:                "需要附着当前真实浏览器标签页，并确认当前页面 URL 或标题",
@@ -119,6 +137,25 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 				"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 20},
 			},
 			"required":             []string{"url", "query"},
+			"additionalProperties": false,
+		},
+	},
+	{
+		Name:      "web_search",
+		UseWhen:   "Need to search the web for sources before reading specific pages.",
+		AvoidWhen: "You already have the exact page URL and only need to read or search within that page.",
+		Constraints: []string{
+			"Read-only search over public web pages",
+			"Returns structured search hits rather than a full page transcript",
+			"Follow up with page_read after choosing a promising result",
+		},
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query": map[string]any{"type": "string", "description": "Search query to look up on the web."},
+				"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 10},
+			},
+			"required":             []string{"query"},
 			"additionalProperties": false,
 		},
 	},

@@ -133,7 +133,7 @@ func (s *Service) maybeCreateWaitingInputTask(flow taskEntryFlow) (map[string]an
 }
 
 func (s *Service) finishInputSubmit(flow taskEntryFlow, task runengine.TaskRecord) (map[string]any, error) {
-	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(flow.Suggestion.RequiresConfirm), bubbleTextForInput(flow.Snapshot, flow.Suggestion, previewClarificationHits(s, task, flow.Snapshot, flow.Suggestion), flow.Snapshot.SessionReplyLanguage), task.StartedAt.Format(dateTimeLayout))
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(flow.Suggestion.RequiresConfirm), s.bubbleTextForInput(task, flow.Snapshot, flow.Suggestion), task.StartedAt.Format(dateTimeLayout))
 	if flow.Suggestion.RequiresConfirm {
 		task = s.persistTaskPresentation(task, bubble)
 		return buildTaskEntryResponse(task, bubble, nil), nil
@@ -153,6 +153,7 @@ func (s *Service) finishInputSubmit(flow taskEntryFlow, task runengine.TaskRecor
 	}
 
 	task = governedTask
+	s.refreshTitleAfterGovernance(task, flow.Snapshot, flow.Suggestion.Intent)
 	deliveryResult := map[string]any(nil)
 	var execErr error
 	task, bubble, deliveryResult, _, execErr = s.executeTask(task, flow.Snapshot, flow.Suggestion.Intent)

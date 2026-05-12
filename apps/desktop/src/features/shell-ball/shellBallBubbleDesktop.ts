@@ -22,13 +22,12 @@ export type ShellBallBubbleInlineApprovalState = {
 };
 
 /**
- * Intent-confirm metadata is shell-ball-local UI state used to render the
- * current inferred intent and to disable actions while a confirm/correction
- * request is in flight.
+ * Intent-confirm metadata is shell-ball-local UI state used to keep the formal
+ * intent identifier and to disable actions while a confirm/correction request
+ * is in flight.
  */
 export type ShellBallBubbleIntentConfirmState = {
   intentName: string;
-  intentLabel: string;
   status?: "idle" | "submitting";
 };
 

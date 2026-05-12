@@ -55,17 +55,20 @@ func TestOwnedTaskIDsForReplayClaimsResponseTaskIDsForTaskStart(t *testing.T) {
 	}
 }
 
-func TestOwnedTaskIDsForReplayClaimsResponseTaskIDsForNotepadConvert(t *testing.T) {
-	response := newSuccessEnvelope(json.RawMessage(`"req-notepad-convert"`), map[string]any{
-		"task": map[string]any{
-			"task_id": "task_notepad_started",
-		},
-	}, "2026-04-08T10:00:00Z")
+func TestOwnedTaskIDsForReplayKeepsTrackedTaskIDsOnErrorResponse(t *testing.T) {
+	response := newErrorEnvelope(json.RawMessage(`"req-task-control"`), &rpcError{
+		Code:    errMethodNotFound,
+		Message: "METHOD_NOT_FOUND",
+		Detail:  "task updated before downstream failure",
+		TraceID: "trace_task_control_failed",
+	})
 
-	taskIDs := ownedTaskIDsForReplay("agent.notepad.convert_to_task", nil, response)
-	expected := []string{"task_notepad_started"}
+	taskIDs := ownedTaskIDsForReplay("agent.task.control", map[string]bool{
+		"task_tracked": true,
+	}, response)
+	expected := []string{"task_tracked"}
 	if !reflect.DeepEqual(taskIDs, expected) {
-		t.Fatalf("expected notepad.convert_to_task to claim response task ids %v, got %v", expected, taskIDs)
+		t.Fatalf("expected error response to keep tracked task ids %v, got %v", expected, taskIDs)
 	}
 }
 

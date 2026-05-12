@@ -19,6 +19,9 @@ func (s *Service) ReplaceModel(modelService *model.Service) {
 	s.modelMu.Lock()
 	s.model = modelService
 	s.modelMu.Unlock()
+	if s.titleGenerator != nil {
+		s.titleGenerator.ReplaceModel(modelService)
+	}
 	if s.executor != nil {
 		s.executor.ReplaceModel(modelService)
 	}

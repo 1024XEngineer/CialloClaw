@@ -737,7 +737,8 @@ func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot taskco
 		// shortcuts that normally skip confirmation for fresh starts.
 		suggestion.RequiresConfirm = true
 	}
-	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForInput(mergedSnapshot, suggestion, previewClarificationHits(s, task, mergedSnapshot, suggestion), mergedSnapshot.SessionReplyLanguage), time.Now().Format(dateTimeLayout))
+	suggestion.TaskTitle = s.fallbackTaskTitle(mergedSnapshot, suggestion.Intent, suggestion.TaskTitle)
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), s.bubbleTextForInput(task, mergedSnapshot, suggestion), time.Now().Format(dateTimeLayout))
 	updatedTask, changed := s.runEngine.ContinueTask(task.TaskID, runengine.ContinuationUpdate{
 		Snapshot:      continuationSnapshot,
 		Title:         suggestion.TaskTitle,
@@ -756,7 +757,6 @@ func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot taskco
 			"delivery_result": nil,
 		}, nil
 	}
-
 	governedTask, governedResponse, handled, governanceErr := s.handleTaskGovernanceDecision(updatedTask, suggestion.Intent)
 	if governanceErr != nil {
 		return nil, governanceErr
@@ -764,6 +764,7 @@ func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot taskco
 	if handled {
 		return governedResponse, nil
 	}
+	s.refreshTitleAfterGovernance(governedTask, mergedSnapshot, suggestion.Intent)
 	executedTask, resultBubble, deliveryResult, _, execErr := s.executeTask(governedTask, mergedSnapshot, suggestion.Intent)
 	if execErr != nil {
 		return nil, execErr
