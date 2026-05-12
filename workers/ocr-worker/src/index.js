@@ -78,8 +78,12 @@ function normalizedExtension(targetPath) {
 
 function commandVersionArgs(command) {
   switch (command) {
+    case "soffice":
+      return ["--version"];
     case "tesseract":
       return ["--version"];
+    case "antiword":
+      return ["-h"];
     default:
       return ["-v"];
   }
@@ -95,12 +99,20 @@ async function checkCommand(command, deps) {
 }
 
 async function backendStatus(deps) {
-  const [tesseract, pdftotext, pdftoppm] = await Promise.all([
+  const [tesseract, pdftotext, pdftoppm, soffice, antiword, catdoc] = await Promise.all([
     checkCommand("tesseract", deps),
     checkCommand("pdftotext", deps),
     checkCommand("pdftoppm", deps),
+    checkCommand("soffice", deps),
+    checkCommand("antiword", deps),
+    checkCommand("catdoc", deps),
   ]);
-  return { pdftoppm, pdftotext, tesseract };
+  return {
+    legacy_doc: soffice || antiword || catdoc,
+    pdftoppm,
+    pdftotext,
+    tesseract,
+  };
 }
 
 function missingDependencies(backends) {
