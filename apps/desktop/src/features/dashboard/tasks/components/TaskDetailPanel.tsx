@@ -314,7 +314,7 @@ export function TaskDetailPanel({
                 runId: event.target.value,
               }))
             }
-            placeholder="例如 001"
+            placeholder="例如 run-runtime"
             value={eventFilterDraft.runId}
           />
         </label>

@@ -163,6 +163,7 @@ export function DashboardHome({
     ? dashboardEntranceOrbs.find((config) => config.key === hoveredEntranceKey)?.module ?? activeState?.module ?? null
     : activeState?.module ?? null;
   const activeModuleColor = activeModule ? dashboardModuleColors[activeModule].color : null;
+  const hasLoadWarnings = data.loadWarnings.length > 0;
   const isOverlayOpen = Boolean(activeState || voiceOpen);
 
   const closeActiveOverlay = useCallback(() => {
@@ -320,6 +321,11 @@ export function DashboardHome({
           <div className="dashboard-orbit-home__badge-dot" />
           <span>Dashboard Orbit</span>
         </div>
+        {hasLoadWarnings ? (
+          <div className="dashboard-orbit-home__shortcut-pill dashboard-orbit-home__shortcut-pill--warn" title={data.loadWarnings.join(" | ")}>
+            部分模块未同步
+          </div>
+        ) : null}
       </header>
 
       <div className="dashboard-orbit-home__canvas">

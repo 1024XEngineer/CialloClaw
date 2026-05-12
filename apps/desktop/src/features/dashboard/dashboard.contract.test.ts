@@ -2034,6 +2034,7 @@ test("dashboard home no longer replays mock summon or voice presets when live re
   assert.doesNotMatch(dashboardHomeServiceSource, /return sequences.length > 0 \? sequences : dashboardVoiceSequences\.map/);
   assert.match(dashboardHomeSource, /if \(data\.summonTemplates\.length === 0\) \{/);
   assert.match(dashboardHomeSource, /data\.loadWarnings\.length > 0/);
+  assert.match(dashboardHomeSource, /部分模块未同步/);
 });
 
 test("dashboard event panel routes task-detail actions through the shared navigation helper", () => {
@@ -9902,7 +9903,8 @@ test("TaskDetailPanel exposes formal runtime event filters and applies them expl
 
   assert.match(panelSource, /agent\.task\.events\.list/);
   assert.match(panelSource, /事件类型/);
-  assert.match(panelSource, /Run ID/);
+  assert.match(panelSource, /运行编号/);
+  assert.match(panelSource, /例如 run-runtime/);
   assert.match(panelSource, /最近 24 小时/);
   assert.match(panelSource, /应用筛选/);
   assert.match(panelSource, /setEventFilterDraft\(DEFAULT_TASK_EVENT_FILTERS\)/);
