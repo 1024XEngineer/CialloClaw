@@ -131,81 +131,32 @@ CialloClaw 当前负责以下内容：
 
 ```mermaid
 flowchart TB
-    subgraph Desktop[桌面交互模块]
-        direction TB
-        D1[近场入口]
-        D2[轻量输入与轻反馈]
-        D3[任务工作台]
-        D4[控制与设置入口]
-        D5[现场采集与视图协调]
-    end
+    Desktop[桌面交互模块]
+    Access[本地接入模块]
+    TaskRuntime[任务运行模块]
+    Governance[治理模块]
+    Capability[能力网关模块]
+    Delivery[交付模块]
+    Collaboration[长期协作模块]
+    Data[本地数据模块]
 
-    subgraph Access[本地接入模块]
-        direction TB
-        A1[协议接入与方法路由]
-        A2[任务会话与追踪锚定]
-        A3[查询装配与通知回流]
-    end
+    Desktop -->|请求/控制| Access
+    Access -->|锚点/通知| TaskRuntime
 
-    subgraph TaskRuntime[任务运行模块]
-        direction TB
-        T1[任务编排]
-        T2[上下文归一与意图建议]
-        T3[运行控制与受控执行]
-        T4[会话串行与续接]
-        T5[执行兼容链]
-    end
+    TaskRuntime <-->|风险/授权| Governance
+    TaskRuntime -->|能力调用| Capability
+    TaskRuntime -->|结果收敛| Delivery
+    TaskRuntime -->|任务状态| Data
 
-    subgraph Governance[治理模块]
-        direction TB
-        G1[风险评估与授权承接]
-        G2[审计与安全摘要]
-        G3[恢复点与恢复结果]
-    end
+    Governance -->|审计/恢复点| Data
+    Capability -->|读写/检索| Data
+    Delivery -->|产物/引用| Data
 
-    subgraph Delivery[交付模块]
-        direction TB
-        R1[轻量反馈]
-        R2[正式结果交付]
-        R3[产物与引用]
-    end
+    Delivery -->|交付回流| Access
+    Access -->|状态投影| Desktop
 
-    subgraph Capability[能力网关模块]
-        direction TB
-        C1[模型适配]
-        C2[工具与插件适配]
-        C3[执行后端与边车能力]
-    end
-
-    subgraph Data[本地数据模块]
-        direction TB
-        S1[对象仓储]
-        S2[本地检索]
-        S3[工作区路径与机密存储]
-    end
-
-    subgraph Collaboration[长期协作模块]
-        direction TB
-        L1[记忆与镜像引用]
-        L2[推荐与巡检]
-        L3[事项升级与追踪评估]
-    end
-
-    Desktop -.->|正式请求与状态投影依赖| Access
-    Access -.->|对象锚点与统一通知依赖| TaskRuntime
-
-    TaskRuntime -.->|风险授权与恢复依赖| Governance
-    TaskRuntime -.->|结果收敛依赖| Delivery
-    TaskRuntime -.->|能力调用依赖| Capability
-    TaskRuntime -.->|对象读写依赖| Data
-    TaskRuntime -.->|长期协作依赖| Collaboration
-
-    Governance -.->|治理对象持久化依赖| Data
-    Governance -.->|安全摘要交付依赖| Delivery
-    Delivery -.->|交付对象持久化依赖| Data
-    Capability -.->|工作区路径与机密依赖| Data
-    Collaboration -.->|记忆召回与评估数据依赖| Data
-    Collaboration -.->|升级为正式任务时依赖| TaskRuntime
+    Collaboration -->|推荐/巡检| Access
+    Collaboration -->|记忆/评估| Data
 ```
 
 阅读约束：
