@@ -1151,7 +1151,7 @@ export function NotePage() {
   );
   const sourceNoteAvailabilityMessage = useMemo(() => {
     if (dataMode !== "rpc") {
-      return "Mock 模式下不会读写真实 markdown 便签。";
+      return "当前不会读写真实 markdown 便签。";
     }
 
     if (!desktopSourceNotesAvailable) {
@@ -1287,7 +1287,7 @@ export function NotePage() {
 
   async function refreshInspection(reason: string, prefix?: string) {
     if (dataMode !== "rpc") {
-      showFeedback("Mock 模式下不会执行真实巡检。");
+      showFeedback("当前不会执行真实巡检。");
       return;
     }
 

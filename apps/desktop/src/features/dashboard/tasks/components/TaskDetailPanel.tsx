@@ -304,17 +304,17 @@ export function TaskDetailPanel({
             value={eventFilterDraft.eventType}
           />
         </label>
-        <label className="task-detail-runtime-filters__field">
-          <span>运行编号</span>
-          <input
-            className="task-detail-runtime-filters__input"
+          <label className="task-detail-runtime-filters__field">
+            <span>运行编号</span>
+            <input
+              className="task-detail-runtime-filters__input"
             onChange={(event) =>
               setEventFilterDraft((current) => ({
                 ...current,
                 runId: event.target.value,
               }))
             }
-            placeholder="例如 run_001"
+            placeholder="例如 001"
             value={eventFilterDraft.runId}
           />
         </label>
