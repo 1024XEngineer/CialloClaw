@@ -85,6 +85,14 @@ func TestCompactTaskFallbackDoesNotRewriteLeadingNoun(t *testing.T) {
 	}
 }
 
+func TestCompactTaskFallbackSplitsLongSingleSentenceClauses(t *testing.T) {
+	title := CompactTaskFallback("请详细介绍这次琪露诺是谁，出自哪部作品，出名的同人作有哪些")
+
+	if title != "请详细介绍这次琪露诺是谁 出自哪部作品" {
+		t.Fatalf("expected long single-sentence fallback title to compact by clauses, got %q", title)
+	}
+}
+
 func TestCompactNoteFallbackKeepsWholeNoteContextBounded(t *testing.T) {
 	title := CompactNoteFallback("- [ ] Weekly retro\nreview blockers and next steps")
 

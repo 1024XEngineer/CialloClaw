@@ -168,6 +168,32 @@ func TestServiceSubmitInputUsesGeneratedTaskTitleFromFullContext(t *testing.T) {
 	t.Fatalf("expected submit input to schedule async task title refinement, got %+v", record)
 }
 
+func TestServiceSubmitInputCompactsLongSingleSentenceFallbackTitle(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			return model.GenerateTextResponse{OutputText: "先整理角色来源和代表同人作品。"}, nil
+		},
+	})
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": "sess_submit_clause_fallback_title",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "请详细介绍这次琪露诺是谁，出自哪部作品，出名的同人作有哪些",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit input failed: %v", err)
+	}
+
+	task := result["task"].(map[string]any)
+	if task["title"] != "请详细介绍这次琪露诺是谁 出自哪部作品" {
+		t.Fatalf("expected submit input fallback title to compact long single sentence clauses, got %q", task["title"])
+	}
+}
+
 func TestServiceConfirmTaskUsesGeneratedTaskTitleAfterConfirmation(t *testing.T) {
 	service, _ := newTestServiceWithModelClient(t, stubModelClient{
 		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {

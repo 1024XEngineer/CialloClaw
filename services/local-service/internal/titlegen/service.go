@@ -329,6 +329,12 @@ func compactFallbackTitle(raw string, maxLength int) string {
 		return normalizeTitle(raw, maxLength)
 	}
 	candidate := strings.Join(segments[:minInt(len(segments), 2)], " ")
+	if len(segments) == 1 && textutil.TruncateGraphemes(candidate, maxLength) != candidate {
+		clauses := titleClauses(candidate)
+		if len(clauses) > 1 {
+			candidate = strings.Join(clauses[:minInt(len(clauses), 2)], " ")
+		}
+	}
 	return normalizeTitle(candidate, maxLength)
 }
 
@@ -362,6 +368,20 @@ func stripChecklistPrefix(value string) string {
 		}
 	}
 	return value
+}
+
+func titleClauses(raw string) []string {
+	replacer := strings.NewReplacer("，", "\n", ",", "\n", "、", "\n", "：", "\n", ":", "\n")
+	parts := strings.Split(replacer.Replace(raw), "\n")
+	clauses := make([]string, 0, len(parts))
+	for _, part := range parts {
+		clause := strings.Join(strings.Fields(strings.TrimSpace(part)), " ")
+		if clause == "" {
+			continue
+		}
+		clauses = append(clauses, clause)
+	}
+	return clauses
 }
 
 func minInt(left, right int) int {

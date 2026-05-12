@@ -136,3 +136,16 @@ func TestSuggestFallbackTitleUsesLaterContextWhenFirstSentenceIsLong(t *testing.
 		t.Fatalf("expected local fallback to compact the full text instead of a pre-truncated first sentence, got %q", suggestion.TaskTitle)
 	}
 }
+
+func TestSuggestCompactsLongSingleSentenceTaskTitle(t *testing.T) {
+	service := NewService()
+
+	suggestion := service.Suggest(taskcontext.TaskContextSnapshot{
+		InputType: "text",
+		Text:      "请详细介绍这次琪露诺是谁，出自哪部作品，出名的同人作有哪些",
+	}, nil, false)
+
+	if suggestion.TaskTitle != "请详细介绍这次琪露诺是谁 出自哪部作品" {
+		t.Fatalf("expected single-sentence task title to compact by clauses before model generation, got %q", suggestion.TaskTitle)
+	}
+}
