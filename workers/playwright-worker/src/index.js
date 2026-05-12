@@ -1021,9 +1021,16 @@ export async function handleRequest(request, deps = defaultDependencies) {
         const normalizedQuery = String(request.query ?? "").trim();
         const rawLimit = Number(request.limit ?? 0);
         const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.floor(rawLimit) : 5;
+        const explicitSearchURL = normalizeOptionalString(request.url);
         const searchURL = buildWebSearchURL(normalizedQuery, request.url);
         return openBrowserPage(searchURL, deps, async (page, _response, execution) => {
           const results = await collectWebSearchResults(page, limit);
+          if (!explicitSearchURL && results.length === 0) {
+            throw createStructuredWorkerError(
+              "search_results_unavailable",
+              "web_search could not extract results from the default search page",
+            );
+          }
           return {
             attached: execution.attached,
             browser_kind: execution.browserKind,

@@ -87,8 +87,8 @@ test("health reports missing OCR dependencies", async () => {
   assert.equal(response.ok, false);
   assert.equal(response.error.code, "dependency_missing");
   assert.match(response.error.message, /tesseract/);
-  assert.match(response.error.message, /legacy_doc/);
   assert.equal(response.result.status, "degraded");
+  assert.equal(response.result.dependencies.legacy_doc, false);
 });
 
 test("health succeeds when OCR backends are installed", async () => {
@@ -116,6 +116,21 @@ test("health succeeds when any legacy doc converter is available", async () => {
 
   assert.equal(response.ok, true);
   assert.equal(response.result.dependencies.legacy_doc, true);
+});
+
+test("health stays available when only legacy doc conversion is missing", async () => {
+  const response = await healthResponse(createDeps({
+    execFile: async (command) => {
+      if (command === "soffice" || command === "antiword" || command === "catdoc") {
+        throw new Error(`missing ${command}`);
+      }
+      return { stdout: "ok", stderr: "" };
+    },
+  }));
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.status, "degraded");
+  assert.equal(response.result.dependencies.legacy_doc, false);
 });
 
 test("extract_text routes images through tesseract", async () => {

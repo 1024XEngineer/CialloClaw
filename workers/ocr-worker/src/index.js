@@ -128,7 +128,12 @@ function missingDependencies(backends) {
 
 export async function healthResponse(deps = defaultDependencies) {
   const backends = await backendStatus(deps);
-  const missing = missingDependencies(backends);
+  const requiredBackends = {
+    pdftoppm: backends.pdftoppm,
+    pdftotext: backends.pdftotext,
+    tesseract: backends.tesseract,
+  };
+  const missing = missingDependencies(requiredBackends);
   if (missing.length > 0) {
     return {
       ok: false,
@@ -147,7 +152,9 @@ export async function healthResponse(deps = defaultDependencies) {
   return {
     ok: true,
     result: {
-      status: "ok",
+      // `legacy_doc` is an optional compatibility path: keep the worker healthy for
+      // text/PDF/image extraction and surface `.doc` gaps only when that format is requested.
+      status: backends.legacy_doc ? "ok" : "degraded",
       worker_name: manifest.worker_name,
       capabilities: manifest.capabilities,
       dependencies: backends,

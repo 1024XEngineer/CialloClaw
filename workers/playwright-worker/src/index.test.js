@@ -624,6 +624,20 @@ test("web_search accepts an explicit url even when query is blank", async () => 
   assert.equal(response.result.result_count, 1);
 });
 
+test("web_search fails when the default search page yields no parseable results", async () => {
+  const response = await handleRequest({
+    action: "web_search",
+    query: "release notes",
+  }, createDeps({
+    gotoURL: "https://duckduckgo.com/html/?q=release+notes",
+    searchResults: [],
+  }));
+
+  assert.equal(response.ok, false);
+  assert.equal(response.error.code, "search_results_unavailable");
+  assert.match(response.error.message, /could not extract results/i);
+});
+
 test("web_search reports missing queries as structured input errors", async () => {
   const response = await handleRequest({
     action: "web_search",
