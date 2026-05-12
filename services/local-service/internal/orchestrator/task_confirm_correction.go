@@ -45,6 +45,9 @@ func (s *Service) reinferTaskIntentFromCorrection(task runengine.TaskRecord, sna
 }
 
 func (s *Service) inferTaskIntentFromCorrection(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, correctionText string) map[string]any {
+	if intentValue, ok := heuristicTranslateIntentFromCorrection(correctionText); ok {
+		return intentValue
+	}
 	if modelService := s.currentModel(); modelService != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), taskConfirmCorrectionModelTimeout)
 		defer cancel()
@@ -60,6 +63,38 @@ func (s *Service) inferTaskIntentFromCorrection(task runengine.TaskRecord, snaps
 		}
 	}
 	return fallbackTaskConfirmCorrectionIntent(correctionText)
+}
+
+func heuristicTranslateIntentFromCorrection(correctionText string) (map[string]any, bool) {
+	normalized := strings.ToLower(strings.TrimSpace(correctionText))
+	if normalized == "" {
+		return nil, false
+	}
+	if !containsAnyCorrectionMarker(normalized, "translate", "translation", "翻译", "译成", "译为") {
+		return nil, false
+	}
+
+	arguments := map[string]any{}
+	switch {
+	case containsAnyCorrectionMarker(normalized, "english", "英文", "英语"):
+		arguments["target_language"] = "English"
+	case containsAnyCorrectionMarker(normalized, "chinese", "中文", "汉语", "简体中文"):
+		arguments["target_language"] = "Chinese"
+	}
+
+	return map[string]any{
+		"name":      "translate",
+		"arguments": arguments,
+	}, true
+}
+
+func containsAnyCorrectionMarker(text string, markers ...string) bool {
+	for _, marker := range markers {
+		if marker != "" && strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func buildTaskConfirmCorrectionPrompt(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, correctionText string) string {

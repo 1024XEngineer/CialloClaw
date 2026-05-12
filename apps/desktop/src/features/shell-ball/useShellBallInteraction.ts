@@ -52,7 +52,7 @@ function canStartShellBallVoiceEntry(state: ShellBallVisualState | undefined) {
 }
 
 function canOpenShellBallDashboardFromDoubleClick(state: ShellBallVisualState) {
-  return state === "idle" || state === "hover_input" || state === "confirming_intent";
+  return state === "idle" || state === "hover_input" || state === "confirming_intent" || state === "waiting_auth";
 }
 
 const SHELL_BALL_NON_RECOVERABLE_VOICE_ERRORS = new Set([

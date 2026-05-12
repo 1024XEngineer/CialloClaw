@@ -180,7 +180,7 @@ func (s *Service) classifyTaskContinuation(snapshot taskcontext.TaskContextSnaps
 
 func (s *Service) modelTaskContinuationDecision(snapshot taskcontext.TaskContextSnapshot, explicitIntent map[string]any, continuationContext taskContinuationContext, options taskContinuationOptions) (taskContinuationDecision, bool) {
 	modelService := s.currentModel()
-	if s == nil || modelService == nil {
+	if modelService == nil {
 		return taskContinuationDecision{}, false
 	}
 	// Continuation classification is a best-effort refinement on top of the local
@@ -703,6 +703,13 @@ func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot taskco
 	baseSnapshot := snapshotFromTask(task)
 	continuationSnapshot := sanitizeContinuationUpdateSnapshot(baseSnapshot, snapshot)
 	mergedSnapshot := mergeContinuationSnapshots(baseSnapshot, continuationSnapshot)
+	if correctionText, ok := pendingConfirmationCorrectionText(task, continuationSnapshot, explicitIntent); ok {
+		return s.ConfirmTask(map[string]any{
+			"task_id":         task.TaskID,
+			"confirmed":       false,
+			"correction_text": correctionText,
+		})
+	}
 	if s.intent.AnalyzeSnapshot(mergedSnapshot) == "waiting_input" {
 		bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleContinuationNeedMore, nil), time.Now().Format(dateTimeLayout))
 		updatedTask, changed := s.runEngine.ContinueTask(task.TaskID, runengine.ContinuationUpdate{
@@ -730,7 +737,7 @@ func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot taskco
 		// shortcuts that normally skip confirmation for fresh starts.
 		suggestion.RequiresConfirm = true
 	}
-	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForInput(suggestion), time.Now().Format(dateTimeLayout))
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForInput(mergedSnapshot, suggestion, previewClarificationHits(s, task, mergedSnapshot, suggestion), mergedSnapshot.SessionReplyLanguage), time.Now().Format(dateTimeLayout))
 	updatedTask, changed := s.runEngine.ContinueTask(task.TaskID, runengine.ContinuationUpdate{
 		Snapshot:      continuationSnapshot,
 		Title:         suggestion.TaskTitle,
@@ -766,6 +773,26 @@ func (s *Service) continuePendingTask(task runengine.TaskRecord, snapshot taskco
 		"bubble_message":  resultBubble,
 		"delivery_result": deliveryResult,
 	}, nil
+}
+
+// pendingConfirmationCorrectionText upgrades one plain-text follow-up on a
+// confirming task into the same correction flow as agent.task.confirm. This
+// keeps the original task snapshot as the translation target instead of
+// appending "translate it" onto the content payload and asking for the same
+// clarification again.
+func pendingConfirmationCorrectionText(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, explicitIntent map[string]any) (string, bool) {
+	if task.Status != "confirming_intent" || len(explicitIntent) > 0 || snapshot.InputType != "text" {
+		return "", false
+	}
+	if len(snapshot.Files) > 0 || strings.TrimSpace(snapshot.SelectionText) != "" || strings.TrimSpace(snapshot.ErrorText) != "" {
+		return "", false
+	}
+	correctionText := strings.TrimSpace(snapshot.Text)
+	if correctionText == "" {
+		return "", false
+	}
+	_, ok := heuristicTranslateIntentFromCorrection(correctionText)
+	return correctionText, ok
 }
 
 func pendingContinuationRequiresConfirm(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, options taskContinuationOptions) bool {
