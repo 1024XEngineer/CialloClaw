@@ -18,6 +18,8 @@ export type ShellBallDashboardTransitionComplete = {
   requestId?: string;
 };
 
+const SHELL_BALL_DASHBOARD_CLOSE_TRANSITION_TIMEOUT_MS = 1_200;
+
 async function getShellBallWindowHandle() {
   const currentWindow = getCurrentWindow();
 
@@ -68,6 +70,26 @@ export async function requestShellBallDashboardCloseTransition() {
   return new Promise<boolean>((resolve) => {
     let settled = false;
     let cleanup: (() => void) | null = null;
+    const timeoutHandle = globalThis.setTimeout(() => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      cleanup?.();
+      resolve(false);
+    }, SHELL_BALL_DASHBOARD_CLOSE_TRANSITION_TIMEOUT_MS);
+
+    function finalize(result: boolean) {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      globalThis.clearTimeout(timeoutHandle);
+      cleanup?.();
+      resolve(result);
+    }
 
     void currentWindow
       .listen<ShellBallDashboardTransitionComplete>(shellBallDashboardTransitionEvents.complete, ({ payload }) => {
@@ -75,9 +97,7 @@ export async function requestShellBallDashboardCloseTransition() {
           return;
         }
 
-        settled = true;
-        cleanup?.();
-        resolve(true);
+        finalize(true);
       })
       .then((unlisten) => {
         if (settled) {
@@ -100,13 +120,7 @@ export async function requestShellBallDashboardCloseTransition() {
         void currentWindow.emitTo(shellBallWindowLabels.ball, shellBallDashboardTransitionEvents.request, payload);
       })
       .catch(() => {
-        if (settled) {
-          return;
-        }
-
-        settled = true;
-        cleanup?.();
-        resolve(false);
+        finalize(false);
       });
   });
 }
