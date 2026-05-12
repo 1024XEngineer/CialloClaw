@@ -57,8 +57,8 @@ export const siteNav: SiteNavItem[] = [
 
 export const homeActions: HomeAction[] = [
   { label: "网页版", href: "/", primary: true },
-  { label: "下载", href: "/docs/quick-start#下载与启动" },
-  { label: "使用教程", href: "/docs/quick-start#配置模型" },
+  { label: "下载", href: "/docs/quick-start#download-and-launch" },
+  { label: "使用教程", href: "/docs/quick-start#configure-a-model" },
 ];
 
 const zhDocsPages: DocsPageEntry[] = [

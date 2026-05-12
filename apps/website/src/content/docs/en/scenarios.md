@@ -1,31 +1,57 @@
 # Usage Scenarios
 
-## Web Research
+## Summarise a Webpage
 
-While browsing a webpage, select the content you want analysed. CialloClaw can summarise articles, extract key points, or generate a draft response based on your reading.
+```text
+Open a webpage → long press the floating ball → say "Summarise this page for me"
+```
 
-## Code Review
+Suitable for reading articles, documents, announcements, and reference materials.
 
-Select code from your editor or terminal. CialloClaw can explain what the code does, identify potential issues, or suggest improvements.
+------
 
-## Document Drafting
+## Translate or Explain Text
 
-Drag a document onto the floating ball to start working with it. CialloClaw can help rewrite, translate, or summarise the content. It maintains context throughout your editing session.
+```text
+Select some text → click the floating ball → ask it to explain or translate
+```
 
-## Task Management
+Suitable for handling foreign language content, technical terms, code snippets, and complex explanations.
 
-Turn any conversation into a tracked task. CialloClaw automatically captures delivery results, artifacts, and citations so you never lose track of what was accomplished.
+------
 
-## File Analysis
+## Analyse a File
 
-Drop a file onto CialloClaw to analyse its contents. Supported formats include text files, code files, and structured data. CialloClaw can extract information, answer questions about the content, or convert it to different formats.
+```text
+Drop in a file → add a request → send
+```
 
-## Quick Actions
+For example:
 
-Use keyboard shortcuts to speed up your workflow:
-- `Ctrl+1`: Open tasks module
-- `Ctrl+2`: Open notes module
-- `Ctrl+3`: Open memory module
-- `Ctrl+4`: Open safety module
-- `Ctrl+5`: Activate voice input
-- `Esc`: Close the current window
+```text
+Summarise the key points of this document for me
+```
+
+------
+
+## Explain an Error
+
+```text
+Select the error → click the floating ball → ask it to analyse the cause
+```
+
+Suitable for terminal errors, web page exceptions, program errors, and configuration issues.
+
+------
+
+## Draft Content
+
+You can ask CialloClaw to help you generate:
+
+```text
+Daily report draft
+Email draft
+Meeting checklist
+Presentation outline
+Next-step plan
+```

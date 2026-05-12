@@ -1,3 +1,48 @@
+/**
+ * Maps Chinese heading text to its canonical English anchor ID so that
+ * anchors are always ASCII (no encoding issues in GitHub Pages project-page
+ * URLs) and match the English heading slugs regardless of the active locale.
+ *
+ * Add new entries here when a new Chinese heading is introduced.
+ */
+const CANONICAL_HEADING_ID: Record<string, string> = {
+  /* quick-start.md */
+  "下载与启动": "download-and-launch",
+  "下载": "download",
+  "下载入口：": "download-options",
+  "最新版安装": "install-the-latest-version",
+  "先行版安装": "install-the-preview-version",
+  "第一步：获取源码": "step-1-get-the-source-code",
+  "方式一：使用 Git 克隆仓库": "option-1-clone-with-git",
+  "方式二：下载 ZIP": "option-2-download-zip",
+  "第二步：安装依赖": "step-2-install-dependencies",
+  "第三步：启动本地服务": "step-3-start-the-local-service",
+  "第四步：启动桌面端": "step-4-launch-the-desktop-app",
+  "先行版启动流程总结": "preview-version-startup-summary",
+  "配置模型": "configure-a-model",
+  "打开控制面板": "open-the-control-panel",
+  "填写模型信息": "fill-in-the-model-information",
+  "尝试使用": "try-it-out",
+  "输入一句话": "send-a-message",
+  "长按语音": "long-press-the-floating-ball",
+  "双击打开工作台": "double-click-to-open-the-workspace",
+  "常用动作速览": "common-actions-overview",
+  /* scenarios.md */
+  "总结网页": "summarise-a-webpage",
+  "翻译或解释文本": "translate-or-explain-text",
+  "分析文件": "analyse-a-file",
+  "解释报错": "explain-an-error",
+  "生成草稿": "draft-content",
+  /* faq.md */
+  "工作台白屏了怎么办？": "the-workspace-is-blank-what-can-i-do",
+  "悬浮球不见了怎么办？": "the-floating-ball-is-missing",
+  "输入后没有回复怎么办？": "no-response-after-typing",
+  "语音不能用怎么办？": "voice-input-is-not-working",
+  "先行版启动失败怎么办？": "the-preview-version-fails-to-start",
+  "最新版和先行版有什么区别？": "what-is-the-difference-between-the-latest-and-preview-versions",
+  "CialloClaw 是免费的吗？": "is-cialloclaw-free",
+};
+
 export type DocsOutlineItem = {
   id: string;
   title: string;
@@ -33,13 +78,35 @@ const DOCS_PATH_MAP: Record<string, string> = {
   "Frequently Asked Questions": "/docs/faq",
 };
 
+/**
+ * Derives a URL-safe anchor ID from a heading title.
+ *
+ * Chinese characters are stripped so that anchors remain ASCII-only, which
+ * avoids encoding problems in GitHub Pages project-page URLs.
+ *
+ * When the result would be empty (purely Chinese heading) a deterministic
+ * short hash of the original title is used as a fallback.
+ */
 export function createHeadingId(title: string) {
-  return title
-    .trim()
+  const trimmed = title.trim();
+  const canonical = CANONICAL_HEADING_ID[trimmed];
+  if (canonical) return canonical;
+
+  const cleaned = trimmed
     .toLowerCase()
     .replace(/[“”"'`]/g, "")
-    .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, "-")
+    .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
+
+  if (cleaned) return cleaned;
+
+  // Deterministic hash so the same heading always produces the same anchor.
+  let hash = 0;
+  for (let i = 0; i < trimmed.length; i++) {
+    hash = ((hash << 5) - hash) + trimmed.charCodeAt(i);
+    hash |= 0; // enforce 32-bit integer
+  }
+  return `h-${Math.abs(hash).toString(36).slice(0, 6)}`;
 }
 
 function extractSummary(lines: string[]) {

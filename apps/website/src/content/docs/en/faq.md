@@ -1,39 +1,81 @@
 # Frequently Asked Questions
 
-## General
+## The workspace is blank, what can I do?
 
-### Is CialloClaw free?
+Right-click inside the workspace window and select Refresh.
 
-Yes, CialloClaw is completely open-source and free to use. You only pay for the model API usage if you use a paid provider.
+If it still does not recover, you can exit CialloClaw and restart it.
 
-### Which platforms are supported?
+------
 
-Currently, CialloClaw supports Windows 10 and later. Other platforms are under consideration.
+## The floating ball is missing
 
-### Does CialloClaw work offline?
+It may be snapped to the edge of the screen.
 
-Basic features require a network connection to the model provider. Some local features may work offline depending on your model configuration.
+Check around the edges of your screen first.
+You can also right-click the CialloClaw icon in the system tray and click:
 
-## Privacy
+```text
+Show Floating Ball
+```
 
-### Does CialloClaw collect my data?
+------
 
-No. All data stays on your machine. CialloClaw does not collect telemetry, analytics, or usage statistics.
+## No response after typing
 
-### Can I delete my data?
+Please check the following:
 
-Yes. You can clear all task history, notes, and memory from the settings panel at any time.
+```text
+Whether a model has been configured
+Whether the test connection was successful
+Whether the network is working
+```
 
-## Technical
+If you are using the preview version, also confirm that the first terminal's service is still running:
 
-### How do I update CialloClaw?
+```cmd
+pnpm dev:service
+```
 
-Download the latest version from the GitHub releases page and run the installer. Your settings and data are preserved during updates.
+------
 
-### Can I use my own API key?
+## Voice input is not working
 
-Yes. CialloClaw supports custom API keys for multiple model providers. Configure them in the settings panel.
+Please check:
 
-### Why is the floating ball not responding?
+```text
+Whether the system allows CialloClaw to use the microphone
+Whether the current device has an available microphone
+Whether the model configuration is correct
+```
 
-Try restarting the application. If the issue persists, check the model configuration and ensure your API key is valid.
+------
+
+## The preview version fails to start
+
+Check the following in order:
+
+```text
+Is pnpm installed
+Is the Rust / Tauri development environment set up
+Are commands executed in the project root directory
+Did pnpm install succeed
+Is the first terminal still running
+Is the second terminal command entered correctly
+```
+
+------
+
+## What is the difference between the latest and preview versions?
+
+**Latest version** is more stable, suitable for general users.
+
+**Preview version** receives updates faster, suitable for developers and early adopters. It may contain unfinished or unstable features.
+
+------
+
+## Is CialloClaw free?
+
+CialloClaw itself is open source and free.
+
+If you use third-party model services, model API fees may apply. The cost depends on the model and service provider you configure.
