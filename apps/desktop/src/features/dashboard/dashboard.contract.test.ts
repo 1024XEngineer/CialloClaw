@@ -2096,6 +2096,16 @@ test("safety page stays RPC-only instead of exposing a page-level mock toggle", 
   assert.doesNotMatch(securityAppSource, /saveDashboardDataMode\("safety"\)/);
   assert.doesNotMatch(securityAppSource, /setDataMode\(/);
 });
+
+test("safety page formats missing budget limits as unconfigured instead of echoing zero tokens", () => {
+  const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
+
+  assert.match(securityAppSource, /function isConfiguredBudgetLimit\(value: number\)/);
+  assert.match(securityAppSource, /function formatBudgetLimitValue\(value: number\)/);
+  assert.match(securityAppSource, /单任务上限未配置/);
+  assert.match(securityAppSource, /请在控制面板完成配置/);
+  assert.match(securityAppSource, /SECURITY_BUDGET_DISPLAY_SETTINGS_KEY/);
+});
 test("dashboard home entrance labels stay hidden until hover or focus", () => {
   const dashboardHomeStyleSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.css"), "utf8");
   const entranceOrbSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/components/DashboardEntranceOrb.tsx"), "utf8");
@@ -3822,14 +3832,125 @@ test("control panel workspace section opens the trusted runtime directory instea
   assert.doesNotMatch(controlPanelAppSource, /value=\{draft\.settings\.general\.download\.workspace_path\}/);
   assert.doesNotMatch(controlPanelAppSource, /workspace_path: event\.target\.value/);
 });
-test("control panel keeps budget rows in the safety page instead of duplicating them", () => {
+test("control panel exposes dedicated budget display controls alongside the safety summary", () => {
   const controlPanelAppSource = readFileSync(resolve(desktopRoot, "src/features/control-panel/ControlPanelApp.tsx"), "utf8");
   assert.match(controlPanelAppSource, /title="模型与安全摘要"/);
+  assert.match(controlPanelAppSource, /title="预算与成本展示"/);
+  assert.match(controlPanelAppSource, /label="当日 Tokens"/);
+  assert.match(controlPanelAppSource, /label="今日成本"/);
+  assert.match(controlPanelAppSource, /label="单任务上限"/);
+  assert.match(controlPanelAppSource, /label="当日上限"/);
   assert.match(controlPanelAppSource, /label="安全状态"/);
   assert.match(controlPanelAppSource, /label="待确认授权"/);
-  assert.doesNotMatch(controlPanelAppSource, /label="今日成本"/);
-  assert.doesNotMatch(controlPanelAppSource, /label="单任务上限"/);
-  assert.doesNotMatch(controlPanelAppSource, /label="当日上限"/);
+});
+
+test("security budget display settings stay local to desktop presentation and overlay the summary when provided", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, {
+    window: {
+      __TAURI_INTERNALS__: {},
+      localStorage,
+    },
+  });
+
+  try {
+    await withDesktopAliasRuntime(async (requireFn) => {
+      const modulePath = resolve(desktopRoot, "src/services/securityBudgetDisplayService.ts");
+      delete requireFn.cache[modulePath];
+
+      const service = requireFn(modulePath) as {
+        applySecurityBudgetDisplaySettings: (
+          summary: {
+            current_task_tokens: number;
+            current_task_cost: number;
+            today_tokens: number;
+            today_cost: number;
+            single_task_limit: number;
+            daily_limit: number;
+            budget_auto_downgrade: boolean;
+          },
+          settings: {
+            today_tokens: number | null;
+            today_cost: number | null;
+            single_task_limit: number | null;
+            daily_limit: number | null;
+          },
+        ) => {
+          current_task_tokens: number;
+          current_task_cost: number;
+          today_tokens: number;
+          today_cost: number;
+          single_task_limit: number;
+          daily_limit: number;
+          budget_auto_downgrade: boolean;
+        };
+        loadSecurityBudgetDisplaySettings: () => {
+          today_tokens: number | null;
+          today_cost: number | null;
+          single_task_limit: number | null;
+          daily_limit: number | null;
+        };
+        saveSecurityBudgetDisplaySettings: (settings: {
+          today_tokens: number | null;
+          today_cost: number | null;
+          single_task_limit: number | null;
+          daily_limit: number | null;
+        }) => {
+          today_tokens: number | null;
+          today_cost: number | null;
+          single_task_limit: number | null;
+          daily_limit: number | null;
+        };
+      };
+
+      const saved = service.saveSecurityBudgetDisplaySettings({
+        today_tokens: 48000,
+        today_cost: 16.32,
+        single_task_limit: 50000,
+        daily_limit: 300000,
+      });
+      const loaded = service.loadSecurityBudgetDisplaySettings();
+      const merged = service.applySecurityBudgetDisplaySettings(
+        {
+          current_task_tokens: 1200,
+          current_task_cost: 0.48,
+          today_tokens: 0,
+          today_cost: 0,
+          single_task_limit: 0,
+          daily_limit: 0,
+          budget_auto_downgrade: true,
+        },
+        loaded,
+      );
+
+      assert.deepEqual(saved, loaded);
+      assert.equal(merged.today_tokens, 48000);
+      assert.equal(merged.today_cost, 16.32);
+      assert.equal(merged.single_task_limit, 50000);
+      assert.equal(merged.daily_limit, 300000);
+      assert.equal(merged.current_task_tokens, 1200);
+      assert.equal(merged.current_task_cost, 0.48);
+    });
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
 });
 test("control panel restore-default helper preserves the persisted workspace, task-source, and model-route boundaries", () => {
   const { buildControlPanelRestoreDefaultsData } = loadControlPanelServiceModule();
