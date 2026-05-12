@@ -226,7 +226,7 @@ export function TaskDeliveryPage() {
     const plan = resolveTaskOpenExecutionPlan(result, taskId);
 
     if (plan.mode === "task_detail" && plan.taskId === taskId) {
-      showFeedback("当前正式结果已经在交付页中展示。");
+      showFeedback("当前结果已经在交付页中展示。");
       return;
     }
 
@@ -291,7 +291,7 @@ export function TaskDeliveryPage() {
       await handleResolvedOpen(result);
     },
     onError: (error) => {
-      showFeedback(error instanceof Error ? `执行正式打开动作失败：${error.message}` : "执行正式打开动作失败，请稍后再试。");
+      showFeedback(error instanceof Error ? `执行打开动作失败：${error.message}` : "执行打开动作失败，请稍后再试。");
     },
   });
 
@@ -323,13 +323,13 @@ export function TaskDeliveryPage() {
 
       <section className="task-delivery-page__hero">
         <div className="task-delivery-page__hero-copy">
-          <p className="task-delivery-page__eyebrow">Formal Delivery</p>
+          <p className="task-delivery-page__eyebrow">任务交付</p>
           <h1>{formalDeliveryResult?.title ?? detailData?.task.title ?? "正在准备任务交付视图"}</h1>
           <p className="task-delivery-page__hero-text">
             {formalDeliveryResult?.preview_text ??
               (detailData
-                ? "当前任务还没有独立的正式交付结果，你仍然可以在下方查看产物、引用与交付出口。"
-                : "正在从本地服务读取正式交付、产物与引用信息。")}
+                ? "当前任务还没有独立的交付结果，你仍然可以在下方查看产物、引用与交付出口。"
+                : "正在从本地服务读取交付、产物与引用信息。")}
           </p>
         </div>
 
@@ -376,7 +376,7 @@ export function TaskDeliveryPage() {
             </div>
             <p>
               {detailState === "loading"
-                ? "当前先展示已有的任务交付承接，正式 delivery_result、产物与引用会在同步完成后补齐。"
+                ? "当前先展示已有的任务交付承接，交付结果、产物与引用会在同步完成后补齐。"
                 : `${detailErrorMessage ?? "任务交付详情请求失败"}。当前可先返回任务详情，稍后再试。`}
             </p>
           </section>
@@ -385,8 +385,8 @@ export function TaskDeliveryPage() {
         <section className="task-delivery-page__card">
           <div className="task-delivery-page__card-head">
             <div>
-              <p className="task-delivery-page__card-eyebrow">Delivery Summary</p>
-              <h2>正式交付摘要</h2>
+              <p className="task-delivery-page__card-eyebrow">交付概览</p>
+              <h2>交付摘要</h2>
             </div>
           </div>
           {detailData ? (
@@ -404,12 +404,12 @@ export function TaskDeliveryPage() {
                 <dd>{formatTimestamp(detailData.task.updated_at)}</dd>
               </div>
               <div>
-                <dt>正式类型</dt>
+                <dt>类型</dt>
                 <dd>{formalDeliveryResult?.type ?? "尚未生成"}</dd>
               </div>
               <div>
                 <dt>预览说明</dt>
-                <dd>{formalDeliveryResult?.preview_text ?? "当前还没有正式 delivery_result。"}</dd>
+                <dd>{formalDeliveryResult?.preview_text ?? "当前还没有交付结果。"}</dd>
               </div>
             </dl>
           ) : (
@@ -420,22 +420,22 @@ export function TaskDeliveryPage() {
         <section className="task-delivery-page__card">
           <div className="task-delivery-page__card-head">
             <div>
-              <p className="task-delivery-page__card-eyebrow">Resolved Payload</p>
-              <h2>正式打开出口</h2>
+              <p className="task-delivery-page__card-eyebrow">打开内容</p>
+              <h2>打开出口</h2>
             </div>
           </div>
           {formalDeliveryResult ? (
             <dl className="task-delivery-page__payload-list">
               <div>
-                <dt>Task ID</dt>
+                <dt>任务编号</dt>
                 <dd>{formalDeliveryResult.payload.task_id ?? taskId}</dd>
               </div>
               <div>
-                <dt>Path</dt>
+                <dt>路径</dt>
                 <dd>{formalDeliveryResult.payload.path ?? "无"}</dd>
               </div>
               <div>
-                <dt>URL</dt>
+                <dt>链接</dt>
                 <dd>
                   {formalDeliveryUrl ? (
                     formalDeliveryUrlIsAllowed ? (
@@ -452,14 +452,14 @@ export function TaskDeliveryPage() {
               </div>
             </dl>
           ) : (
-            <p className="task-delivery-page__empty">当前没有正式 payload 可展示。</p>
+            <p className="task-delivery-page__empty">当前没有可展示的内容。</p>
           )}
         </section>
 
         <section className="task-delivery-page__card task-delivery-page__card--wide">
           <div className="task-delivery-page__card-head">
             <div>
-              <p className="task-delivery-page__card-eyebrow">Artifacts</p>
+              <p className="task-delivery-page__card-eyebrow">产物</p>
               <h2>交付产物</h2>
             </div>
           </div>
@@ -494,8 +494,8 @@ export function TaskDeliveryPage() {
         <section className="task-delivery-page__card task-delivery-page__card--wide">
           <div className="task-delivery-page__card-head">
             <div>
-              <p className="task-delivery-page__card-eyebrow">Citations & Evidence</p>
-              <h2>正式引用与证据</h2>
+              <p className="task-delivery-page__card-eyebrow">引用与证据</p>
+              <h2>引用与证据</h2>
             </div>
           </div>
           <div className="task-delivery-page__item-list">
@@ -535,7 +535,7 @@ export function TaskDeliveryPage() {
                 </Button>
               </article>
             ))}
-            {citations.length === 0 && evidenceArtifacts.length === 0 ? <p className="task-delivery-page__empty">当前没有正式引用或证据需要展示。</p> : null}
+            {citations.length === 0 && evidenceArtifacts.length === 0 ? <p className="task-delivery-page__empty">当前没有引用或证据需要展示。</p> : null}
           </div>
         </section>
       </section>

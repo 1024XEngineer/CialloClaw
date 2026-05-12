@@ -840,8 +840,8 @@ export function MirrorApp() {
   const { overview } = mirrorData;
   const dataSourceDetails = [
     mirrorData.source === "rpc"
-      ? "当前展示来自本地 JSON-RPC 服务。"
-      : "当前展示的是本地缓存的镜像概览，用于在 RPC 不可用时保持页面可读性。",
+      ? "当前展示来自本地服务。"
+      : "当前展示的是本地缓存的概览，用于在服务不可用时保持页面可读性。",
   ];
 
   if (mirrorData.rpcContext.serverTime) {
@@ -867,7 +867,7 @@ export function MirrorApp() {
   const dataSourceBadge =
     mirrorData.source === "rpc"
       ? { label: "LIVE", tone: "green" as const, copy: dataSourceDetails.join(" · ") }
-      : { label: "MOCK", tone: "processing" as const, copy: dataSourceDetails.join(" · ") };
+      : { label: "本地", tone: "processing" as const, copy: dataSourceDetails.join(" · ") };
   const latestMemoryReference = overview.memory_references[0] ?? null;
   const latestConversation = mirrorData.conversations[0] ?? null;
 
@@ -1088,9 +1088,9 @@ export function MirrorApp() {
     if (key === "profile") {
       const primaryProfileItem = profileView.backend_items[0] ?? profileView.local_stat_items[0] ?? null;
       return {
-        badge: profileView.backend_items.length > 0 ? `${profileView.backend_items.length} 个后端字段` : "暂无后端字段",
+        badge: profileView.backend_items.length > 0 ? `${profileView.backend_items.length} 个画像项` : "暂无画像项",
         tone: "green",
-        detailLine: profileView.local_stat_items.length > 0 ? `${profileView.local_stat_items.length} 条最近本地统计。` : "仅显示后端画像字段。",
+        detailLine: profileView.local_stat_items.length > 0 ? `${profileView.local_stat_items.length} 条最近本地统计。` : "仅显示你的画像信息。",
         accent: getMirrorDirectionMeta(key).accent,
         mainLine: primaryProfileItem?.value ?? "暂无画像资料",
       };
@@ -1104,7 +1104,7 @@ export function MirrorApp() {
         latestConversation?.user_text ??
         (mirrorData.conversationSummary.total_records > 0
           ? `本地仍保留 ${mirrorData.conversationSummary.total_records} 条最近对话。`
-          : "轻触查看后端历史概要与本地最近 100 条对话记录。");
+          : "轻触查看历史概要与本地最近 100 条对话记录。");
 
       return {
         badge:
@@ -1128,8 +1128,8 @@ export function MirrorApp() {
       detailLine:
         memorySummary ??
         (mirrorData.conversationSummary.total_records > 0
-          ? `后端暂无新引用；本地仍保留 ${mirrorData.conversationSummary.total_records} 条最近对话统计。`
-          : "等待新的后端记忆引用记录。"),
+          ? `暂无新引用；本地仍保留 ${mirrorData.conversationSummary.total_records} 条最近对话统计。`
+          : "等待新的记忆引用记录。"),
       accent: getMirrorDirectionMeta(key).accent,
       mainLine: latestMemoryReference?.memory_id ?? "暂无近期被调用记忆",
       emphasis: "memory",

@@ -2168,12 +2168,12 @@ test("security audit cards and mirror cards stay aligned with the v6 frontend pr
   assert.match(securityAppSource, /const auditFilterTaskId = auditScope === "focused_task" \? focusedTaskId : null/);
   assert.match(securityAppSource, /const rpcAuditRequiresTaskContext = moduleData\?\.source === "rpc"/);
   assert.match(securityAppSource, /disabled=\{rpcAuditRequiresTaskContext\}/);
-  assert.match(securityAppSource, /当前后端仅支持按 task 查看审计记录/);
+  assert.match(securityAppSource, /当前只支持从带任务上下文的安全入口或任务详情查看审计记录/);
   assert.match(securityAppSource, /loadSecurityAuditRecords\(moduleData\.source, auditFilterTaskId/);
   assert.match(securityAppSource, /loadSecurityFocusedTaskDetail\(focusedTaskId, moduleData\?\.source \?\? "rpc"\)/);
   assert.match(securityAppSource, /当前屏幕任务治理链/);
-  assert.match(securityAppSource, /正式授权锚点/);
-  assert.match(securityAppSource, /正式引用/);
+  assert.match(securityAppSource, /授权依据/);
+  assert.match(securityAppSource, /引用/);
   assert.match(securityAppSource, /latest_failure_category/);
   assert.match(securityAppSource, /title: "审计记录"/);
   assert.doesNotMatch(securityAppSource, /decisionHistory/);
@@ -2274,7 +2274,7 @@ test("task page keeps waiting-auth anchors and routes follow-up steering through
   assert.doesNotMatch(taskPageSource, /item\.task\.status === "confirming_intent" \|\| item\.task\.status === "processing"/);
   assert.match(taskPageSource, /onSteerTask=\{handleSteerTask\}/);
   assert.match(taskDetailPanelSource, /const canSteerTask = task \? canTaskAcceptSteering\(task\) : false;/);
-  assert.match(taskDetailPanelSource, /当前任务仍在等待确认处理方式；确认后才会开放正式 `agent\.task\.steer` 追加要求。/);
+  assert.match(taskDetailPanelSource, /当前任务仍在等待确认处理方式；确认后才会开放追加要求。/);
   assert.match(taskDetailPanelSource, /当前任务还在等待确认处理方式，确认后才能继续追加要求。/);
   assert.match(taskDetailPanelSource, /placeholder=\{steeringPlaceholder\}/);
 });
@@ -5585,7 +5585,7 @@ test("mirror app reuses the mutation snapshot instead of triggering a second mir
     /const handleSettingsUpdate = useCallback\([\s\S]*loadMirrorOverviewData\(dataMode\)/,
   );
   assert.match(mirrorDetailSource, /settingsSnapshotUsesWarningBaseline/);
-  assert.match(mirrorDetailSource, /本地回退快照/);
+  assert.match(mirrorDetailSource, /回退快照/);
 });
 
 test("dashboard settings mutation keeps transport failures visible and does not mutate local settings", async () => {
@@ -6472,7 +6472,8 @@ test("task workspace routes formal delivery through a dedicated page and keeps l
   assert.match(taskDeliverySource, /isAllowedTaskOpenUrl/);
   assert.match(taskDeliverySource, /formalDeliveryUrlIsAllowed/);
   assert.doesNotMatch(taskDeliverySource, /href=\{formalDeliveryResult\.payload\.url\}/);
-  assert.match(taskDeliverySource, /当前正式结果已经在交付页中展示/);
+  assert.match(taskDeliverySource, /任务交付/);
+  assert.match(taskDeliverySource, /当前结果已经在交付页中展示/);
   assert.match(taskDeliverySource, /onOpenTaskDelivery:/);
 
   assert.doesNotMatch(taskDetailSource, /当前协议尚未提供稳定的 artifact\.open 能力/);
@@ -7283,7 +7284,7 @@ test("note conversion and confirming-intent surfaces use direct task handoff wor
   const voiceFieldSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/components/DashboardVoiceField.tsx"), "utf8");
   const homeServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts"), "utf8");
 
-  assert.match(noteActionBarSource, /会按这条便签生成正式任务并跳转到任务页。/);
+  assert.match(noteActionBarSource, /会按这条便签生成任务并跳转到任务页。/);
   assert.doesNotMatch(noteActionBarSource, /会直接生成任务并跳转到任务页。/);
   assert.match(notePageSource, /function getNoteConvertSuccessFeedback\(status: Task\["status"\]\)/);
   assert.match(notePageSource, /已按这条便签生成任务，正在打开任务详情。/);
@@ -7686,7 +7687,7 @@ test("note page can pin a pending created source note before the formal bucket i
   assert.match(notePageSource, /function findPreferredItemIdForSourceNote\(/);
   assert.match(notePageSource, /const nextItemId = replacementItemId \?\? findPreferredItemIdForSourceNote\(/);
   assert.match(notePageSource, /if \(nextItem\.sourceNote\?\.localOnly\) \{/);
-  assert.match(notePageSource, /showFeedback\("新便签已放到网格里，正在同步正式分组。"\);/);
+  assert.match(notePageSource, /showFeedback\("新便签已放到网格里，正在同步分组。"\);/);
 });
 
 test("note page upgrades canvas and selected source-note cards to their formal items once sync completes", () => {
@@ -9828,7 +9829,7 @@ test("TaskDetailPanel keeps evidence artifacts scoped to formal citation links",
   assert.match(panelSource, /const formalEvidenceCount = new Set\(/);
   assert.match(panelSource, /const hasEvidenceContent = evidenceItems\.length > 0 \|\| evidenceArtifacts\.length > 0;/);
   assert.match(panelSource, /if \(!isScreenTask \|\| detail === null \|\| !hasEvidenceContent\) \{/);
-  assert.match(panelSource, /该区域只在屏幕类任务中展示正式截图、OCR 摘要与引用片段。/);
+  assert.match(panelSource, /该区域只在屏幕类任务中展示截图、OCR 摘要与引用片段。/);
   assert.match(panelSource, /return sourceRef\.length > 0 \? sourceRef : citation\.citation_id/);
   assert.match(panelSource, /evidenceArtifacts\.map\(\(artifact\) => \(/);
   assert.match(panelSource, /outputArtifacts\.map\(\(artifact\) => \(/);
@@ -9861,14 +9862,15 @@ test("TaskDetailPanel renders formal delivery as a first-class output entry", ()
   assert.match(panelSource, /citation\.excerpt_text/);
 });
 
-test("TaskDetailPanel renders a formal screen governance section only for screen tasks with synced detail", () => {
+test("TaskDetailPanel renders the screen safety section only for screen tasks with synced detail", () => {
   const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
 
   assert.match(panelSource, /const isScreenTask = task\?\.source_type === "screen_capture" \|\| detail\?\.task\.intent\?\.name === "screen_analyze"/);
   assert.match(panelSource, /if \(!isScreenTask \|\| shouldDeferSecuritySummary \|\| !runtimeSummary \|\| detail === null\) \{/);
-  assert.match(panelSource, /Screen Governance/);
-  assert.match(panelSource, /屏幕授权、恢复与失败收口/);
-  assert.match(panelSource, /该区域只消费正式 `approval_request`、`authorization_record`、`audit_record`、`recovery_point` 与 `runtime_summary` 字段/);
+  assert.match(panelSource, /证据链/);
+  assert.match(panelSource, /屏幕安全与恢复/);
+  assert.match(panelSource, /运行事件/);
+  assert.match(panelSource, /该区域只展示授权、恢复点、审计记录与运行摘要，不读取未整理的工作输出。/);
   assert.match(panelSource, /runtimeSummary\.latest_failure_category/);
   assert.match(panelSource, /detail\.approval_request/);
   assert.match(panelSource, /detail\.authorization_record/);

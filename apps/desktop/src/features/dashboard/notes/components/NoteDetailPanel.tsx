@@ -356,7 +356,7 @@ export function NoteDetailPanel({
                     <Link2 className="h-4 w-4" />
                     <div>
                       <p className="note-detail-resource-item__title">关联任务</p>
-                      <p className="note-detail-resource-item__meta">已关联正式任务</p>
+                      <p className="note-detail-resource-item__meta">已关联任务</p>
                       <p className="note-detail-resource-item__path">任务 ID · {formatLinkedTaskReference(item.item.linked_task_id)}</p>
                     </div>
                   </button>

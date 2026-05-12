@@ -509,10 +509,10 @@ export function DashboardVoiceField({ isOpen, onClose, onRecommendationConfirm, 
                 ? "我正在把最终转写通过 agent.input.submit 送入任务入口。"
                 : stage === "completed"
                   ? submittedTaskStatus === "waiting_auth"
-                    ? (submittedMessage ?? "语音内容已经进入正式任务链路，接下来会打开安全页继续处理授权。")
+                    ? (submittedMessage ?? "语音内容已经进入任务流程，接下来会打开安全页继续处理授权。")
                     : submittedTaskId
                       ? (submittedMessage ?? `语音内容已经进入任务 ${submittedTaskId}，接下来会打开任务详情继续承接。`)
-                      : "语音内容已经进入正式任务链路，接下来会打开任务页继续承接。"
+                      : "语音内容已经进入任务流程，接下来会打开任务页继续承接。"
                   : stage === "error"
                     ? errorMessage ?? "这次语音没有形成可提交内容。"
                     : "直接说出你的想法，停顿结束后会自动提交；也可以手动结束收音。"}

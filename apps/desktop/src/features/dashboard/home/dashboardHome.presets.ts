@@ -40,7 +40,7 @@ export const dashboardHomeStates: Record<DashboardHomeEventStateKey, DashboardHo
     tag: "正在推进",
     tagTone: "active",
     headline: "正在整理当前任务的真实信号",
-    subline: "这里只保留后端返回的正式任务摘要，不再放入来源计数类示意文案。",
+    subline: "这里只保留返回的任务摘要，不再放入来源计数类示意文案。",
     progress: 42,
     progressLabel: "执行中",
     progressSteps: [
@@ -51,7 +51,7 @@ export const dashboardHomeStates: Record<DashboardHomeEventStateKey, DashboardHo
     ],
     context: [
       { iconKey: "search", text: "已接入当前任务概览", time: "刚刚", type: "normal" },
-      { iconKey: "sparkles", text: "优先展示正式返回的重点信号", time: "刚刚", type: "normal" },
+      { iconKey: "sparkles", text: "优先展示返回的重点信号", time: "刚刚", type: "normal" },
       { iconKey: "loader", text: "正在对齐任务主链路", time: "进行中", type: "active" },
     ],
     breathSpeed: 1.8,

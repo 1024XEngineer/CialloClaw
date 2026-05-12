@@ -406,7 +406,7 @@ function createFallbackExperience(item: TodoItem): NoteDetailExperience {
           ? ""
           : item.agent_suggestion
             ? `${item.title}。${item.agent_suggestion}`
-            : `${item.title}。当前只返回了基础便签字段，页面用最小默认说明承接这条事项。`,
+            : `${item.title}。当前只返回了基础便签内容，页面用最小默认说明承接这条事项。`,
     noteType: fallbackNoteType,
     plannedAt: item.due_at,
     previewStatus,
@@ -420,7 +420,7 @@ function createFallbackExperience(item: TodoItem): NoteDetailExperience {
     recentInstanceStatus: item.recent_instance_status ?? null,
     relatedResources: createResourceHints(item),
     repeatRule:
-      item.repeat_rule ?? (item.bucket === "recurring_rule" ? "协议暂未返回具体重复规则，当前只展示规则条目。" : null),
+      item.repeat_rule ?? (item.bucket === "recurring_rule" ? "当前还没有返回具体重复规则，当前只展示规则条目。" : null),
     summaryLabel: getSummaryLabel(item),
     timeHint: getTimeHint(item),
     title: item.title,
@@ -501,7 +501,7 @@ function createSourceNoteFallbackExperience(input: {
     noteText: input.noteText,
     noteType: input.repeatRule ? "recurring" : "reminder",
     plannedAt: input.plannedAt,
-    prerequisite: "当前还没有正式巡检结果，这条记录仍停留在桌面本地同步态。",
+    prerequisite: "当前还没有巡检结果，这条记录仍停留在桌面本地同步中。",
     previewStatus: input.checked ? "已勾选" : "待巡检",
     recentInstanceStatus: input.recentInstanceStatus,
     relatedResources: input.relatedResources,
@@ -553,10 +553,10 @@ export function buildSourceNoteFallbackItem(note: SourceNoteDocument): NoteListI
 
   return {
     experience: createSourceNoteFallbackExperience({
-      agentSuggestion: "这张便签已经保存在任务来源目录里。你可以继续编辑它，巡检识别后会切换成正式便签项。",
+      agentSuggestion: "这张便签已经保存在任务来源目录里。你可以继续编辑它，巡检识别后会切换成可处理的便签项。",
       checked: false,
       effectiveScope: note.sourceRoot,
-      noteText: previewText || "这张源便签还没有提炼出正式事项，当前先作为本地便签卡片显示。",
+      noteText: previewText || "这张源便签还没有整理成事项，当前先作为本地便签卡片显示。",
       plannedAt: null,
       recentInstanceStatus: null,
       relatedResources: sourceResources,
@@ -566,7 +566,7 @@ export function buildSourceNoteFallbackItem(note: SourceNoteDocument): NoteListI
       title: note.title,
     }),
     item: {
-      agent_suggestion: "等待巡检同步后再进入正式事项流。",
+      agent_suggestion: "等待巡检同步后再进入便签流程。",
       bucket: "later",
       due_at: null,
       item_id: itemId,
@@ -592,7 +592,7 @@ export function buildSourceNoteFallbackItem(note: SourceNoteDocument): NoteListI
       ended_at: null,
       effective_scope: note.sourceRoot,
       next_occurrence_at: null,
-      prerequisite: "等待巡检把源文件识别成正式事项。",
+      prerequisite: "等待巡检把源文件识别成事项。",
       recent_instance_status: null,
       recurring_enabled: false,
       repeat_rule: null,
@@ -657,7 +657,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
       },
     ];
     const item = {
-      agent_suggestion: current.agentSuggestion ?? "等待巡检把这个 markdown 便签块同步成正式事项。",
+      agent_suggestion: current.agentSuggestion ?? "等待巡检把这个 markdown 便签块同步成事项。",
       bucket,
       due_at: dueAt,
       effective_scope: current.effectiveScope ?? note.sourceRoot,
@@ -680,7 +680,7 @@ export function buildSourceNoteFallbackItems(note: SourceNoteDocument): NoteList
 
     items.push({
       experience: createSourceNoteFallbackExperience({
-        agentSuggestion: current.agentSuggestion ?? "这条 markdown 事项还在等待巡检同步，正式识别后才会进入便签流程。",
+        agentSuggestion: current.agentSuggestion ?? "这条 markdown 事项还在等待巡检同步，识别后才会进入便签流程。",
         checked: current.checked,
         effectiveScope: current.effectiveScope ?? note.sourceRoot,
         noteText,
