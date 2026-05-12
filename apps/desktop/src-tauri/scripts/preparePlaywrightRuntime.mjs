@@ -53,7 +53,9 @@ export function preparePlaywrightRuntime() {
   const sourceWorkerRoot = resolve(repoRoot, "workers", "playwright-worker");
   const sourceWorkerEntry = resolve(sourceWorkerRoot, "src", "index.js");
   const sourceWorkerPackage = resolve(sourceWorkerRoot, "package.json");
+  const sourceNodeExecutable = resolve(process.execPath);
   const runtimeRoot = resolve(srcTauriRoot, "resources", "playwright-runtime");
+  const packagedNodeRoot = resolve(runtimeRoot, "node");
   const packagedWorkerRoot = resolve(runtimeRoot, "workers", "playwright-worker");
   const packagedWorkerSourceRoot = resolve(packagedWorkerRoot, "src");
   const browsersRoot = resolve(runtimeRoot, "ms-playwright");
@@ -61,11 +63,16 @@ export function preparePlaywrightRuntime() {
   if (!existsSync(sourceWorkerEntry)) {
     throw new Error(`playwright worker entry is missing: ${sourceWorkerEntry}`);
   }
+  if (!existsSync(sourceNodeExecutable)) {
+    throw new Error(`node executable is missing: ${sourceNodeExecutable}`);
+  }
 
   const playwrightVersion = loadPlaywrightVersion(sourceWorkerPackage);
 
   rmSync(runtimeRoot, { recursive: true, force: true });
+  mkdirSync(packagedNodeRoot, { recursive: true });
   mkdirSync(packagedWorkerSourceRoot, { recursive: true });
+  cpSync(sourceNodeExecutable, resolve(packagedNodeRoot, process.platform === "win32" ? "node.exe" : "node"));
   cpSync(sourceWorkerEntry, resolve(packagedWorkerSourceRoot, "index.js"));
   writeFileSync(
     resolve(packagedWorkerRoot, "package.json"),

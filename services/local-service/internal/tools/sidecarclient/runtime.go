@@ -23,6 +23,7 @@ const sidecarHealthTimeout = 5 * time.Second
 const sidecarDefaultTimeout = 20 * time.Second
 const playwrightWorkerRelativePath = "workers/playwright-worker/src/index.js"
 const playwrightRuntimeRootEnvKey = "CIALLOCLAW_PLAYWRIGHT_RUNTIME_ROOT"
+const packagedNodeRelativeDirectory = "node"
 
 type workerInvoker interface {
 	Invoke(ctx context.Context, request sidecarRequest) (sidecarResponse, error)
@@ -91,11 +92,28 @@ func (e sidecarRequestError) Error() string {
 }
 
 func newCommandWorkerInvoker(entryPath string) commandWorkerInvoker {
+	command := resolvePlaywrightNodeCommand()
 	return commandWorkerInvoker{
 		entryPath: entryPath,
-		command:   "node",
+		command:   command,
 		args:      []string{entryPath},
 	}
+}
+
+func resolvePlaywrightNodeCommand() string {
+	runtimeRoot := strings.TrimSpace(os.Getenv(playwrightRuntimeRootEnvKey))
+	if runtimeRoot == "" {
+		return "node"
+	}
+	fileName := "node"
+	if runtimesrc.GOOS == "windows" {
+		fileName = "node.exe"
+	}
+	candidate := filepath.Join(runtimeRoot, packagedNodeRelativeDirectory, fileName)
+	if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+		return candidate
+	}
+	return "node"
 }
 
 func (i commandWorkerInvoker) Invoke(ctx context.Context, request sidecarRequest) (sidecarResponse, error) {

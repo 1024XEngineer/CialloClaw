@@ -658,6 +658,33 @@ func TestWorkerSearchRootsPrefersExplicitPackagedRuntimeRoot(t *testing.T) {
 	}
 }
 
+func TestResolvePlaywrightNodeCommandPrefersPackagedNode(t *testing.T) {
+	runtimeRoot := t.TempDir()
+	nodeDir := filepath.Join(runtimeRoot, packagedNodeRelativeDirectory)
+	if err := os.MkdirAll(nodeDir, 0o755); err != nil {
+		t.Fatalf("mkdir packaged node dir: %v", err)
+	}
+	nodePath := filepath.Join(nodeDir, "node")
+	if os.PathSeparator == '\\' {
+		nodePath = filepath.Join(nodeDir, "node.exe")
+	}
+	if err := os.WriteFile(nodePath, []byte("fake node"), 0o755); err != nil {
+		t.Fatalf("write packaged node executable: %v", err)
+	}
+	t.Setenv(playwrightRuntimeRootEnvKey, runtimeRoot)
+
+	if got := resolvePlaywrightNodeCommand(); got != nodePath {
+		t.Fatalf("expected packaged node path %q, got %q", nodePath, got)
+	}
+}
+
+func TestResolvePlaywrightNodeCommandFallsBackToSystemNode(t *testing.T) {
+	t.Setenv(playwrightRuntimeRootEnvKey, t.TempDir())
+	if got := resolvePlaywrightNodeCommand(); got != "node" {
+		t.Fatalf("expected fallback node command, got %q", got)
+	}
+}
+
 func TestCommandWorkerInvokerInvokeReturnsStructuredRequestError(t *testing.T) {
 	entryPath := writeTempWorkerScript(t, `process.stdin.resume(); process.stdin.on("end", () => { process.stdout.write(JSON.stringify({ ok: false, error: { code: "http_404", message: "page not found" } })); process.exitCode = 1; });`)
 	invoker := newCommandWorkerInvoker(entryPath)
