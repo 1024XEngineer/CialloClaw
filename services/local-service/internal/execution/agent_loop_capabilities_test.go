@@ -64,6 +64,13 @@ func TestAgentLoopToolDefinitionsExposeBrowserToolsWhenSnapshotSupportsAttach(t 
 	if !strings.Contains(definitions[2].Description, "不会隐式导航或交互页面") {
 		t.Fatalf("expected browser_attach_current description to explain attach boundary, got %q", definitions[2].Description)
 	}
+	properties, ok := definitions[2].InputSchema["properties"].(map[string]any)
+	if !ok || properties == nil {
+		t.Fatalf("expected browser_attach_current schema properties to stay an empty object, got %+v", definitions[2].InputSchema)
+	}
+	if len(properties) != 0 {
+		t.Fatalf("expected browser_attach_current schema properties to stay empty, got %+v", properties)
+	}
 }
 
 func TestAgentLoopToolDefinitionsAllowSparseBrowserContextForDiscoveryTools(t *testing.T) {
