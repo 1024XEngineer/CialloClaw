@@ -25,3 +25,4 @@ services/local-service/internal/rpc/workspace/
 
 apps/.temp/*
 !apps/.temp/.gitkeep
+.sisyphus/

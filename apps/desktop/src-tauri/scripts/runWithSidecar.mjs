@@ -1,5 +1,5 @@
 /* global process, console */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildLocalServiceSidecar } from "./ensureLocalServiceSidecar.mjs";
@@ -36,6 +36,33 @@ function runFrontendCommand(commandName) {
   });
 }
 
+function stopStaleBundledSidecars() {
+  if (process.platform !== "win32") {
+    return;
+  }
+
+  // Tauri copies the bundled sidecar into `src-tauri/target/*` before booting
+  // the app. On Windows, a stale child keeps that copied executable locked and
+  // the next build panics with `PermissionDenied` while refreshing the bundle.
+  const result = spawnSync(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "Stop-Process -Name cialloclaw-service -Force -ErrorAction SilentlyContinue",
+    ],
+    {
+      stdio: "pipe",
+      encoding: "utf8",
+    },
+  );
+
+  if (result.error) {
+    console.warn("Failed to stop stale bundled sidecars before launching Tauri.");
+  }
+}
+
 const commandName = process.argv[2];
 
 if (commandName !== "dev" && commandName !== "build") {
@@ -44,6 +71,7 @@ if (commandName !== "dev" && commandName !== "build") {
 }
 
 try {
+  stopStaleBundledSidecars();
   const sidecarPath = buildLocalServiceSidecar();
   console.log(`Prepared local-service sidecar: ${sidecarPath}`);
 } catch (error) {
