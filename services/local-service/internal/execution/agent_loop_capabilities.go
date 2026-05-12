@@ -122,24 +122,6 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 			"additionalProperties": false,
 		},
 	},
-	{
-		Name:      "structured_dom",
-		UseWhen:   "需要快速了解页面的标题层级、链接、按钮和输入框结构",
-		AvoidWhen: "用户只需要通读正文，或只需要确认某个关键词是否出现",
-		Constraints: []string{
-			"页面结构读取可能触发审批",
-			"一次只提取一个绝对 URL 的结构摘要",
-			"不会执行页面交互",
-		},
-		InputSchema: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"url": map[string]any{"type": "string", "description": "Absolute URL to inspect."},
-			},
-			"required":             []string{"url"},
-			"additionalProperties": false,
-		},
-	},
 }
 
 type agentLoopCapabilitySpec struct {
