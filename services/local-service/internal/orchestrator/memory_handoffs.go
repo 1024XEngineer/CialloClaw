@@ -307,10 +307,6 @@ func readPlanRetrievalContextItems(plan map[string]any) []map[string]any {
 	}
 }
 
-func clarificationBubbleText(suggestionIntent map[string]any, snapshot taskcontext.TaskContextSnapshot, hits []memory.RetrievalHit) string {
-	return clarificationBubbleTextForLanguage(suggestionIntent, hits, clarificationReplyLanguage(snapshot))
-}
-
 func clarificationBubbleTextForLanguage(suggestionIntent map[string]any, hits []memory.RetrievalHit, replyLanguage string) string {
 	base := clarificationBaseTextForLanguage(suggestionIntent, replyLanguage)
 	if len(hits) == 0 {
