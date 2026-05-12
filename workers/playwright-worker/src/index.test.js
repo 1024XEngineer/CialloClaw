@@ -328,6 +328,7 @@ test("handleRequest delegates health requests through the worker switch", async 
 
 test("health prefers a managed local browser session before bundled launch", async () => {
   const lifecycle = [];
+  const existingPage = createPage({ title: "Managed Health Page" });
   const response = await healthResponse(createDeps({
     lifecycle,
     launchManagedBrowser: async () => ({
@@ -337,11 +338,17 @@ test("health prefers a managed local browser session before bundled launch", asy
       endpointURL: "http://127.0.0.1:9333",
       source: "playwright_worker_local_browser",
       browser: {
+        async close() {
+          lifecycle.push("managed.browser.close");
+        },
         contexts() {
           return [{
+            pages() {
+              return [existingPage];
+            },
             async newPage() {
               lifecycle.push("managed.newPage");
-              return createPage({ title: "Managed Health Page" });
+              return existingPage;
             },
           }];
         },
@@ -350,7 +357,7 @@ test("health prefers a managed local browser session before bundled launch", asy
   }));
 
   assert.equal(response.ok, true);
-  assert.deepEqual(lifecycle, ["launchManagedBrowser", "managed.newPage"]);
+  assert.deepEqual(lifecycle, ["launchManagedBrowser", "managed.browser.close"]);
 });
 
 test("page_read returns normalized page metadata", async () => {
@@ -398,8 +405,14 @@ test("page_read uses a managed local browser session when available", async () =
       endpointURL: "http://127.0.0.1:9333",
       source: "playwright_worker_local_browser",
       browser: {
+        async close() {
+          lifecycle.push("managed.browser.close");
+        },
         contexts() {
           return [{
+            pages() {
+              return [page];
+            },
             async newPage() {
               lifecycle.push("managed.newPage");
               return page;
@@ -416,7 +429,7 @@ test("page_read uses a managed local browser session when available", async () =
   assert.equal(response.result.endpoint_url, "http://127.0.0.1:9333");
   assert.equal(response.result.source, "playwright_worker_local_browser");
   assert.equal(response.result.title, "Managed Article");
-  assert.deepEqual(lifecycle, ["launchManagedBrowser", "managed.newPage"]);
+  assert.deepEqual(lifecycle, ["launchManagedBrowser", "managed.browser.close"]);
   assert.deepEqual(navigationLog, [{
     action: "goto",
     options: {
@@ -425,7 +438,64 @@ test("page_read uses a managed local browser session when available", async () =
     },
     url: "https://example.com",
   }]);
-  assert.deepEqual(actionLog.map((entry) => entry.action), ["page.close"]);
+  assert.deepEqual(actionLog.map((entry) => entry.action), []);
+});
+
+test("page_read opens a managed tab when no reusable page is available", async () => {
+  const lifecycle = [];
+  const page = createPage({
+    bodyText: "Managed tab created on demand",
+    currentURL: "https://example.com/new-managed",
+    gotoURL: "https://example.com/new-managed",
+    title: "Managed New Tab",
+  });
+  const response = await handleRequest({ action: "page_read", url: "https://example.com" }, createDeps({
+    lifecycle,
+    launchManagedBrowser: async () => ({
+      managed: true,
+      browserKind: "edge",
+      browserTransport: "cdp",
+      endpointURL: "http://127.0.0.1:9333",
+      source: "playwright_worker_local_browser",
+      browser: {
+        async close() {
+          lifecycle.push("managed.browser.close");
+        },
+        contexts() {
+          return [{
+            async newPage() {
+              lifecycle.push("managed.newPage");
+              return page;
+            },
+          }];
+        },
+      },
+    }),
+  }));
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.title, "Managed New Tab");
+  assert.deepEqual(lifecycle, ["launchManagedBrowser", "managed.newPage", "managed.browser.close"]);
+});
+
+test("health fails fast when a managed browser has no writable context", async () => {
+  await assert.rejects(
+    () => healthResponse(createDeps({
+      launchManagedBrowser: async () => ({
+        managed: true,
+        browserKind: "edge",
+        browserTransport: "cdp",
+        endpointURL: "http://127.0.0.1:9333",
+        source: "playwright_worker_local_browser",
+        browser: {
+          contexts() {
+            return [{}];
+          },
+        },
+      }),
+    })),
+    /managed browser did not expose a writable context/,
+  );
 });
 
 test("page_read uses the HTML title tag when Playwright title lookup is empty", async () => {
@@ -467,6 +537,135 @@ test("web_search returns structured search hits", async () => {
     url: "https://example.com/release-notes",
     snippet: "Latest release notes.",
   });
+});
+
+test("web_search accepts an explicit url even when query is blank", async () => {
+  const response = await handleRequest({
+    action: "web_search",
+    query: "   ",
+    url: "https://example.com/search?q=codex",
+  }, createDeps({
+    gotoURL: "https://example.com/search?q=codex",
+    searchResults: [
+      { title: "Codex Result", url: "https://example.com/docs", snippet: "Docs home." },
+    ],
+  }));
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.query, "");
+  assert.equal(response.result.search_url, "https://example.com/search?q=codex");
+  assert.equal(response.result.result_count, 1);
+});
+
+test("web_search reports missing queries as structured input errors", async () => {
+  const response = await handleRequest({
+    action: "web_search",
+    query: "   ",
+  }, createDeps());
+
+  assert.equal(response.ok, false);
+  assert.equal(response.error.code, "invalid_input");
+  assert.match(response.error.message, /query is required for web_search/);
+});
+
+test("web_search collects deduplicated snippets from the page DOM", async () => {
+  const resultAnchor = {
+    href: "https://example.com/result-1",
+    textContent: "Result One",
+    parentElement: null,
+    closest(selector) {
+      if (selector === ".result") {
+        return {
+          querySelector() {
+            return { textContent: "Snippet One" };
+          },
+        };
+      }
+      return null;
+    },
+  };
+  const duplicateAnchor = {
+    href: "https://example.com/result-1",
+    textContent: "Result One Duplicate",
+    parentElement: null,
+    closest() {
+      return null;
+    },
+  };
+  const articleAnchor = {
+    href: "https://example.com/result-2",
+    textContent: "Result Two",
+    parentElement: {
+      querySelector() {
+        return { textContent: "Parent Snippet" };
+      },
+    },
+    closest(selector) {
+      if (selector === "article") {
+        return {
+          querySelector() {
+            return null;
+          },
+        };
+      }
+      return null;
+    },
+  };
+  const ignoredAnchor = {
+    href: "https://example.com/ignored",
+    textContent: "",
+    parentElement: null,
+    closest() {
+      return null;
+    },
+  };
+  const page = createPage({
+    gotoURL: "https://duckduckgo.com/html/?q=codex",
+  });
+  page.evaluate = async (callback, limit) => {
+    const originalDocument = globalThis.document;
+    globalThis.document = {
+      querySelectorAll(selector) {
+        switch (selector) {
+          case "a.result__a":
+            return [resultAnchor];
+          case ".result__body a[href]":
+            return [duplicateAnchor];
+          case "article a[href]":
+            return [articleAnchor];
+          case ".links_main a[href]":
+            return [ignoredAnchor];
+          default:
+            return [];
+        }
+      },
+    };
+    try {
+      return callback(limit);
+    } finally {
+      globalThis.document = originalDocument;
+    }
+  };
+
+  const response = await handleRequest({
+    action: "web_search",
+    query: "codex",
+    limit: 2,
+  }, createDeps({ page }));
+
+  assert.equal(response.ok, true);
+  assert.deepEqual(response.result.results, [
+    {
+      title: "Result One",
+      url: "https://example.com/result-1",
+      snippet: "Snippet One",
+    },
+    {
+      title: "Result Two",
+      url: "https://example.com/result-2",
+      snippet: "Parent Snippet",
+    },
+  ]);
 });
 
 test("page_read falls back to hostname and untitled titles when needed", async () => {

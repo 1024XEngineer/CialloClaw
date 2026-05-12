@@ -327,16 +327,13 @@ async function openSessionPage(session) {
     if (!context || typeof context.newPage !== "function") {
       throw new Error("managed browser did not expose a writable context");
     }
-    const page = await context.newPage();
+    const existingPages = typeof context.pages === "function" ? context.pages() : [];
+    const page = existingPages.at(-1) ?? await context.newPage();
     return {
       context,
       page,
       async close() {
-        try {
-          await closeIfPossible(page, "close");
-        } finally {
-          await closeIfPossible(browser, "close");
-        }
+        await closeIfPossible(browser, "close");
       },
     };
   }
