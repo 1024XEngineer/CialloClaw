@@ -406,6 +406,11 @@ func TestGenerateToolCallsNormalizesNestedNullToolSchemaNodes(t *testing.T) {
 				InputSchema: map[string]any{
 					"type":                 "object",
 					"properties":           nil,
+					"contains":             nil,
+					"not":                  nil,
+					"if":                   nil,
+					"then":                 nil,
+					"else":                 nil,
 					"additionalProperties": false,
 				},
 			},
@@ -429,6 +434,21 @@ func TestGenerateToolCallsNormalizesNestedNullToolSchemaNodes(t *testing.T) {
 	properties, ok := parameters["properties"].(map[string]any)
 	if !ok || properties == nil || len(properties) != 0 {
 		t.Fatalf("expected browser attach schema properties to serialize as an empty object, got %+v", parameters["properties"])
+	}
+	if _, ok := parameters["contains"]; ok {
+		t.Fatalf("expected contains:nil to be omitted from serialized schema, got %+v", parameters)
+	}
+	if _, ok := parameters["not"]; ok {
+		t.Fatalf("expected not:nil to be omitted from serialized schema, got %+v", parameters)
+	}
+	if _, ok := parameters["if"]; ok {
+		t.Fatalf("expected if:nil to be omitted from serialized schema, got %+v", parameters)
+	}
+	if _, ok := parameters["then"]; ok {
+		t.Fatalf("expected then:nil to be omitted from serialized schema, got %+v", parameters)
+	}
+	if _, ok := parameters["else"]; ok {
+		t.Fatalf("expected else:nil to be omitted from serialized schema, got %+v", parameters)
 	}
 }
 

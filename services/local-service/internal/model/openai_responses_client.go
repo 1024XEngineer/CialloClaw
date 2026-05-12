@@ -344,41 +344,51 @@ func normalizeToolSchemaMap(schema map[string]any) map[string]any {
 
 	normalized := make(map[string]any, len(schema))
 	for key, value := range schema {
-		normalized[key] = normalizeToolSchemaValue(key, value)
+		normalizedValue, keep := normalizeToolSchemaValue(key, value)
+		if !keep {
+			continue
+		}
+		normalized[key] = normalizedValue
 	}
 	return normalized
 }
 
-func normalizeToolSchemaValue(key string, value any) any {
+func normalizeToolSchemaValue(key string, value any) (any, bool) {
 	switch typed := value.(type) {
 	case map[string]any:
-		return normalizeToolSchemaMap(typed)
+		return normalizeToolSchemaMap(typed), true
 	case []map[string]any:
 		normalized := make([]map[string]any, 0, len(typed))
 		for _, item := range typed {
 			normalized = append(normalized, normalizeToolSchemaMap(item))
 		}
-		return normalized
+		return normalized, true
 	case []any:
 		normalized := make([]any, 0, len(typed))
 		for _, item := range typed {
-			normalized = append(normalized, normalizeToolSchemaValue("", item))
+			normalizedValue, keep := normalizeToolSchemaValue("", item)
+			if !keep {
+				continue
+			}
+			normalized = append(normalized, normalizedValue)
 		}
-		return normalized
+		return normalized, true
 	case nil:
 		if schemaNullRequiresObject(key) {
-			return map[string]any{}
+			return map[string]any{}, true
 		}
-		return nil
+		// Drop non-neutral nil schema keywords so provider-bound JSON stays valid
+		// without changing validation semantics by inventing an empty schema node.
+		return nil, false
 	default:
-		return value
+		return value, true
 	}
 }
 
 func schemaNullRequiresObject(key string) bool {
 	switch key {
 	case "$defs", "definitions", "properties", "patternProperties", "dependentSchemas",
-		"items", "contains", "not", "if", "then", "else", "propertyNames",
+		"items", "propertyNames",
 		"additionalProperties", "unevaluatedProperties":
 		return true
 	default:

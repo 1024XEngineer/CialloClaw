@@ -98,8 +98,13 @@ func TestOpenAIResponseHelpers(t *testing.T) {
 		"type":       "object",
 		"properties": nil,
 		"items":      nil,
+		"contains":   nil,
+		"not":        nil,
+		"if":         nil,
+		"then":       nil,
+		"else":       nil,
 		"allOf": []any{
-			map[string]any{"type": "object", "properties": nil},
+			map[string]any{"type": "object", "properties": nil, "not": nil},
 		},
 	}
 	normalizedSchema := normalizeToolSchema(nestedSchema)
@@ -108,6 +113,21 @@ func TestOpenAIResponseHelpers(t *testing.T) {
 	}
 	if items, ok := normalizedSchema["items"].(map[string]any); !ok || items == nil {
 		t.Fatalf("expected items:null to normalize into an empty object, got %+v", normalizedSchema)
+	}
+	if _, ok := normalizedSchema["contains"]; ok {
+		t.Fatalf("expected contains:nil to be omitted so serialization does not change schema semantics, got %+v", normalizedSchema)
+	}
+	if _, ok := normalizedSchema["not"]; ok {
+		t.Fatalf("expected not:nil to be omitted so serialization does not change schema semantics, got %+v", normalizedSchema)
+	}
+	if _, ok := normalizedSchema["if"]; ok {
+		t.Fatalf("expected if:nil to be omitted so serialization does not change schema semantics, got %+v", normalizedSchema)
+	}
+	if _, ok := normalizedSchema["then"]; ok {
+		t.Fatalf("expected then:nil to be omitted so serialization does not change schema semantics, got %+v", normalizedSchema)
+	}
+	if _, ok := normalizedSchema["else"]; ok {
+		t.Fatalf("expected else:nil to be omitted so serialization does not change schema semantics, got %+v", normalizedSchema)
 	}
 	allOf, ok := normalizedSchema["allOf"].([]any)
 	if !ok || len(allOf) != 1 {
@@ -119,6 +139,9 @@ func TestOpenAIResponseHelpers(t *testing.T) {
 	}
 	if branchProperties, ok := firstBranch["properties"].(map[string]any); !ok || branchProperties == nil {
 		t.Fatalf("expected nested properties:null to normalize into an empty object, got %+v", firstBranch)
+	}
+	if _, ok := firstBranch["not"]; ok {
+		t.Fatalf("expected nested not:nil to be omitted so serialization does not change schema semantics, got %+v", firstBranch)
 	}
 
 	if got := truncateErrorMessage(strings.Repeat("a", 300)); len(got) != 256 {
