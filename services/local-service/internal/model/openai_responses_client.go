@@ -334,7 +334,56 @@ func normalizeToolSchema(schema map[string]any) map[string]any {
 			"additionalProperties": true,
 		}
 	}
-	return schema
+	return normalizeToolSchemaMap(schema)
+}
+
+func normalizeToolSchemaMap(schema map[string]any) map[string]any {
+	if schema == nil {
+		return map[string]any{}
+	}
+
+	normalized := make(map[string]any, len(schema))
+	for key, value := range schema {
+		normalized[key] = normalizeToolSchemaValue(key, value)
+	}
+	return normalized
+}
+
+func normalizeToolSchemaValue(key string, value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return normalizeToolSchemaMap(typed)
+	case []map[string]any:
+		normalized := make([]map[string]any, 0, len(typed))
+		for _, item := range typed {
+			normalized = append(normalized, normalizeToolSchemaMap(item))
+		}
+		return normalized
+	case []any:
+		normalized := make([]any, 0, len(typed))
+		for _, item := range typed {
+			normalized = append(normalized, normalizeToolSchemaValue("", item))
+		}
+		return normalized
+	case nil:
+		if schemaNullRequiresObject(key) {
+			return map[string]any{}
+		}
+		return nil
+	default:
+		return value
+	}
+}
+
+func schemaNullRequiresObject(key string) bool {
+	switch key {
+	case "$defs", "definitions", "properties", "patternProperties", "dependentSchemas",
+		"items", "contains", "not", "if", "then", "else", "propertyNames",
+		"additionalProperties", "unevaluatedProperties":
+		return true
+	default:
+		return false
+	}
 }
 
 func extractFunctionToolCalls(response responses.Response) []ToolInvocation {

@@ -94,6 +94,32 @@ func TestOpenAIResponseHelpers(t *testing.T) {
 	if got := normalizeToolSchema(customSchema); got["type"] != "string" {
 		t.Fatalf("expected provided schema to be preserved, got %+v", got)
 	}
+	nestedSchema := map[string]any{
+		"type":       "object",
+		"properties": nil,
+		"items":      nil,
+		"allOf": []any{
+			map[string]any{"type": "object", "properties": nil},
+		},
+	}
+	normalizedSchema := normalizeToolSchema(nestedSchema)
+	if properties, ok := normalizedSchema["properties"].(map[string]any); !ok || properties == nil {
+		t.Fatalf("expected properties:null to normalize into an empty object, got %+v", normalizedSchema)
+	}
+	if items, ok := normalizedSchema["items"].(map[string]any); !ok || items == nil {
+		t.Fatalf("expected items:null to normalize into an empty object, got %+v", normalizedSchema)
+	}
+	allOf, ok := normalizedSchema["allOf"].([]any)
+	if !ok || len(allOf) != 1 {
+		t.Fatalf("expected allOf to stay intact, got %+v", normalizedSchema["allOf"])
+	}
+	firstBranch, ok := allOf[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected allOf branch to stay a schema object, got %+v", allOf[0])
+	}
+	if branchProperties, ok := firstBranch["properties"].(map[string]any); !ok || branchProperties == nil {
+		t.Fatalf("expected nested properties:null to normalize into an empty object, got %+v", firstBranch)
+	}
 
 	if got := truncateErrorMessage(strings.Repeat("a", 300)); len(got) != 256 {
 		t.Fatalf("expected truncated error length 256, got %d", len(got))

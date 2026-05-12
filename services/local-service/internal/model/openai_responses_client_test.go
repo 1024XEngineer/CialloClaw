@@ -328,6 +328,22 @@ func TestGenerateToolCallsSuccess(t *testing.T) {
 	if len(received.Tools) != 1 {
 		t.Fatalf("expected one tool definition, got %d", len(received.Tools))
 	}
+	toolMap, ok := received.Tools[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected tool payload to be an object, got %+v", received.Tools[0])
+	}
+	parameters, ok := toolMap["parameters"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected parameters object, got %+v", toolMap["parameters"])
+	}
+	properties, ok := parameters["properties"].(map[string]any)
+	if !ok || properties == nil {
+		t.Fatalf("expected properties object in serialized schema, got %+v", parameters)
+	}
+	pathSchema, ok := properties["path"].(map[string]any)
+	if !ok || pathSchema["type"] != "string" {
+		t.Fatalf("expected path property schema, got %+v", properties["path"])
+	}
 	if len(result.ToolCalls) != 1 {
 		t.Fatalf("expected one tool call, got %+v", result.ToolCalls)
 	}
@@ -339,6 +355,80 @@ func TestGenerateToolCallsSuccess(t *testing.T) {
 	}
 	if result.RequestID != "resp_tool_123" {
 		t.Fatalf("request id mismatch: got %q", result.RequestID)
+	}
+}
+
+func TestGenerateToolCallsNormalizesNestedNullToolSchemaNodes(t *testing.T) {
+	type capturedRequest struct {
+		Tools []interface{} `json:"tools"`
+	}
+
+	var received capturedRequest
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("failed to read request body: %v", err)
+		}
+		if err := json.Unmarshal(body, &received); err != nil {
+			t.Fatalf("failed to parse request body: %v", err)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"resp_tool_schema_123",
+			"model":"gpt-5.4",
+			"output_text":"",
+			"output":[],
+			"usage":{"input_tokens":10,"output_tokens":0,"total_tokens":10}
+		}`))
+	}))
+	defer server.Close()
+
+	client, err := NewOpenAIResponsesClient(OpenAIResponsesClientConfig{
+		APIKey:     "test-key",
+		Endpoint:   server.URL,
+		ModelID:    "gpt-5.4",
+		HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatalf("NewOpenAIResponsesClient returned error: %v", err)
+	}
+
+	_, err = client.GenerateToolCalls(context.Background(), ToolCallRequest{
+		TaskID: "task_schema_001",
+		RunID:  "run_schema_001",
+		Input:  "Attach the current browser tab before summarizing it.",
+		Tools: []ToolDefinition{
+			{
+				Name:        "browser_attach_current",
+				Description: "Attach the current browser tab",
+				InputSchema: map[string]any{
+					"type":                 "object",
+					"properties":           nil,
+					"additionalProperties": false,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("GenerateToolCalls returned error: %v", err)
+	}
+
+	if len(received.Tools) != 1 {
+		t.Fatalf("expected one tool definition, got %d", len(received.Tools))
+	}
+	toolMap, ok := received.Tools[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected tool payload to be an object, got %+v", received.Tools[0])
+	}
+	parameters, ok := toolMap["parameters"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected parameters object, got %+v", toolMap["parameters"])
+	}
+	properties, ok := parameters["properties"].(map[string]any)
+	if !ok || properties == nil || len(properties) != 0 {
+		t.Fatalf("expected browser attach schema properties to serialize as an empty object, got %+v", parameters["properties"])
 	}
 }
 
