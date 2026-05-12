@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -561,7 +562,12 @@ func buildMirrorProfile(tasks []runengine.TaskRecord) map[string]any {
 	}
 }
 
-func aggregateTokenCostSummary(unfinishedTasks, finishedTasks []runengine.TaskRecord, budgetAutoDowngrade bool) map[string]any {
+type tokenCostUsageSummary struct {
+	TodayTokens int
+	TodayCost   float64
+}
+
+func aggregateTokenCostSummary(unfinishedTasks, finishedTasks []runengine.TaskRecord, budgetAutoDowngrade bool, extraTodayUsage tokenCostUsageSummary) map[string]any {
 	currentTaskTokens := 0
 	currentTaskCost := 0.0
 	if currentTask, ok := latestTokenUsageTask(unfinishedTasks, finishedTasks); ok {
@@ -579,6 +585,8 @@ func aggregateTokenCostSummary(unfinishedTasks, finishedTasks []runengine.TaskRe
 		todayTokens += intValueFromAny(task.TokenUsage["total_tokens"])
 		todayCost += floatValueFromAny(task.TokenUsage["estimated_cost"])
 	}
+	todayTokens += extraTodayUsage.TodayTokens
+	todayCost += extraTodayUsage.TodayCost
 
 	return map[string]any{
 		"current_task_tokens":   currentTaskTokens,
@@ -588,6 +596,24 @@ func aggregateTokenCostSummary(unfinishedTasks, finishedTasks []runengine.TaskRe
 		"single_task_limit":     0.0,
 		"daily_limit":           0.0,
 		"budget_auto_downgrade": budgetAutoDowngrade,
+	}
+}
+
+// inspectorTitleGenerationUsage keeps manual inspector note-title generation
+// visible in day-level quota summaries without collapsing these calls into the
+// current task token view.
+func (s *Service) inspectorTitleGenerationUsage(ctx context.Context) tokenCostUsageSummary {
+	if s == nil || s.storage == nil {
+		return tokenCostUsageSummary{}
+	}
+
+	usage, err := s.storage.InspectorTitleGenerationUsage(ctx, time.Now().UTC())
+	if err != nil {
+		return tokenCostUsageSummary{}
+	}
+	return tokenCostUsageSummary{
+		TodayTokens: usage.TotalTokens,
+		TodayCost:   usage.TotalCost,
 	}
 }
 

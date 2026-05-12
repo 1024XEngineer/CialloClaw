@@ -18,6 +18,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/titlegen"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/traceeval"
 )
@@ -41,6 +42,7 @@ type Service struct {
 	executor         *execution.Service
 	inspector        *taskinspector.Service
 	storage          *storage.Service
+	titleGenerator   *titlegen.Service
 	modelMu          sync.RWMutex
 	runtimeMu        sync.RWMutex
 	sessionInputMu   sync.RWMutex
@@ -102,6 +104,30 @@ func (s *Service) attachExecutor(executorService *execution.Service) {
 		}
 		return messages
 	})
+}
+
+// WithTaskInspector replaces the default inspector service used by inspection
+// RPCs. A nil value keeps the default no-storage inspector.
+func (s *Service) WithTaskInspector(inspectorService *taskinspector.Service) *Service {
+	if inspectorService != nil {
+		if s.titleGenerator != nil {
+			inspectorService.WithTitleGenerator(s.titleGenerator)
+		}
+		s.inspector = inspectorService
+	}
+	return s
+}
+
+// WithTitleGenerator replaces the default runtime title generator so every
+// title-producing path shares the same model-backed policy.
+func (s *Service) WithTitleGenerator(generator *titlegen.Service) *Service {
+	if generator != nil {
+		s.titleGenerator = generator
+		if s.inspector != nil {
+			s.inspector.WithTitleGenerator(generator)
+		}
+	}
+	return s
 }
 
 // Snapshot returns the minimal debug summary for health endpoints. It is a
