@@ -533,15 +533,6 @@ body[data-app-window="shell-ball"],
   -webkit-line-clamp: 2;
 }
 
-.shell-ball-bubble-message__intent-summary {
-  color: rgba(59, 88, 124, 0.94);
-  font-size: 0.64rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  line-height: 1.4;
-  margin: 0 0 0.42rem;
-}
-
 .shell-ball-bubble-message__loading {
   align-items: flex-start;
   display: grid;

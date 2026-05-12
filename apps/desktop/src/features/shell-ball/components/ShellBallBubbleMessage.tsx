@@ -39,9 +39,8 @@ export function ShellBallBubbleMessage({
   const showMarkdown = item.role === "agent" && item.bubble.type !== "intent_confirm";
   const showLoadingState = item.desktop.presentationHint === "loading";
   const inlineApproval = item.role === "agent" ? item.desktop.inlineApproval : undefined;
-  const intentConfirm = item.role === "agent" ? item.desktop.intentConfirm : undefined;
   const inlineApprovalBusy = inlineApproval?.status === "submitting";
-  const intentConfirmBusy = intentConfirm?.status === "submitting";
+  const intentConfirmBusy = item.role === "agent" ? item.desktop.intentConfirm?.status === "submitting" : undefined;
   const shouldShowInlineApprovalActions =
     inlineApproval !== undefined && onAllowApproval !== undefined && onDenyApproval !== undefined;
   const shouldShowIntentActions =
@@ -168,11 +167,6 @@ export function ShellBallBubbleMessage({
               <ChevronUp className="shell-ball-bubble-message__collapse-control-icon" aria-hidden="true" />
             )}
           </button>
-        ) : null}
-        {intentConfirm ? (
-          <p className="shell-ball-bubble-message__intent-summary">
-            当前意图：{intentConfirm.intentLabel}
-          </p>
         ) : null}
         {shouldShowInlineApprovalActions ? (
           <div className="shell-ball-bubble-message__approval-actions">
