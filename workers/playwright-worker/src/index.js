@@ -1,6 +1,10 @@
 import { isIP } from "node:net";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { stdin as input, stdout as output, stderr as errorOutput } from "node:process";
+import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
 export const manifest = {
@@ -22,13 +26,18 @@ export const manifest = {
 
 const browserTimeoutMS = 30000;
 const defaultCDPEndpointURL = "http://127.0.0.1:9222";
+const defaultManagedCDPEndpointURL = "http://127.0.0.1:9333";
 const defaultSearchEngineURL = "https://duckduckgo.com/html/";
+const managedBrowserStartupTimeoutMS = 10000;
+const managedBrowserRetryIntervalMS = 250;
+const managedBrowserUserDataRoot = path.join(os.tmpdir(), "cialloclaw-playwright-browser");
 const supportedCDPBrowserKinds = new Set(["chrome", "edge"]);
 const workerUserAgent = "CialloClawPlaywrightWorker/0.1";
 
 const defaultDependencies = {
   connectToBrowser,
-  launchBrowser,
+  launchBrowser: launchBundledBrowser,
+  launchManagedBrowser,
 };
 
 function readAllStdin() {
@@ -40,6 +49,18 @@ function readAllStdin() {
     });
     input.on("end", () => resolve(data));
     input.on("error", reject);
+  });
+}
+
+function writeStream(stream, text) {
+  return new Promise((resolve, reject) => {
+    stream.write(text, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
   });
 }
 
@@ -70,7 +91,7 @@ function extractTitle(html, url) {
   }
 }
 
-async function launchBrowser() {
+async function launchBundledBrowser() {
   const { chromium } = await import("playwright");
   return chromium.launch({ headless: true });
 }
@@ -78,6 +99,210 @@ async function launchBrowser() {
 async function connectToBrowser(endpointURL) {
   const { chromium } = await import("playwright");
   return chromium.connectOverCDP(endpointURL);
+}
+
+async function browserVersionString(browser) {
+  if (!browser || typeof browser.version !== "function") {
+    return "";
+  }
+  try {
+    return await browser.version();
+  } catch {
+    return "";
+  }
+}
+
+function detectWindowsBrowserCandidates(env = process.env) {
+  const roots = [env["ProgramFiles(x86)"], env.ProgramFiles, env.LOCALAPPDATA].filter(Boolean);
+  return [
+    {
+      browserKind: "edge",
+      executablePaths: roots.map((root) => path.join(root, "Microsoft", "Edge", "Application", "msedge.exe")),
+    },
+    {
+      browserKind: "chrome",
+      executablePaths: roots.map((root) => path.join(root, "Google", "Chrome", "Application", "chrome.exe")),
+    },
+  ];
+}
+
+function detectDarwinBrowserCandidates() {
+  return [
+    {
+      browserKind: "chrome",
+      executablePaths: ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"],
+    },
+    {
+      browserKind: "edge",
+      executablePaths: ["/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"],
+    },
+  ];
+}
+
+function detectLinuxBrowserCandidates() {
+  return [
+    {
+      browserKind: "chrome",
+      executablePaths: ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/snap/bin/chromium"],
+    },
+    {
+      browserKind: "edge",
+      executablePaths: ["/usr/bin/microsoft-edge", "/usr/bin/microsoft-edge-stable"],
+    },
+  ];
+}
+
+function isFilePath(filePath, statSync = fs.statSync) {
+  try {
+    return statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+export function resolveLocalBrowserCandidates(options = {}) {
+  const platformName = options.platform ?? process.platform;
+  const statSync = options.statSync ?? fs.statSync;
+  const env = options.env ?? process.env;
+  let candidates;
+  switch (platformName) {
+    case "win32":
+      candidates = detectWindowsBrowserCandidates(env);
+      break;
+    case "darwin":
+      candidates = detectDarwinBrowserCandidates();
+      break;
+    default:
+      candidates = detectLinuxBrowserCandidates();
+      break;
+  }
+
+  return candidates
+    .map((candidate) => {
+      const executablePath = candidate.executablePaths.find((filePath) => isFilePath(filePath, statSync));
+      if (!executablePath) {
+        return null;
+      }
+      return {
+        browserKind: candidate.browserKind,
+        executablePath,
+      };
+    })
+    .filter(Boolean);
+}
+
+function managedBrowserUserDataDir(browserKind) {
+  return path.join(managedBrowserUserDataRoot, browserKind);
+}
+
+function managedBrowserArgs(endpointURL, browserKind) {
+  const debugPort = new URL(endpointURL).port || "9333";
+  return [
+    `--remote-debugging-port=${debugPort}`,
+    "--remote-debugging-address=127.0.0.1",
+    `--user-data-dir=${managedBrowserUserDataDir(browserKind)}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    "about:blank",
+  ];
+}
+
+async function waitForManagedBrowserConnection(endpointURL, deps) {
+  const deadline = Date.now() + managedBrowserStartupTimeoutMS;
+  const sleeper = deps.sleep ?? sleep;
+  let lastError;
+  while (Date.now() < deadline) {
+    try {
+      return await deps.connectToBrowser(endpointURL);
+    } catch (error) {
+      lastError = error;
+      await sleeper(managedBrowserRetryIntervalMS);
+    }
+  }
+  if (lastError instanceof Error) {
+    throw lastError;
+  }
+  throw new Error(`timed out waiting for browser endpoint ${endpointURL}`);
+}
+
+export async function launchManagedBrowser(deps = defaultDependencies) {
+  const endpointURL = deps.endpointURL ?? defaultManagedCDPEndpointURL;
+  const candidates = (deps.resolveLocalBrowserCandidates ?? resolveLocalBrowserCandidates)();
+  const mkdirSync = deps.mkdirSync ?? fs.mkdirSync;
+  const spawnBrowserProcess = deps.spawnBrowserProcess ?? ((executablePath, args) => spawn(executablePath, args, {
+    detached: true,
+    stdio: "ignore",
+  }));
+  if (candidates.length === 0) {
+    throw new Error("no local Chrome or Edge browser executable was found");
+  }
+
+  for (let index = 0; index < candidates.length; index += 1) {
+    const candidate = candidates[index];
+    try {
+      const browser = await deps.connectToBrowser(endpointURL);
+      return {
+        browser,
+        browserKind: detectConnectedBrowserKind(await browserVersionString(browser)) ?? candidate.browserKind,
+        browserTransport: "cdp",
+        endpointURL,
+        managed: true,
+        source: "playwright_worker_local_browser",
+      };
+    } catch {
+      // Fall through and try launching a managed browser process.
+    }
+
+    try {
+      mkdirSync(managedBrowserUserDataDir(candidate.browserKind), { recursive: true });
+      const child = spawnBrowserProcess(candidate.executablePath, managedBrowserArgs(endpointURL, candidate.browserKind));
+      child.unref();
+      const browser = await waitForManagedBrowserConnection(endpointURL, deps);
+      return {
+        browser,
+        browserKind: detectConnectedBrowserKind(await browserVersionString(browser)) ?? candidate.browserKind,
+        browserTransport: "cdp",
+        endpointURL,
+        managed: true,
+        source: "playwright_worker_local_browser",
+      };
+    } catch (error) {
+      if (index === candidates.length - 1) {
+        throw error;
+      }
+    }
+  }
+
+  throw new Error("failed to launch a managed local browser");
+}
+
+async function acquireBrowserSession(deps = defaultDependencies) {
+  let managedError;
+  try {
+    return await deps.launchManagedBrowser(deps);
+  } catch (error) {
+    managedError = error;
+  }
+
+  try {
+    return {
+      browser: await deps.launchBrowser(),
+      browserKind: undefined,
+      browserTransport: "launch",
+      endpointURL: undefined,
+      managed: false,
+      source: "playwright_worker_browser",
+    };
+  } catch (launchError) {
+    const details = [];
+    if (managedError) {
+      details.push(`local browser failed: ${managedError instanceof Error ? managedError.message : String(managedError)}`);
+    }
+    if (launchError) {
+      details.push(`bundled browser failed: ${launchError instanceof Error ? launchError.message : String(launchError)}`);
+    }
+    throw new Error(details.join("; "));
+  }
 }
 
 async function closeIfPossible(target, methodName) {
@@ -92,6 +317,39 @@ async function closeResources(context, browser) {
   } finally {
     await closeIfPossible(browser, "close");
   }
+}
+
+async function openSessionPage(session) {
+  const browser = session?.browser;
+  const contexts = typeof browser?.contexts === "function" ? browser.contexts() : [];
+  if (session?.managed) {
+    const context = contexts.find(Boolean);
+    if (!context || typeof context.newPage !== "function") {
+      throw new Error("managed browser did not expose a writable context");
+    }
+    const page = await context.newPage();
+    return {
+      context,
+      page,
+      async close() {
+        try {
+          await closeIfPossible(page, "close");
+        } finally {
+          await closeIfPossible(browser, "close");
+        }
+      },
+    };
+  }
+
+  const context = await browser.newContext({ userAgent: workerUserAgent });
+  const page = await context.newPage();
+  return {
+    context,
+    page,
+    async close() {
+      await closeResources(context, browser);
+    },
+  };
 }
 
 async function navigatePage(page, url) {
@@ -111,21 +369,21 @@ async function navigatePage(page, url) {
 }
 
 async function openBrowserPage(url, deps, callback) {
-  const browser = await deps.launchBrowser();
-  let context;
+  const session = await acquireBrowserSession(deps);
+  let openedPage;
   try {
-    context = await browser.newContext({ userAgent: workerUserAgent });
-    const page = await context.newPage();
+    openedPage = await openSessionPage(session);
+    const page = openedPage.page;
     const response = await navigatePage(page, url);
     return await callback(page, response, {
       attached: false,
-      browserKind: undefined,
-      browserTransport: "launch",
-      endpointURL: undefined,
-      source: "playwright_worker_browser",
+      browserKind: session.browserKind,
+      browserTransport: session.browserTransport,
+      endpointURL: session.endpointURL,
+      source: session.source,
     });
   } finally {
-    await closeResources(context, browser);
+    await openedPage?.close?.();
   }
 }
 
@@ -408,7 +666,7 @@ async function connectAttachedBrowser(request, deps) {
     throw createStructuredWorkerError("browser_attach_failed", message);
   }
 
-  const connectedBrowserKind = detectConnectedBrowserKind(await browser?.version?.().catch(() => ""));
+  const connectedBrowserKind = detectConnectedBrowserKind(await browserVersionString(browser));
   if (attachConfig.browserKind && connectedBrowserKind && attachConfig.browserKind !== connectedBrowserKind) {
     throw createStructuredWorkerError(
       "browser_kind_mismatch",
@@ -425,7 +683,12 @@ async function connectAttachedBrowser(request, deps) {
 }
 
 async function withAttachedBrowser(request, deps, callback) {
-  return callback(await connectAttachedBrowser(request, deps));
+  const session = await connectAttachedBrowser(request, deps);
+  try {
+    return await callback(session);
+  } finally {
+    await closeIfPossible(session?.browser, "close");
+  }
 }
 
 async function withAttachedPage(request, deps, callback) {
@@ -489,11 +752,10 @@ async function summarizeLoadedPage(page, fallbackURL, execution, response) {
 // healthResponse validates that the worker can load Playwright, start a browser,
 // and create a fresh page before the Go runtime marks the sidecar as ready.
 export async function healthResponse(deps = defaultDependencies) {
-  const browser = await deps.launchBrowser();
-  let context;
+  const session = await acquireBrowserSession(deps);
+  let openedPage;
   try {
-    context = await browser.newContext({ userAgent: workerUserAgent });
-    await context.newPage();
+    openedPage = await openSessionPage(session);
     return {
       ok: true,
       result: {
@@ -503,7 +765,7 @@ export async function healthResponse(deps = defaultDependencies) {
       },
     };
   } finally {
-    await closeResources(context, browser);
+    await openedPage?.close?.();
   }
 }
 
@@ -804,13 +1066,15 @@ async function main() {
   const raw = await readAllStdin();
   const trimmed = raw.trim();
   if (trimmed === "" || trimmed === "--manifest") {
-    output.write(`${JSON.stringify(manifest)}\n`);
+    await writeStream(output, `${JSON.stringify(manifest)}\n`);
+    process.exit(0);
     return;
   }
 
   const request = JSON.parse(trimmed);
   const response = await handleRequest(request);
-  output.write(`${JSON.stringify(response)}\n`);
+  await writeStream(output, `${JSON.stringify(response)}\n`);
+  process.exit(0);
 }
 
 if (isMainModule()) {
@@ -823,8 +1087,11 @@ if (isMainModule()) {
         message,
       },
     };
-    errorOutput.write(`${message}\n`);
-    output.write(`${JSON.stringify(response)}\n`);
-    process.exitCode = 1;
+    Promise.allSettled([
+      writeStream(errorOutput, `${message}\n`),
+      writeStream(output, `${JSON.stringify(response)}\n`),
+    ]).finally(() => {
+      process.exit(1);
+    });
   });
 }
