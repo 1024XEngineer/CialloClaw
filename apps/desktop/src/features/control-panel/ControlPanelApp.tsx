@@ -1087,6 +1087,9 @@ export function ControlPanelApp() {
             tone: result.modelValidation.ok ? "neutral" : "warning",
           });
         }
+
+        // Only a successful RPC-backed save can clear the backend connectivity banner.
+        setLoadError(null);
       }
 
       if (budgetDisplayDirty) {
@@ -1095,7 +1098,6 @@ export function ControlPanelApp() {
         setBudgetDisplayDraft(savedBudgetDisplay);
       }
 
-      setLoadError(null);
       setPanelData(nextPanelData);
       setDraft(nextDraft);
       if (!settingsDirty && !inspectorDirty) {
@@ -1909,7 +1911,7 @@ export function ControlPanelApp() {
               {isRestoreDefaultsConfirming ? (
                 <div className="control-panel-shell__about-confirm">
                   <Text as="p" size="2" className="control-panel-shell__about-note">
-                    会重置通用设置、悬浮球、记忆设置、任务巡检与预算自动降级。
+                    会重置通用设置、悬浮球、记忆设置、任务巡检、预算自动降级，以及本地预算展示值。
                   </Text>
                   <Text as="p" size="2" className="control-panel-shell__about-note">
                     不会删除任务历史、记忆内容、本地文件，也不会改动当前已保存的 workspace 路径、任务来源、模型路由或已保存 API Key。

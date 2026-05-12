@@ -3844,6 +3844,19 @@ test("control panel exposes dedicated budget display controls alongside the safe
   assert.match(controlPanelAppSource, /label="待确认授权"/);
 });
 
+test("control panel keeps RPC load errors until a backend-backed save actually succeeds", () => {
+  const controlPanelAppSource = readFileSync(resolve(desktopRoot, "src/features/control-panel/ControlPanelApp.tsx"), "utf8");
+
+  assert.match(controlPanelAppSource, /if \(settingsDirty \|\| inspectorDirty\) \{[\s\S]*setLoadError\(null\);[\s\S]*\}/);
+  assert.doesNotMatch(controlPanelAppSource, /if \(budgetDisplayDirty\) \{[\s\S]*setLoadError\(null\);[\s\S]*\}/);
+});
+
+test("control panel restore-default confirmation warns that local budget display values will be cleared", () => {
+  const controlPanelAppSource = readFileSync(resolve(desktopRoot, "src/features/control-panel/ControlPanelApp.tsx"), "utf8");
+
+  assert.match(controlPanelAppSource, /以及本地预算展示值/);
+});
+
 test("security budget display settings stay local to desktop presentation and overlay the summary when provided", async () => {
   const originalWindow = globalThis.window;
   const storage = new Map<string, string>();
