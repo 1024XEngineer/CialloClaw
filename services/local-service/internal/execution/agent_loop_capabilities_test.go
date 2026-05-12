@@ -18,11 +18,11 @@ import (
 func TestAgentLoopToolDefinitionsUseSharedCatalog(t *testing.T) {
 	service := newAgentLoopCapabilityTestService(t, true)
 	definitions := service.agentLoopToolDefinitions()
-	if len(definitions) != 5 {
-		t.Fatalf("expected five planner-visible tools without browser hints, got %+v", definitions)
+	if len(definitions) != 4 {
+		t.Fatalf("expected four planner-visible tools without browser hints, got %+v", definitions)
 	}
 
-	wantNames := []string{"read_file", "list_dir", "page_read", "page_search", "structured_dom"}
+	wantNames := []string{"read_file", "list_dir", "page_read", "page_search"}
 	for index, want := range wantNames {
 		if definitions[index].Name != want {
 			t.Fatalf("unexpected tool definition order at %d: got %q want %q", index, definitions[index].Name, want)
@@ -52,10 +52,10 @@ func TestAgentLoopToolDefinitionsUseSharedCatalog(t *testing.T) {
 func TestAgentLoopToolDefinitionsExposeBrowserToolsWhenSnapshotSupportsAttach(t *testing.T) {
 	service := newAgentLoopCapabilityTestService(t, true)
 	definitions := service.agentLoopToolDefinitionsForSnapshot(taskcontext.TaskContextSnapshot{BrowserKind: "chrome", PageURL: "https://example.com", WindowTitle: "Example"})
-	if len(definitions) != 7 {
-		t.Fatalf("expected browser-capable snapshot to expose seven planner-visible tools, got %+v", definitions)
+	if len(definitions) != 6 {
+		t.Fatalf("expected browser-capable snapshot to expose six planner-visible tools, got %+v", definitions)
 	}
-	wantNames := []string{"read_file", "list_dir", "browser_attach_current", "browser_snapshot", "page_read", "page_search", "structured_dom"}
+	wantNames := []string{"read_file", "list_dir", "browser_attach_current", "browser_snapshot", "page_read", "page_search"}
 	for index, want := range wantNames {
 		if definitions[index].Name != want {
 			t.Fatalf("unexpected browser-aware tool definition order at %d: got %q want %q", index, definitions[index].Name, want)
@@ -63,9 +63,6 @@ func TestAgentLoopToolDefinitionsExposeBrowserToolsWhenSnapshotSupportsAttach(t 
 	}
 	if !strings.Contains(definitions[2].Description, "不会隐式导航或交互页面") {
 		t.Fatalf("expected browser_attach_current description to explain attach boundary, got %q", definitions[2].Description)
-	}
-	if !strings.Contains(definitions[6].Description, "不会执行页面交互") {
-		t.Fatalf("expected structured_dom description to preserve read-only contract, got %q", definitions[6].Description)
 	}
 }
 
@@ -76,7 +73,7 @@ func TestAgentLoopToolDefinitionsAllowSparseBrowserContextForDiscoveryTools(t *t
 	for _, definition := range definitions {
 		names = append(names, definition.Name)
 	}
-	if !containsString(names, "read_file") || !containsString(names, "list_dir") || !containsString(names, "page_read") || !containsString(names, "page_search") || !containsString(names, "structured_dom") {
+	if !containsString(names, "read_file") || !containsString(names, "list_dir") || !containsString(names, "page_read") || !containsString(names, "page_search") {
 		t.Fatalf("expected sparse browser context to preserve non-browser planner tools, got %+v", names)
 	}
 	if containsString(names, "browser_attach_current") || containsString(names, "browser_snapshot") || containsString(names, "browser_tabs_list") || containsString(names, "browser_navigate") || containsString(names, "browser_tab_focus") {
@@ -107,8 +104,8 @@ func TestAgentLoopToolAllowlistRequiresCatalogMembershipAndRegistryPresence(t *t
 	}
 
 	withPlaywright := newAgentLoopCapabilityTestService(t, true)
-	if !withPlaywright.isAllowedAgentLoopTool("structured_dom") {
-		t.Fatal("expected structured_dom to become planner-visible once cataloged")
+	if withPlaywright.isAllowedAgentLoopTool("structured_dom") {
+		t.Fatal("expected structured_dom to stay outside the default planner catalog")
 	}
 	if withPlaywright.isAllowedAgentLoopTool("browser_attach_current") {
 		t.Fatal("expected browser_attach_current to stay hidden without attach-capable snapshot hints")

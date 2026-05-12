@@ -265,6 +265,29 @@ func TestDispatchTaskControlValidationAndStatusErrors(t *testing.T) {
 	}
 }
 
+func TestDispatchTaskConfirmRejectsMalformedCorrectionText(t *testing.T) {
+	server := newTestServer()
+
+	response := server.dispatch(requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-task-confirm-invalid-correction-text"`),
+		Method:  methodAgentTaskConfirm,
+		Params: mustMarshal(t, map[string]any{
+			"task_id":         "task_confirm_invalid_correction_text",
+			"confirmed":       false,
+			"correction_text": 42,
+		}),
+	})
+
+	errEnvelope, ok := response.(errorEnvelope)
+	if !ok {
+		t.Fatalf("expected error response envelope, got %#v", response)
+	}
+	if errEnvelope.Error.Code != errInvalidParams || errEnvelope.Error.Message != "INVALID_PARAMS" {
+		t.Fatalf("expected INVALID_PARAMS for malformed correction_text, got %+v", errEnvelope.Error)
+	}
+}
+
 func TestDispatchTaskListClampsPagingParams(t *testing.T) {
 	server := newTestServer()
 	for index := 0; index < 25; index++ {

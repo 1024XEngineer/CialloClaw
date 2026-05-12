@@ -30,8 +30,8 @@ function createPage(overrides = {}) {
         inputs: ["email"],
       };
     },
-    goto: async (url) => {
-      navigationLog.push({ action: "goto", url });
+    goto: async (url, options) => {
+      navigationLog.push({ action: "goto", options, url });
       page.currentURL = overrides.gotoURL ?? url;
       return Object.prototype.hasOwnProperty.call(overrides, "response")
         ? overrides.response
@@ -162,9 +162,11 @@ test("handleRequest delegates health requests through the worker switch", async 
 });
 
 test("page_read returns normalized page metadata", async () => {
+  const navigationLog = [];
   const response = await handleRequest({ action: "page_read", url: "https://example.com" }, createDeps({
     bodyText: "Hello world from browser",
     gotoURL: "https://example.com/article",
+    navigationLog,
     title: "Example Article",
   }));
 
@@ -173,6 +175,14 @@ test("page_read returns normalized page metadata", async () => {
   assert.equal(response.result.title, "Example Article");
   assert.equal(response.result.text_content, "Hello world from browser");
   assert.equal(response.result.source, "playwright_worker_browser");
+  assert.deepEqual(navigationLog, [{
+    action: "goto",
+    options: {
+      timeout: 30000,
+      waitUntil: "load",
+    },
+    url: "https://example.com",
+  }]);
 });
 
 test("page_read uses the HTML title tag when Playwright title lookup is empty", async () => {
@@ -473,7 +483,14 @@ test("browser_navigate drives the attached tab to a new url", async () => {
   assert.equal(response.result.title, "Next Page");
   assert.equal(response.result.text_content, "Navigation complete");
   assert.deepEqual(lifecycle, ["connect:http://127.0.0.1:9222"]);
-  assert.deepEqual(navigationLog, [{ action: "goto", url: "https://example.com/next" }]);
+  assert.deepEqual(navigationLog, [{
+    action: "goto",
+    options: {
+      timeout: 30000,
+      waitUntil: "load",
+    },
+    url: "https://example.com/next",
+  }]);
 });
 
 test("browser_interact keeps real-browser actions on the attached tab", async () => {

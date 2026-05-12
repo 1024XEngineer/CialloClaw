@@ -12,6 +12,7 @@ import { X } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { PanelSurface, StatusBadge } from "@cialloclaw/ui";
 import { subscribeMirrorOverviewUpdated } from "@/rpc/subscriptions";
+import { useDashboardEscapeHandler } from "@/features/dashboard/shared/dashboardEscapeCoordinator";
 import {
   formatDashboardSettingsMutationFeedback,
   updateDashboardSettings,
@@ -605,6 +606,12 @@ export function MirrorApp() {
     setFocusedMemoryId(null);
   }, []);
 
+  useDashboardEscapeHandler({
+    enabled: activeDetailKey !== null,
+    handleEscape: closeDetail,
+    priority: 220,
+  });
+
   useEffect(() => {
     return () => {
       isMountedRef.current = false;
@@ -804,23 +811,6 @@ export function MirrorApp() {
     persistFloatingModulePositions(modulePositions);
   }, [boardReady, draggingKey, modulePositions, persistFloatingModulePositions]);
 
-  useEffect(() => {
-    if (!activeDetailKey) {
-      return;
-    }
-
-    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape") {
-        closeDetail();
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-
-    return () => {
-      window.removeEventListener("keydown", handleKeyDown);
-    };
-  }, [activeDetailKey, closeDetail]);
   const handleSettingsUpdate = useCallback(
     async (subject: string, patch: DashboardSettingsPatch) => {
       const result = await updateDashboardSettings(patch, dataMode);

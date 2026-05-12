@@ -11,6 +11,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/languagepolicy"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
@@ -110,6 +111,7 @@ type Request struct {
 	AttemptIndex       int
 	SegmentKind        string
 	InputText          string
+	ReplyLanguage      string
 	ResultTitle        string
 	FallbackOutput     string
 	ToolDefinitions    []model.ToolDefinition
@@ -215,7 +217,7 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 				}))
 			}
 		}
-		plannerInput, compactedHistory := buildPlannerInput(activeInputText, history, availableToolDefinitions, request.CompressChars, request.KeepRecent)
+		plannerInput, compactedHistory := buildPlannerInputForLanguage(activeInputText, request.ReplyLanguage, history, availableToolDefinitions, request.CompressChars, request.KeepRecent)
 		round := PersistedRound{
 			StepID:        fmt.Sprintf("step_loop_%02d", turn+1),
 			RunID:         request.RunID,
@@ -338,7 +340,7 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 						return Result{}, true, err
 					}
 				}
-				activeInputText = appendCapabilityReminderInput(activeInputText, availableToolDefinitions)
+				activeInputText = appendCapabilityReminderInputForLanguage(activeInputText, availableToolDefinitions, request.ReplyLanguage)
 				// Retry this heuristic only once. Repeated denials after an explicit
 				// reminder should return to the caller so the loop stays observable.
 				events = appendEvent(events, request, newEventForRound(round, "loop.retrying", map[string]any{
@@ -551,7 +553,7 @@ func (r *Runtime) Run(ctx context.Context, request Request) (Result, bool, error
 							return Result{}, true, err
 						}
 					}
-					activeInputText = appendCapabilityReminderInput(activeInputText, availableToolDefinitions)
+					activeInputText = appendCapabilityReminderInputForLanguage(activeInputText, availableToolDefinitions, request.ReplyLanguage)
 					events = appendEvent(events, request, newEventForRound(round, "loop.retrying", map[string]any{
 						"attempt_index": round.AttemptIndex,
 						"segment_kind":  round.SegmentKind,
@@ -659,8 +661,38 @@ func isAgentLoopIntent(taskIntent map[string]any) bool {
 }
 
 func buildPlannerInput(inputText string, history []string, toolDefinitions []model.ToolDefinition, compressChars, keepRecent int) (string, []string) {
+	return buildPlannerInputForLanguage(inputText, "", history, toolDefinitions, compressChars, keepRecent)
+}
+
+func buildPlannerInputForLanguage(inputText, replyLanguage string, history []string, toolDefinitions []model.ToolDefinition, compressChars, keepRecent int) (string, []string) {
 	compressedHistory := compactHistory(history, compressChars, keepRecent)
-	sections := []string{
+	english := effectiveReplyLanguage(replyLanguage, inputText) == languagepolicy.ReplyLanguageEnglish
+	sections := plannerInstructionSections(english)
+	if capabilityLines := buildToolCapabilityLines(toolDefinitions, english); len(capabilityLines) > 0 {
+		sections = append(sections, "", plannerCapabilityHeading(english))
+		sections = append(sections, capabilityLines...)
+	}
+	sections = append(sections, "", plannerContextHeading(english), strings.TrimSpace(inputText))
+	if len(compressedHistory) > 0 {
+		sections = append(sections, "", plannerHistoryHeading(english))
+		sections = append(sections, compressedHistory...)
+	}
+	return strings.Join(sections, "\n"), compressedHistory
+}
+
+func plannerInstructionSections(english bool) []string {
+	if english {
+		return []string{
+			"You are the planning round for a desktop agent.",
+			"Use English for this request unless the user explicitly asks for another language.",
+			"First decide whether you can answer directly; call tools only when they will clearly improve the result.",
+			"If an available tool can help finish the task, prefer using the tool instead of claiming you cannot do it.",
+			"Lead with the conclusion, stay concise, and avoid filler.",
+			"Do not invent file contents, directory entries, or webpage contents.",
+			"If the task is already clear and does not need tools, give the final answer directly.",
+		}
+	}
+	return []string{
 		"你是桌面 Agent 的规划轮次。",
 		"默认使用中文回答；只有在用户明确要求其他语言时才切换。",
 		"先判断能否直接回答；只有在工具能明显提升结果时才调用工具。",
@@ -669,16 +701,27 @@ func buildPlannerInput(inputText string, history []string, toolDefinitions []mod
 		"不要编造文件内容、目录项或网页内容。",
 		"如果任务已经足够清晰且不需要工具，直接给最终答复。",
 	}
-	if capabilityLines := buildToolCapabilityLines(toolDefinitions); len(capabilityLines) > 0 {
-		sections = append(sections, "", "当前可用能力：")
-		sections = append(sections, capabilityLines...)
+}
+
+func plannerCapabilityHeading(english bool) string {
+	if english {
+		return "Available tools:"
 	}
-	sections = append(sections, "", "用户上下文：", strings.TrimSpace(inputText))
-	if len(compressedHistory) > 0 {
-		sections = append(sections, "", "已观察到的工具结果：")
-		sections = append(sections, compressedHistory...)
+	return "当前可用能力："
+}
+
+func plannerContextHeading(english bool) string {
+	if english {
+		return "User context:"
 	}
-	return strings.Join(sections, "\n"), compressedHistory
+	return "用户上下文："
+}
+
+func plannerHistoryHeading(english bool) string {
+	if english {
+		return "Observed tool results:"
+	}
+	return "已观察到的工具结果："
 }
 
 func filterAllowedToolDefinitions(toolDefinitions []model.ToolDefinition, allowedTool func(string) bool) []model.ToolDefinition {
@@ -789,7 +832,7 @@ func shouldCarryPlannerOutputText(outputText string) bool {
 	return true
 }
 
-func buildToolCapabilityLines(toolDefinitions []model.ToolDefinition) []string {
+func buildToolCapabilityLines(toolDefinitions []model.ToolDefinition, english bool) []string {
 	lines := make([]string, 0, len(toolDefinitions))
 	for _, definition := range toolDefinitions {
 		name := strings.TrimSpace(definition.Name)
@@ -803,10 +846,15 @@ func buildToolCapabilityLines(toolDefinitions []model.ToolDefinition) []string {
 		}
 		if requiredFields := toolRequiredFields(definition.InputSchema); len(requiredFields) > 0 {
 			separator := "。"
+			requiredLabel := "必填参数："
+			if english {
+				separator = ". "
+				requiredLabel = "Required params: "
+			}
 			if strings.HasSuffix(line, ".") || strings.HasSuffix(line, "!") || strings.HasSuffix(line, "?") || strings.HasSuffix(line, "。") || strings.HasSuffix(line, "！") || strings.HasSuffix(line, "？") {
 				separator = " "
 			}
-			line += separator + "必填参数：" + strings.Join(requiredFields, ", ")
+			line += separator + requiredLabel + strings.Join(requiredFields, ", ")
 		}
 		lines = append(lines, line)
 	}
@@ -1295,9 +1343,41 @@ func stripCapabilityRoleLeadIn(normalized string) string {
 }
 
 func appendCapabilityReminderInput(inputText string, toolDefinitions []model.ToolDefinition) string {
+	return appendCapabilityReminderInputForLanguage(inputText, toolDefinitions, "")
+}
+
+func appendCapabilityReminderInputForLanguage(inputText string, toolDefinitions []model.ToolDefinition, replyLanguage string) string {
 	// Append the reminder to the original user input so the next planner round
 	// keeps the task context while restating the bounded tool surface.
-	sections := []string{
+	english := effectiveReplyLanguage(replyLanguage, inputText) == languagepolicy.ReplyLanguageEnglish
+	sections := capabilityReminderSections(inputText, english)
+	if capabilityLines := buildToolCapabilityLines(toolDefinitions, english); len(capabilityLines) > 0 {
+		sections = append(sections, plannerCapabilityHeading(english))
+		sections = append(sections, capabilityLines...)
+	}
+	return strings.TrimSpace(strings.Join(sections, "\n"))
+}
+
+func effectiveReplyLanguage(replyLanguage, inputText string) string {
+	if trimmed := strings.TrimSpace(replyLanguage); trimmed != "" {
+		return trimmed
+	}
+	return languagepolicy.PreferredReplyLanguage(inputText)
+}
+
+func capabilityReminderSections(inputText string, english bool) []string {
+	if english {
+		return []string{
+			strings.TrimSpace(inputText),
+			"",
+			"Capability reminder:",
+			"- The following tool capabilities are available in this round.",
+			"- Before saying you cannot do something or cannot access something, check whether these tools apply.",
+			"- If a tool can help finish the task, call it. Otherwise answer concisely in the user's language; default to Chinese only when the user did not specify another language.",
+		}
+	}
+
+	return []string{
 		strings.TrimSpace(inputText),
 		"",
 		"能力提醒：",
@@ -1305,11 +1385,6 @@ func appendCapabilityReminderInput(inputText string, toolDefinitions []model.Too
 		"- 在回答“做不到”或“无法访问”之前，先判断这些工具是否适用。",
 		"- 如果工具能帮助完成任务，就调用工具；否则按用户要求的语言给出简洁答复；若用户未指定语言，默认中文。",
 	}
-	if capabilityLines := buildToolCapabilityLines(toolDefinitions); len(capabilityLines) > 0 {
-		sections = append(sections, "当前可用能力：")
-		sections = append(sections, capabilityLines...)
-	}
-	return strings.TrimSpace(strings.Join(sections, "\n"))
 }
 
 func appendSteeringInput(inputText string, steeringMessages []string) string {

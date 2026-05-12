@@ -48,6 +48,16 @@ func protocolNotepadItemMap(item map[string]any, now time.Time) map[string]any {
 	return result
 }
 
+// ProtocolNotepadItem projects one internal notepad record to the stable
+// TodoItem RPC shape so orchestrator responses do not leak richer provenance
+// fields that only exist to preserve task-conversion semantics internally.
+func (e *Engine) ProtocolNotepadItem(item map[string]any) map[string]any {
+	if len(item) == 0 {
+		return nil
+	}
+	return protocolNotepadItemMap(item, e.now())
+}
+
 func protocolNotepadResourceList(rawValue any) []map[string]any {
 	resources := cloneResourceList(rawValue)
 	if len(resources) == 0 {
@@ -110,6 +120,7 @@ func normalizeNotepadItem(item map[string]any, now time.Time) map[string]any {
 	if plannedAt := deriveNotepadPlannedAt(normalized); plannedAt != "" {
 		normalized["planned_at"] = plannedAt
 	}
+	normalized["note_text_origin"] = deriveNotepadNoteTextOrigin(normalized)
 	normalized["note_text"] = deriveNotepadNoteText(normalized)
 	normalized["prerequisite"] = deriveNotepadPrerequisite(normalized)
 	normalized["related_resources"] = deriveNotepadRelatedResources(normalized)
@@ -326,6 +337,20 @@ func deriveNotepadNoteText(item map[string]any) string {
 	}
 	title := strings.TrimSpace(stringValue(item, "title", "待办事项"))
 	suggestion := strings.TrimSpace(stringValue(item, "agent_suggestion", ""))
+	return deriveSyntheticNotepadNoteText(title, suggestion)
+}
+
+func deriveNotepadNoteTextOrigin(item map[string]any) string {
+	if strings.TrimSpace(stringValue(item, "note_text", "")) == "" {
+		return "derived_default"
+	}
+	if origin := strings.TrimSpace(stringValue(item, "note_text_origin", "")); origin != "" {
+		return origin
+	}
+	return "user_provided"
+}
+
+func deriveSyntheticNotepadNoteText(title, suggestion string) string {
 	if suggestion != "" {
 		return title + "。当前建议：" + suggestion + "。"
 	}
@@ -562,51 +587,58 @@ func deriveNotepadRelatedResources(item map[string]any) []map[string]any {
 		return resources
 	}
 
+	// These fallback resources exist for notepad browsing only. Downstream task
+	// snapshots must still distinguish them from user-supplied execution inputs.
 	resources := make([]map[string]any, 0, 2)
 	title := strings.ToLower(strings.TrimSpace(stringValue(item, "title", "")))
 	switch stringValue(item, "bucket", "") {
 	case notepadBucketRecurringRule:
 		resources = append(resources, map[string]any{
-			"id":          stringValue(item, "item_id", "") + "_rule_source",
-			"label":       "任务源目录",
-			"path":        defaultTaskSourcePath,
-			"type":        "directory",
-			"target_kind": "folder",
+			"id":              stringValue(item, "item_id", "") + "_rule_source",
+			"label":           "任务源目录",
+			"path":            defaultTaskSourcePath,
+			"type":            "directory",
+			"target_kind":     "folder",
+			"resource_origin": "derived_default",
 		})
 	case notepadBucketClosed:
 		resources = append(resources, map[string]any{
-			"id":          stringValue(item, "item_id", "") + "_archive",
-			"label":       "归档目录",
-			"path":        "workspace/archive",
-			"type":        "directory",
-			"target_kind": "folder",
+			"id":              stringValue(item, "item_id", "") + "_archive",
+			"label":           "归档目录",
+			"path":            "workspace/archive",
+			"type":            "directory",
+			"target_kind":     "folder",
+			"resource_origin": "derived_default",
 		})
 	}
 	if strings.Contains(title, "模板") {
 		resources = append(resources, map[string]any{
-			"id":          stringValue(item, "item_id", "") + "_template",
-			"label":       "关联模板",
-			"path":        "workspace/templates",
-			"type":        "directory",
-			"target_kind": "folder",
+			"id":              stringValue(item, "item_id", "") + "_template",
+			"label":           "关联模板",
+			"path":            "workspace/templates",
+			"type":            "directory",
+			"target_kind":     "folder",
+			"resource_origin": "derived_default",
 		})
 	}
 	if strings.Contains(title, "周报") || strings.Contains(title, "报告") || strings.Contains(title, "评审") {
 		resources = append(resources, map[string]any{
-			"id":          stringValue(item, "item_id", "") + "_drafts",
-			"label":       "草稿目录",
-			"path":        "workspace/drafts",
-			"type":        "directory",
-			"target_kind": "folder",
+			"id":              stringValue(item, "item_id", "") + "_drafts",
+			"label":           "草稿目录",
+			"path":            "workspace/drafts",
+			"type":            "directory",
+			"target_kind":     "folder",
+			"resource_origin": "derived_default",
 		})
 	}
 	if len(resources) == 0 {
 		resources = append(resources, map[string]any{
-			"id":          stringValue(item, "item_id", "") + "_workspace",
-			"label":       "默认工作区",
-			"path":        defaultWorkspaceRoot,
-			"type":        "directory",
-			"target_kind": "folder",
+			"id":              stringValue(item, "item_id", "") + "_workspace",
+			"label":           "默认工作区",
+			"path":            defaultWorkspaceRoot,
+			"type":            "directory",
+			"target_kind":     "folder",
+			"resource_origin": "derived_default",
 		})
 	}
 	return resources
@@ -718,6 +750,9 @@ func restoreNotepadItemsFromStore(items []storage.TodoItemRecord, rules []storag
 			"created_at":       record.CreatedAt,
 			"updated_at":       record.UpdatedAt,
 		}
+		if record.NoteTextOrigin != "" {
+			item["note_text_origin"] = record.NoteTextOrigin
+		}
 		if record.SourceBucket != "" {
 			item["source_bucket"] = record.SourceBucket
 		}
@@ -733,7 +768,7 @@ func restoreNotepadItemsFromStore(items []storage.TodoItemRecord, rules []storag
 		if record.LinkedTaskID != "" {
 			item["linked_task_id"] = record.LinkedTaskID
 		}
-		if resources := decodeRelatedResources(record.RelatedResourcesJSON); len(resources) > 0 {
+		if resources := restoreStoredRelatedResources(item, decodeRelatedResources(record.RelatedResourcesJSON)); len(resources) > 0 {
 			item["related_resources"] = resources
 		}
 		if tags := decodeTags(record.TagsJSON); len(tags) > 0 {
@@ -752,9 +787,120 @@ func restoreNotepadItemsFromStore(items []storage.TodoItemRecord, rules []storag
 			item["recent_instance_status"] = nullableMapString(rule.RecentInstanceStatus)
 			item["effective_scope"] = nullableMapString(rule.EffectiveScope)
 		}
+		if origin := restoreStoredNoteTextOrigin(item, record.NoteTextOrigin); origin != "" {
+			item["note_text_origin"] = origin
+		}
 		result = append(result, item)
 	}
 	return result
+}
+
+// restoreStoredNoteTextOrigin preserves persisted provenance for title-only
+// notes. Legacy rows without an explicit origin marker stay on the conservative
+// "keep the stored body" side because content equality alone is not enough
+// evidence to discard note_text during later task conversion.
+func restoreStoredNoteTextOrigin(item map[string]any, persistedOrigin string) string {
+	if origin := strings.TrimSpace(persistedOrigin); origin != "" {
+		return origin
+	}
+	noteText := strings.TrimSpace(stringValue(item, "note_text", ""))
+	if noteText == "" {
+		return ""
+	}
+	return "user_provided"
+}
+
+// restoreStoredRelatedResources upgrades legacy persisted dashboard fallback
+// resources so later task conversion can still distinguish them from explicit
+// user attachments after a restart.
+func restoreStoredRelatedResources(item map[string]any, resources []map[string]any) []map[string]any {
+	if len(resources) == 0 {
+		return nil
+	}
+
+	defaultResourceIDs := knownDerivedDefaultNotepadResourceIDs(stringValue(item, "item_id", ""))
+	defaultsBySignature := knownDerivedDefaultNotepadResourceSignatures()
+
+	for _, resource := range resources {
+		if strings.TrimSpace(stringValue(resource, "resource_origin", "")) != "" {
+			continue
+		}
+		resourceID := strings.TrimSpace(firstNonEmpty(
+			stringValue(resource, "resource_id", ""),
+			stringValue(resource, "id", ""),
+		))
+		if _, ok := defaultResourceIDs[resourceID]; !ok {
+			continue
+		}
+		if _, ok := defaultsBySignature[relatedResourceSignature(resource)]; ok {
+			resource["resource_origin"] = "derived_default"
+		}
+	}
+	return resources
+}
+
+func knownDerivedDefaultNotepadResourceIDs(itemID string) map[string]struct{} {
+	itemID = strings.TrimSpace(itemID)
+	if itemID == "" {
+		return nil
+	}
+	return map[string]struct{}{
+		itemID + "_rule_source": {},
+		itemID + "_archive":     {},
+		itemID + "_template":    {},
+		itemID + "_drafts":      {},
+		itemID + "_workspace":   {},
+	}
+}
+
+func knownDerivedDefaultNotepadResourceSignatures() map[string]struct{} {
+	defaultResources := []map[string]any{
+		{
+			"label":       "任务源目录",
+			"path":        defaultTaskSourcePath,
+			"type":        "directory",
+			"target_kind": "folder",
+		},
+		{
+			"label":       "归档目录",
+			"path":        "workspace/archive",
+			"type":        "directory",
+			"target_kind": "folder",
+		},
+		{
+			"label":       "关联模板",
+			"path":        "workspace/templates",
+			"type":        "directory",
+			"target_kind": "folder",
+		},
+		{
+			"label":       "草稿目录",
+			"path":        "workspace/drafts",
+			"type":        "directory",
+			"target_kind": "folder",
+		},
+		{
+			"label":       "默认工作区",
+			"path":        defaultWorkspaceRoot,
+			"type":        "directory",
+			"target_kind": "folder",
+		},
+	}
+
+	signatures := make(map[string]struct{}, len(defaultResources))
+	for _, resource := range defaultResources {
+		signatures[relatedResourceSignature(resource)] = struct{}{}
+	}
+	return signatures
+}
+
+func relatedResourceSignature(resource map[string]any) string {
+	return strings.Join([]string{
+		strings.TrimSpace(stringValue(resource, "path", "")),
+		strings.TrimSpace(stringValue(resource, "label", "")),
+		strings.TrimSpace(firstNonEmpty(stringValue(resource, "resource_type", ""), stringValue(resource, "type", ""))),
+		strings.TrimSpace(stringValue(resource, "target_kind", "")),
+	}, "|")
 }
 
 func todoItemRecordFromMap(item map[string]any, now time.Time) (storage.TodoItemRecord, error) {
@@ -786,6 +932,7 @@ func todoItemRecordFromMap(item map[string]any, now time.Time) (storage.TodoItem
 		TagsJSON:             tagsJSON,
 		AgentSuggestion:      stringValue(item, "agent_suggestion", ""),
 		NoteText:             stringValue(item, "note_text", ""),
+		NoteTextOrigin:       stringValue(item, "note_text_origin", ""),
 		Prerequisite:         stringValue(item, "prerequisite", ""),
 		PlannedAt:            stringValue(item, "planned_at", ""),
 		PreviousBucket:       stringValue(item, "previous_bucket", ""),

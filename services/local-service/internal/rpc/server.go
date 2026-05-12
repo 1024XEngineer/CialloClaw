@@ -28,11 +28,9 @@ type Server struct {
 	streamMu                 sync.Mutex
 	streamConns              map[net.Conn]struct{}
 	streamWG                 sync.WaitGroup
-	serveRunning             bool
-	runCancel                context.CancelFunc
-	namedPipeCancel          context.CancelFunc
+	runCtx                   context.Context
+	runCancel                context.CancelCauseFunc
 	shuttingDown             bool
-	terminalErr              error
 }
 
 // NewServer wires configured transports to registered handlers without

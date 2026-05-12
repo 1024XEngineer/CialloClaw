@@ -164,6 +164,100 @@ func TestHandleStreamConnSkipsBufferedLiveRuntimeReplay(t *testing.T) {
 	}
 }
 
+func TestHandleStreamConnStreamsLiveRuntimeForNotepadConvertToTask(t *testing.T) {
+	modelClient := &stubLoopModelClient{
+		generateToolWait: make(chan struct{}),
+		generateToolSeen: make(chan struct{}),
+	}
+	server := newTestServerWithModelClient(modelClient)
+	if err := server.orchestrator.RunEngine().SyncNotepadItems([]map[string]any{{
+		"item_id":   "todo_stream_runtime",
+		"title":     "整理工作区说明",
+		"bucket":    "upcoming",
+		"status":    "normal",
+		"type":      "todo_item",
+		"note_text": "inspect this workspace and answer directly",
+	}}); err != nil {
+		t.Fatalf("seed notepad item: %v", err)
+	}
+
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+
+	go server.handleStreamConn(left)
+
+	encoder := json.NewEncoder(right)
+	decoder := json.NewDecoder(right)
+	request := requestEnvelope{
+		JSONRPC: "2.0",
+		ID:      json.RawMessage(`"req-stream-notepad-runtime"`),
+		Method:  "agent.notepad.convert_to_task",
+		Params: mustMarshal(t, map[string]any{
+			"request_meta": map[string]any{
+				"trace_id": "trace_stream_notepad_runtime",
+			},
+			"item_id":   "todo_stream_runtime",
+			"confirmed": true,
+		}),
+	}
+
+	if err := encoder.Encode(request); err != nil {
+		t.Fatalf("encode notepad stream request: %v", err)
+	}
+	if err := right.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("set live notification deadline: %v", err)
+	}
+
+	var liveNotification notificationEnvelope
+	if err := decoder.Decode(&liveNotification); err != nil {
+		t.Fatalf("decode live runtime notification: %v", err)
+	}
+	if !isLiveRuntimeMethod(liveNotification.Method) {
+		t.Fatalf("expected live runtime notification before response, got %+v", liveNotification)
+	}
+	if err := right.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear live notification deadline: %v", err)
+	}
+
+	close(modelClient.generateToolWait)
+
+	if err := right.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
+		t.Fatalf("set response deadline: %v", err)
+	}
+	responseSeen := false
+	for index := 0; index < 8; index++ {
+		var envelope map[string]any
+		if err := decoder.Decode(&envelope); err != nil {
+			t.Fatalf("decode response envelope: %v", err)
+		}
+		if envelope["id"] == nil {
+			continue
+		}
+		responseSeen = true
+		break
+	}
+	if !responseSeen {
+		t.Fatal("expected final response after live runtime notification")
+	}
+
+	if err := right.SetReadDeadline(time.Now().Add(250 * time.Millisecond)); err != nil {
+		t.Fatalf("set replay deadline: %v", err)
+	}
+	for {
+		var replayed notificationEnvelope
+		if err := decoder.Decode(&replayed); err != nil {
+			break
+		}
+		if isLiveRuntimeMethod(replayed.Method) {
+			t.Fatalf("expected drain replay to skip already streamed runtime notification, got %+v", replayed)
+		}
+	}
+	if err := right.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatalf("clear replay deadline: %v", err)
+	}
+}
+
 func TestHandleStreamConnReturnsDecodeErrorForMalformedPayload(t *testing.T) {
 	server := newTestServer()
 	left, right := net.Pipe()
@@ -817,7 +911,7 @@ func TestTransportSupervisorReturnsTimeoutWhenWorkerDoesNotExit(t *testing.T) {
 	}
 }
 
-func TestServerStartFencesReuseAfterTransportTimeout(t *testing.T) {
+func TestServerStartRejectsRestartAfterTransportTimeout(t *testing.T) {
 	server := newTestServer()
 	server.transport = "named_pipe"
 	server.debugHTTPServer = nil
@@ -860,8 +954,8 @@ func TestServerStartFencesReuseAfterTransportTimeout(t *testing.T) {
 	}()
 	select {
 	case err := <-reuseErr:
-		if !errors.Is(err, errTransportShutdownIncomplete) {
-			t.Fatalf("expected terminal server reuse to fail, got %v", err)
+		if !errors.Is(err, errServerAlreadyStarted) {
+			t.Fatalf("expected one-shot server to reject restart after timeout, got %v", err)
 		}
 	case <-startCalls:
 		t.Fatal("expected terminal server to reject reuse before starting transports")
@@ -902,8 +996,8 @@ func TestServerStartRejectsConcurrentServeRun(t *testing.T) {
 
 	select {
 	case err := <-secondStartErr:
-		if !errors.Is(err, errServerAlreadyRunning) {
-			t.Fatalf("expected concurrent Start to be rejected, got %v", err)
+		if !errors.Is(err, errServerAlreadyStarted) {
+			t.Fatalf("expected one-shot server to reject concurrent Start, got %v", err)
 		}
 	case <-started:
 		t.Fatal("expected second Start to fail before opening another listener")
@@ -926,13 +1020,13 @@ func TestServerStartRejectsConcurrentServeRun(t *testing.T) {
 	}
 }
 
-func TestServerStartAllowsReuseAfterCleanShutdown(t *testing.T) {
+func TestServerStartRejectsRestartAfterCleanShutdown(t *testing.T) {
 	server := newTestServer()
 	server.transport = "named_pipe"
 	server.debugHTTPServer = nil
 
-	started := make(chan struct{}, 2)
-	listenerReleased := make(chan struct{}, 2)
+	started := make(chan struct{}, 1)
+	listenerReleased := make(chan struct{}, 1)
 	server.serveNamedPipe = func(ctx context.Context, pipeName string, handler func(net.Conn)) error {
 		started <- struct{}{}
 		<-ctx.Done()
@@ -971,23 +1065,14 @@ func TestServerStartAllowsReuseAfterCleanShutdown(t *testing.T) {
 	}()
 
 	select {
-	case <-started:
-	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected cleanly stopped server to allow a second serve run")
-	}
-
-	listenerReleased <- struct{}{}
-	if err := server.Shutdown(context.Background()); err != nil {
-		t.Fatalf("shutdown second serve run: %v", err)
-	}
-
-	select {
 	case err := <-secondStartErr:
-		if err != nil {
-			t.Fatalf("expected second serve run to stop cleanly, got %v", err)
+		if !errors.Is(err, errServerAlreadyStarted) {
+			t.Fatalf("expected one-shot server to reject restart after clean shutdown, got %v", err)
 		}
+	case <-started:
+		t.Fatal("expected one-shot server to reject restart before opening another listener")
 	case <-time.After(500 * time.Millisecond):
-		t.Fatal("expected second serve run to exit after shutdown")
+		t.Fatal("expected second Start to return without blocking")
 	}
 }
 

@@ -6,30 +6,32 @@ import "strings"
 // TaskContextSnapshot aggregates the normalized request context that the main
 // task pipeline uses for intent inference and orchestration.
 type TaskContextSnapshot struct {
-	Source         string
-	Trigger        string
-	InputType      string
-	InputMode      string
-	Text           string
-	SelectionText  string
-	ErrorText      string
-	Files          []string
-	PageTitle      string
-	PageURL        string
-	AppName        string
-	BrowserKind    string
-	ProcessPath    string
-	ProcessID      int
-	WindowTitle    string
-	VisibleText    string
-	ScreenSummary  string
-	ClipboardText  string
-	HoverTarget    string
-	LastAction     string
-	DwellMillis    int
-	CopyCount      int
-	WindowSwitches int
-	PageSwitches   int
+	Source               string
+	Trigger              string
+	InputType            string
+	InputMode            string
+	Text                 string
+	SessionContextText   string
+	SessionReplyLanguage string
+	SelectionText        string
+	ErrorText            string
+	Files                []string
+	PageTitle            string
+	PageURL              string
+	AppName              string
+	BrowserKind          string
+	ProcessPath          string
+	ProcessID            int
+	WindowTitle          string
+	VisibleText          string
+	ScreenSummary        string
+	ClipboardText        string
+	HoverTarget          string
+	LastAction           string
+	DwellMillis          int
+	CopyCount            int
+	WindowSwitches       int
+	PageSwitches         int
 }
 
 // CaptureService folds JSON-RPC request params into a stable task context object.

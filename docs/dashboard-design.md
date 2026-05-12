@@ -75,6 +75,14 @@
 
 无论哪一档提醒，点击后都应直接落到对应模块和对应对象，而不是只打开一个空页面。
 
+## 3.4 Escape 回退语义
+
+- `Escape` 应始终先回退当前上下文，而不是直接退出整个 dashboard。
+- 若当前页面存在局部展开态、详情 overlay、事件舱或语音面板，第一次 `Escape` 应先关闭这一层局部状态。
+- 若当前位于 `tasks / notes / memory / safety` 等非首页模块，且当前没有更细的局部层可退，则 `Escape` 应返回 dashboard 首页。
+- 只有当用户已经在 dashboard 首页且没有任何局部展开态时，`Escape` 才允许继续冒泡为关闭 dashboard 窗口。
+- 输入框、`textarea`、`select` 和 `contenteditable` 仍应保留现有输入保护，不应因统一回退语义而被提前打断。
+
 # 4. 任务状态模块
 
 ## 4.1 模块定位

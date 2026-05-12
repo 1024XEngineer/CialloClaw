@@ -3,9 +3,10 @@ package orchestrator
 import (
 	"errors"
 	"fmt"
-	"strings"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
+	taskcontext "github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 )
 
 // NotepadList returns lightweight notepad items from storage without promoting
@@ -48,7 +49,7 @@ func (s *Service) NotepadUpdate(params map[string]any) (map[string]any, error) {
 		"deleted_item_id": nil,
 	}
 	if updatedItem != nil {
-		response["notepad_item"] = updatedItem
+		response["notepad_item"] = s.runEngine.ProtocolNotepadItem(updatedItem)
 	}
 	if deletedItemID != "" {
 		response["deleted_item_id"] = deletedItemID
@@ -81,20 +82,12 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 		}
 	}()
 
-	itemTitle := stringValue(item, "title", "待办事项")
-	taskIntent := notepadIntent(item)
-	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
-		RequestSource: "dashboard",
-		Title:         itemTitle,
-		SourceType:    "todo",
-		Status:        "confirming_intent",
-		Intent:        taskIntent,
-		CurrentStep:   "intent_confirmation",
-		RiskLevel:     s.risk.DefaultLevel(),
-		Timeline:      initialTimeline("confirming_intent", "intent_confirmation"),
-	})
-	s.attachMemoryReadPlans(task.TaskID, task.RunID, notepadSnapshot(item), taskIntent)
-	updatedItem, ok := s.runEngine.LinkNotepadItemTask(itemID, task.TaskID)
+	snapshot := notepadSnapshot(item, currentRuntimeWorkspaceRoot(s.executor))
+	suggestion := s.intent.Suggest(snapshot, nil, false)
+	suggestion = s.normalizeSuggestedIntentForAvailability(snapshot, suggestion, false)
+	suggestion.TaskTitle = notepadTaskTitle(snapshot, suggestion)
+	task := s.createNotepadTask(snapshot, suggestion)
+	linkedItem, ok := s.runEngine.LinkNotepadItemTask(itemID, task.TaskID)
 	if !ok {
 		linkErr := fmt.Errorf("failed to link notepad item to task: %s", itemID)
 		if rollbackErr := s.runEngine.DeleteTask(task.TaskID); rollbackErr != nil {
@@ -103,43 +96,112 @@ func (s *Service) NotepadConvertToTask(params map[string]any) (map[string]any, e
 		return nil, linkErr
 	}
 	claimed = false
+	publishedTaskStart := false
+	if !suggestion.RequiresConfirm {
+		// Direct-execution note conversions must publish task ownership before
+		// queue/governance/execution starts so the shared RPC stream can attach
+		// live loop.* notifications to this request the same way task.start does.
+		s.publishTaskStart(task.TaskID, task.SessionID, requestTraceID(params))
+		publishedTaskStart = true
+	}
+	response, err := s.finishNotepadTask(snapshot, suggestion, task)
+	if err != nil {
+		if publishedTaskStart {
+			return s.failPublishedNotepadTask(linkedItem, task, suggestion.Intent, err)
+		}
+		return nil, s.rollbackLinkedNotepadTask(itemID, task.TaskID, err)
+	}
+	if !publishedTaskStart {
+		s.publishTaskStart(task.TaskID, task.SessionID, requestTraceID(params))
+	}
 
-	return map[string]any{
-		"task":           taskMap(task),
-		"notepad_item":   updatedItem,
-		"refresh_groups": []string{stringValue(updatedItem, "bucket", "upcoming")},
-	}, nil
+	response["notepad_item"] = s.runEngine.ProtocolNotepadItem(linkedItem)
+	response["refresh_groups"] = []string{stringValue(linkedItem, "bucket", "upcoming")}
+	return response, nil
 }
 
-// defaultIntentMap creates a minimal default intent payload for notepad
-// conversions.
-func defaultIntentMap(name string) map[string]any {
-	arguments := map[string]any{}
-	if name == "summarize" {
-		arguments["style"] = "key_points"
+// rollbackLinkedNotepadTask compensates the note->task backlink before deleting
+// the provisional task so failed conversions do not leave stale dashboard links.
+func (s *Service) rollbackLinkedNotepadTask(itemID, taskID string, cause error) error {
+	if _, ok := s.runEngine.UnlinkNotepadItemTask(itemID, taskID); !ok {
+		cause = errors.Join(cause, fmt.Errorf("rollback notepad link %s -> %s", itemID, taskID))
 	}
-	if name == "rewrite" {
-		arguments["tone"] = "professional"
+	if rollbackErr := s.runEngine.DeleteTask(taskID); rollbackErr != nil {
+		cause = errors.Join(cause, fmt.Errorf("rollback task %s: %w", taskID, rollbackErr))
 	}
-	return map[string]any{
-		"name":      name,
-		"arguments": arguments,
-	}
+	return cause
 }
 
-func notepadIntent(item map[string]any) map[string]any {
-	title := strings.ToLower(stringValue(item, "title", ""))
-	suggestion := strings.ToLower(stringValue(item, "agent_suggestion", ""))
-	combined := title + " " + suggestion
-
-	switch {
-	case strings.Contains(combined, "翻译") || strings.Contains(combined, "translate"):
-		return defaultIntentMap("translate")
-	case strings.Contains(combined, "改写") || strings.Contains(combined, "rewrite"):
-		return defaultIntentMap("rewrite")
-	case strings.Contains(combined, "解释") || strings.Contains(combined, "explain"):
-		return defaultIntentMap("explain")
-	default:
-		return defaultIntentMap("summarize")
+// failPublishedNotepadTask keeps externally visible note conversions queryable
+// when late orchestration setup fails after task.start has already been emitted.
+// Once transports can subscribe to the task id, deleting it would leave a
+// dangling runtime object on the stream side and a missing task in storage.
+// The note stays linked to that failed task so task-centric recovery flows can
+// still navigate back to the originating notepad item without guessing state.
+func (s *Service) failPublishedNotepadTask(linkedItem map[string]any, task runengine.TaskRecord, taskIntent map[string]any, cause error) (map[string]any, error) {
+	impactScope := s.buildImpactScope(task, s.buildPendingExecution(task, taskIntent))
+	bubbleText := "任务启动失败，请稍后再试。"
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", bubbleText, task.UpdatedAt.Format(dateTimeLayout))
+	failedTask, ok := s.runEngine.FailTaskExecution(task.TaskID, "task_start_failed", "execution_error", bubbleText, impactScope, bubble)
+	if !ok {
+		return nil, errors.Join(cause, ErrTaskNotFound)
 	}
+	auditRecord := s.writeGovernanceAuditRecord(failedTask.TaskID, failedTask.RunID, "execution", "start_task", bubbleText, impactScopeTarget(impactScope, targetPathFromIntent(taskIntent)), "failed")
+	failedTask = s.appendAuditData(failedTask, compactAuditRecords(auditRecord), nil)
+
+	response := buildTaskEntryResponse(failedTask, bubble, nil)
+	response["notepad_item"] = s.runEngine.ProtocolNotepadItem(linkedItem)
+	response["refresh_groups"] = []string{stringValue(linkedItem, "bucket", "upcoming")}
+	return response, nil
+}
+
+func (s *Service) createNotepadTask(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) runengine.TaskRecord {
+	status := taskStatusForSuggestion(suggestion.RequiresConfirm)
+	currentStep := currentStepForSuggestion(suggestion.RequiresConfirm, suggestion.Intent)
+	task := s.runEngine.CreateTask(runengine.CreateTaskInput{
+		RequestSource:     snapshot.Source,
+		RequestTrigger:    snapshot.Trigger,
+		Title:             suggestion.TaskTitle,
+		SourceType:        "todo",
+		Status:            status,
+		Intent:            suggestion.Intent,
+		PreferredDelivery: suggestion.DirectDeliveryType,
+		CurrentStep:       currentStep,
+		RiskLevel:         s.risk.DefaultLevel(),
+		Timeline:          initialTimeline(status, currentStep),
+		Snapshot:          snapshot,
+	})
+	s.attachMemoryReadPlans(task.TaskID, task.RunID, snapshot, suggestion.Intent)
+	return task
+}
+
+func (s *Service) finishNotepadTask(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, task runengine.TaskRecord) (map[string]any, error) {
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(suggestion.RequiresConfirm), bubbleTextForStart(snapshot, suggestion, previewClarificationHits(s, task, snapshot, suggestion), snapshot.SessionReplyLanguage), task.StartedAt.Format(dateTimeLayout))
+	if suggestion.RequiresConfirm {
+		task = s.persistTaskPresentation(task, bubble)
+		return buildTaskEntryResponse(task, bubble, nil), nil
+	}
+
+	if queuedTask, queueBubble, queued, queueErr := s.queueTaskIfSessionBusy(task); queueErr != nil {
+		return nil, queueErr
+	} else if queued {
+		return buildTaskEntryResponse(queuedTask, queueBubble, nil), nil
+	}
+
+	governedTask, governedResponse, handled, governanceErr := s.handleTaskGovernanceDecision(task, suggestion.Intent)
+	if governanceErr != nil {
+		return nil, governanceErr
+	}
+	if handled {
+		return governedResponse, nil
+	}
+	task = governedTask
+
+	deliveryResult := map[string]any(nil)
+	var execErr error
+	task, bubble, deliveryResult, _, execErr = s.executeTask(task, snapshot, suggestion.Intent)
+	if execErr != nil {
+		return nil, execErr
+	}
+	return buildTaskEntryResponse(task, bubble, deliveryResult), nil
 }

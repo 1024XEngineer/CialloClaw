@@ -502,7 +502,15 @@ function isShellBallInputSubmitResult(value: ShellBallInputSubmitResult | null |
 }
 
 function getShellBallResultTaskId(result: ShellBallInputSubmitResult) {
-  return result.task?.task_id ?? result.bubble_message?.task_id ?? "";
+  if (typeof result.task?.task_id === "string") {
+    return result.task.task_id;
+  }
+
+  if (typeof result.bubble_message?.task_id === "string") {
+    return result.bubble_message.task_id;
+  }
+
+  return "";
 }
 
 export function createShellBallFinalizedSpeechBubbleItem(input: {
@@ -551,6 +559,37 @@ function createShellBallTextBubbleItem(input: {
     role: input.role,
     desktop: createShellBallBubbleDesktopState(input),
   } satisfies ShellBallBubbleItem;
+}
+
+/**
+ * Backend bubble payloads can travel through runtime and compatibility paths.
+ * Normalize them once at the shell-ball boundary so incomplete payloads do not
+ * crash the floating window renderer.
+ */
+function normalizeShellBallBackendBubbleMessage(
+  bubbleMessage: BubbleMessage,
+  fallback: {
+    createdAt: string;
+    taskId: string;
+  },
+): BubbleMessage {
+  const bubbleId = typeof bubbleMessage.bubble_id === "string" && bubbleMessage.bubble_id.trim() !== ""
+    ? bubbleMessage.bubble_id
+    : `shell-ball-backend-bubble-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+
+  return {
+    bubble_id: bubbleId,
+    task_id: typeof bubbleMessage.task_id === "string" && bubbleMessage.task_id.trim() !== ""
+      ? bubbleMessage.task_id
+      : fallback.taskId,
+    type: bubbleMessage.type,
+    text: typeof bubbleMessage.text === "string" ? bubbleMessage.text : "",
+    pinned: false,
+    hidden: false,
+    created_at: typeof bubbleMessage.created_at === "string" && bubbleMessage.created_at.trim() !== ""
+      ? bubbleMessage.created_at
+      : fallback.createdAt,
+  };
 }
 
 function getShellBallPendingFileName(filePath: string) {
@@ -658,9 +697,11 @@ function syncShellBallVisualStateFromTaskStatus(status: Parameters<typeof getShe
 }
 
 function createShellBallApprovalPendingReply(approvalRequest: ApprovalRequest) {
-  const operationName = approvalRequest.operation_name.trim();
-  const targetObject = approvalRequest.target_object.trim();
-  const reason = approvalRequest.reason.trim();
+  // approval.pending runs through the shell-ball's local realtime path, so the
+  // fallback copy must tolerate malformed payloads instead of crashing the host.
+  const operationName = typeof approvalRequest.operation_name === "string" ? approvalRequest.operation_name.trim() : "";
+  const targetObject = typeof approvalRequest.target_object === "string" ? approvalRequest.target_object.trim() : "";
+  const reason = typeof approvalRequest.reason === "string" ? approvalRequest.reason.trim() : "";
 
   if (operationName !== "" && targetObject !== "" && reason !== "") {
     return `Waiting for approval: ${operationName} on ${targetObject}. ${reason}`;
@@ -749,12 +790,18 @@ function createShellBallApprovalResponseBubbleItem(input: {
   turnPhase?: number;
 }) {
   const bubbleMessage = input.response.bubble_message;
-  const bubbleText = bubbleMessage?.text.trim() ?? "";
+  const normalizedBubbleMessage = bubbleMessage === null
+    ? null
+    : normalizeShellBallBackendBubbleMessage(bubbleMessage, {
+        createdAt: input.createdAt,
+        taskId: input.taskId,
+      });
+  const bubbleText = normalizedBubbleMessage?.text.trim() ?? "";
 
-  if (bubbleMessage !== null && bubbleText !== "") {
+  if (normalizedBubbleMessage !== null && bubbleText !== "") {
     return {
       bubble: {
-        ...bubbleMessage,
+        ...normalizedBubbleMessage,
         task_id: input.taskId,
         hidden: false,
         pinned: false,
@@ -786,18 +833,24 @@ export function createShellBallAgentBubbleItem(
   turnOrder: ShellBallBubbleTurnOrder = {},
 ) {
   const bubbleMessage = result.bubble_message;
-  const bubbleText = bubbleMessage?.text.trim() ?? "";
+  const normalizedBubbleMessage = bubbleMessage === null
+    ? null
+    : normalizeShellBallBackendBubbleMessage(bubbleMessage, {
+        createdAt: fallbackCreatedAt,
+        taskId: getShellBallResultTaskId(result),
+      });
+  const bubbleText = normalizedBubbleMessage?.text.trim() ?? "";
   const deliveryPreview = result.delivery_result?.preview_text?.trim() ?? "";
   const taskId = getShellBallResultTaskId(result);
 
-  if (bubbleMessage !== null && bubbleText !== "") {
-    const bubbleType = bubbleMessage.type;
+  if (normalizedBubbleMessage !== null && bubbleText !== "") {
+    const bubbleType = normalizedBubbleMessage.type;
 
     if (bubbleType === "result" && result.delivery_result !== null) {
       return createShellBallDeliveryResultBubbleItem({
         taskId,
         deliveryResult: result.delivery_result,
-        createdAt: bubbleMessage.created_at || fallbackCreatedAt,
+        createdAt: normalizedBubbleMessage.created_at || fallbackCreatedAt,
         turnIndex: turnOrder.turnIndex,
         turnPhase: turnOrder.turnPhase,
         textOverride: bubbleText,
@@ -814,7 +867,7 @@ export function createShellBallAgentBubbleItem(
 
     return {
       bubble: {
-        ...bubbleMessage,
+        ...normalizedBubbleMessage,
         hidden: false,
         pinned: false,
       },
@@ -831,7 +884,19 @@ export function createShellBallAgentBubbleItem(
       role: "agent",
       text: deliveryPreview,
       bubbleType: "result",
-      createdAt: result.delivery_result?.payload?.task_id ? fallbackCreatedAt : bubbleMessage?.created_at ?? fallbackCreatedAt,
+      createdAt: result.delivery_result?.payload?.task_id ? fallbackCreatedAt : normalizedBubbleMessage?.created_at ?? fallbackCreatedAt,
+      taskId,
+      turnIndex: turnOrder.turnIndex,
+      turnPhase: turnOrder.turnPhase,
+    });
+  }
+
+  if (result.task?.status === "waiting_auth") {
+    return createShellBallTextBubbleItem({
+      role: "agent",
+      text: "此任务需要授权，请双击悬浮球后前往仪表盘的安全页完成授权。",
+      bubbleType: "status",
+      createdAt: fallbackCreatedAt,
       taskId,
       turnIndex: turnOrder.turnIndex,
       turnPhase: turnOrder.turnPhase,
@@ -857,12 +922,18 @@ function createShellBallSteerBubbleItem(
   turnOrder: ShellBallBubbleTurnOrder = {},
 ) {
   const bubbleMessage = result.bubble_message;
-  const bubbleText = bubbleMessage?.text.trim() ?? "";
+  const normalizedBubbleMessage = bubbleMessage === null
+    ? null
+    : normalizeShellBallBackendBubbleMessage(bubbleMessage, {
+        createdAt: fallbackCreatedAt,
+        taskId: result.task.task_id,
+      });
+  const bubbleText = normalizedBubbleMessage?.text.trim() ?? "";
 
-  if (bubbleMessage !== null && bubbleText !== "") {
+  if (normalizedBubbleMessage !== null && bubbleText !== "") {
     return {
       bubble: {
-        ...bubbleMessage,
+        ...normalizedBubbleMessage,
         hidden: false,
         pinned: false,
       },
@@ -890,12 +961,18 @@ function createShellBallTaskControlBubbleItem(
   turnOrder: ShellBallBubbleTurnOrder = {},
 ) {
   const bubbleMessage = result.bubble_message;
-  const bubbleText = bubbleMessage?.text.trim() ?? "";
+  const normalizedBubbleMessage = bubbleMessage === null
+    ? null
+    : normalizeShellBallBackendBubbleMessage(bubbleMessage, {
+        createdAt: fallbackCreatedAt,
+        taskId: result.task.task_id,
+      });
+  const bubbleText = normalizedBubbleMessage?.text.trim() ?? "";
 
-  if (bubbleMessage !== null && bubbleText !== "") {
+  if (normalizedBubbleMessage !== null && bubbleText !== "") {
     return {
       bubble: {
-        ...bubbleMessage,
+        ...normalizedBubbleMessage,
         hidden: false,
         pinned: false,
       },
@@ -1821,7 +1898,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           ...nextItems,
           ...createShellBallSubmitFeedbackBubbleItems(result, {
             createdAt: new Date().toISOString(),
-            taskId: task?.task_id,
+            taskId: result.task?.task_id,
             turnIndex,
           }),
         ]);
@@ -1934,7 +2011,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
           pendingAgentBubbleItem.bubble.bubble_id,
           createShellBallSubmitFeedbackBubbleItems(result, {
             createdAt: new Date().toISOString(),
-            taskId: task?.task_id,
+            taskId: result.task?.task_id,
             turnIndex,
           }),
         );
@@ -2416,7 +2493,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
             pendingAgentBubbleItem.bubble.bubble_id,
             createShellBallSubmitFeedbackBubbleItems(result, {
               createdAt: new Date().toISOString(),
-              taskId: task?.task_id,
+              taskId: result.task?.task_id,
               turnIndex,
             }),
           );
@@ -3230,7 +3307,7 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
               pendingAgentBubbleItem.bubble.bubble_id,
               createShellBallSubmitFeedbackBubbleItems(result, {
                 createdAt: new Date().toISOString(),
-                taskId: task?.task_id,
+                taskId: result.task?.task_id,
                 turnIndex,
               }),
             );
