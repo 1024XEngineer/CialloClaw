@@ -3683,9 +3683,13 @@ func resolveWebSearchToolInput(arguments map[string]any) (map[string]any, bool) 
 		return nil, false
 	}
 
+	// Keep the derived search URL for governance/audit targeting, but mark it as
+	// implicit so the worker still treats "no parseable results from the default
+	// search page" as a structured failure instead of a silent empty success.
 	input := map[string]any{
-		"query": queryValue,
-		"url":   defaultWebSearchURL(queryValue),
+		"query":           queryValue,
+		"url":             defaultWebSearchURL(queryValue),
+		"url_is_explicit": false,
 	}
 	if limit, ok := arguments["limit"]; ok {
 		input["limit"] = limit

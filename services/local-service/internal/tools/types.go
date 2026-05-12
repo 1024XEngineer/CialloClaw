@@ -298,10 +298,11 @@ type BrowserSearchResultItem struct {
 
 // BrowserWebSearchRequest is the normalized request shape for internet search.
 type BrowserWebSearchRequest struct {
-	Query  string
-	URL    string
-	Engine string
-	Limit  int
+	Query         string
+	URL           string
+	URLIsExplicit *bool
+	Engine        string
+	Limit         int
 }
 
 // BrowserWebSearchResult describes one internet search result page.

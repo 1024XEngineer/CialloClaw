@@ -28,18 +28,19 @@ type workerInvoker interface {
 }
 
 type sidecarRequest struct {
-	Action       string                     `json:"action"`
-	URL          string                     `json:"url,omitempty"`
-	Query        string                     `json:"query,omitempty"`
-	Attach       *tools.BrowserAttachConfig `json:"attach,omitempty"`
-	Path         string                     `json:"path,omitempty"`
-	Language     string                     `json:"language,omitempty"`
-	OutputPath   string                     `json:"output_path,omitempty"`
-	OutputDir    string                     `json:"output_dir,omitempty"`
-	Format       string                     `json:"format,omitempty"`
-	Limit        int                        `json:"limit,omitempty"`
-	EverySeconds float64                    `json:"every_seconds,omitempty"`
-	Actions      []map[string]any           `json:"actions,omitempty"`
+	Action        string                     `json:"action"`
+	URL           string                     `json:"url,omitempty"`
+	URLIsExplicit *bool                      `json:"url_is_explicit,omitempty"`
+	Query         string                     `json:"query,omitempty"`
+	Attach        *tools.BrowserAttachConfig `json:"attach,omitempty"`
+	Path          string                     `json:"path,omitempty"`
+	Language      string                     `json:"language,omitempty"`
+	OutputPath    string                     `json:"output_path,omitempty"`
+	OutputDir     string                     `json:"output_dir,omitempty"`
+	Format        string                     `json:"format,omitempty"`
+	Limit         int                        `json:"limit,omitempty"`
+	EverySeconds  float64                    `json:"every_seconds,omitempty"`
+	Actions       []map[string]any           `json:"actions,omitempty"`
 }
 
 type sidecarResponse struct {
@@ -218,10 +219,11 @@ func (c runtimePlaywrightClient) SearchPageAttached(ctx context.Context, url, qu
 
 func (c runtimePlaywrightClient) SearchWeb(ctx context.Context, request tools.BrowserWebSearchRequest) (tools.BrowserWebSearchResult, error) {
 	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{
-		Action: "web_search",
-		URL:    strings.TrimSpace(request.URL),
-		Query:  strings.TrimSpace(request.Query),
-		Limit:  request.Limit,
+		Action:        "web_search",
+		URL:           strings.TrimSpace(request.URL),
+		URLIsExplicit: request.URLIsExplicit,
+		Query:         strings.TrimSpace(request.Query),
+		Limit:         request.Limit,
 	})
 	if err != nil {
 		return tools.BrowserWebSearchResult{}, err

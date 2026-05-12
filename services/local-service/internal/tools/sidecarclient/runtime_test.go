@@ -150,6 +150,50 @@ func TestPlaywrightSidecarRuntimeClientExecutesRealReadAndSearch(t *testing.T) {
 	}
 }
 
+func TestPlaywrightSidecarRuntimeClientMarksDerivedWebSearchURLImplicit(t *testing.T) {
+	osCapability := platform.NewLocalOSCapabilityAdapter()
+	runtime, err := NewPlaywrightSidecarRuntime(plugin.NewService(), osCapability)
+	if err != nil {
+		t.Fatalf("NewPlaywrightSidecarRuntime returned error: %v", err)
+	}
+	invoker := &stubWorkerInvoker{response: sidecarResponse{OK: true, Result: map[string]any{
+		"query":        "release notes",
+		"search_url":   "https://duckduckgo.com/html/?q=release+notes",
+		"result_count": 1,
+		"results": []any{
+			map[string]any{"title": "Release Notes", "url": "https://example.com/release-notes", "snippet": "Latest release notes."},
+		},
+		"source": "playwright_worker_http",
+	}}}
+	runtime.invoker = invoker
+	if err := runtime.Start(); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	implicit := false
+	_, err = runtime.Client().SearchWeb(t.Context(), tools.BrowserWebSearchRequest{
+		Query:         "release notes",
+		URL:           "https://duckduckgo.com/html/?q=release+notes",
+		URLIsExplicit: &implicit,
+		Limit:         2,
+	})
+	if err != nil {
+		t.Fatalf("SearchWeb returned error: %v", err)
+	}
+	if len(invoker.requests) < 2 {
+		t.Fatalf("expected health and web_search requests, got %+v", invoker.requests)
+	}
+	if invoker.requests[1].Action != "web_search" {
+		t.Fatalf("expected web_search request, got %+v", invoker.requests[1])
+	}
+	if invoker.requests[1].URL != "https://duckduckgo.com/html/?q=release+notes" {
+		t.Fatalf("expected derived search url to be forwarded, got %+v", invoker.requests[1])
+	}
+	if invoker.requests[1].URLIsExplicit == nil || *invoker.requests[1].URLIsExplicit {
+		t.Fatalf("expected derived search url to be marked implicit, got %+v", invoker.requests[1])
+	}
+}
+
 func TestPlaywrightSidecarRuntimeClientInteracts(t *testing.T) {
 	osCapability := platform.NewLocalOSCapabilityAdapter()
 	runtime, err := NewPlaywrightSidecarRuntime(plugin.NewService(), osCapability)

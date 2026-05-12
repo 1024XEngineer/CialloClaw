@@ -1022,7 +1022,9 @@ export async function handleRequest(request, deps = defaultDependencies) {
         const normalizedQuery = String(request.query ?? "").trim();
         const rawLimit = Number(request.limit ?? 0);
         const limit = Number.isFinite(rawLimit) && rawLimit > 0 ? Math.floor(rawLimit) : 5;
-        const explicitSearchURL = normalizeOptionalString(request.url);
+        const explicitSearchURL = request.url_is_explicit === false
+          ? ""
+          : normalizeOptionalString(request.url);
         const searchURL = buildWebSearchURL(normalizedQuery, request.url);
         return openBrowserPage(searchURL, deps, async (page, _response, execution) => {
           const results = await collectWebSearchResults(page, limit);

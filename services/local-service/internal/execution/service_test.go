@@ -2102,6 +2102,9 @@ func TestExecuteDirectSidecarWebSearchUsesToolExecutor(t *testing.T) {
 	if result.ToolInput["url"] != "https://duckduckgo.com/html/?q=release+notes" {
 		t.Fatalf("expected derived search url in tool input, got %+v", result.ToolInput)
 	}
+	if explicit, ok := result.ToolInput["url_is_explicit"].(bool); !ok || explicit {
+		t.Fatalf("expected derived search url to stay implicit, got %+v", result.ToolInput)
+	}
 	if !strings.Contains(result.BubbleText, "Release Notes") {
 		t.Fatalf("expected bubble text to include search preview, got %s", result.BubbleText)
 	}
@@ -2254,6 +2257,22 @@ func TestResolvePageToolInputMatchesEquivalentRootURLs(t *testing.T) {
 	target, ok := attach["target"].(map[string]any)
 	if !ok || target["url"] != "https://example.com/" {
 		t.Fatalf("expected root URL target normalization, got %+v", attach)
+	}
+}
+
+func TestResolveWebSearchToolInputKeepsDerivedURLImplicit(t *testing.T) {
+	input, ok := resolveWebSearchToolInput(map[string]any{"query": "release notes", "limit": 3.0})
+	if !ok {
+		t.Fatal("expected web_search tool input to resolve")
+	}
+	if input["query"] != "release notes" {
+		t.Fatalf("expected query to be preserved, got %+v", input)
+	}
+	if input["url"] != "https://duckduckgo.com/html/?q=release+notes" {
+		t.Fatalf("expected derived search url, got %+v", input)
+	}
+	if explicit, ok := input["url_is_explicit"].(bool); !ok || explicit {
+		t.Fatalf("expected derived url to remain implicit, got %+v", input)
 	}
 }
 

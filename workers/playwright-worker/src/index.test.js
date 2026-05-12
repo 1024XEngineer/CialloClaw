@@ -638,6 +638,22 @@ test("web_search fails when the default search page yields no parseable results"
   assert.match(response.error.message, /could not extract results/i);
 });
 
+test("web_search still treats derived urls as default when the caller marks them implicit", async () => {
+  const response = await handleRequest({
+    action: "web_search",
+    query: "release notes",
+    url: "https://duckduckgo.com/html/?q=release+notes",
+    url_is_explicit: false,
+  }, createDeps({
+    gotoURL: "https://duckduckgo.com/html/?q=release+notes",
+    searchResults: [],
+  }));
+
+  assert.equal(response.ok, false);
+  assert.equal(response.error.code, "search_results_unavailable");
+  assert.match(response.error.message, /could not extract results/i);
+});
+
 test("web_search reports missing queries as structured input errors", async () => {
   const response = await handleRequest({
     action: "web_search",

@@ -195,9 +195,10 @@ func (t *WebSearchTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteC
 	}
 
 	request := tools.BrowserWebSearchRequest{
-		Query: strings.TrimSpace(input["query"].(string)),
-		URL:   strings.TrimSpace(stringValueMap(input, "url")),
-		Limit: intValueMap(input, "limit"),
+		Query:         strings.TrimSpace(input["query"].(string)),
+		URL:           strings.TrimSpace(stringValueMap(input, "url")),
+		URLIsExplicit: optionalBoolValueMap(input, "url_is_explicit"),
+		Limit:         intValueMap(input, "limit"),
 	}
 	if request.Limit <= 0 {
 		request.Limit = defaultPageSearchLimit
@@ -451,6 +452,19 @@ func stringValueMap(values map[string]any, key string) string {
 	}
 	value, _ := values[key].(string)
 	return strings.TrimSpace(value)
+}
+
+func optionalBoolValueMap(values map[string]any, key string) *bool {
+	if values == nil {
+		return nil
+	}
+	switch typed := values[key].(type) {
+	case bool:
+		value := typed
+		return &value
+	default:
+		return nil
+	}
 }
 
 func intValueMap(values map[string]any, key string) int {
