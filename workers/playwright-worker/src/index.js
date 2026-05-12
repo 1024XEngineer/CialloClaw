@@ -166,6 +166,25 @@ function normalizeComparableURL(url) {
   }
 }
 
+function isLoopbackHost(hostname) {
+  const normalized = String(hostname ?? "").trim().toLowerCase();
+  return normalized === "localhost" || normalized === "::1" || /^127(?:\.\d{1,3}){3}$/u.test(normalized);
+}
+
+function parseBareHostCandidate(value) {
+  const match = String(value ?? "").trim().match(
+    /^(?<host>localhost|\d{1,3}(?:\.\d{1,3}){3}|[^\s/?.#]+\.[^\s/?#]+)(?::(?<port>\d+))?(?<suffix>[/?#].*)?$/iu,
+  );
+  if (!match?.groups) {
+    return null;
+  }
+
+  return {
+    host: match.groups.host,
+    port: match.groups.port ? Number(match.groups.port) : undefined,
+  };
+}
+
 function normalizeTopLevelURL(rawURL) {
   const normalized = normalizeOptionalString(rawURL);
   if (!normalized) {
@@ -179,9 +198,16 @@ function normalizeTopLevelURL(rawURL) {
     return `https:${normalized}`;
   }
 
-  // Bare domains are common in natural-language requests, so promote them to
-  // https before the launch-path browser navigation validates the URL.
-  if (/^(localhost|\d{1,3}(?:\.\d{1,3}){3}|[^\s/?.#]+\.[^\s/?#]+)(?::\d+)?(?:[/?#].*)?$/iu.test(normalized)) {
+  const bareHost = parseBareHostCandidate(normalized);
+  if (bareHost) {
+    if (isLoopbackHost(bareHost.host)) {
+      return `http://${normalized}`;
+    }
+
+    if (bareHost.port === 80) {
+      return `http://${normalized}`;
+    }
+
     return `https://${normalized}`;
   }
 

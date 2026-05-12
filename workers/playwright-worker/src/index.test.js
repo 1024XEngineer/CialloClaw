@@ -206,6 +206,34 @@ test("page_read promotes bare domains to https before navigation", async () => {
   }]);
 });
 
+test("page_read promotes loopback hosts to http before navigation", async () => {
+  const navigationLog = [];
+  const response = await handleRequest({ action: "page_read", url: "127.0.0.1:80" }, createDeps({
+    bodyText: "Local auth page",
+    gotoURL: "http://127.0.0.1:80",
+    navigationLog,
+    title: "Local Auth",
+  }));
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.url, "http://127.0.0.1:80");
+  assert.equal(navigationLog[0].url, "http://127.0.0.1:80");
+});
+
+test("page_read still promotes public bare domains to https before navigation", async () => {
+  const navigationLog = [];
+  const response = await handleRequest({ action: "page_read", url: "example.com/docs" }, createDeps({
+    bodyText: "Example docs",
+    gotoURL: "https://example.com/docs",
+    navigationLog,
+    title: "Example Docs",
+  }));
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.url, "https://example.com/docs");
+  assert.equal(navigationLog[0].url, "https://example.com/docs");
+});
+
 test("page_read uses the HTML title tag when Playwright title lookup is empty", async () => {
   const response = await handleRequest({ action: "page_read", url: "https://example.com" }, createDeps({
     bodyText: "Hello world from browser",
