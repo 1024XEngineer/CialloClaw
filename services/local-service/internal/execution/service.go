@@ -1933,6 +1933,9 @@ func toolBubbleText(toolName string, result *tools.ToolExecutionResult) string {
 
 func (s *Service) buildExecutionInput(snapshot taskcontext.TaskContextSnapshot, memoryReadPlans []map[string]any, replyLanguage string) string {
 	sections := make([]string, 0, 7)
+	if snapshot.SessionContextText != "" {
+		sections = append(sections, executionContextSection(replyLanguage, "近期会话上下文", "Recent session context", snapshot.SessionContextText))
+	}
 	if snapshot.SelectionText != "" {
 		sections = append(sections, executionContextSection(replyLanguage, "选中文本", "Selected text", snapshot.SelectionText))
 	}

@@ -337,8 +337,11 @@ func clarificationBaseTextForLanguage(suggestionIntent map[string]any, replyLang
 	return clarificationFollowUpPrompt(suggestionIntent, false)
 }
 
-func initialClarificationPrompt(snapshot taskcontext.TaskContextSnapshot, startFlow bool) string {
-	if clarificationReplyLanguage(snapshot) == languagepolicy.ReplyLanguageEnglish {
+func initialClarificationPromptForLanguage(snapshot taskcontext.TaskContextSnapshot, startFlow bool, replyLanguage string) string {
+	if strings.TrimSpace(replyLanguage) == "" {
+		replyLanguage = clarificationReplyLanguage(snapshot)
+	}
+	if replyLanguage == languagepolicy.ReplyLanguageEnglish {
 		if startFlow {
 			return "I am not sure how you want me to handle this yet. Please confirm the goal first."
 		}
@@ -355,7 +358,11 @@ func clarificationReplyLanguage(snapshot taskcontext.TaskContextSnapshot) string
 	if preferredInput == "" {
 		preferredInput = firstNonEmptyString(snapshot.SelectionText, memoryQueryFromSnapshot(snapshot))
 	}
-	return languagepolicy.PreferredReplyLanguage(preferredInput)
+	currentLanguage := languagepolicy.PreferredReplyLanguage(preferredInput)
+	if shouldPreferRememberedSessionLanguage(snapshot, currentLanguage) {
+		return strings.TrimSpace(snapshot.SessionReplyLanguage)
+	}
+	return currentLanguage
 }
 
 func clarificationFollowUpPrompt(taskIntent map[string]any, english bool) string {

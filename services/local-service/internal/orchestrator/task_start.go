@@ -72,6 +72,7 @@ func (s *Service) maybeContinueStartTask(flow *taskEntryFlow) (map[string]any, b
 	if strings.TrimSpace(resolvedSessionID) != "" {
 		flow.Params = withResolvedSessionID(flow.Params, resolvedSessionID)
 	}
+	flow.Snapshot = s.applySessionInputContext(flow.Params, flow.Snapshot)
 	return nil, false, nil
 }
 
@@ -121,13 +122,14 @@ func (s *Service) createTaskFromEntryFlow(flow taskEntryFlow) runengine.TaskReco
 		Timeline:          initialTimeline(status, currentStep),
 		Snapshot:          flow.Snapshot,
 	})
+	s.clearSessionInputContext(task.SessionID)
 	s.publishTaskStart(task.TaskID, task.SessionID, requestTraceID(flow.Params))
 	s.attachMemoryReadPlans(task.TaskID, task.RunID, flow.Snapshot, flow.Suggestion.Intent)
 	return task
 }
 
 func (s *Service) finishStartTask(flow taskEntryFlow, task runengine.TaskRecord) (map[string]any, error) {
-	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(flow.Suggestion.RequiresConfirm), bubbleTextForStart(flow.Snapshot, flow.Suggestion, previewClarificationHits(s, task, flow.Snapshot, flow.Suggestion)), task.StartedAt.Format(dateTimeLayout))
+	bubble := s.delivery.BuildBubbleMessage(task.TaskID, bubbleTypeForSuggestion(flow.Suggestion.RequiresConfirm), bubbleTextForStart(flow.Snapshot, flow.Suggestion, previewClarificationHits(s, task, flow.Snapshot, flow.Suggestion), flow.Snapshot.SessionReplyLanguage), task.StartedAt.Format(dateTimeLayout))
 	if flow.Suggestion.RequiresConfirm {
 		task = s.persistTaskPresentation(task, bubble)
 		return buildTaskEntryResponse(task, bubble, nil), nil
@@ -210,23 +212,23 @@ func bubbleTypeForSuggestion(requiresConfirm bool) string {
 }
 
 // bubbleTextForInput returns the bubble text for agent.input.submit flows.
-func bubbleTextForInput(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, hits []memory.RetrievalHit) string {
+func bubbleTextForInput(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, hits []memory.RetrievalHit, replyLanguage string) string {
 	if suggestion.RequiresConfirm {
 		if !suggestion.IntentConfirmed {
-			return initialClarificationPrompt(snapshot, false)
+			return initialClarificationPromptForLanguage(snapshot, false, replyLanguage)
 		}
-		return clarificationBubbleText(suggestion.Intent, snapshot, hits)
+		return clarificationBubbleTextForLanguage(suggestion.Intent, hits, clarificationReplyLanguage(snapshot))
 	}
 	return suggestion.ResultBubbleText
 }
 
 // bubbleTextForStart returns the bubble text for agent.task.start flows.
-func bubbleTextForStart(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, hits []memory.RetrievalHit) string {
+func bubbleTextForStart(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, hits []memory.RetrievalHit, replyLanguage string) string {
 	if suggestion.RequiresConfirm {
 		if !suggestion.IntentConfirmed {
-			return initialClarificationPrompt(snapshot, true)
+			return initialClarificationPromptForLanguage(snapshot, true, replyLanguage)
 		}
-		return clarificationBubbleText(suggestion.Intent, snapshot, hits)
+		return clarificationBubbleTextForLanguage(suggestion.Intent, hits, clarificationReplyLanguage(snapshot))
 	}
 	return suggestion.ResultBubbleText
 }
