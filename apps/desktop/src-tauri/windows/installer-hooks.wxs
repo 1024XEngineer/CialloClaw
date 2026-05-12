@@ -1,0 +1,30 @@
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <CustomAction
+      Id="KillCialloClawProcessesBeforeInstall"
+      Directory="TARGETDIR"
+      Execute="immediate"
+      ExeCommand='cmd.exe /d /c taskkill /f /t /im cialloclaw-desktop.exe &gt;nul 2&gt;&amp;1 &amp; taskkill /f /t /im cialloclaw-service.exe &gt;nul 2&gt;&amp;1 &amp; exit /b 0'
+      Impersonate="yes"
+      Return="ignore"
+    />
+
+    <CustomAction
+      Id="KillCialloClawProcessesBeforeUninstall"
+      Directory="TARGETDIR"
+      Execute="immediate"
+      ExeCommand='cmd.exe /d /c taskkill /f /t /im cialloclaw-desktop.exe &gt;nul 2&gt;&amp;1 &amp; taskkill /f /t /im cialloclaw-service.exe &gt;nul 2&gt;&amp;1 &amp; exit /b 0'
+      Impersonate="yes"
+      Return="ignore"
+    />
+
+    <InstallExecuteSequence>
+      <Custom Action="KillCialloClawProcessesBeforeInstall" Before="InstallInitialize">
+        NOT REMOVE
+      </Custom>
+      <Custom Action="KillCialloClawProcessesBeforeUninstall" Before="RemoveFiles">
+        REMOVE="ALL"
+      </Custom>
+    </InstallExecuteSequence>
+  </Fragment>
+</Wix>
