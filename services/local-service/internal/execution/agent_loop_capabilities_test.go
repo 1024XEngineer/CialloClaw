@@ -115,9 +115,6 @@ func TestAgentLoopToolAllowlistRequiresCatalogMembershipAndRegistryPresence(t *t
 	}
 
 	withPlaywright := newAgentLoopCapabilityTestService(t, true)
-	if withPlaywright.isAllowedAgentLoopTool("structured_dom") {
-		t.Fatal("expected structured_dom to stay outside the default planner catalog")
-	}
 	if withPlaywright.isAllowedAgentLoopTool("browser_attach_current") {
 		t.Fatal("expected browser_attach_current to stay hidden without attach-capable snapshot hints")
 	}

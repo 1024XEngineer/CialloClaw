@@ -263,21 +263,6 @@ test("page_read keeps launch-path transport failures loud", async () => {
   );
 });
 
-test("structured_dom returns page snapshot", async () => {
-  const response = await handleRequest({ action: "structured_dom", url: "https://example.com" }, createDeps({
-    snapshot: {
-      headings: ["Heading A", "Heading B"],
-      links: ["Docs"],
-      buttons: ["Submit"],
-      inputs: ["email"],
-    },
-  }));
-
-  assert.equal(response.ok, true);
-  assert.deepEqual(response.result.headings, ["Heading A", "Heading B"]);
-  assert.deepEqual(response.result.links, ["Docs"]);
-});
-
 test("page_interact applies actions and returns updated content", async () => {
   const actionLog = [];
   const response = await handleRequest({
@@ -784,27 +769,6 @@ test("page_interact uses attached tabs without forcing a new navigation", async 
   assert.equal(response.result.source, "playwright_worker_cdp");
   assert.deepEqual(actionLog.map((entry) => entry.action), ["click", "waitForTimeout"]);
   assert.deepEqual(navigationLog, []);
-});
-
-test("structured_dom can read an attached page chosen by page index", async () => {
-  const response = await handleRequest({
-    action: "structured_dom",
-    attach: {
-      browser_kind: "edge",
-      target: { page_index: 1 },
-    },
-  }, createDeps({
-    browserVersion: "Microsoft Edge/125.0.0.0",
-    connectedPages: [
-      createPage({ currentURL: "https://example.com/one", title: "One", snapshot: { headings: ["Ignore"], links: [], buttons: [], inputs: [] } }),
-      createPage({ currentURL: "https://example.com/two", title: "Two", snapshot: { headings: ["Chosen"], links: ["Docs"], buttons: ["Save"], inputs: ["email"] } }),
-    ],
-  }));
-
-  assert.equal(response.ok, true);
-  assert.equal(response.result.attached, true);
-  assert.equal(response.result.title, "Two");
-  assert.deepEqual(response.result.headings, ["Chosen"]);
 });
 
 test("page_interact rethrows unsupported interaction types", async () => {

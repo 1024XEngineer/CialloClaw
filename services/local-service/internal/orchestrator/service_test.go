@@ -119,16 +119,15 @@ type successfulExecutionBackend struct {
 }
 
 type stubPlaywrightClient struct {
-	readResult       tools.BrowserPageReadResult
-	searchResult     tools.BrowserPageSearchResult
-	webSearchResult  tools.BrowserWebSearchResult
-	interactResult   tools.BrowserPageInteractResult
-	structuredResult tools.BrowserStructuredDOMResult
-	attachResult     tools.BrowserAttachedPageResult
-	snapshotResult   tools.BrowserSnapshotResult
-	navigateResult   tools.BrowserNavigationResult
-	tabsResult       tools.BrowserTabsListResult
-	err              error
+	readResult      tools.BrowserPageReadResult
+	searchResult    tools.BrowserPageSearchResult
+	webSearchResult tools.BrowserWebSearchResult
+	interactResult  tools.BrowserPageInteractResult
+	attachResult    tools.BrowserAttachedPageResult
+	snapshotResult  tools.BrowserSnapshotResult
+	navigateResult  tools.BrowserNavigationResult
+	tabsResult      tools.BrowserTabsListResult
+	err             error
 }
 
 type localHTTPPlaywrightClient struct{}
@@ -241,18 +240,6 @@ func (s stubPlaywrightClient) InteractPageAttached(ctx context.Context, url stri
 	return s.InteractPage(ctx, url, actions)
 }
 
-func (localHTTPPlaywrightClient) StructuredDOM(_ context.Context, _ string) (tools.BrowserStructuredDOMResult, error) {
-	return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
-}
-
-func (localHTTPPlaywrightClient) StructuredDOMAttached(_ context.Context, _ string, _ tools.BrowserAttachConfig) (tools.BrowserStructuredDOMResult, error) {
-	return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
-}
-
-func (s stubPlaywrightClient) StructuredDOMAttached(ctx context.Context, url string, _ tools.BrowserAttachConfig) (tools.BrowserStructuredDOMResult, error) {
-	return s.StructuredDOM(ctx, url)
-}
-
 func (localHTTPPlaywrightClient) AttachCurrentPage(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserAttachedPageResult, error) {
 	return tools.BrowserAttachedPageResult{}, tools.ErrPlaywrightSidecarFailed
 }
@@ -358,17 +345,6 @@ func (s stubPlaywrightClient) InteractPage(_ context.Context, url string, _ []ma
 		return tools.BrowserPageInteractResult{}, s.err
 	}
 	result := s.interactResult
-	if result.URL == "" {
-		result.URL = url
-	}
-	return result, nil
-}
-
-func (s stubPlaywrightClient) StructuredDOM(_ context.Context, url string) (tools.BrowserStructuredDOMResult, error) {
-	if s.err != nil {
-		return tools.BrowserStructuredDOMResult{}, s.err
-	}
-	result := s.structuredResult
 	if result.URL == "" {
 		result.URL = url
 	}
@@ -15687,8 +15663,8 @@ func TestServicePluginDetailGetIncludesBrowserToolMetadata(t *testing.T) {
 		t.Fatalf("expected playwright plugin detail header, got %+v", pluginValue)
 	}
 	tools := result["tools"].([]map[string]any)
-	if len(tools) != 11 {
-		t.Fatalf("expected playwright plugin detail to expose eleven tools, got %+v", tools)
+	if len(tools) != 10 {
+		t.Fatalf("expected playwright plugin detail to expose ten tools, got %+v", tools)
 	}
 	for _, toolName := range []string{"browser_attach_current", "browser_snapshot", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact"} {
 		item := pluginToolItemByName(tools, toolName)

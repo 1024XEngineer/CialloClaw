@@ -15,10 +15,6 @@ func TestNoopWorkerClientsCoverAllMethods(t *testing.T) {
 	if _, err := playwrightClient.SearchPage(context.Background(), "https://example.com", "broken", 1); !errors.Is(err, tools.ErrPlaywrightSidecarFailed) {
 		t.Fatalf("expected noop playwright search to fail, got %v", err)
 	}
-	if _, err := playwrightClient.StructuredDOM(context.Background(), "https://example.com"); !errors.Is(err, tools.ErrPlaywrightSidecarFailed) {
-		t.Fatalf("expected noop playwright dom to fail, got %v", err)
-	}
-
 	ocrClient := NewNoopOCRWorkerClient()
 	if _, err := ocrClient.OCRImage(context.Background(), "workspace/demo.png", "eng"); !errors.Is(err, tools.ErrOCRWorkerFailed) {
 		t.Fatalf("expected noop OCR image to fail, got %v", err)

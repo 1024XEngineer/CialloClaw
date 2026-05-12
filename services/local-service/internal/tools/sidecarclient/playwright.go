@@ -45,14 +45,6 @@ func (noopPlaywrightSidecarClient) InteractPageAttached(_ context.Context, _ str
 	return tools.BrowserPageInteractResult{}, tools.ErrPlaywrightSidecarFailed
 }
 
-func (noopPlaywrightSidecarClient) StructuredDOM(_ context.Context, _ string) (tools.BrowserStructuredDOMResult, error) {
-	return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
-}
-
-func (noopPlaywrightSidecarClient) StructuredDOMAttached(_ context.Context, _ string, _ tools.BrowserAttachConfig) (tools.BrowserStructuredDOMResult, error) {
-	return tools.BrowserStructuredDOMResult{}, tools.ErrPlaywrightSidecarFailed
-}
-
 func (noopPlaywrightSidecarClient) AttachCurrentPage(_ context.Context, _ tools.BrowserAttachConfig) (tools.BrowserAttachedPageResult, error) {
 	return tools.BrowserAttachedPageResult{}, tools.ErrPlaywrightSidecarFailed
 }
@@ -318,70 +310,6 @@ func (t *PageInteractTool) Execute(ctx context.Context, execCtx *tools.ToolExecu
 	}, nil
 }
 
-type StructuredDOMTool struct {
-	meta tools.ToolMetadata
-}
-
-func NewStructuredDOMTool() *StructuredDOMTool {
-	return &StructuredDOMTool{meta: tools.ToolMetadata{
-		Name:            "structured_dom",
-		DisplayName:     "结构化页面",
-		Description:     "通过 Playwright sidecar 提取页面标题、标题层级、链接与交互元素摘要",
-		Source:          tools.ToolSourceSidecar,
-		RiskHint:        "yellow",
-		TimeoutSec:      20,
-		InputSchemaRef:  "tools/structured_dom/input",
-		OutputSchemaRef: "tools/structured_dom/output",
-		SupportsDryRun:  false,
-	}}
-}
-
-func (t *StructuredDOMTool) Metadata() tools.ToolMetadata { return t.meta }
-
-func (t *StructuredDOMTool) Validate(input map[string]any) error {
-	url, ok := input["url"].(string)
-	if !ok || strings.TrimSpace(url) == "" {
-		return fmt.Errorf("input field 'url' must be a non-empty string")
-	}
-	if _, _, err := optionalAttachConfigFromInput(input); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (t *StructuredDOMTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteContext, input map[string]any) (*tools.ToolResult, error) {
-	if execCtx == nil || execCtx.Playwright == nil {
-		return nil, tools.ErrPlaywrightSidecarFailed
-	}
-	url := strings.TrimSpace(input["url"].(string))
-	attach, attached, err := optionalAttachConfigFromInput(input)
-	if err != nil {
-		return nil, err
-	}
-	var result tools.BrowserStructuredDOMResult
-	if attached {
-		result, err = execCtx.Playwright.StructuredDOMAttached(ctx, url, attach)
-	} else {
-		result, err = execCtx.Playwright.StructuredDOM(ctx, url)
-	}
-	if err != nil {
-		return nil, err
-	}
-	rawOutput := browserExecutionMetadataOutput(result.BrowserExecutionMetadata)
-	rawOutput["url"] = result.URL
-	rawOutput["title"] = result.Title
-	rawOutput["headings"] = append([]string(nil), result.Headings...)
-	rawOutput["links"] = append([]string(nil), result.Links...)
-	rawOutput["buttons"] = append([]string(nil), result.Buttons...)
-	rawOutput["inputs"] = append([]string(nil), result.Inputs...)
-	rawOutput["source"] = firstNonEmptyString(result.Source, "playwright_sidecar")
-	return &tools.ToolResult{
-		ToolName:      t.meta.Name,
-		RawOutput:     rawOutput,
-		SummaryOutput: map[string]any{"url": result.URL, "title": result.Title, "attached": result.Attached, "browser_kind": result.BrowserKind, "heading_count": len(result.Headings), "link_count": len(result.Links), "button_count": len(result.Buttons), "input_count": len(result.Inputs), "source": firstNonEmptyString(result.Source, "playwright_sidecar")},
-	}, nil
-}
-
 func (t *PageSearchTool) Metadata() tools.ToolMetadata { return t.meta }
 
 func (t *PageSearchTool) Validate(input map[string]any) error {
@@ -450,7 +378,6 @@ func RegisterPlaywrightTools(registry *tools.Registry) error {
 		NewPageSearchTool(),
 		NewWebSearchTool(),
 		NewPageInteractTool(),
-		NewStructuredDOMTool(),
 		NewBrowserAttachCurrentTool(),
 		NewBrowserSnapshotTool(),
 		NewBrowserNavigateTool(),

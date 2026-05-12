@@ -101,8 +101,8 @@ func TestNewWiresStorageBackedMemoryService(t *testing.T) {
 	if app.toolRegistry == nil || app.toolExecutor == nil {
 		t.Fatal("expected tool registry and executor to be wired")
 	}
-	if app.toolRegistry.Count() != 22 {
-		t.Fatalf("expected 22 tools to be registered, got %d", app.toolRegistry.Count())
+	if app.toolRegistry.Count() != 21 {
+		t.Fatalf("expected 21 tools to be registered, got %d", app.toolRegistry.Count())
 	}
 	if _, err := app.toolRegistry.Get("generate_text"); err != nil {
 		t.Fatalf("expected generate_text to be registered, got %v", err)
@@ -125,7 +125,7 @@ func TestNewWiresStorageBackedMemoryService(t *testing.T) {
 	if _, err := app.toolRegistry.Get("page_search"); err != nil {
 		t.Fatalf("expected page_search to be registered, got %v", err)
 	}
-	for _, toolName := range []string{"web_search", "page_interact", "structured_dom", "browser_attach_current", "browser_snapshot", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact", "extract_text", "ocr_image", "ocr_pdf", "transcode_media", "extract_frames", "normalize_recording"} {
+	for _, toolName := range []string{"web_search", "page_interact", "browser_attach_current", "browser_snapshot", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact", "extract_text", "ocr_image", "ocr_pdf", "transcode_media", "extract_frames", "normalize_recording"} {
 		if _, err := app.toolRegistry.Get(toolName); err != nil {
 			t.Fatalf("expected %s to be registered, got %v", toolName, err)
 		}
@@ -187,8 +187,8 @@ func TestBuildRuntimesRegistersToolsAndModelRuntime(t *testing.T) {
 	if runtimes.toolRegistry == nil || runtimes.toolExecutor == nil {
 		t.Fatal("expected runtime stage to wire tools")
 	}
-	if runtimes.toolRegistry.Count() != 22 {
-		t.Fatalf("expected runtime stage to register 22 tools, got %d", runtimes.toolRegistry.Count())
+	if runtimes.toolRegistry.Count() != 21 {
+		t.Fatalf("expected runtime stage to register 21 tools, got %d", runtimes.toolRegistry.Count())
 	}
 }
 

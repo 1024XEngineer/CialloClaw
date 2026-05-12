@@ -337,7 +337,7 @@ func isWebpageTool(toolName string) bool {
 
 func isLegacyWebpageTool(toolName string) bool {
 	switch strings.TrimSpace(toolName) {
-	case "page_read", "page_search", "web_search", "page_interact", "structured_dom":
+	case "page_read", "page_search", "web_search", "page_interact":
 		return true
 	default:
 		return false

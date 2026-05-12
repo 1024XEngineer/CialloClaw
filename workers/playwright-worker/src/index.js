@@ -11,7 +11,6 @@ export const manifest = {
     "page_search",
     "web_search",
     "page_interact",
-    "structured_dom",
     "browser_attach_current",
     "browser_snapshot",
     "browser_navigate",
@@ -514,28 +513,6 @@ async function fetchPage(request, deps) {
   });
 }
 
-async function buildStructuredDOM(request, deps) {
-  return openAttachedPage(request, deps, async (page, _response, execution) => {
-    const fallbackURL = String(request?.url ?? "");
-    const snapshot = await page.evaluate(() => ({
-      headings: Array.from(document.querySelectorAll("h1, h2, h3")).map((node) => node.textContent?.trim()).filter(Boolean).slice(0, 20),
-      links: Array.from(document.querySelectorAll("a[href]")).map((node) => node.textContent?.trim() || node.getAttribute("href") || "").filter(Boolean).slice(0, 20),
-      buttons: Array.from(document.querySelectorAll("button, [role='button']")).map((node) => node.textContent?.trim()).filter(Boolean).slice(0, 20),
-      inputs: Array.from(document.querySelectorAll("input, textarea, select")).map((node) => node.getAttribute("name") || node.getAttribute("aria-label") || node.getAttribute("placeholder") || node.tagName.toLowerCase()).filter(Boolean).slice(0, 20),
-    }));
-    return {
-      attached: execution.attached,
-      browserKind: execution.browserKind,
-      browserTransport: execution.browserTransport,
-      endpointURL: execution.endpointURL,
-      url: page.url() || fallbackURL,
-      title: (await page.title()) || extractTitle(await page.content(), page.url()),
-      source: execution.source,
-      ...snapshot,
-    };
-  });
-}
-
 async function buildBrowserSnapshot(request, deps) {
   return withAttachedPage(request, deps, async (descriptor, execution) => {
     const page = descriptor.page;
@@ -776,9 +753,6 @@ export async function handleRequest(request, deps = defaultDependencies) {
           };
         });
       });
-    }
-    case "structured_dom": {
-      return executeBrowserRequest(request, deps, async () => buildStructuredDOM(request, deps));
     }
     case "browser_attach_current": {
       return executeBrowserRequest(request, deps, async () => attachCurrentBrowserPage(request, deps));

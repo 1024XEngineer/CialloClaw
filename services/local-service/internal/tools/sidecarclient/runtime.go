@@ -275,40 +275,6 @@ func (c runtimePlaywrightClient) InteractPageAttached(ctx context.Context, url s
 	}, nil
 }
 
-func (c runtimePlaywrightClient) StructuredDOM(ctx context.Context, url string) (tools.BrowserStructuredDOMResult, error) {
-	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{Action: "structured_dom", URL: url})
-	if err != nil {
-		return tools.BrowserStructuredDOMResult{}, err
-	}
-	return tools.BrowserStructuredDOMResult{
-		BrowserExecutionMetadata: browserExecutionMetadata(response.Result),
-		URL:                      stringValue(response.Result, "url"),
-		Title:                    stringValue(response.Result, "title"),
-		Headings:                 stringSliceValue(response.Result, "headings"),
-		Links:                    stringSliceValue(response.Result, "links"),
-		Buttons:                  stringSliceValue(response.Result, "buttons"),
-		Inputs:                   stringSliceValue(response.Result, "inputs"),
-		Source:                   firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
-	}, nil
-}
-
-func (c runtimePlaywrightClient) StructuredDOMAttached(ctx context.Context, url string, attach tools.BrowserAttachConfig) (tools.BrowserStructuredDOMResult, error) {
-	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{Action: "structured_dom", URL: url, Attach: cloneAttachConfigPtr(&attach)})
-	if err != nil {
-		return tools.BrowserStructuredDOMResult{}, err
-	}
-	return tools.BrowserStructuredDOMResult{
-		BrowserExecutionMetadata: browserExecutionMetadata(response.Result),
-		URL:                      stringValue(response.Result, "url"),
-		Title:                    stringValue(response.Result, "title"),
-		Headings:                 stringSliceValue(response.Result, "headings"),
-		Links:                    stringSliceValue(response.Result, "links"),
-		Buttons:                  stringSliceValue(response.Result, "buttons"),
-		Inputs:                   stringSliceValue(response.Result, "inputs"),
-		Source:                   firstNonEmptyString(stringValue(response.Result, "source"), "playwright_sidecar"),
-	}, nil
-}
-
 func (c runtimePlaywrightClient) AttachCurrentPage(ctx context.Context, attach tools.BrowserAttachConfig) (tools.BrowserAttachedPageResult, error) {
 	response, err := c.invokeBrowserRequest(ctx, sidecarRequest{Action: "browser_attach_current", Attach: cloneAttachConfigPtr(&attach)})
 	if err != nil {

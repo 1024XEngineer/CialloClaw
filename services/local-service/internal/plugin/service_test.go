@@ -126,7 +126,7 @@ func TestCatalogEntriesAndSnapshotsAreCloned(t *testing.T) {
 	if freshSnapshot.Catalog.DisplayName == "mutated" || freshSnapshot.Manifest.Name == "mutated" || freshSnapshot.Runtimes[0].Name == "mutated" {
 		t.Fatalf("expected catalog snapshots to be cloned, got %+v", freshSnapshot)
 	}
-	if len(freshSnapshot.Manifest.Capabilities) != 11 {
+	if len(freshSnapshot.Manifest.Capabilities) != 10 {
 		t.Fatalf("expected playwright snapshot to expose full browser capability set, got %+v", freshSnapshot.Manifest.Capabilities)
 	}
 	for _, capability := range []string{"web_search", "browser_attach_current", "browser_snapshot", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact"} {

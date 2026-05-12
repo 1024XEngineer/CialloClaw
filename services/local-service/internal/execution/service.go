@@ -1251,8 +1251,6 @@ func resolveDirectToolInput(intentName string, args map[string]any, snapshot tas
 		return resolveWebSearchToolInput(args)
 	case "page_interact":
 		return resolvePageToolInput(intentName, args, snapshot)
-	case "structured_dom":
-		return resolvePageToolInput(intentName, args, snapshot)
 	case "extract_text", "ocr_image", "ocr_pdf":
 		pathValue := stringValue(args, "path", stringValue(args, "file_path", ""))
 		if pathValue == "" {
@@ -3204,10 +3202,6 @@ func (s *Service) resolveGovernanceToolExecution(request Request) (string, map[s
 				if input, ok := resolvePageToolInput(intentName, args, request.Snapshot); ok {
 					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
 				}
-			case "structured_dom":
-				if input, ok := resolvePageToolInput(intentName, args, request.Snapshot); ok {
-					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
-				}
 			case "extract_text", "ocr_image", "ocr_pdf":
 				pathValue := stringValue(args, "path", stringValue(args, "file_path", ""))
 				if pathValue != "" {
@@ -3326,7 +3320,7 @@ func GovernanceTargetObject(toolName string, toolInput map[string]any, execCtx *
 			return stringValue(toolInput, "working_dir", "")
 		}
 		return firstNonEmpty(stringValue(toolInput, "working_dir", ""), execCtx.WorkspacePath)
-	case "page_read", "page_search", "page_interact", "structured_dom", "web_search":
+	case "page_read", "page_search", "page_interact", "web_search":
 		return stringValue(toolInput, "url", "")
 	case "browser_navigate":
 		return firstNonEmpty(strings.TrimSpace(stringValue(toolInput, "url", "")), browserStableTargetObject(mapValue(toolInput, "attach")))
