@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/delivery"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/languagepolicy"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/memory"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
@@ -178,8 +179,17 @@ func mirrorReferenceFromSummary(summary memory.MemorySummary) map[string]any {
 // attachMemoryReadPlans registers the retrieval plans attached at task start or
 // confirmation time. Read plans are persisted before execution so later mirror,
 // debug, or storage-backed views can explain what memory lookup the task was
-// supposed to perform even if execution changes or the process restarts.
+// supposed to perform even if execution changes or the process restarts. When
+// clarification already materialized retrieval hits for the same task, reuse the
+// same evidence so the confirmation bubble and execution stay aligned.
 func (s *Service) attachMemoryReadPlans(taskID, runID string, snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any) {
+	if hits := currentTaskReadPlanHits(s.runEngine, taskID); len(hits) > 0 {
+		reusedHits := cloneRetrievalHitsForTask(taskID, runID, hits)
+		_, _ = s.runEngine.SetMemoryPlans(taskID, buildMemoryReadPlans(s.memory, taskID, runID, snapshot, taskIntent, reusedHits), nil)
+		s.syncTaskReadMirrorReferences(taskID, mirrorReferencesFromRetrievalHits(reusedHits), nil)
+		return
+	}
+
 	readPlans := buildMemoryReadPlans(s.memory, taskID, runID, snapshot, taskIntent, nil)
 	_, _ = s.runEngine.SetMemoryPlans(taskID, readPlans, nil)
 	references, hits, err := s.materializeMemoryReadReferences(taskID, runID, snapshot)
@@ -187,6 +197,198 @@ func (s *Service) attachMemoryReadPlans(taskID, runID string, snapshot taskconte
 		_, _ = s.runEngine.SetMemoryPlans(taskID, buildMemoryReadPlans(s.memory, taskID, runID, snapshot, taskIntent, hits), nil)
 	}
 	s.syncTaskReadMirrorReferences(taskID, references, err)
+}
+
+// previewMemoryContext performs the same storage-backed retrieval as execution
+// planning, but it only returns the matched summaries so clarification bubbles
+// can acknowledge recent context without changing task ownership decisions.
+func (s *Service) previewMemoryContext(taskID, runID string, snapshot taskcontext.TaskContextSnapshot) []memory.RetrievalHit {
+	if s == nil || s.memory == nil {
+		return nil
+	}
+
+	hits, err := s.memory.Search(context.Background(), memory.RetrievalQuery{
+		TaskID: taskID,
+		RunID:  runID,
+		Query:  memoryQueryFromSnapshot(snapshot),
+		Limit:  memory.DefaultSearchLimit,
+	})
+	if err != nil {
+		return nil
+	}
+
+	return hits
+}
+
+// clarificationPreviewHits prefers the retrieval_context already materialized on
+// the task so clarification bubbles and later execution reuse the same memory
+// evidence even after storage round-trips or follow-up confirmation RPCs.
+func (s *Service) clarificationPreviewHits(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot) []memory.RetrievalHit {
+	if s == nil {
+		return nil
+	}
+
+	currentTask := task
+	if s.runEngine != nil && strings.TrimSpace(task.TaskID) != "" {
+		if persistedTask, ok := s.runEngine.GetTask(task.TaskID); ok {
+			currentTask = persistedTask
+		}
+	}
+
+	if hits := taskReadPlanRetrievalHits(currentTask); len(hits) > 0 {
+		return hits
+	}
+
+	return s.previewMemoryContext(currentTask.TaskID, currentTask.RunID, snapshot)
+}
+
+func currentTaskReadPlanHits(engine *runengine.Engine, taskID string) []memory.RetrievalHit {
+	if engine == nil || strings.TrimSpace(taskID) == "" {
+		return nil
+	}
+	task, ok := engine.GetTask(taskID)
+	if !ok {
+		return nil
+	}
+	return taskReadPlanRetrievalHits(task)
+}
+
+func taskReadPlanRetrievalHits(task runengine.TaskRecord) []memory.RetrievalHit {
+	if len(task.MemoryReadPlans) == 0 {
+		return nil
+	}
+
+	hits := make([]memory.RetrievalHit, 0, len(task.MemoryReadPlans))
+	for _, plan := range task.MemoryReadPlans {
+		for _, item := range readPlanRetrievalContextItems(plan) {
+			summary := strings.TrimSpace(stringValue(item, "summary", ""))
+			if summary == "" {
+				continue
+			}
+			hits = append(hits, memory.RetrievalHit{
+				TaskID:   task.TaskID,
+				RunID:    task.RunID,
+				MemoryID: strings.TrimSpace(stringValue(item, "memory_id", "")),
+				Source:   strings.TrimSpace(stringValue(item, "source", "")),
+				Summary:  summary,
+				Score:    floatValueFromAny(item["score"]),
+			})
+		}
+	}
+	if len(hits) == 0 {
+		return nil
+	}
+	return hits
+}
+
+func readPlanRetrievalContextItems(plan map[string]any) []map[string]any {
+	rawValue, ok := plan["retrieval_context"]
+	if !ok {
+		return nil
+	}
+	switch value := rawValue.(type) {
+	case []map[string]any:
+		return cloneMapSlice(value)
+	case []any:
+		items := make([]map[string]any, 0, len(value))
+		for _, entry := range value {
+			item, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			items = append(items, cloneMap(item))
+		}
+		if len(items) == 0 {
+			return nil
+		}
+		return items
+	default:
+		return nil
+	}
+}
+
+func clarificationBubbleTextForLanguage(suggestionIntent map[string]any, hits []memory.RetrievalHit, replyLanguage string) string {
+	base := clarificationBaseTextForLanguage(suggestionIntent, replyLanguage)
+	if len(hits) == 0 {
+		return base
+	}
+
+	summary := strings.TrimSpace(hits[0].Summary)
+	if summary == "" {
+		return base
+	}
+
+	trimmedSummary := truncateText(summary, 72)
+	if replyLanguage == languagepolicy.ReplyLanguageEnglish {
+		return fmt.Sprintf("Based on your earlier context (%s), %s", trimmedSummary, clarificationFollowUpPrompt(suggestionIntent, true))
+	}
+
+	return fmt.Sprintf("结合你之前提到的内容（%s），%s", trimmedSummary, clarificationFollowUpPrompt(suggestionIntent, false))
+}
+
+func clarificationBaseTextForLanguage(suggestionIntent map[string]any, replyLanguage string) string {
+	if replyLanguage == languagepolicy.ReplyLanguageEnglish {
+		return clarificationFollowUpPrompt(suggestionIntent, true)
+	}
+	return clarificationFollowUpPrompt(suggestionIntent, false)
+}
+
+func initialClarificationPromptForLanguage(snapshot taskcontext.TaskContextSnapshot, startFlow bool, replyLanguage string) string {
+	if strings.TrimSpace(replyLanguage) == "" {
+		replyLanguage = clarificationReplyLanguage(snapshot)
+	}
+	if replyLanguage == languagepolicy.ReplyLanguageEnglish {
+		if startFlow {
+			return "I am not sure how you want me to handle this yet. Please confirm the goal first."
+		}
+		return "I am not sure how you want me to handle this content yet. Please confirm the goal first."
+	}
+	if startFlow {
+		return "我还不确定你想如何处理当前对象，请先确认。"
+	}
+	return "我还不确定你想如何处理这段内容，请确认目标。"
+}
+
+func clarificationReplyLanguage(snapshot taskcontext.TaskContextSnapshot) string {
+	preferredInput := firstNonEmptyString(snapshot.Text, snapshot.ErrorText)
+	if preferredInput == "" {
+		preferredInput = firstNonEmptyString(snapshot.SelectionText, memoryQueryFromSnapshot(snapshot))
+	}
+	currentLanguage := languagepolicy.PreferredReplyLanguage(preferredInput)
+	if shouldPreferRememberedSessionLanguage(snapshot, currentLanguage) {
+		return strings.TrimSpace(snapshot.SessionReplyLanguage)
+	}
+	return currentLanguage
+}
+
+func clarificationFollowUpPrompt(taskIntent map[string]any, english bool) string {
+	switch stringValue(taskIntent, "name", "") {
+	case "translate":
+		if english {
+			return "do you want me to translate it?"
+		}
+		return "你是想让我翻译它吗？"
+	case "rewrite":
+		if english {
+			return "do you want me to rewrite it?"
+		}
+		return "你是想让我改写它吗？"
+	case "explain":
+		if english {
+			return "do you want me to explain it?"
+		}
+		return "你是想让我解释它吗？"
+	case "summarize":
+		if english {
+			return "do you want me to summarize it?"
+		}
+		return "你是想让我总结它吗？"
+	default:
+		if english {
+			return "what would you like me to do next?"
+		}
+		return "你现在希望我具体怎么处理？"
+	}
 }
 
 func buildMemoryReadPlans(memoryService *memory.Service, taskID, runID string, snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any, hits []memory.RetrievalHit) []map[string]any {

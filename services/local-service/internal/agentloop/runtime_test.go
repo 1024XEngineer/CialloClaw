@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/languagepolicy"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
@@ -204,7 +205,7 @@ func TestRunCompactsHistoryBeforeLaterPlannerRounds(t *testing.T) {
 
 func TestBuildPlannerInputIncludesToolCatalogAndConcisePolicy(t *testing.T) {
 	plannerInput, compactedHistory := buildPlannerInput(
-		"Inspect workspace notes and answer.",
+		"请检查工作区笔记并回答。",
 		nil,
 		[]model.ToolDefinition{
 			{
@@ -246,6 +247,67 @@ func TestBuildPlannerInputIncludesToolCatalogAndConcisePolicy(t *testing.T) {
 	}
 }
 
+func TestBuildPlannerInputUsesEnglishPolicyForEnglishOnlyInput(t *testing.T) {
+	plannerInput, _ := buildPlannerInput("Inspect workspace notes and answer.", nil, nil, 0, 0)
+
+	if !strings.Contains(plannerInput, "Use English for this request unless the user explicitly asks for another language.") {
+		t.Fatalf("expected english-only input to switch planner language contract, got %q", plannerInput)
+	}
+	if strings.Contains(plannerInput, "用户上下文：") || strings.Contains(plannerInput, "当前可用能力：") {
+		t.Fatalf("expected english-only planner input to avoid chinese headings, got %q", plannerInput)
+	}
+}
+
+func TestBuildPlannerInputUsesEnglishPolicyForCommonEnglishPhrase(t *testing.T) {
+	plannerInput, _ := buildPlannerInput("review the diff", nil, nil, 0, 0)
+
+	if !strings.Contains(plannerInput, "Use English for this request unless the user explicitly asks for another language.") {
+		t.Fatalf("expected common english phrase to keep english planner policy, got %q", plannerInput)
+	}
+	if strings.Contains(plannerInput, "用户上下文：") {
+		t.Fatalf("expected common english phrase to avoid chinese planner headings, got %q", plannerInput)
+	}
+}
+
+func TestBuildPlannerInputUsesExplicitReplyLanguageWithChineseMemoryContext(t *testing.T) {
+	plannerInput, _ := buildPlannerInputForLanguage(
+		"Input:\nreview the diff\n\n历史记忆参考数据:\n```json\n[{\"summary\":\"项目 alpha 历史偏好\"}]\n```",
+		languagepolicy.ReplyLanguageEnglish,
+		nil,
+		nil,
+		0,
+		0,
+	)
+
+	if !strings.Contains(plannerInput, "Use English for this request unless the user explicitly asks for another language.") {
+		t.Fatalf("expected explicit english reply language to keep english planner prompt, got %q", plannerInput)
+	}
+	if strings.Contains(plannerInput, "默认使用中文回答") {
+		t.Fatalf("expected explicit english reply language to avoid chinese planner prompt, got %q", plannerInput)
+	}
+}
+
+func TestBuildPlannerInputUsesEnglishCapabilityLabels(t *testing.T) {
+	plannerInput, _ := buildPlannerInput(
+		"Inspect workspace notes and answer.",
+		nil,
+		[]model.ToolDefinition{{
+			Name:        "read_file",
+			Description: "Read a file from the workspace.",
+			InputSchema: map[string]any{"required": []string{"path"}},
+		}},
+		0,
+		0,
+	)
+
+	if !strings.Contains(plannerInput, "Required params: path") {
+		t.Fatalf("expected english-only planner input to localize required params label, got %q", plannerInput)
+	}
+	if strings.Contains(plannerInput, "必填参数") {
+		t.Fatalf("expected english-only planner input to avoid chinese capability labels, got %q", plannerInput)
+	}
+}
+
 func TestBuildPlannerInputOmitsToolSectionWithoutTools(t *testing.T) {
 	plannerInput, compactedHistory := buildPlannerInput(
 		"Just answer directly.",
@@ -264,13 +326,20 @@ func TestBuildPlannerInputOmitsToolSectionWithoutTools(t *testing.T) {
 }
 
 func TestAppendCapabilityReminderInputPreservesLanguageContract(t *testing.T) {
-	reminderInput := appendCapabilityReminderInput("Please answer in English.", []model.ToolDefinition{{Name: "read_file"}})
+	reminderInput := appendCapabilityReminderInput("Please answer in English.", []model.ToolDefinition{{
+		Name:        "read_file",
+		Description: "Read a file from the workspace.",
+		InputSchema: map[string]any{"required": []string{"path"}},
+	}})
 
-	if !strings.Contains(reminderInput, "按用户要求的语言给出简洁答复；若用户未指定语言，默认中文。") {
+	if !strings.Contains(reminderInput, "answer concisely in the user's language") {
 		t.Fatalf("expected reminder input to preserve the user language contract, got %q", reminderInput)
 	}
-	if strings.Contains(reminderInput, "简洁中文答复") {
-		t.Fatalf("expected reminder input to avoid forcing Chinese replies, got %q", reminderInput)
+	if !strings.Contains(reminderInput, "Required params: path") {
+		t.Fatalf("expected english reminder input to localize required params label, got %q", reminderInput)
+	}
+	if strings.Contains(reminderInput, "必填参数") || strings.Contains(reminderInput, "能力提醒：") {
+		t.Fatalf("expected english reminder input to avoid chinese scaffolding, got %q", reminderInput)
 	}
 }
 
@@ -1559,19 +1628,19 @@ func TestRunRetriesWhenPlannerClaimsCapabilitiesAreUnavailable(t *testing.T) {
 	if len(plannerInputs) != 3 {
 		t.Fatalf("expected three planner rounds, got %+v", plannerInputs)
 	}
-	if !strings.Contains(plannerInputs[1], "能力提醒：") {
+	if !strings.Contains(plannerInputs[1], "Capability reminder:") {
 		t.Fatalf("expected second planner input to include capability reminder, got %q", plannerInputs[1])
 	}
 	if countEventType(result.Events, "loop.round.completed") != 3 {
 		t.Fatalf("expected one completed event per persisted planner round, got %+v", result.Events)
 	}
-	if !strings.Contains(plannerInputs[1], "当前这轮已经开放下列工具能力。") {
+	if !strings.Contains(plannerInputs[1], "The following tool capabilities are available in this round.") {
 		t.Fatalf("expected second planner input to restate tool availability, got %q", plannerInputs[1])
 	}
-	if !strings.Contains(plannerInputs[1], "按用户要求的语言给出简洁答复；若用户未指定语言，默认中文。") {
+	if !strings.Contains(plannerInputs[1], "answer concisely in the user's language") {
 		t.Fatalf("expected second planner input to preserve language contract, got %q", plannerInputs[1])
 	}
-	if strings.Contains(plannerInputs[1], "简洁中文答复") {
+	if strings.Contains(plannerInputs[1], "简洁中文答复") || strings.Contains(plannerInputs[1], "能力提醒：") {
 		t.Fatalf("expected second planner input to avoid forcing Chinese replies, got %q", plannerInputs[1])
 	}
 	if countRetryReason(result.Events, "capability_reminder") != 1 {
@@ -1635,7 +1704,7 @@ func TestRunDoesNotRepeatCapabilityReminderAfterSecondDenial(t *testing.T) {
 	if len(plannerInputs) != 2 {
 		t.Fatalf("expected capability reminder flow to stop after one retry, got %+v", plannerInputs)
 	}
-	if !strings.Contains(plannerInputs[1], "能力提醒：") {
+	if !strings.Contains(plannerInputs[1], "Capability reminder:") {
 		t.Fatalf("expected second planner input to include capability reminder, got %q", plannerInputs[1])
 	}
 	if countEventType(result.Events, "loop.round.completed") != 2 {
