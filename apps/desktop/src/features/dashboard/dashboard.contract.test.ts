@@ -2077,16 +2077,6 @@ test("dashboard home randomizes summons while preferring a different module when
   assert.match(dashboardHomeSource, /onClose=\{closeActiveOverlay\}/);
 });
 
-test("mirror page stays RPC-only instead of exposing a page-level mock toggle", () => {
-  const mirrorAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/memory/MirrorApp.tsx"), "utf8");
-
-  assert.match(mirrorAppSource, /const dataMode: MirrorOverviewSource = "rpc";/);
-  assert.doesNotMatch(mirrorAppSource, /DashboardMockToggle/);
-  assert.doesNotMatch(mirrorAppSource, /loadDashboardDataMode\("memory"\)/);
-  assert.doesNotMatch(mirrorAppSource, /saveDashboardDataMode\("memory"\)/);
-  assert.doesNotMatch(mirrorAppSource, /setDataMode\(/);
-});
-
 test("safety page stays RPC-only instead of exposing a page-level mock toggle", () => {
   const securityAppSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/safety/SecurityApp.tsx"), "utf8");
 

@@ -3,8 +3,7 @@ import { DashboardModuleFloatingNav } from "@/features/dashboard/shared/Dashboar
 import { MockMirrorMemoryOverview } from "./MockMirrorMemoryPage";
 
 /**
- * Mounts the new mock-only mirror memory routes while preserving the previous
- * implementation in `LegacyMemoryPage` for future reference.
+ * Mounts the current mock-only mirror memory route for the dashboard.
  */
 export function MemoryPage() {
   return (
