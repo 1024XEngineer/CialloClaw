@@ -320,10 +320,7 @@ func clarificationBaseTextForLanguage(suggestionIntent map[string]any, replyLang
 
 func initialClarificationPromptForLanguage(snapshot taskcontext.TaskContextSnapshot, startFlow bool, replyLanguage string) string {
 	if strings.TrimSpace(replyLanguage) == "" {
-		preferredInput := firstNonEmptyString(snapshot.Text, snapshot.ErrorText)
-		if preferredInput == "" {
-			preferredInput = firstNonEmptyString(snapshot.SelectionText, memoryQueryFromSnapshot(snapshot))
-		}
+		preferredInput := clarificationLanguageEvidence(snapshot)
 		replyLanguage = languagepolicy.PreferredReplyLanguage(preferredInput)
 	}
 	if replyLanguage == languagepolicy.ReplyLanguageEnglish {

@@ -31,6 +31,22 @@ func TestBubbleTextForConfirmationUsesSettingsDefaultLanguage(t *testing.T) {
 	}
 }
 
+func TestBubbleTextForConfirmationUsesChineseDefaultLanguageWithoutInputSignal(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		output: `{"intent":{"name":"summarize","arguments":{"style":"brief"}}}`,
+	})
+
+	text := service.bubbleTextForConfirmation(
+		runengine.TaskRecord{},
+		taskcontext.TaskContextSnapshot{},
+		intent.Suggestion{RequiresConfirm: true},
+		true,
+	)
+	if !strings.Contains(text, "请先确认") {
+		t.Fatalf("expected chinese clarification bubble from default settings fallback, got %q", text)
+	}
+}
+
 func TestBubbleTextForConfirmationPrefersRememberedSessionLanguage(t *testing.T) {
 	service, _ := newTestServiceWithModelClient(t, stubModelClient{
 		output: `{"intent":{"name":"summarize","arguments":{"style":"brief"}}}`,

@@ -159,14 +159,18 @@ func buildTaskConfirmQuestionPrompt(snapshot taskcontext.TaskContextSnapshot, su
 	return strings.Join(lines, "\n")
 }
 
+func clarificationLanguageEvidence(snapshot taskcontext.TaskContextSnapshot) string {
+	return firstNonEmptyString(
+		firstNonEmptyString(snapshot.Text, snapshot.ErrorText),
+		snapshot.SelectionText,
+	)
+}
+
 // confirmationReplyLanguage keeps clarification and confirmation copy on the
 // same language path so default settings can drive UI text when the current
 // input is too ambiguous to infer reliably.
 func (s *Service) confirmationReplyLanguage(snapshot taskcontext.TaskContextSnapshot) string {
-	preferredInput := firstNonEmptyString(snapshot.Text, snapshot.ErrorText)
-	if preferredInput == "" {
-		preferredInput = firstNonEmptyString(snapshot.SelectionText, memoryQueryFromSnapshot(snapshot))
-	}
+	preferredInput := clarificationLanguageEvidence(snapshot)
 	if preferredInput != "" {
 		currentLanguage := languagepolicy.PreferredReplyLanguage(preferredInput)
 		if shouldPreferRememberedSessionLanguage(snapshot, currentLanguage) {
