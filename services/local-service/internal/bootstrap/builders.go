@@ -31,6 +31,7 @@ type coreDeps struct {
 	auditService               *audit.Service
 	checkpointService          *checkpoint.Service
 	fileSystem                 platform.FileSystemAdapter
+	toolFileSystem             platform.FileSystemAdapter
 	executionBackend           tools.ExecutionCapability
 	osCapability               platform.OSCapabilityAdapter
 	pluginService              *plugin.Service
@@ -63,6 +64,10 @@ func buildCoreDeps(cfg config.Config) (coreDeps, error) {
 	if err != nil {
 		return coreDeps{}, err
 	}
+	toolPathPolicy, err := platform.NewLocalToolPathPolicy(cfg.WorkspaceRoot)
+	if err != nil {
+		return coreDeps{}, err
+	}
 
 	storageService := storage.NewService(platform.NewLocalStorageAdapter(cfg.DatabasePath))
 	resolvedModelConfig, placeholderModelConfig, persistedModelRouteChanged, err := loadBootstrapModelConfig(cfg.Model, storageService.SettingsStore())
@@ -74,6 +79,7 @@ func buildCoreDeps(cfg config.Config) (coreDeps, error) {
 	auditService := audit.NewService(storageService.AuditWriter())
 	checkpointService := checkpoint.NewService(storageService.RecoveryPointWriter())
 	fileSystem := platform.NewLocalFileSystemAdapter(pathPolicy)
+	toolFileSystem := platform.NewLocalFileSystemAdapter(toolPathPolicy)
 	executionBackend := platform.NewControlledExecutionBackend(cfg.WorkspaceRoot)
 	osCapability := platform.NewLocalOSCapabilityAdapter()
 	pluginService := plugin.NewService()
@@ -91,6 +97,7 @@ func buildCoreDeps(cfg config.Config) (coreDeps, error) {
 		auditService:               auditService,
 		checkpointService:          checkpointService,
 		fileSystem:                 fileSystem,
+		toolFileSystem:             toolFileSystem,
 		executionBackend:           executionBackend,
 		osCapability:               osCapability,
 		pluginService:              pluginService,
@@ -165,6 +172,7 @@ func buildServices(core coreDeps, runtimes runtimeDeps) (serviceDeps, error) {
 		runtimes.toolExecutor,
 		core.pluginService,
 	).WithArtifactStore(core.storageService.ArtifactStore()).
+		WithToolPlatform(core.toolFileSystem).
 		WithLoopRuntimeStore(core.storageService.LoopRuntimeStore()).
 		WithExtensionAssetCatalog(core.storageService)
 	inspectorService := taskinspector.NewService(core.fileSystem)

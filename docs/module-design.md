@@ -1678,10 +1678,10 @@ flowchart TB
 补充约束：`exec_command` 默认优先路由到 Docker sandbox；仅对 `cmd` / `powershell` / `pwsh` 这类 Windows shell 入口保留受控宿主执行路径，避免在 Windows 主目标上把本地命令误送入 Linux 容器。
 
 - 真实浏览器附着线索只允许来自桌面快照承接的 `browser_kind / page_url / page_title / window_title`，执行层不得信任模型直接覆盖 CDP 端点或浏览器类型；
-- agent loop 默认只暴露无需审批的浏览器能力（如 `browser_attach_current / browser_snapshot`）；`browser_tabs_list / browser_navigate / browser_tab_focus / browser_interact` 仍受审批边界约束，在具备 loop 内授权暂停前不得进入默认目录。
+- agent loop 默认只暴露无需审批的浏览器能力；当前默认目录已包含 `browser_attach_current / browser_snapshot / browser_tabs_list`，以及在公开 `http(s)` 目标或稳定标签页目标下默认低风险的 `browser_navigate / browser_tab_focus`。`browser_interact` 仍受审批边界约束，在具备更细粒度交互预判前不得进入默认目录。
 - 当前桌面 Agent Loop 的 planner-visible capability catalog 必须由执行层单一真源生成，同一份定义同时派生工具描述、参数 schema 和运行态 allowlist，避免出现“Prompt 里可用但执行层拒绝”或反向漂移。
-- 当前默认冻结的只读规划能力面为 `read_file / list_dir / extract_text / page_read / page_search / web_search`；`page_interact` 虽已是 Playwright sidecar 正式能力，但不进入当前桌面 Agent Loop 的默认规划目录。
-- 每个能力条目都必须同时声明适用场景、不适用场景和约束；当前 `page_read / page_search / web_search` 对显式 `http(s)` 网页目标默认按低风险只读处理。审批边界仅保留给 `localhost` 风格主机名、单标签主机名、本地域后缀，以及字面量回环 / 私网 / link-local / CGNAT IP 目标；页面交互、导航和跨标签页浏览器动作仍保留审批治理边界。
+- 当前默认规划能力面包含 `read_file / list_dir / extract_text / page_read / page_search / web_search`，并会在浏览器上下文可附着时额外暴露 `browser_attach_current / browser_snapshot / browser_tabs_list / browser_navigate / browser_tab_focus`；`page_interact` 虽已是 Playwright sidecar 正式能力，但在具备细粒度交互风险预判前仍不进入当前桌面 Agent Loop 的默认规划目录。
+- 每个能力条目都必须同时声明适用场景、不适用场景和约束；当前 `page_read / page_search / web_search` 对显式 `http(s)` 网页目标默认按低风险只读处理，`browser_navigate` 对公开 `http(s)` 目标也默认按低风险导航处理，`browser_tabs_list / browser_tab_focus` 默认按当前浏览器会话内的低风险观察或聚焦动作处理。审批边界保留给 `localhost` 风格主机名、单标签主机名、本地域后缀、字面量回环 / 私网 / link-local / CGNAT IP 目标、显式 endpoint override，以及尚未细分的页面交互与浏览器交互动作。
 
 #### 处理主线
 1. 根据 `Intent` 和 arguments 解析目标工具及目标对象。
@@ -2203,8 +2203,8 @@ flowchart TB
 - **对象仓储与运行态持久化**：承接 `task / run / event / tool_call / delivery_result / approval_request` 等正式对象和兼容对象的持久化。
 - **本地索引与检索**：承接 FTS5、向量检索和后续结构化召回索引。
 - **Workspace / Artifact 存储**：承接工作区文档、交付产物和证据文件。
-- **路径策略与机密存储**：负责 workspace 边界、敏感路径校验和 Stronghold 等机密存储。
-- **文件系统抽象层**：统一约束工作区、产物目录和路径策略下的文件读写。
+- **路径策略与机密存储**：负责 workspace 边界、当前用户本地文件策略、Known Folder / OneDrive 重定向解析、敏感路径校验和 Stronghold 等机密存储。
+- **文件系统抽象层**：统一约束工作区、产物目录以及当前用户允许路径策略下的文件读写。
 - **系统能力抽象层**：统一承接窗口、通知、系统动作、环境元数据等平台能力。
 - **执行后端适配层**：统一承接 Docker sandbox、受控宿主执行和未来跨平台执行后端。
 
@@ -2215,8 +2215,8 @@ flowchart TB
 | 对象仓储与运行态持久化 | 运行控制器和治理层提交的正式对象写入计划 | `TaskRunRecord`、`DeliveryResultRecord`、`CitationRecord` 等持久化记录 | 查询结果、运行态恢复、任务详情真源 |
 | 本地索引与检索 | 记忆沉淀、文本索引写入、召回请求 | FTS5 条目、向量索引、结构化键值命中 | `retrieval_hit`、检索摘要、排序结果 |
 | Workspace / Artifact 存储 | 正式交付、屏幕证据、文档写入 | artifact 元数据、路径映射、交付 payload | 文档路径、artifact 列表、文件定位入口 |
-| 路径策略与机密存储 | 高风险执行前的路径检查和密钥读取 | workspace allowlist、secret handle、敏感路径决策 | allow / deny、配置读取、统一错误码 |
-| 文件系统抽象层 | 文件读写、路径归一化、artifact 落盘 | 规范化路径、文件句柄、workspace 边界校验 | 安全文件操作结果 |
+| 路径策略与机密存储 | 高风险执行前的路径检查和密钥读取 | workspace boundary、current-user local path policy、known-folder resolution、secret handle、敏感路径决策 | allow / deny、配置读取、统一错误码 |
+| 文件系统抽象层 | 文件读写、路径归一化、artifact 落盘 | 规范化路径、文件句柄、路径策略边界校验 | 安全文件操作结果 |
 | 系统能力抽象层 | 通知、快捷键、剪贴板、屏幕授权、sidecar 生命周期 | 平台调用请求、环境元数据 | 宿主能力结果或平台级降级信号 |
 | 执行后端适配层 | 工具与执行请求 | sandbox profile、resource limit、backend routing | 受控执行结果、执行环境错误 |
 

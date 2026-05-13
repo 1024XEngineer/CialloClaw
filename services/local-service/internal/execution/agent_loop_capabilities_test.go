@@ -56,14 +56,19 @@ func TestAgentLoopToolDefinitionsExposeBrowserToolsWhenSnapshotSupportsAttach(t 
 		PageURL:     "https://example.com",
 		WindowTitle: "Example",
 	})
-	if len(definitions) < 8 {
-		t.Fatalf("expected browser-capable snapshot to expose the browser planner tools, got %+v", definitions)
+	if len(definitions) != 11 {
+		t.Fatalf("expected browser-capable snapshot to expose eleven planner-visible tools, got %+v", definitions)
 	}
+
+	wantNames := []string{"read_file", "list_dir", "extract_text", "browser_attach_current", "browser_snapshot", "browser_tabs_list", "page_read", "page_search", "browser_navigate", "browser_tab_focus", "web_search"}
 	names := make([]string, 0, len(definitions))
 	browserAttachIndex := -1
-	for index, definition := range definitions {
-		names = append(names, definition.Name)
-		if definition.Name == "browser_attach_current" {
+	for index, want := range wantNames {
+		names = append(names, definitions[index].Name)
+		if definitions[index].Name != want {
+			t.Fatalf("unexpected browser-aware tool definition order at %d: got %q want %q", index, definitions[index].Name, want)
+		}
+		if definitions[index].Name == "browser_attach_current" {
 			browserAttachIndex = index
 		}
 	}
@@ -98,8 +103,11 @@ func TestAgentLoopToolDefinitionsAllowSparseBrowserContextForDiscoveryTools(t *t
 	if !containsString(names, "read_file") || !containsString(names, "list_dir") || !containsString(names, "extract_text") || !containsString(names, "page_read") || !containsString(names, "page_search") || !containsString(names, "web_search") {
 		t.Fatalf("expected sparse browser context to preserve non-browser planner tools, got %+v", names)
 	}
-	if containsString(names, "browser_attach_current") || containsString(names, "browser_snapshot") || containsString(names, "browser_tabs_list") || containsString(names, "browser_navigate") || containsString(names, "browser_tab_focus") {
-		t.Fatalf("expected sparse browser context to keep target-dependent browser tools hidden, got %+v", names)
+	if containsString(names, "browser_attach_current") || containsString(names, "browser_snapshot") || containsString(names, "browser_navigate") {
+		t.Fatalf("expected sparse browser context to keep current-page browser tools hidden, got %+v", names)
+	}
+	if !containsString(names, "browser_tabs_list") || !containsString(names, "browser_tab_focus") {
+		t.Fatalf("expected sparse browser context to expose browser discovery tools, got %+v", names)
 	}
 }
 
@@ -141,11 +149,14 @@ func TestAgentLoopToolAllowlistRequiresCatalogMembershipAndRegistryPresence(t *t
 	if withPlaywright.isAllowedAgentLoopToolForSnapshot("browser_attach_current", taskcontext.TaskContextSnapshot{BrowserKind: "chrome"}) {
 		t.Fatal("expected browser_attach_current to stay hidden for sparse browser context without target hints")
 	}
-	if withPlaywright.isAllowedAgentLoopToolForSnapshot("browser_tabs_list", taskcontext.TaskContextSnapshot{BrowserKind: "chrome"}) {
-		t.Fatal("expected browser_tabs_list to stay hidden until loop governance can pause for approval")
+	if !withPlaywright.isAllowedAgentLoopToolForSnapshot("browser_tabs_list", taskcontext.TaskContextSnapshot{BrowserKind: "chrome"}) {
+		t.Fatal("expected browser_tabs_list to be allowed for sparse browser context")
 	}
-	if withPlaywright.isAllowedAgentLoopToolForSnapshot("browser_navigate", taskcontext.TaskContextSnapshot{BrowserKind: "edge", PageURL: "https://example.com", WindowTitle: "Example"}) {
-		t.Fatal("expected browser_navigate to stay hidden until loop governance can pause for approval")
+	if !withPlaywright.isAllowedAgentLoopToolForSnapshot("browser_navigate", taskcontext.TaskContextSnapshot{BrowserKind: "edge", PageURL: "https://example.com", WindowTitle: "Example"}) {
+		t.Fatal("expected browser_navigate to be allowed when the snapshot exposes an attach-capable page")
+	}
+	if !withPlaywright.isAllowedAgentLoopToolForSnapshot("browser_tab_focus", taskcontext.TaskContextSnapshot{BrowserKind: "chrome"}) {
+		t.Fatal("expected browser_tab_focus to be allowed for sparse browser context")
 	}
 	if withPlaywright.isAllowedAgentLoopTool("browser_interact") {
 		t.Fatal("expected browser_interact to stay disallowed until the planner catalog opts in")

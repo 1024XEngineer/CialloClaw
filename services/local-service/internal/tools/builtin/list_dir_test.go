@@ -112,9 +112,12 @@ func TestListDirToolExecuteWithinWorkspace(t *testing.T) {
 	if len(entries) != 2 || entries[0]["name"] != "a.txt" {
 		t.Fatalf("unexpected entries: %+v", entries)
 	}
-	preview, ok := result.SummaryOutput["entries_preview"].([]string)
-	if !ok || len(preview) != 2 || preview[0] != "a.txt" || preview[1] != "b/" {
-		t.Fatalf("unexpected summary preview: %+v", result.SummaryOutput)
+	preview := result.SummaryOutput["entries_preview"].([]string)
+	if len(preview) != 2 || preview[0] != "a.txt" || preview[1] != "b/" {
+		t.Fatalf("unexpected entries preview: %+v", result.SummaryOutput)
+	}
+	if previewText, _ := result.SummaryOutput["entries_preview_text"].(string); previewText != "a.txt, b/" {
+		t.Fatalf("unexpected entries preview text: %+v", result.SummaryOutput)
 	}
 }
 
