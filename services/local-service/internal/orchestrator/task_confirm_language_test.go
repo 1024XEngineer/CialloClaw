@@ -73,6 +73,42 @@ func TestBubbleTextForConfirmationPrefersRememberedSessionLanguage(t *testing.T)
 	}
 }
 
+func TestBubbleTextForConfirmationUsesEnglishPageContextWithoutTextSignal(t *testing.T) {
+	service, _ := newTestServiceWithModelClient(t, stubModelClient{
+		output: `{"intent":{"name":"summarize","arguments":{"style":"brief"}}}`,
+	})
+
+	text := service.bubbleTextForConfirmation(
+		runengine.TaskRecord{},
+		taskcontext.TaskContextSnapshot{
+			PageTitle: "Release notes dashboard",
+		},
+		intent.Suggestion{RequiresConfirm: true},
+		true,
+	)
+	if !strings.Contains(text, "Please confirm the goal first.") {
+		t.Fatalf("expected english clarification bubble from page context, got %q", text)
+	}
+}
+
+func TestFallbackConfirmIntentTextUsesEnglishAction(t *testing.T) {
+	text := fallbackConfirmIntentText(
+		taskcontext.TaskContextSnapshot{},
+		intent.Suggestion{
+			Intent: map[string]any{
+				"name": "summarize",
+			},
+		},
+		languagepolicy.ReplyLanguageEnglish,
+	)
+	if strings.Contains(text, "总结") || strings.Contains(text, "处理") {
+		t.Fatalf("expected english fallback confirmation action, got %q", text)
+	}
+	if text != "Do you want me to summarize?" {
+		t.Fatalf("expected english fallback confirmation question, got %q", text)
+	}
+}
+
 func TestBuildTaskConfirmQuestionPromptUsesReplyLanguage(t *testing.T) {
 	snapshot := taskcontext.TaskContextSnapshot{Text: "openclaw docs"}
 	suggestion := intent.Suggestion{

@@ -102,7 +102,7 @@ func shouldUseModelBackedConfirmIntentText(suggestion intent.Suggestion) bool {
 func fallbackConfirmIntentText(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, replyLanguage string) string {
 	action, subject := intentConfirmTitleParts(suggestion.TaskTitle)
 	if subject == "" {
-		action = intentConfirmAction(snapshot, suggestion.Intent)
+		action = intentConfirmAction(snapshot, suggestion.Intent, replyLanguage)
 		subject = intentConfirmSubject(snapshot, suggestion.Intent)
 	}
 
@@ -125,10 +125,13 @@ func fallbackConfirmIntentText(snapshot taskcontext.TaskContextSnapshot, suggest
 	}
 }
 
-func intentConfirmAction(snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any) string {
+func intentConfirmAction(snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any, replyLanguage string) string {
 	intentName := strings.TrimSpace(stringValue(taskIntent, "name", ""))
 	if intentName == "" {
 		return ""
+	}
+	if isEnglishReplyLanguage(replyLanguage) {
+		return englishIntentConfirmAction(snapshot, intentName)
 	}
 	const subjectMarker = "__confirm_subject__"
 	title := presentation.TaskTitle(intentName, presentation.TaskTitleOptions{
@@ -141,6 +144,29 @@ func intentConfirmAction(snapshot taskcontext.TaskContextSnapshot, taskIntent ma
 		return ""
 	}
 	return strings.TrimSpace(strings.TrimRight(prefix, "：:"))
+}
+
+func englishIntentConfirmAction(snapshot taskcontext.TaskContextSnapshot, intentName string) string {
+	switch intentName {
+	case "rewrite":
+		return "rewrite"
+	case "translate":
+		return "translate"
+	case "explain":
+		if strings.TrimSpace(snapshot.ErrorText) != "" {
+			return "explain"
+		}
+		return "explain"
+	case "summarize":
+		return "summarize"
+	case "screen_analyze":
+		if strings.TrimSpace(snapshot.ErrorText) != "" {
+			return "analyze"
+		}
+		return "analyze"
+	default:
+		return "handle"
+	}
 }
 
 func buildTaskConfirmQuestionPrompt(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, replyLanguage string) string {
@@ -160,10 +186,30 @@ func buildTaskConfirmQuestionPrompt(snapshot taskcontext.TaskContextSnapshot, su
 }
 
 func clarificationLanguageEvidence(snapshot taskcontext.TaskContextSnapshot) string {
-	return firstNonEmptyString(
-		firstNonEmptyString(snapshot.Text, snapshot.ErrorText),
+	for _, value := range []string{
+		snapshot.Text,
+		snapshot.ErrorText,
 		snapshot.SelectionText,
-	)
+		firstSnapshotFile(snapshot),
+		snapshot.VisibleText,
+		snapshot.ScreenSummary,
+		snapshot.PageTitle,
+		snapshot.WindowTitle,
+		snapshot.ClipboardText,
+		snapshot.HoverTarget,
+	} {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstSnapshotFile(snapshot taskcontext.TaskContextSnapshot) string {
+	if len(snapshot.Files) == 0 {
+		return ""
+	}
+	return snapshot.Files[0]
 }
 
 // confirmationReplyLanguage keeps clarification and confirmation copy on the
