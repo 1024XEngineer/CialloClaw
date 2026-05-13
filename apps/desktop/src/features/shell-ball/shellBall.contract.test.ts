@@ -9001,7 +9001,7 @@ test("shell-ball voice notifications are consumed locally from startup and forma
   assert.match(coordinatorSource, /speakApprovalPendingNotification\(\{\s*approval_request: input\.approvalRequest,\s*task_id: input\.taskId,\s*\}\);/);
   assert.match(coordinatorSource, /speakDeliveryReadyNotification\(\{\s*delivery_result: input\.deliveryResult,\s*task_id: input\.taskId,\s*\}\);/);
   assert.match(voiceServiceSource, /const STARTUP_GREETING_TEXT = "CialloClaw 已启动";/);
-  assert.match(voiceServiceSource, /const IDLE_CLICK_GREETING_TEXT = "CialloClaw";/);
+  assert.match(voiceServiceSource, /const IDLE_CLICK_GREETING_TEXT = "Ciallo";/);
   assert.match(voiceServiceSource, /const SELECTION_DETECTED_TEXT = "检测到选中文本";/);
   assert.match(voiceServiceSource, /const CLIPBOARD_DETECTED_TEXT = "检测到剪贴板内容";/);
   assert.match(voiceServiceSource, /const APPROVAL_PENDING_TEXT = "有一个操作需要你确认";/);
