@@ -174,7 +174,13 @@ function resolveFallbackPlaywrightBrowserDirectory() {
     process.env.HOME ? resolve(process.env.HOME, ".cache", "ms-playwright") : null,
   ].filter(Boolean);
 
-  return resolveFirstExistingDirectory(candidates, "bundled Playwright browser source");
+  for (const candidate of candidates) {
+    if (isDirectoryPath(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
 }
 
 function resolvePnpmHoistedPackageSource(nodeModulesPath, packageName) {
@@ -214,6 +220,38 @@ function resolvePackageSourceFromNodeModulesRoots(nodeModulesRoots, packageName)
   throw new Error(`Missing runtime package ${packageName} in ${nodeModulesRoots.join(", ")}`);
 }
 
+function installPlaywrightBrowserRuntime(targetBrowserRoot, playwrightPackageSource, repoRoot) {
+  mkdirSync(targetBrowserRoot, { recursive: true });
+  run(process.execPath, [resolve(playwrightPackageSource, "cli.js"), "install", "chromium"], {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      PLAYWRIGHT_BROWSERS_PATH: targetBrowserRoot,
+      PLAYWRIGHT_SKIP_BROWSER_GC: "1",
+    },
+  });
+}
+
+function preparePlaywrightBrowserRuntime(stagingRoot, runtimeSourceRoot, playwrightPackageSource, repoRoot) {
+  const targetBrowserRoot = resolve(stagingRoot, "ms-playwright");
+  removeRuntimePathIfPresent(targetBrowserRoot);
+
+  const runtimeBrowserDir = resolve(runtimeSourceRoot, "ms-playwright");
+  if (isDirectoryPath(runtimeBrowserDir)) {
+    copyRuntimePath(runtimeBrowserDir, targetBrowserRoot, "bundled Playwright browser source");
+    return targetBrowserRoot;
+  }
+
+  const cachedBrowserDir = resolveFallbackPlaywrightBrowserDirectory();
+  if (cachedBrowserDir !== null) {
+    copyRuntimePath(cachedBrowserDir, targetBrowserRoot, "bundled Playwright browser source");
+    return targetBrowserRoot;
+  }
+
+  installPlaywrightBrowserRuntime(targetBrowserRoot, playwrightPackageSource, repoRoot);
+  return targetBrowserRoot;
+}
+
 export function preparePlaywrightBundleRuntime() {
   const repoRoot = resolve(currentDirectory, "..", "..", "..", "..");
   const srcTauriRoot = resolve(currentDirectory, "..");
@@ -222,9 +260,6 @@ export function preparePlaywrightBundleRuntime() {
   const workerSourceRoot = resolve(repoRoot, "workers", "playwright-worker");
   const bundledWorkerRuntimeRoot = resolve(runtimeSourceRoot, "workers", "playwright-worker");
 
-  const browserRuntimeSource = isDirectoryPath(resolve(runtimeSourceRoot, "ms-playwright"))
-    ? resolve(runtimeSourceRoot, "ms-playwright")
-    : resolveFallbackPlaywrightBrowserDirectory();
   const workerNodeModulesRoots = [
     resolve(bundledWorkerRuntimeRoot, "node_modules"),
     resolve(workerSourceRoot, "node_modules"),
@@ -235,16 +270,14 @@ export function preparePlaywrightBundleRuntime() {
   const playwrightPackageSource = resolvePackageSourceFromNodeModulesRoots(workerNodeModulesRoots, "playwright");
   const playwrightCorePackageSource = resolvePackageSourceFromNodeModulesRoots(workerNodeModulesRoots, "playwright-core");
 
-  assertDirectoryExists(browserRuntimeSource, "bundled Playwright browser source");
   assertDirectoryExists(workerScriptSource, "Playwright worker source");
   assertFileExists(workerPackageSource, "Playwright worker package.json");
 
   mkdirSync(stagingRoot, { recursive: true });
-  removeRuntimePathIfPresent(resolve(stagingRoot, "ms-playwright"));
   removeRuntimePathIfPresent(resolve(stagingRoot, "workers"));
 
   stageBundledNodeRuntime(stagingRoot, runtimeSourceRoot);
-  copyRuntimePath(browserRuntimeSource, resolve(stagingRoot, "ms-playwright"), "bundled Playwright browser source");
+  preparePlaywrightBrowserRuntime(stagingRoot, runtimeSourceRoot, playwrightPackageSource, repoRoot);
 
   const stagedWorkerRoot = resolve(stagingRoot, "workers", "playwright-worker");
   mkdirSync(stagedWorkerRoot, { recursive: true });
