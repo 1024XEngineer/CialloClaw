@@ -8947,6 +8947,9 @@ test("shell-ball voice notifications are consumed locally from startup and forma
   assert.match(voiceServiceSource, /const APPROVAL_PENDING_TEXT = "有一个操作需要你确认";/);
   assert.match(voiceServiceSource, /const DELIVERY_READY_TEXT = "任务结果已准备好";/);
   assert.match(voiceServiceSource, /const VOICE_LIST_READY_TIMEOUT_MS = 600;/);
+  assert.match(voiceServiceSource, /let latestVoiceNotificationRequestId = 0;/);
+  assert.match(voiceServiceSource, /const requestId = \+\+latestVoiceNotificationRequestId;/);
+  assert.match(voiceServiceSource, /if \(requestId !== latestVoiceNotificationRequestId\) \{\s*return false;\s*\}/);
   assert.match(voiceServiceSource, /addEventListener\("voiceschanged", handleVoicesChanged\)/);
   assert.match(voiceServiceSource, /return payload\.delivery_result\.type === "bubble" \? null : DELIVERY_READY_TEXT;/);
 });

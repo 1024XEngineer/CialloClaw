@@ -29,6 +29,7 @@ const CLIPBOARD_DETECTED_TEXT = "检测到剪贴板内容";
 const APPROVAL_PENDING_TEXT = "有一个操作需要你确认";
 const DELIVERY_READY_TEXT = "任务结果已准备好";
 const VOICE_LIST_READY_TIMEOUT_MS = 600;
+let latestVoiceNotificationRequestId = 0;
 
 function normalizeVoiceType(voiceType: string) {
   return voiceType.trim().toLowerCase();
@@ -224,6 +225,7 @@ async function speakVoiceNotification(input: {
   kind: VoiceNotificationKind;
   payload?: ApprovalPendingNotification | DeliveryReadyNotification;
 }) {
+  const requestId = ++latestVoiceNotificationRequestId;
   const host = getVoiceNotificationHost();
   if (host === null) {
     return false;
@@ -247,6 +249,12 @@ async function speakVoiceNotification(input: {
     voiceType: settings.voice_type,
     voices: availableVoices,
   });
+
+  // Voice discovery can resolve out of order during startup, so only the most
+  // recent local notification is allowed to claim the shared synthesizer.
+  if (requestId !== latestVoiceNotificationRequestId) {
+    return false;
+  }
 
   utterance.lang = language;
   if (resolvedVoice !== null) {
