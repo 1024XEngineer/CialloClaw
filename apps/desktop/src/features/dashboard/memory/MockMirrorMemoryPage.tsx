@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { format } from "date-fns";
 import { zhCN } from "date-fns/locale";
-import { ArrowRight, Calendar as CalendarIcon, Copy, Sparkles, X } from "lucide-react";
+import { ArrowRight, Calendar as CalendarIcon, Copy, X } from "lucide-react";
 import memoryBackground from "@/assets/background_memory.png";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { useDashboardEscapeHandler } from "@/features/dashboard/shared/dashboardEscapeCoordinator";
 import {
   findMockRecentMemory,
   findMockSessionSummary,
@@ -47,20 +48,11 @@ export function MockMirrorMemoryOverview() {
   const selectedHistoryDateKey = useMemo<HistoryDate>(() => (selectedHistoryDate ? formatHistoryDate(selectedHistoryDate) : formatHistoryDate(defaultHistoryDate)), [selectedHistoryDate]);
   const selectedSession = useMemo(() => findMockSessionSummaryByDate(selectedHistoryDateKey), [selectedHistoryDateKey]);
 
-  useEffect(() => {
-    if (!activeModal) {
-      return;
-    }
-
-    function handleEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setActiveModal(null);
-      }
-    }
-
-    window.addEventListener("keydown", handleEscape);
-    return () => window.removeEventListener("keydown", handleEscape);
-  }, [activeModal]);
+  useDashboardEscapeHandler({
+    enabled: activeModal !== null,
+    handleEscape: () => setActiveModal(null),
+    priority: 220,
+  });
 
   function openRecent(memoryId: string) {
     const memory = findMockRecentMemory(memoryId);
