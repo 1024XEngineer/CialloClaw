@@ -8929,8 +8929,12 @@ test("shell-ball voice notifications are consumed locally from startup and forma
   assert.match(appSource, /speakShellBallSelectionDetectedNotification/);
   assert.match(appSource, /speakShellBallStartupGreeting/);
   assert.match(appSource, /const startupGreetingPlayedRef = useRef\(false\);/);
-  assert.match(appSource, /const selectionPromptVoiceKeyRef = useRef\(""\);/);
-  assert.match(appSource, /const clipboardPromptVoiceTextRef = useRef\(""\);/);
+  assert.match(appSource, /const selectionPromptVoiceSnapshotRef = useRef<ShellBallSelectionSnapshot \| null>\(null\);/);
+  assert.match(appSource, /const clipboardPromptVoiceRef = useRef<ShellBallClipboardVoicePrompt \| null>\(null\);/);
+  assert.match(appSource, /!areShellBallSelectionSnapshotsEqual\(selectionPromptVoiceSnapshotRef\.current, payload\.snapshot\)/);
+  assert.doesNotMatch(appSource, /const voiceKey = `\$\{payload\.snapshot\.updated_at\}:\$\{normalizedSelectionText\}`;/);
+  assert.match(appSource, /clipboardPromptVoiceRef\.current = null;\s*setClipboardPrompt\(null\);/);
+  assert.match(appSource, /activeVoicePrompt\.expiresAt <= Date\.now\(\)/);
   assert.match(appSource, /startupGreetingPlayedRef\.current = true;\s*void speakShellBallStartupGreeting\(\);/);
   assert.match(appSource, /void speakShellBallSelectionDetectedNotification\(\);/);
   assert.match(appSource, /void speakShellBallClipboardDetectedNotification\(\);/);
