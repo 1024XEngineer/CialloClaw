@@ -4909,8 +4909,16 @@ test("control-panel plugin snapshot keeps live runtime data separate from local 
         };
       },
       getPluginDetail: async (params) => {
-        const request = params as { plugin_id: string };
+        const request = params as {
+          include_events: boolean;
+          include_metrics: boolean;
+          include_runtime: boolean;
+          plugin_id: string;
+        };
         assert.equal(request.plugin_id, "ocr_worker");
+        assert.equal(request.include_runtime, true);
+        assert.equal(request.include_metrics, false);
+        assert.equal(request.include_events, true);
 
         return {
           plugin: {
@@ -5010,6 +5018,7 @@ test("control-panel app exposes the plugin extension section and mock toggle cop
   assert.match(controlPanelAppSource, /navLabel: "插件扩展"/);
   assert.match(controlPanelAppSource, /Mock Start/);
   assert.match(controlPanelAppSource, /不会向后端提交正式 enable \/ disable/);
+  assert.match(controlPanelAppSource, /\[selectedPluginId, pluginReloadToken\]/);
 });
 
 test("control panel saves full floating-ball ownership through the real rpc settings flow", async () => {

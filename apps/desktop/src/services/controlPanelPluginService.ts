@@ -225,7 +225,7 @@ export async function loadControlPanelPluginDetail(pluginId: string): Promise<Co
       request_meta: createRequestMeta(),
       plugin_id: pluginId,
       include_runtime: true,
-      include_metrics: true,
+      include_metrics: false,
       include_events: true,
     });
     const storedMocks = loadStoredPluginMocks();

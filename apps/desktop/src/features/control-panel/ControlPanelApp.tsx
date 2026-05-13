@@ -995,7 +995,7 @@ export function ControlPanelApp() {
     return () => {
       cancelled = true;
     };
-  }, [selectedPluginId]);
+  }, [selectedPluginId, pluginReloadToken]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1945,7 +1945,7 @@ export function ControlPanelApp() {
               <InfoRow label="本地 mock 覆盖" value={pluginSnapshot ? `${pluginSnapshot.summary.mock_overrides} 个` : "载入中…"} />
               <ControlLine
                 label="刷新运行态"
-                hint="重新读取插件列表、运行态、指标和最近事件；不会清空本地 mock 启停覆盖。"
+                hint="重新读取插件列表、运行态和最近事件；不会清空本地 mock 启停覆盖。"
                 className="control-panel-shell__row--stacked"
               >
                 <div className="control-panel-shell__plugin-toolbar">
