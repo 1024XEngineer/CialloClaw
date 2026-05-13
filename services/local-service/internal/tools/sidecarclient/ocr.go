@@ -214,7 +214,7 @@ func NewExtractTextTool() *ExtractTextTool {
 	return &ExtractTextTool{meta: tools.ToolMetadata{
 		Name:            "extract_text",
 		DisplayName:     "文本提取",
-		Description:     "通过 OCR worker 从文本文件、PDF 或图片中提取正文内容",
+		Description:     "通过 OCR worker 从文本文件、Office 文档、PDF 或图片中提取正文内容",
 		Source:          tools.ToolSourceWorker,
 		RiskHint:        "green",
 		TimeoutSec:      20,

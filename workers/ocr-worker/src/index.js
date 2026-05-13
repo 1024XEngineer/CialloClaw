@@ -15,11 +15,15 @@ export const manifest = {
 const imageExtensions = new Set([".bmp", ".gif", ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".webp"]);
 const htmlExtensions = new Set([".htm", ".html"]);
 const docxExtensions = new Set([".docx"]);
+const pptxExtensions = new Set([".pptx"]);
+const xlsxExtensions = new Set([".xlsx"]);
 const legacyWordExtensions = new Set([".doc"]);
-const docxArchiveSizeLimitBytes = 25 * 1024 * 1024;
-const docxEntrySizeLimitBytes = 8 * 1024 * 1024;
-const docxTotalXMLSizeLimitBytes = 16 * 1024 * 1024;
+const ooxmlArchiveSizeLimitBytes = 25 * 1024 * 1024;
+const ooxmlEntrySizeLimitBytes = 8 * 1024 * 1024;
+const ooxmlTotalXMLSizeLimitBytes = 16 * 1024 * 1024;
 const docxWordEntryPattern = /^word\/(document|header\d+|footer\d+|footnotes|endnotes)\.xml$/i;
+const pptxSlideEntryPattern = /^ppt\/slides\/slide\d+\.xml$/i;
+const xlsxSheetEntryPattern = /^xl\/worksheets\/sheet\d+\.xml$/i;
 
 const defaultDependencies = {
   execFile,
@@ -216,7 +220,7 @@ function readZipEntryContent(buffer, localHeaderOffset, compressionMethod, compr
   switch (compressionMethod) {
     case 0:
       if (typeof maxOutputLength === "number" && compressed.length > maxOutputLength) {
-        throw new Error(`docx_entry_too_large:${options.entryName ?? "unknown"}`);
+        throw new Error(`${options.entryTooLargeErrorCode ?? "zip_entry_too_large"}:${options.entryName ?? "unknown"}`);
       }
       return Buffer.from(compressed);
     case 8:
@@ -224,7 +228,7 @@ function readZipEntryContent(buffer, localHeaderOffset, compressionMethod, compr
         return inflateRawSync(compressed, typeof maxOutputLength === "number" ? { maxOutputLength } : undefined);
       } catch (error) {
         if (typeof maxOutputLength === "number" && error?.code === "ERR_BUFFER_TOO_LARGE") {
-          throw new Error(`docx_entry_too_large:${options.entryName ?? "unknown"}`);
+          throw new Error(`${options.entryTooLargeErrorCode ?? "zip_entry_too_large"}:${options.entryName ?? "unknown"}`);
         }
         throw error;
       }
@@ -253,17 +257,32 @@ function unzipEntries(buffer, options = {}) {
     if (!options.includeEntry || options.includeEntry(fileName)) {
       const entry = readZipEntryContent(buffer, localHeaderOffset, compressionMethod, compressedSize, {
         entryName: fileName,
+        entryTooLargeErrorCode: options.entryTooLargeErrorCode,
         maxOutputLength: options.maxEntrySize,
       });
       totalSize += entry.length;
       if (typeof options.maxTotalSize === "number" && totalSize > options.maxTotalSize) {
-        throw new Error("docx_text_too_large");
+        throw new Error(options.totalTooLargeError ?? "zip_text_too_large");
       }
       entries.set(fileName, entry);
     }
     offset += 46 + fileNameLength + extraLength + commentLength;
   }
   return entries;
+}
+
+async function readOOXMLArchive(targetPath, archiveKind, deps, options = {}) {
+  const targetStats = await deps.stat(targetPath);
+  if (typeof targetStats?.size === "number" && targetStats.size > ooxmlArchiveSizeLimitBytes) {
+    throw new Error(`${archiveKind}_archive_too_large`);
+  }
+  return unzipEntries(await readBuffer(targetPath, deps), {
+    ...options,
+    entryTooLargeErrorCode: `${archiveKind}_entry_too_large`,
+    maxEntrySize: ooxmlEntrySizeLimitBytes,
+    maxTotalSize: ooxmlTotalXMLSizeLimitBytes,
+    totalTooLargeError: `${archiveKind}_text_too_large`,
+  });
 }
 
 function decodeXMLText(value) {
@@ -292,16 +311,10 @@ function normalizeWordXML(value) {
 }
 
 async function extractDOCXText(targetPath, deps) {
-  const targetStats = await deps.stat(targetPath);
-  if (typeof targetStats?.size === "number" && targetStats.size > docxArchiveSizeLimitBytes) {
-    throw new Error("docx_archive_too_large");
-  }
-  const archive = unzipEntries(await readBuffer(targetPath, deps), {
+  const archive = await readOOXMLArchive(targetPath, "docx", deps, {
     includeEntry(name) {
       return docxWordEntryPattern.test(name);
     },
-    maxEntrySize: docxEntrySizeLimitBytes,
-    maxTotalSize: docxTotalXMLSizeLimitBytes,
   });
   const candidateNames = Array.from(archive.keys())
     .sort((left, right) => {
@@ -329,6 +342,168 @@ async function extractDOCXText(targetPath, deps) {
     language: "docx_text",
     page_count: 1,
     source: "ocr_worker_docx",
+  };
+}
+
+function normalizePresentationXML(value) {
+  const text = String(value ?? "")
+    .replace(/<(?:\w+:)?tab[^>]*\/>/gi, "\t")
+    .replace(/<(?:\w+:)?br[^>]*\/>/gi, "\n")
+    .replace(/<\/(?:\w+:)?p>/gi, "\n")
+    .replace(/<[^>]+>/g, " ");
+  return decodeXMLText(text)
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function slideNumberFromEntryName(name) {
+  const match = /slide(\d+)\.xml$/i.exec(name);
+  return match ? Number.parseInt(match[1], 10) : Number.MAX_SAFE_INTEGER;
+}
+
+function worksheetNumberFromEntryName(name) {
+  const match = /sheet(\d+)\.xml$/i.exec(name);
+  return match ? Number.parseInt(match[1], 10) : Number.MAX_SAFE_INTEGER;
+}
+
+async function extractPPTXText(targetPath, deps) {
+  const archive = await readOOXMLArchive(targetPath, "pptx", deps, {
+    includeEntry(name) {
+      return pptxSlideEntryPattern.test(name);
+    },
+  });
+  const candidateNames = Array.from(archive.keys()).sort((left, right) => slideNumberFromEntryName(left) - slideNumberFromEntryName(right));
+  const sections = [];
+  for (const name of candidateNames) {
+    const value = normalizePresentationXML(archive.get(name)?.toString("utf8") ?? "");
+    if (value !== "") {
+      sections.push(value);
+    }
+  }
+  if (sections.length === 0) {
+    throw new Error("pptx_text_not_found");
+  }
+  return {
+    path: targetPath,
+    text: sections.join("\n\n"),
+    language: "pptx_text",
+    page_count: Math.max(sections.length, 1),
+    source: "ocr_worker_pptx",
+  };
+}
+
+function normalizeSpreadsheetCellText(value) {
+  return decodeXMLText(String(value ?? ""))
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+function extractXMLTextRuns(value) {
+  const parts = [];
+  for (const match of String(value ?? "").matchAll(/<(?:\w+:)?t\b[^>]*>([\s\S]*?)<\/(?:\w+:)?t>/gi)) {
+    parts.push(decodeXMLText(match[1]));
+  }
+  return parts.join("");
+}
+
+function parseXLSXSharedStrings(value) {
+  const items = [];
+  for (const match of String(value ?? "").matchAll(/<si\b[^>]*>([\s\S]*?)<\/si>/gi)) {
+    items.push(normalizeSpreadsheetCellText(extractXMLTextRuns(match[1])));
+  }
+  return items;
+}
+
+function extractXLSXCellText(attributes, body, sharedStrings) {
+  const typeMatch = /\bt="([^"]+)"/i.exec(attributes);
+  const cellType = typeMatch?.[1] ?? "";
+  if (cellType === "inlineStr") {
+    return normalizeSpreadsheetCellText(extractXMLTextRuns(body));
+  }
+  const valueMatch = /<v\b[^>]*>([\s\S]*?)<\/v>/i.exec(body);
+  if (!valueMatch) {
+    return "";
+  }
+  const rawValue = decodeXMLText(valueMatch[1]);
+  if (cellType === "s") {
+    const index = Number.parseInt(rawValue, 10);
+    if (Number.isInteger(index) && index >= 0 && index < sharedStrings.length) {
+      return sharedStrings[index] ?? "";
+    }
+    return "";
+  }
+  if (cellType === "b") {
+    if (rawValue === "1") {
+      return "TRUE";
+    }
+    if (rawValue === "0") {
+      return "FALSE";
+    }
+  }
+  return normalizeSpreadsheetCellText(rawValue);
+}
+
+function sheetLabelFromEntryName(name) {
+  const match = /sheet(\d+)\.xml$/i.exec(name);
+  if (!match) {
+    return "Sheet";
+  }
+  return `Sheet ${match[1]}`;
+}
+
+function extractXLSXSheetText(value, sharedStrings, label) {
+  const rows = [];
+  for (const rowMatch of String(value ?? "").matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/gi)) {
+    const cells = [];
+    for (const cellMatch of rowMatch[1].matchAll(/<c\b([^>]*)>([\s\S]*?)<\/c>/gi)) {
+      const cellText = extractXLSXCellText(cellMatch[1], cellMatch[2], sharedStrings);
+      if (cellText !== "") {
+        cells.push(cellText);
+      }
+    }
+    if (cells.length > 0) {
+      rows.push(cells.join("\t"));
+    }
+  }
+  if (rows.length === 0) {
+    return "";
+  }
+  return `${label}:\n${rows.join("\n")}`;
+}
+
+async function extractXLSXText(targetPath, deps) {
+  const archive = await readOOXMLArchive(targetPath, "xlsx", deps, {
+    includeEntry(name) {
+      return name === "xl/sharedStrings.xml" || xlsxSheetEntryPattern.test(name);
+    },
+  });
+  const sharedStrings = parseXLSXSharedStrings(archive.get("xl/sharedStrings.xml")?.toString("utf8") ?? "");
+  const candidateNames = Array.from(archive.keys())
+    .filter((name) => xlsxSheetEntryPattern.test(name))
+    .sort((left, right) => worksheetNumberFromEntryName(left) - worksheetNumberFromEntryName(right));
+  const sections = [];
+  for (const name of candidateNames) {
+    const value = extractXLSXSheetText(archive.get(name)?.toString("utf8") ?? "", sharedStrings, sheetLabelFromEntryName(name));
+    if (value !== "") {
+      sections.push(value);
+    }
+  }
+  if (sections.length === 0) {
+    throw new Error("xlsx_text_not_found");
+  }
+  return {
+    path: targetPath,
+    text: sections.join("\n\n"),
+    language: "xlsx_text",
+    page_count: Math.max(sections.length, 1),
+    source: "ocr_worker_xlsx",
   };
 }
 
@@ -463,6 +638,12 @@ export async function extractTextResult(targetPath, language, deps = defaultDepe
   }
   if (docxExtensions.has(extension)) {
     return extractDOCXText(targetPath, deps);
+  }
+  if (pptxExtensions.has(extension)) {
+    return extractPPTXText(targetPath, deps);
+  }
+  if (xlsxExtensions.has(extension)) {
+    return extractXLSXText(targetPath, deps);
   }
   if (legacyWordExtensions.has(extension)) {
     return extractLegacyDOCText(targetPath, deps);

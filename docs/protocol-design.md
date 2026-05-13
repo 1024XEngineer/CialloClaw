@@ -4095,7 +4095,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
             {
               "tool_name": "extract_text",
               "display_name": "文本提取",
-              "description": "通过 OCR worker 从文本文件、PDF 或图片中提取正文内容",
+              "description": "通过 OCR worker 从文本文件、Office 文档、PDF 或图片中提取正文内容",
               "source": "worker",
               "risk_hint": "green"
             },

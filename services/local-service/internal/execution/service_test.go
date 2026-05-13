@@ -26,6 +26,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/risk"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textdecode"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/sidecarclient"
@@ -4180,6 +4181,35 @@ func TestBuildExecutionInputAndFileSectionCoverFileBranches(t *testing.T) {
 	for _, fragment := range []string{"选中文本", "输入文本", "错误信息", "页面上下文", "文件 notes/demo.txt 内容"} {
 		if strings.Contains(englishSelectionInputText, fragment) {
 			t.Fatalf("expected english execution input to avoid chinese fragment %q, got %s", fragment, englishSelectionInputText)
+		}
+	}
+}
+
+func TestFileSectionFallsBackToOCRForDocumentAttachments(t *testing.T) {
+	ocrStub := stubOCRWorkerClient{result: tools.OCRTextResult{
+		Path:      "notes/document.bin",
+		Text:      "文档正文第一段\n文档正文第二段",
+		Language:  "docx_text",
+		PageCount: 1,
+		Source:    "ocr_worker_docx",
+	}}
+	service, workspaceRoot := newTestExecutionServiceWithWorkers(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient(), ocrStub, sidecarclient.NewNoopMediaWorkerClient())
+	if err := os.MkdirAll(filepath.Join(workspaceRoot, "notes"), 0o755); err != nil {
+		t.Fatalf("mkdir notes: %v", err)
+	}
+	for _, fileName := range []string{"report.docx", "slides.pptx", "sheet.xlsx"} {
+		if err := os.WriteFile(filepath.Join(workspaceRoot, "notes", fileName), []byte{0x50, 0x4b, 0x03, 0x04, 0xff}, 0o644); err != nil {
+			t.Fatalf("write %s: %v", fileName, err)
+		}
+
+		section := service.fileSection(filepath.ToSlash(filepath.Join("notes", fileName)))
+		if !strings.Contains(section, "文档正文第一段") || strings.Contains(section, textdecode.UnsupportedEncodingUserMessage) {
+			t.Fatalf("expected OCR-backed document section for %s, got %s", fileName, section)
+		}
+
+		englishSection := service.fileSectionForLanguage(filepath.ToSlash(filepath.Join("notes", fileName)), languagepolicy.ReplyLanguageEnglish)
+		if !strings.Contains(englishSection, "File notes/") || !strings.Contains(englishSection, "contents:") || !strings.Contains(englishSection, "文档正文第二段") {
+			t.Fatalf("expected english OCR-backed document section for %s, got %s", fileName, englishSection)
 		}
 	}
 }

@@ -41,6 +41,7 @@ const (
 	deliveryPreviewMaxLength    = 120
 	inputPreviewMaxLength       = 96
 	bubbleTextMaxLength         = 480
+	fileSectionOCRTimeout       = 20 * time.Second
 )
 
 // Service owns the minimum executable task pipeline inside local-service.
@@ -2097,8 +2098,12 @@ func (s *Service) fileSectionForLanguage(filePath, replyLanguage string) string 
 		}
 		return fmt.Sprintf("文件: %s", trimmedPath)
 	}
+	safePath := workspacePath
+	if resolvedPath, err := s.fileSystem.EnsureWithinWorkspace(workspacePath); err == nil {
+		safePath = resolvedPath
+	}
 
-	content, err := s.fileSystem.ReadFile(workspacePath)
+	content, err := s.fileSystem.ReadFile(safePath)
 	if err != nil {
 		if replyLanguage == languagepolicy.ReplyLanguageEnglish {
 			return fmt.Sprintf("File: %s\nRead failed: %v", trimmedPath, err)
@@ -2108,6 +2113,12 @@ func (s *Service) fileSectionForLanguage(filePath, replyLanguage string) string 
 
 	decoded, err := textdecode.Decode(content)
 	if err != nil {
+		if extractedText, ok := s.extractFileSectionDocumentText(safePath); ok {
+			if replyLanguage == languagepolicy.ReplyLanguageEnglish {
+				return fmt.Sprintf("File %s contents:\n%s", trimmedPath, truncateText(extractedText, 1600))
+			}
+			return fmt.Sprintf("文件 %s 内容:\n%s", trimmedPath, truncateText(extractedText, 1600))
+		}
 		if replyLanguage == languagepolicy.ReplyLanguageEnglish {
 			return fmt.Sprintf("File: %s\nFile encoding could not be safely detected. Convert it to UTF-8, UTF-16 BOM, or GB18030 and try again.", trimmedPath)
 		}
@@ -2118,6 +2129,36 @@ func (s *Service) fileSectionForLanguage(filePath, replyLanguage string) string 
 		return fmt.Sprintf("File %s contents:\n%s", trimmedPath, truncateText(decoded.Text, 1600))
 	}
 	return fmt.Sprintf("文件 %s 内容:\n%s", trimmedPath, truncateText(decoded.Text, 1600))
+}
+
+// extractFileSectionDocumentText keeps eager task-context file preloading able
+// to read document-style attachments without routing that preload through a
+// formal tool call. Plain-text files stay on the stricter textdecode path.
+func (s *Service) extractFileSectionDocumentText(filePath string) (string, bool) {
+	if s == nil || s.ocr == nil || !supportsFileSectionDocumentExtraction(filePath) {
+		return "", false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), fileSectionOCRTimeout)
+	defer cancel()
+
+	result, err := s.ocr.ExtractText(ctx, filePath)
+	if err != nil {
+		return "", false
+	}
+	text := strings.TrimSpace(result.Text)
+	if text == "" {
+		return "", false
+	}
+	return text, true
+}
+
+func supportsFileSectionDocumentExtraction(filePath string) bool {
+	switch strings.ToLower(filepath.Ext(strings.TrimSpace(filePath))) {
+	case ".bmp", ".doc", ".docx", ".gif", ".jpeg", ".jpg", ".pdf", ".png", ".pptx", ".tif", ".tiff", ".webp", ".xlsx":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Service) generateOutput(ctx context.Context, request Request, inputText string) (generationTrace, error) {

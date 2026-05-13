@@ -196,6 +196,48 @@ test("extract_text parses OOXML documents without external converters", async ()
   assert.match(response.result.text, /Second paragraph/);
 });
 
+test("extract_text parses PPTX slides without external converters", async () => {
+  const response = await handleRequest({ action: "extract_text", path: "workspace/demo.pptx" }, createDeps({
+    readFile: async (targetPath, encoding) => {
+      if (targetPath === "workspace/demo.pptx") {
+        return buildStoredZip({
+          "ppt/slides/slide2.xml": "<p:sld><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Second slide body</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>",
+          "ppt/slides/slide1.xml": "<p:sld><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Title slide</a:t></a:r></a:p><a:p><a:r><a:t>Agenda item</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>",
+        });
+      }
+      throw new Error(`unexpected readFile target: ${targetPath} (${encoding ?? "buffer"})`);
+    },
+  }));
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.source, "ocr_worker_pptx");
+  assert.equal(response.result.language, "pptx_text");
+  assert.match(response.result.text, /Title slide/);
+  assert.match(response.result.text, /Agenda item/);
+  assert.match(response.result.text, /Second slide body/);
+});
+
+test("extract_text parses XLSX worksheets without external converters", async () => {
+  const response = await handleRequest({ action: "extract_text", path: "workspace/demo.xlsx" }, createDeps({
+    readFile: async (targetPath, encoding) => {
+      if (targetPath === "workspace/demo.xlsx") {
+        return buildStoredZip({
+          "xl/sharedStrings.xml": "<sst><si><t>Name</t></si><si><t>Status</t></si></sst>",
+          "xl/worksheets/sheet1.xml": "<worksheet><sheetData><row r=\"1\"><c r=\"A1\" t=\"s\"><v>0</v></c><c r=\"B1\" t=\"s\"><v>1</v></c></row><row r=\"2\"><c r=\"A2\" t=\"inlineStr\"><is><t>Build</t></is></c><c r=\"B2\"><v>42</v></c></row></sheetData></worksheet>",
+        });
+      }
+      throw new Error(`unexpected readFile target: ${targetPath} (${encoding ?? "buffer"})`);
+    },
+  }));
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.source, "ocr_worker_xlsx");
+  assert.equal(response.result.language, "xlsx_text");
+  assert.match(response.result.text, /Sheet 1:/);
+  assert.match(response.result.text, /Name\tStatus/);
+  assert.match(response.result.text, /Build\t42/);
+});
+
 test("extract_text converts legacy doc files with soffice when available", async () => {
   const removed = [];
   const tempDir = path.join("/tmp", "ocr-worker-doc");
