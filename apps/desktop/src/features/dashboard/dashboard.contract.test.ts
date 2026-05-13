@@ -5012,12 +5012,14 @@ test("control-panel plugin mock toggle only persists overrides that differ from 
   }
 });
 
-test("control-panel app exposes the plugin extension section and mock toggle copy", () => {
+test("control-panel app exposes the plugin extension section with Chinese user-facing copy", () => {
   const controlPanelAppSource = readFileSync(resolve(desktopRoot, "src/features/control-panel/ControlPanelApp.tsx"), "utf8");
 
   assert.match(controlPanelAppSource, /navLabel: "插件扩展"/);
-  assert.match(controlPanelAppSource, /Mock Start/);
-  assert.match(controlPanelAppSource, /不会向后端提交正式 enable \/ disable/);
+  assert.match(controlPanelAppSource, /本页启用/);
+  assert.match(controlPanelAppSource, /当前页面的展示状态/);
+  assert.match(controlPanelAppSource, /状态：\{formatPluginRuntimeStatusLabel\(runtime\.status\)\}/);
+  assert.doesNotMatch(controlPanelAppSource, /Mock Start|Mock Stop|本地 mock 覆盖|不会向后端提交正式 enable \/ disable/);
   assert.match(controlPanelAppSource, /\[selectedPluginId, pluginReloadToken\]/);
 });
 

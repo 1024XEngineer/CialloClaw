@@ -607,17 +607,17 @@ function InfoRow({ label, value }: InfoRowProps) {
 function formatPluginHealthLabel(health: ControlPanelPluginSummary["runtime_health"]) {
   switch (health) {
     case "healthy":
-      return "healthy";
+      return "健康";
     case "degraded":
-      return "degraded";
+      return "降级";
     case "failed":
-      return "failed";
+      return "失败";
     case "stopped":
-      return "stopped";
+      return "已停止";
     case "unavailable":
-      return "unavailable";
+      return "不可用";
     default:
-      return "unknown";
+      return "未知";
   }
 }
 
@@ -637,13 +637,13 @@ function getPluginHealthTone(health: ControlPanelPluginSummary["runtime_health"]
 function formatPluginSourceLabel(source: ControlPanelPluginSummary["plugin"]["source"]) {
   switch (source) {
     case "builtin":
-      return "Built-in";
+      return "内置";
     case "local_dir":
-      return "Local";
+      return "本地目录";
     case "github":
       return "GitHub";
     case "marketplace":
-      return "Marketplace";
+      return "应用市场";
     default:
       return source;
   }
@@ -652,9 +652,9 @@ function formatPluginSourceLabel(source: ControlPanelPluginSummary["plugin"]["so
 function formatPluginRuntimeKindLabel(kind: string) {
   switch (kind) {
     case "worker":
-      return "Worker";
+      return "工作进程";
     case "sidecar":
-      return "Sidecar";
+      return "辅助进程";
     default:
       return kind;
   }
@@ -663,11 +663,11 @@ function formatPluginRuntimeKindLabel(kind: string) {
 function formatPluginRiskHintLabel(riskHint: string) {
   switch (riskHint) {
     case "green":
-      return "green";
+      return "低风险";
     case "yellow":
-      return "yellow";
+      return "需确认";
     case "red":
-      return "red";
+      return "高风险";
     default:
       return riskHint;
   }
@@ -675,10 +675,33 @@ function formatPluginRiskHintLabel(riskHint: string) {
 
 function formatPluginControlLabel(plugin: { control: ControlPanelPluginSummary["control"] }) {
   if (plugin.control.source === "mock") {
-    return plugin.control.effective_enabled ? "mock started" : "mock stopped";
+    return plugin.control.effective_enabled ? "本页已启用" : "本页已停用";
   }
 
-  return plugin.control.effective_enabled ? "live enabled" : "live disabled";
+  return plugin.control.effective_enabled ? "正式已启用" : "正式已停用";
+}
+
+function formatPluginEnabledLabel(enabled: boolean) {
+  return enabled ? "已启用" : "已停用";
+}
+
+function formatPluginRuntimeStatusLabel(status: string) {
+  switch (status) {
+    case "declared":
+      return "已声明";
+    case "starting":
+      return "启动中";
+    case "running":
+      return "运行中";
+    case "stopped":
+      return "已停止";
+    case "unavailable":
+      return "不可用";
+    case "failed":
+      return "失败";
+    default:
+      return status;
+  }
 }
 
 function formatPluginTimestampLabel(timestamp: string | null) {
@@ -1464,8 +1487,8 @@ export function ControlPanelApp() {
     applyPluginControlState(plugin.plugin.plugin_id, nextControl);
     setPluginFeedback(
       nextControl.source === "mock"
-        ? `已切换 ${plugin.plugin.display_name || plugin.plugin.name} 的 mock 启停状态；实时运行态仍以当前 RPC 返回为准。`
-        : `已移除 ${plugin.plugin.display_name || plugin.plugin.name} 的 mock 启停覆盖，页面恢复显示正式状态。`,
+        ? `已更新 ${plugin.plugin.display_name || plugin.plugin.name} 的本页开关状态；实时运行态仍以当前插件查询结果为准。`
+        : `已清除 ${plugin.plugin.display_name || plugin.plugin.name} 的本页临时调整，页面恢复显示正式状态。`,
     );
   };
 
@@ -1938,14 +1961,14 @@ export function ControlPanelApp() {
       case "plugins":
         return (
           <>
-            <SettingsCard title="插件运行态总览" description="列表、详情与运行态来自正式 `agent.plugin.*` 查询；启停按钮当前只写入控制面板本地 mock 状态。">
+            <SettingsCard title="插件运行态总览" description="列表、详情与运行态来自正式插件查询；开关按钮仅调整当前页面的展示状态。">
               <InfoRow label="已注册插件" value={pluginSnapshot ? `${pluginSnapshot.summary.total} 个` : "载入中…"} />
               <InfoRow label="健康插件" value={pluginSnapshot ? `${pluginSnapshot.summary.healthy} 个` : "载入中…"} />
               <InfoRow label="失败 / 降级" value={pluginSnapshot ? `${pluginSnapshot.summary.failed + pluginSnapshot.summary.degraded} 个` : "载入中…"} />
-              <InfoRow label="本地 mock 覆盖" value={pluginSnapshot ? `${pluginSnapshot.summary.mock_overrides} 个` : "载入中…"} />
+              <InfoRow label="本页临时调整" value={pluginSnapshot ? `${pluginSnapshot.summary.mock_overrides} 个` : "载入中…"} />
               <ControlLine
                 label="刷新运行态"
-                hint="重新读取插件列表、运行态和最近事件；不会清空本地 mock 启停覆盖。"
+                hint="重新读取插件列表、运行态和最近事件；不会清空当前页面的临时开关状态。"
                 className="control-panel-shell__row--stacked"
               >
                 <div className="control-panel-shell__plugin-toolbar">
@@ -1960,9 +1983,6 @@ export function ControlPanelApp() {
                     <RefreshCw size={15} strokeWidth={1.8} />
                     <span>{isLoadingPlugins ? "刷新中…" : "刷新插件状态"}</span>
                   </Button>
-                  <Text as="p" size="1" className="control-panel-shell__field-note">
-                    Mock 启停只影响当前控制面板的演示态，不会向后端提交正式 enable / disable。
-                  </Text>
                 </div>
               </ControlLine>
               {pluginLoadError ? (
@@ -1972,7 +1992,7 @@ export function ControlPanelApp() {
               ) : null}
             </SettingsCard>
 
-            <SettingsCard title="已注册插件" description="每张卡片同时展示正式运行态和控制面板本地 mock 启停态。">
+            <SettingsCard title="已注册插件" description="每张卡片同时展示正式运行态和当前页面的开关状态。">
               <div className="control-panel-shell__plugin-grid">
                 {pluginSnapshot && pluginSnapshot.items.length > 0 ? (
                   pluginSnapshot.items.map((item) => {
@@ -2009,9 +2029,9 @@ export function ControlPanelApp() {
                             <span className="control-panel-shell__plugin-meta-pill">v{item.plugin.version}</span>
                           </div>
                           <div className="control-panel-shell__plugin-stat-grid">
-                            <span>{item.runtime_count} runtimes</span>
-                            <span>{item.capability_count} tools</span>
-                            <span>{item.permission_count} permissions</span>
+                            <span>{item.runtime_count} 个运行实例</span>
+                            <span>{item.capability_count} 个工具</span>
+                            <span>{item.permission_count} 项权限</span>
                           </div>
                         </button>
                         <div className="control-panel-shell__plugin-card-actions">
@@ -2023,7 +2043,7 @@ export function ControlPanelApp() {
                             onClick={() => handlePluginToggle(item, !item.control.effective_enabled)}
                           >
                             <Power size={15} strokeWidth={1.8} />
-                            <span>{item.control.effective_enabled ? "Mock Stop" : "Mock Start"}</span>
+                            <span>{item.control.effective_enabled ? "本页停用" : "本页启用"}</span>
                           </Button>
                         </div>
                       </article>
@@ -2039,7 +2059,7 @@ export function ControlPanelApp() {
               </div>
             </SettingsCard>
 
-            <SettingsCard title="插件详情" description="详情面板展示正式 manifest、runtime、recent events 与 tools 合同。">
+            <SettingsCard title="插件详情" description="详情面板展示正式配置、运行态、最近事件与工具合同。">
               {selectedPluginSummary ? (
                 <div className="control-panel-shell__plugin-detail-stack">
                   <div className="control-panel-shell__plugin-detail-header">
@@ -2074,8 +2094,8 @@ export function ControlPanelApp() {
                       <div className="control-panel-shell__plugin-detail-grid">
                         <InfoRow label="入口" value={<code className="control-panel-shell__about-link">{pluginDetail.plugin.entry}</code>} />
                         <InfoRow label="来源" value={formatPluginSourceLabel(pluginDetail.plugin.source)} />
-                        <InfoRow label="正式 enabled" value={pluginDetail.plugin.enabled ? "enabled" : "disabled"} />
-                        <InfoRow label="本地控制态" value={formatPluginControlLabel(pluginDetail)} />
+                        <InfoRow label="正式状态" value={formatPluginEnabledLabel(pluginDetail.plugin.enabled)} />
+                        <InfoRow label="本页状态" value={formatPluginControlLabel(pluginDetail)} />
                       </div>
 
                       <section className="control-panel-shell__plugin-block">
@@ -2089,7 +2109,7 @@ export function ControlPanelApp() {
                             </span>
                           ))}
                           {pluginDetail.plugin.permissions.length === 0 ? (
-                            <span className="control-panel-shell__plugin-meta-pill">No declared permissions</span>
+                            <span className="control-panel-shell__plugin-meta-pill">未声明权限</span>
                           ) : null}
                         </div>
                       </section>
@@ -2113,7 +2133,7 @@ export function ControlPanelApp() {
                                 <StatusPill tone={getPluginHealthTone(runtime.health)}>{formatPluginHealthLabel(runtime.health)}</StatusPill>
                               </div>
                               <Text as="p" size="1" className="control-panel-shell__plugin-card-copy">
-                                status: {runtime.status} · last seen: {formatPluginTimestampLabel(runtime.last_seen_at)}
+                                状态：{formatPluginRuntimeStatusLabel(runtime.status)} · 最近上报：{formatPluginTimestampLabel(runtime.last_seen_at)}
                               </Text>
                             </article>
                           ))}
@@ -2149,9 +2169,9 @@ export function ControlPanelApp() {
                                 {tool.description}
                               </Text>
                               <div className="control-panel-shell__plugin-stat-grid">
-                                <span>{tool.input_contract.fields.length} input fields</span>
-                                <span>{tool.output_contract.fields.length} output fields</span>
-                                <span>{tool.supports_dry_run ? "dry-run" : "direct run"}</span>
+                                <span>{tool.input_contract.fields.length} 个输入字段</span>
+                                <span>{tool.output_contract.fields.length} 个输出字段</span>
+                                <span>{tool.supports_dry_run ? "支持预演" : "直接执行"}</span>
                               </div>
                             </article>
                           ))}
