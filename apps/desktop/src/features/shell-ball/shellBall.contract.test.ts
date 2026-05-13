@@ -29,6 +29,14 @@ import {
 import { getShellBallMotionConfig } from "./shellBall.motion";
 import { collectShellBallSpeechTranscript, composeShellBallSpeechDraft } from "./shellBall.speech";
 import {
+  resolveShellBallClipboardDetectedNotificationText,
+  resolveShellBallSelectionDetectedNotificationText,
+  resolveDeliveryReadyVoiceNotificationText,
+  resolveShellBallSelectionClickGreetingText,
+  resolveShellBallStartupGreetingText,
+  resolveVoiceNotificationVoice,
+} from "../../services/voiceNotificationService";
+import {
   compactPageContext,
   mapDesktopWindowSnapshotToPageContext,
   resolveTaskPageContext,
@@ -2530,6 +2538,74 @@ test("shell-ball speech transcript collection merges recognition chunks", () => 
     }),
     "hello dashboard",
   );
+});
+
+test("voice notification helpers keep startup greeting, detection prompts, selection click greeting, and formal delivery reminders short", () => {
+  assert.equal(resolveShellBallStartupGreetingText(), "CialloClaw 已启动");
+  assert.equal(resolveShellBallSelectionDetectedNotificationText(0), "发现一段高亮文字啦");
+  assert.equal(resolveShellBallSelectionDetectedNotificationText(0.2), "我接住新选中的内容啦");
+  assert.equal(resolveShellBallSelectionDetectedNotificationText(0.4), "新的选中内容到啦");
+  assert.equal(resolveShellBallSelectionDetectedNotificationText(0.6), "这段选中文字交给我吧");
+  assert.equal(resolveShellBallSelectionDetectedNotificationText(0.8), "我看到你圈出的这段话啦");
+  assert.equal(resolveShellBallSelectionClickGreetingText(), "Ciallo");
+  assert.equal(resolveShellBallClipboardDetectedNotificationText(0), "剪贴板刚刚更新啦");
+  assert.equal(resolveShellBallClipboardDetectedNotificationText(0.2), "我接住新复制的内容啦");
+  assert.equal(resolveShellBallClipboardDetectedNotificationText(0.4), "新的剪贴板内容到啦");
+  assert.equal(resolveShellBallClipboardDetectedNotificationText(0.6), "这段复制内容交给我吧");
+  assert.equal(resolveShellBallClipboardDetectedNotificationText(0.8), "我看到你刚复制的小纸条啦");
+  assert.equal(
+    resolveDeliveryReadyVoiceNotificationText({
+      task_id: "task-bubble-delivery",
+      delivery_result: {
+        type: "bubble",
+      },
+    } as any),
+    null,
+  );
+  assert.equal(
+    resolveDeliveryReadyVoiceNotificationText({
+      task_id: "task-formal-delivery",
+      delivery_result: {
+        type: "task_detail",
+      },
+    } as any),
+    "任务结果已准备好",
+  );
+});
+
+test("voice notification helpers prefer the saved voice type and matching locale", () => {
+  const resolvedDefaultFemale = resolveVoiceNotificationVoice({
+    language: "zh-CN",
+    voiceType: "default_female",
+    voices: [
+      { lang: "en-US", name: "Alloy" },
+      { lang: "ja-JP", name: "Sakura Female" },
+      { lang: "zh-CN", name: "Xiaoyi" },
+      { lang: "zh-CN", name: "Xiaoxiao" },
+    ],
+  });
+  assert.equal(resolvedDefaultFemale?.name, "Xiaoxiao");
+
+  const resolvedSoftGirl = resolveVoiceNotificationVoice({
+    language: "zh-CN",
+    voiceType: "soft_girl",
+    voices: [
+      { lang: "zh-CN", name: "Tingting" },
+      { lang: "zh-CN", name: "Tongtong" },
+      { lang: "zh-CN", name: "Xiaohan" },
+    ],
+  });
+  assert.equal(resolvedSoftGirl?.name, "Xiaohan");
+
+  const resolvedCustomVoice = resolveVoiceNotificationVoice({
+    language: "zh-CN",
+    voiceType: "voice_nebula",
+    voices: [
+      { lang: "zh-CN", name: "voice_nebula" },
+      { lang: "zh-CN", name: "Xiaoxiao" },
+    ],
+  });
+  assert.equal(resolvedCustomVoice?.name, "voice_nebula");
 });
 
 test("shell-ball voice recognition final state routes final transcript out of the input draft and restores draft on cancel", () => {
@@ -8173,7 +8249,7 @@ test("shell-ball floating size normalization falls back to medium", () => {
   assert.equal(normalizeShellBallFloatingSize(undefined), "medium");
 });
 
-test("shell-ball mascot hotspot policy only opens primary click for selected-text prompts", () => {
+test("shell-ball mascot hotspot policy opens primary click for idle acknowledgement and prompt intake", () => {
   assert.equal(
     getShellBallMascotHotspotGestureAction({
       visualState: "voice_locked",
@@ -8189,7 +8265,7 @@ test("shell-ball mascot hotspot policy only opens primary click for selected-tex
       gesture: "single_click",
       suppressed: false,
     }),
-    "noop",
+    "primary_click",
   );
 
   assert.equal(
@@ -8868,6 +8944,60 @@ test("shell-ball routes active resumable text follow-ups through task steer", ()
   assert.match(coordinatorSource, /request_meta: createShellBallRequestMeta\(\)/);
   assert.match(coordinatorSource, /task_id: activeShellBallTaskId/);
   assert.match(coordinatorSource, /message: submittedText/);
+});
+
+test("shell-ball voice notifications are consumed locally from startup, selection and clipboard prompts, selection acceptance, and formal task notifications", () => {
+  const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
+  const mascotSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallMascot.tsx"), "utf8");
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  const controlPanelSource = readFileSync(resolve(desktopRoot, "src/features/control-panel/ControlPanelApp.tsx"), "utf8");
+  const voiceConfigSource = readFileSync(resolve(desktopRoot, "src/services/voiceNotificationConfig.ts"), "utf8");
+  const voiceServiceSource = readFileSync(resolve(desktopRoot, "src/services/voiceNotificationService.ts"), "utf8");
+
+  assert.match(appSource, /areShellBallSelectionSnapshotsEqual/);
+  assert.match(appSource, /speakShellBallClipboardDetectedNotification/);
+  assert.match(appSource, /speakShellBallSelectionDetectedNotification/);
+  assert.match(appSource, /speakShellBallSelectionClickGreeting/);
+  assert.match(appSource, /speakShellBallStartupGreeting/);
+  assert.match(appSource, /const startupGreetingPlayedRef = useRef\(false\);/);
+  assert.match(appSource, /const lastSpokenSelectionPromptRef = useRef<ShellBallSelectionSnapshot \| null>\(null\);/);
+  assert.match(appSource, /const lastSpokenClipboardPromptTextRef = useRef<string \| null>\(null\);/);
+  assert.match(appSource, /startupGreetingPlayedRef\.current = true;\s*void speakShellBallStartupGreeting\(\);/);
+  assert.match(appSource, /void speakShellBallSelectionDetectedNotification\(\);/);
+  assert.match(appSource, /void speakShellBallSelectionClickGreeting\(\);/);
+  assert.match(appSource, /void speakShellBallClipboardDetectedNotification\(\);/);
+  assert.doesNotMatch(appSource, /speakShellBallIdleGreeting/);
+  assert.match(mascotSource, /input\.selectionIndicatorVisible \|\| input\.alertOpportunityAvailable \|\| input\.visualState === "idle"/);
+  assert.match(controlPanelSource, /VOICE_NOTIFICATION_VOICE_PRESET_OPTIONS/);
+  assert.match(controlPanelSource, /resolveVoiceNotificationVoicePreset\(draft\.settings\.general\.voice_type\)/);
+  assert.match(voiceConfigSource, /label: "小女孩", value: "default_female"/);
+  assert.match(voiceConfigSource, /label: "软萌", value: "soft_girl"/);
+  assert.match(voiceConfigSource, /label: "元气", value: "bright_girl"/);
+  assert.match(voiceConfigSource, /label: "少年", value: "default_male"/);
+  assert.match(coordinatorSource, /import \{ speakApprovalPendingNotification, speakDeliveryReadyNotification \} from "@\/services\/voiceNotificationService";/);
+  assert.match(coordinatorSource, /speakApprovalPendingNotification\(\{\s*approval_request: input\.approvalRequest,\s*task_id: input\.taskId,\s*\}\);/);
+  assert.match(coordinatorSource, /speakDeliveryReadyNotification\(\{\s*delivery_result: input\.deliveryResult,\s*task_id: input\.taskId,\s*\}\);/);
+  assert.match(voiceServiceSource, /const STARTUP_GREETING_TEXT = "CialloClaw 已启动";/);
+  assert.match(voiceServiceSource, /const SELECTION_DETECTED_TEXT_1 = "发现一段高亮文字啦";/);
+  assert.match(voiceServiceSource, /const SELECTION_DETECTED_TEXT_5 = "我看到你圈出的这段话啦";/);
+  assert.match(voiceServiceSource, /const SELECTION_CLICK_GREETING_TEXT = "Ciallo";/);
+  assert.match(voiceServiceSource, /const CLIPBOARD_DETECTED_TEXT_1 = "剪贴板刚刚更新啦";/);
+  assert.match(voiceServiceSource, /const CLIPBOARD_DETECTED_TEXT_5 = "我看到你刚复制的小纸条啦";/);
+  assert.match(voiceServiceSource, /const APPROVAL_PENDING_TEXT = "有一个操作需要你确认";/);
+  assert.match(voiceServiceSource, /const DELIVERY_READY_TEXT = "任务结果已准备好";/);
+  assert.match(voiceServiceSource, /resolveShellBallSelectionDetectedNotificationText/);
+  assert.match(voiceServiceSource, /resolveShellBallClipboardDetectedNotificationText/);
+  assert.match(voiceServiceSource, /const VOICE_LIST_READY_TIMEOUT_MS = 600;/);
+  assert.match(voiceServiceSource, /let latestVoiceNotificationRequestId = 0;/);
+  assert.match(voiceServiceSource, /const requestId = \+\+latestVoiceNotificationRequestId;/);
+  assert.match(voiceServiceSource, /if \(requestId !== latestVoiceNotificationRequestId\) \{\s*return false;\s*\}/);
+  assert.match(voiceServiceSource, /const latestSettings = getVoiceNotificationSettings\(\);/);
+  assert.match(voiceServiceSource, /if \(!latestSettings\.voice_notification_enabled\) \{\s*return false;\s*\}/);
+  assert.match(voiceServiceSource, /addEventListener\("voiceschanged", handleVoicesChanged\)/);
+  assert.match(voiceServiceSource, /return payload\.delivery_result\.type === "bubble" \? null : DELIVERY_READY_TEXT;/);
+  assert.match(voiceServiceSource, /"xiaoxiao"/);
+  assert.match(voiceServiceSource, /"soft_girl"/);
+  assert.match(voiceServiceSource, /"bright_girl"/);
 });
 
 test("shell-ball falls back to regular submit when active steer status races", () => {

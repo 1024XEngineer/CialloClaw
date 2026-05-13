@@ -56,6 +56,11 @@ import {
   type SecurityBudgetDisplaySettings,
 } from "@/services/securityBudgetDisplayService";
 import { loadDesktopRuntimeDefaultsSnapshot, loadHydratedSettings } from "@/services/settingsService";
+import {
+  resolveVoiceNotificationVoicePreset,
+  VOICE_NOTIFICATION_VOICE_PRESET_OPTIONS,
+  type VoiceNotificationVoicePreset,
+} from "@/services/voiceNotificationConfig";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { buildDesktopOnboardingPresentation } from "@/features/onboarding/onboardingGeometry";
 import {
@@ -529,11 +534,13 @@ function ToggleLine({ checked, description, disabled = false, label, onCheckedCh
 
 function ChoiceGroup<T extends string>({
   className,
+  disabled = false,
   options,
   value,
   onValueChange,
 }: {
   className?: string;
+  disabled?: boolean;
   options: readonly ChoiceOption<T>[];
   value: T;
   onValueChange: (value: T) => void;
@@ -541,7 +548,7 @@ function ChoiceGroup<T extends string>({
   const classes = ["control-panel-shell__choice-group", className].filter(Boolean).join(" ");
 
   return (
-    <div className={classes} role="radiogroup">
+    <div className={classes} role="radiogroup" aria-disabled={disabled}>
       {options.map((option) => {
         const checked = option.value === value;
 
@@ -551,6 +558,7 @@ function ChoiceGroup<T extends string>({
             type="button"
             role="radio"
             aria-checked={checked}
+            disabled={disabled}
             className="control-panel-shell__choice-option"
             data-state={checked ? "checked" : "unchecked"}
             onClick={() => onValueChange(option.value)}
@@ -1558,7 +1566,7 @@ export function ControlPanelApp() {
 
               <ToggleLine
                 label="语音通知"
-                description="控制应用内语音提示和音效反馈。"
+                description="控制悬浮球启动、选中文本检测、剪贴板检测、选中确认和正式任务通知的本地语音提示；保存后同步到其他桌面窗口。"
                 checked={draft.settings.general.voice_notification_enabled}
                 onCheckedChange={(checked) =>
                   updateSettings((current) => ({
@@ -1573,19 +1581,20 @@ export function ControlPanelApp() {
 
               <ControlLine
                 label="提示声线"
-                hint="控制正式 `general.voice_type`，保存后重新打开控制面板会回显当前值。"
+                hint="控制桌面端本地语音播报使用的 `general.voice_type`；当前提供更明确的预设声线按钮，默认优先选择更接近小女孩的中文系统声线。"
                 disabled={!draft.settings.general.voice_notification_enabled}
               >
-                <TextField.Root
-                  className="control-panel-shell__input"
+                <ChoiceGroup
+                  className="control-panel-shell__choice-group--wide"
                   disabled={!draft.settings.general.voice_notification_enabled}
-                  value={draft.settings.general.voice_type}
-                  onChange={(event) =>
+                  options={VOICE_NOTIFICATION_VOICE_PRESET_OPTIONS}
+                  value={resolveVoiceNotificationVoicePreset(draft.settings.general.voice_type)}
+                  onValueChange={(value: VoiceNotificationVoicePreset) =>
                     updateSettings((current) => ({
                       ...current,
                       settings: {
                         ...current.settings,
-                        general: { ...current.settings.general, voice_type: event.target.value },
+                        general: { ...current.settings.general, voice_type: value },
                       },
                     }))
                   }

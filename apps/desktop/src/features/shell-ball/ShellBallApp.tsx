@@ -13,6 +13,7 @@ import { ShellBallAttachmentTray } from "./components/ShellBallAttachmentTray";
 import { ShellBallBubbleZone } from "./components/ShellBallBubbleZone";
 import { ShellBallInputBar } from "./components/ShellBallInputBar";
 import { ShellBallVoiceHints } from "./components/ShellBallVoiceHints";
+import { areShellBallSelectionSnapshotsEqual } from "./selection/selection.provider";
 import type { ShellBallSelectionSnapshot } from "./selection/selection.types";
 import { useShellBallInteraction } from "./useShellBallInteraction";
 import { getShellBallMotionConfig } from "./shellBall.motion";
@@ -39,6 +40,12 @@ import {
   setShellBallPressLock,
 } from "../../platform/shellBallWindow";
 import { loadSettings } from "../../services/settingsService";
+import {
+  speakShellBallClipboardDetectedNotification,
+  speakShellBallSelectionDetectedNotification,
+  speakShellBallSelectionClickGreeting,
+  speakShellBallStartupGreeting,
+} from "../../services/voiceNotificationService";
 import { openOrFocusDesktopWindow } from "../../platform/windowController";
 import { buildDesktopOnboardingPresentation } from "@/features/onboarding/onboardingGeometry";
 import {
@@ -391,9 +398,12 @@ export function ShellBallApp() {
   const clipboardPromptClearTimeoutRef = useRef<number | null>(null);
   const selectionPromptClearTimeoutRef = useRef<number | null>(null);
   const selectionPromptExpiryTimeoutRef = useRef<number | null>(null);
+  const lastSpokenSelectionPromptRef = useRef<ShellBallSelectionSnapshot | null>(null);
+  const lastSpokenClipboardPromptTextRef = useRef<string | null>(null);
   const previousVisualStateRef = useRef<ShellBallVisualState>(visualState);
   const transitionQueueRef = useRef(Promise.resolve());
   const edgeDockRevealHideTimeoutRef = useRef<number | null>(null);
+  const startupGreetingPlayedRef = useRef(false);
   const dragDropHandlersRef = useRef<{
     handleDroppedFiles: (paths: string[]) => Promise<void> | void;
   }>({
@@ -482,6 +492,16 @@ export function ShellBallApp() {
       window.removeEventListener("storage", syncFloatingBallSizeFromStorage);
     };
   }, []);
+
+  useEffect(() => {
+    if (startupGreetingPlayedRef.current) {
+      return;
+    }
+
+    startupGreetingPlayedRef.current = true;
+    void speakShellBallStartupGreeting();
+  }, []);
+
   const {
     ballDockSettling,
     ballDragActive,
@@ -903,6 +923,16 @@ export function ShellBallApp() {
     setTextDragActive(false);
   }, []);
 
+  const clearSelectionPrompt = useCallback(() => {
+    lastSpokenSelectionPromptRef.current = null;
+    setSelectionPrompt(null);
+  }, []);
+
+  const clearClipboardPrompt = useCallback(() => {
+    lastSpokenClipboardPromptTextRef.current = null;
+    setClipboardPrompt(null);
+  }, []);
+
   const handleWindowTextDrag = useCallback((event: DragEvent) => {
     if (!shouldAcceptShellBallTextDrop(event.dataTransfer)) {
       clearTextDragState();
@@ -952,9 +982,9 @@ export function ShellBallApp() {
         window.clearTimeout(selectionPromptClearTimeoutRef.current);
         selectionPromptClearTimeoutRef.current = null;
       }
-      setSelectionPrompt(null);
+      clearSelectionPrompt();
     }
-  }, [visualState]);
+  }, [clearSelectionPrompt, visualState]);
 
   useEffect(() => {
     if (selectionPrompt === null) {
@@ -967,19 +997,19 @@ export function ShellBallApp() {
 
     const updatedAtMs = resolveShellBallSelectionUpdatedAtMs(selectionPrompt.updated_at);
     if (updatedAtMs === null) {
-      setSelectionPrompt(null);
+      clearSelectionPrompt();
       return;
     }
 
     const remainingMs = updatedAtMs + SHELL_BALL_SELECTION_PROMPT_WINDOW_MS - Date.now();
     if (remainingMs <= 0) {
-      setSelectionPrompt(null);
+      clearSelectionPrompt();
       return;
     }
 
     selectionPromptExpiryTimeoutRef.current = window.setTimeout(() => {
       selectionPromptExpiryTimeoutRef.current = null;
-      setSelectionPrompt(null);
+      clearSelectionPrompt();
     }, remainingMs);
 
     return () => {
@@ -988,7 +1018,7 @@ export function ShellBallApp() {
         selectionPromptExpiryTimeoutRef.current = null;
       }
     };
-  }, [selectionPrompt]);
+  }, [clearSelectionPrompt, selectionPrompt]);
 
   useEffect(() => {
     if (clipboardPrompt === null) {
@@ -1001,13 +1031,13 @@ export function ShellBallApp() {
 
     const remainingMs = clipboardPrompt.expiresAt - Date.now();
     if (remainingMs <= 0) {
-      setClipboardPrompt(null);
+      clearClipboardPrompt();
       return;
     }
 
     clipboardPromptClearTimeoutRef.current = window.setTimeout(() => {
       clipboardPromptClearTimeoutRef.current = null;
-      setClipboardPrompt(null);
+      clearClipboardPrompt();
     }, remainingMs);
 
     return () => {
@@ -1016,7 +1046,7 @@ export function ShellBallApp() {
         clipboardPromptClearTimeoutRef.current = null;
       }
     };
-  }, [clipboardPrompt]);
+  }, [clearClipboardPrompt, clipboardPrompt]);
 
   useEffect(() => {
     const currentWindow = getCurrentWindow();
@@ -1036,6 +1066,11 @@ export function ShellBallApp() {
             selectionPromptClearTimeoutRef.current = null;
           }
 
+          if (!areShellBallSelectionSnapshotsEqual(lastSpokenSelectionPromptRef.current, payload.snapshot)) {
+            lastSpokenSelectionPromptRef.current = payload.snapshot;
+            void speakShellBallSelectionDetectedNotification();
+          }
+
           setSelectionPrompt(payload.snapshot);
           return;
         }
@@ -1049,7 +1084,7 @@ export function ShellBallApp() {
         // a short debounce before retiring the alert opportunity.
         selectionPromptClearTimeoutRef.current = window.setTimeout(() => {
           selectionPromptClearTimeoutRef.current = null;
-          setSelectionPrompt(null);
+          clearSelectionPrompt();
         }, SHELL_BALL_SELECTION_PROMPT_CLEAR_DELAY_MS);
       })
       .then((unlisten) => {
@@ -1069,7 +1104,7 @@ export function ShellBallApp() {
       }
       cleanup?.();
     };
-  }, []);
+  }, [clearSelectionPrompt]);
 
   useEffect(() => {
     const currentWindow = getCurrentWindow();
@@ -1084,8 +1119,13 @@ export function ShellBallApp() {
     void currentWindow
       .listen<ShellBallClipboardSnapshotPayload>(shellBallWindowSyncEvents.clipboardSnapshot, ({ payload }) => {
         if (payload.text.trim() === "") {
-          setClipboardPrompt(null);
+          clearClipboardPrompt();
           return;
+        }
+
+        if (lastSpokenClipboardPromptTextRef.current !== payload.text) {
+          lastSpokenClipboardPromptTextRef.current = payload.text;
+          void speakShellBallClipboardDetectedNotification();
         }
 
         setClipboardPrompt({
@@ -1106,7 +1146,7 @@ export function ShellBallApp() {
       disposed = true;
       cleanup?.();
     };
-  }, []);
+  }, [clearClipboardPrompt]);
 
   const handleMascotPrimaryAction = useCallback(() => {
     if (isShellBallSelectionPromptActive(selectionPrompt)) {
@@ -1120,29 +1160,38 @@ export function ShellBallApp() {
         return;
       }
 
-      setSelectionPrompt(null);
+      void speakShellBallSelectionClickGreeting();
+      clearSelectionPrompt();
       void handleCoordinatorSelectedTextPrompt(activeSelectionPrompt);
       return;
     }
 
     if (selectionPrompt !== null) {
-      setSelectionPrompt(null);
+      clearSelectionPrompt();
       return;
     }
 
     if (clipboardPrompt !== null) {
       if (!isShellBallClipboardPromptActive(clipboardPrompt)) {
-        setClipboardPrompt(null);
+        clearClipboardPrompt();
         return;
       }
 
-      setClipboardPrompt(null);
+      clearClipboardPrompt();
       void handleCoordinatorClipboardPrompt(clipboardPrompt.text);
       return;
     }
 
     handlePrimaryClick();
-  }, [clipboardPrompt, handleCoordinatorClipboardPrompt, handleCoordinatorSelectedTextPrompt, handlePrimaryClick, selectionPrompt]);
+  }, [
+    clearClipboardPrompt,
+    clearSelectionPrompt,
+    clipboardPrompt,
+    handleCoordinatorClipboardPrompt,
+    handleCoordinatorSelectedTextPrompt,
+    handlePrimaryClick,
+    selectionPrompt,
+  ]);
 
   const handleDockAwareRegionEnter = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
     void event;
