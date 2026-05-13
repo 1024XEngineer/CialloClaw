@@ -150,7 +150,51 @@ func TestPlaywrightSidecarRuntimeClientExecutesRealReadAndSearch(t *testing.T) {
 	}
 }
 
-func TestPlaywrightSidecarRuntimeClientInteractsAndReadsStructuredDOM(t *testing.T) {
+func TestPlaywrightSidecarRuntimeClientMarksDerivedWebSearchURLImplicit(t *testing.T) {
+	osCapability := platform.NewLocalOSCapabilityAdapter()
+	runtime, err := NewPlaywrightSidecarRuntime(plugin.NewService(), osCapability)
+	if err != nil {
+		t.Fatalf("NewPlaywrightSidecarRuntime returned error: %v", err)
+	}
+	invoker := &stubWorkerInvoker{response: sidecarResponse{OK: true, Result: map[string]any{
+		"query":        "release notes",
+		"search_url":   "https://duckduckgo.com/html/?q=release+notes",
+		"result_count": 1,
+		"results": []any{
+			map[string]any{"title": "Release Notes", "url": "https://example.com/release-notes", "snippet": "Latest release notes."},
+		},
+		"source": "playwright_worker_http",
+	}}}
+	runtime.invoker = invoker
+	if err := runtime.Start(); err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+
+	implicit := false
+	_, err = runtime.Client().SearchWeb(t.Context(), tools.BrowserWebSearchRequest{
+		Query:         "release notes",
+		URL:           "https://duckduckgo.com/html/?q=release+notes",
+		URLIsExplicit: &implicit,
+		Limit:         2,
+	})
+	if err != nil {
+		t.Fatalf("SearchWeb returned error: %v", err)
+	}
+	if len(invoker.requests) < 2 {
+		t.Fatalf("expected health and web_search requests, got %+v", invoker.requests)
+	}
+	if invoker.requests[1].Action != "web_search" {
+		t.Fatalf("expected web_search request, got %+v", invoker.requests[1])
+	}
+	if invoker.requests[1].URL != "https://duckduckgo.com/html/?q=release+notes" {
+		t.Fatalf("expected derived search url to be forwarded, got %+v", invoker.requests[1])
+	}
+	if invoker.requests[1].URLIsExplicit == nil || *invoker.requests[1].URLIsExplicit {
+		t.Fatalf("expected derived search url to be marked implicit, got %+v", invoker.requests[1])
+	}
+}
+
+func TestPlaywrightSidecarRuntimeClientInteracts(t *testing.T) {
 	osCapability := platform.NewLocalOSCapabilityAdapter()
 	runtime, err := NewPlaywrightSidecarRuntime(plugin.NewService(), osCapability)
 	if err != nil {
@@ -174,22 +218,6 @@ func TestPlaywrightSidecarRuntimeClientInteractsAndReadsStructuredDOM(t *testing
 	}
 	if interactResult.ActionsApplied != 2 {
 		t.Fatalf("unexpected interaction result: %+v", interactResult)
-	}
-	invoker.response = sidecarResponse{OK: true, Result: map[string]any{
-		"url":      "https://example.com",
-		"title":    "Interactive Page",
-		"headings": []any{"Heading"},
-		"links":    []any{"Docs"},
-		"buttons":  []any{"Submit"},
-		"inputs":   []any{"email"},
-		"source":   "playwright_worker_browser",
-	}}
-	domResult, err := runtime.Client().StructuredDOM(t.Context(), "https://example.com")
-	if err != nil {
-		t.Fatalf("StructuredDOM returned error: %v", err)
-	}
-	if len(domResult.Headings) != 1 || len(domResult.Links) != 1 {
-		t.Fatalf("unexpected structured dom result: %+v", domResult)
 	}
 }
 
@@ -217,10 +245,6 @@ func TestPlaywrightSidecarRuntimeClientForwardsAttachForPageActions(t *testing.T
 	invoker.response = sidecarResponse{OK: true, Result: map[string]any{"url": "https://example.com/docs", "title": "Docs", "text_content": "clicked", "actions_applied": 1, "source": "playwright_worker_cdp", "attached": true, "browser_kind": "chrome"}}
 	if _, err := runtime.client.InteractPageAttached(t.Context(), "https://example.com/docs", []map[string]any{{"type": "click", "selector": "button"}}, attach); err != nil {
 		t.Fatalf("InteractPageAttached returned error: %v", err)
-	}
-	invoker.response = sidecarResponse{OK: true, Result: map[string]any{"url": "https://example.com/docs", "title": "Docs", "headings": []any{"Install"}, "links": []any{"Guide"}, "buttons": []any{"Next"}, "inputs": []any{"search"}, "source": "playwright_worker_cdp", "attached": true, "browser_kind": "chrome"}}
-	if _, err := runtime.client.StructuredDOMAttached(t.Context(), "https://example.com/docs", attach); err != nil {
-		t.Fatalf("StructuredDOMAttached returned error: %v", err)
 	}
 	for _, request := range invoker.requests[1:] {
 		if request.Attach == nil || request.Attach.BrowserKind != "chrome" {
@@ -560,32 +584,15 @@ func TestPlaywrightSidecarRuntimeClientSupportsAttachedPageActions(t *testing.T)
 		t.Fatalf("InteractPageAttached returned error: %v", err)
 	}
 
-	invoker.response = sidecarResponse{OK: true, Result: map[string]any{
-		"attached":          true,
-		"browser_kind":      "chrome",
-		"browser_transport": "cdp",
-		"endpoint_url":      "http://127.0.0.1:9222",
-		"url":               "https://example.com/docs",
-		"title":             "Docs",
-		"headings":          []any{"Install"},
-		"links":             []any{"Guide"},
-		"buttons":           []any{"Next"},
-		"inputs":            []any{"search"},
-		"source":            "playwright_worker_cdp",
-	}}
-	if _, err := runtime.Client().StructuredDOMAttached(t.Context(), "https://example.com/docs", attach); err != nil {
-		t.Fatalf("StructuredDOMAttached returned error: %v", err)
-	}
-
-	if len(invoker.requests) != 5 {
-		t.Fatalf("expected health plus four attached page requests, got %+v", invoker.requests)
+	if len(invoker.requests) != 4 {
+		t.Fatalf("expected health plus three attached page requests, got %+v", invoker.requests)
 	}
 	for _, request := range invoker.requests[1:] {
 		if request.Attach == nil || request.Attach.EndpointURL != "http://127.0.0.1:9222" {
 			t.Fatalf("expected attached page request metadata, got %+v", request)
 		}
 	}
-	if invoker.requests[1].Action != "page_read" || invoker.requests[2].Action != "page_search" || invoker.requests[3].Action != "page_interact" || invoker.requests[4].Action != "structured_dom" {
+	if invoker.requests[1].Action != "page_read" || invoker.requests[2].Action != "page_search" || invoker.requests[3].Action != "page_interact" {
 		t.Fatalf("unexpected attached page request sequence: %+v", invoker.requests)
 	}
 }

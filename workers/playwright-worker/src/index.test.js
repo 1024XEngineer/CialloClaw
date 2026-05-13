@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { handleRequest, healthResponse, normalizeText } from "./index.js";
+import { handleRequest, healthResponse, launchManagedBrowser, normalizeText, resolveLocalBrowserCandidates } from "./index.js";
 
 function createResponse(overrides = {}) {
   return {
@@ -14,15 +14,35 @@ function createResponse(overrides = {}) {
 function createPage(overrides = {}) {
   const actionLog = overrides.actionLog ?? [];
   const navigationLog = overrides.navigationLog ?? [];
+  let windowName = overrides.windowName ?? "";
   const page = {
     currentURL: overrides.currentURL ?? "https://example.com/final",
     async content() {
       return overrides.html ?? "<html><head><title>Demo Page</title></head><body>Hello world. Search target. Another target.</body></html>";
     },
+    async close() {
+      actionLog.push({ action: "page.close" });
+    },
     async bringToFront() {
       actionLog.push({ action: "bringToFront" });
     },
-    async evaluate() {
+    async evaluate(callback, ...args) {
+      if (overrides.evaluateImpl) {
+        return overrides.evaluateImpl(callback, ...args);
+      }
+      const callbackSource = typeof callback === "function" ? String(callback) : "";
+      if (callbackSource.includes("window.name = pageName")) {
+        windowName = args[0] ?? "";
+        actionLog.push({ action: "markManagedWorkerPage", windowName });
+        return undefined;
+      }
+      if (callbackSource.includes("window.name === \"cialloclaw-playwright-worker\"")) {
+        actionLog.push({ action: "isManagedWorkerPage", windowName });
+        return windowName === "cialloclaw-playwright-worker";
+      }
+      if (overrides.searchResults) {
+        return overrides.searchResults;
+      }
       return overrides.snapshot ?? {
         headings: ["Heading A"],
         links: ["Docs"],
@@ -102,6 +122,9 @@ function createDeps(overrides = {}) {
     },
     async launchBrowser() {
       lifecycle.push("launch");
+      if (overrides.launchBrowser) {
+        return overrides.launchBrowser();
+      }
       return {
         async close() {
           lifecycle.push("browser.close");
@@ -126,11 +149,167 @@ function createDeps(overrides = {}) {
         },
       };
     },
+    async launchManagedBrowser() {
+      lifecycle.push("launchManagedBrowser");
+      if (overrides.launchManagedBrowser) {
+        return overrides.launchManagedBrowser();
+      }
+      throw new Error("managed browser unavailable");
+    },
   };
 }
 
 test("normalizeText removes markup noise", () => {
   assert.equal(normalizeText("<div>Hello&nbsp;<strong>world</strong></div>"), "Hello world");
+});
+
+test("resolveLocalBrowserCandidates keeps the first existing browser path per kind", () => {
+  const candidates = resolveLocalBrowserCandidates({
+    platform: "win32",
+    env: {
+      "ProgramFiles(x86)": "C:\\Program Files (x86)",
+      ProgramFiles: "C:\\Program Files",
+      LOCALAPPDATA: "C:\\Users\\demo\\AppData\\Local",
+    },
+    statSync(filePath) {
+      return {
+        isFile() {
+          return filePath === "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe" ||
+            filePath === "C:\\Users\\demo\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe";
+        },
+      };
+    },
+  });
+
+  assert.deepEqual(candidates, [
+    {
+      browserKind: "edge",
+      executablePath: "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+    },
+    {
+      browserKind: "chrome",
+      executablePath: "C:\\Users\\demo\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe",
+    },
+  ]);
+});
+
+test("launchManagedBrowser reuses an existing endpoint before spawning", async () => {
+  let spawnCalled = false;
+  const browser = await launchManagedBrowser({
+    resolveLocalBrowserCandidates() {
+      return [{ browserKind: "edge", executablePath: "C:\\Edge\\msedge.exe" }];
+    },
+    async connectToBrowser(endpointURL) {
+      assert.equal(endpointURL, "http://127.0.0.1:9555");
+      return {
+        async close() {},
+        version() {
+          return "Microsoft Edge/125.0.0.0";
+        },
+      };
+    },
+    endpointURL: "http://127.0.0.1:9555",
+    spawnBrowserProcess() {
+      spawnCalled = true;
+      throw new Error("spawn should not be called");
+    },
+  });
+
+  assert.equal(browser.browserKind, "edge");
+  assert.equal(browser.browserTransport, "cdp");
+  assert.equal(browser.endpointURL, "http://127.0.0.1:9555");
+  assert.equal(browser.source, "playwright_worker_local_browser");
+  assert.equal(spawnCalled, false);
+});
+
+test("launchManagedBrowser spawns a browser and waits for the endpoint", async () => {
+  let attempts = 0;
+  let mkdirPath = "";
+  let spawned = null;
+  const browser = await launchManagedBrowser({
+    resolveLocalBrowserCandidates() {
+      return [{ browserKind: "chrome", executablePath: "C:\\Chrome\\chrome.exe" }];
+    },
+    async connectToBrowser() {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new Error("ECONNREFUSED");
+      }
+      return {
+        async close() {},
+        async version() {
+          return "Chrome/125.0.0.0";
+        },
+      };
+    },
+    mkdirSync(targetPath) {
+      mkdirPath = targetPath;
+    },
+    sleep() {
+      return Promise.resolve();
+    },
+    spawnBrowserProcess(executablePath, args) {
+      spawned = { executablePath, args };
+      return {
+        unref() {},
+      };
+    },
+  });
+
+  assert.equal(browser.browserKind, "chrome");
+  assert.equal(browser.endpointURL, "http://127.0.0.1:9333");
+  assert.match(mkdirPath, /cialloclaw-playwright-browser/);
+  assert.equal(spawned.executablePath, "C:\\Chrome\\chrome.exe");
+  assert.ok(spawned.args.includes("--remote-debugging-port=9333"));
+  assert.ok(spawned.args.includes("about:blank"));
+  assert.equal(attempts, 2);
+});
+
+test("launchManagedBrowser rejects when no local browser candidate exists", async () => {
+  await assert.rejects(
+    () => launchManagedBrowser({
+      resolveLocalBrowserCandidates() {
+        return [];
+      },
+    }),
+    /no local Chrome or Edge browser executable was found/,
+  );
+});
+
+test("launchManagedBrowser reports endpoint timeouts after spawning", async () => {
+  const originalNow = Date.now;
+  let attempts = 0;
+  Date.now = (() => {
+    const values = [0, 0, 10001];
+    return () => values.shift() ?? 10001;
+  })();
+  try {
+    await assert.rejects(
+      () => launchManagedBrowser({
+        resolveLocalBrowserCandidates() {
+          return [{ browserKind: "edge", executablePath: "C:\\Edge\\msedge.exe" }];
+        },
+        async connectToBrowser() {
+          attempts += 1;
+          throw "ECONNREFUSED";
+        },
+        mkdirSync() {},
+        sleep() {
+          return Promise.resolve();
+        },
+        spawnBrowserProcess() {
+          return {
+            unref() {},
+          };
+        },
+      }),
+      /timed out waiting for browser endpoint/,
+    );
+  } finally {
+    Date.now = originalNow;
+  }
+
+  assert.equal(attempts, 2);
 });
 
 test("health verifies browser startup and page creation", async () => {
@@ -139,7 +318,7 @@ test("health verifies browser startup and page creation", async () => {
 
   assert.equal(response.ok, true);
   assert.equal(response.result.status, "ok");
-  assert.deepEqual(lifecycle, ["launch", "newContext", "newPage", "context.close", "browser.close"]);
+  assert.deepEqual(lifecycle, ["launchManagedBrowser", "launch", "newContext", "newPage", "context.close", "browser.close"]);
 });
 
 test("health still closes browser when context cleanup fails", async () => {
@@ -149,7 +328,7 @@ test("health still closes browser when context cleanup fails", async () => {
     /context close failed/,
   );
 
-  assert.deepEqual(lifecycle, ["launch", "newContext", "newPage", "context.close", "browser.close"]);
+  assert.deepEqual(lifecycle, ["launchManagedBrowser", "launch", "newContext", "newPage", "context.close", "browser.close"]);
 });
 
 test("handleRequest delegates health requests through the worker switch", async () => {
@@ -158,7 +337,41 @@ test("handleRequest delegates health requests through the worker switch", async 
 
   assert.equal(response.ok, true);
   assert.equal(response.result.worker_name, "playwright_worker");
-  assert.deepEqual(lifecycle, ["launch", "newContext", "newPage", "context.close", "browser.close"]);
+  assert.deepEqual(lifecycle, ["launchManagedBrowser", "launch", "newContext", "newPage", "context.close", "browser.close"]);
+});
+
+test("health prefers a managed local browser session before bundled launch", async () => {
+  const lifecycle = [];
+  const existingPage = createPage({ title: "Managed Health Page", windowName: "cialloclaw-playwright-worker" });
+  const response = await healthResponse(createDeps({
+    lifecycle,
+    launchManagedBrowser: async () => ({
+      managed: true,
+      browserKind: "edge",
+      browserTransport: "cdp",
+      endpointURL: "http://127.0.0.1:9333",
+      source: "playwright_worker_local_browser",
+      browser: {
+        async close() {
+          lifecycle.push("managed.browser.close");
+        },
+        contexts() {
+          return [{
+            pages() {
+              return [existingPage];
+            },
+            async newPage() {
+              lifecycle.push("managed.newPage");
+              return existingPage;
+            },
+          }];
+        },
+      },
+    }),
+  }));
+
+  assert.equal(response.ok, true);
+  assert.deepEqual(lifecycle, ["launchManagedBrowser", "managed.browser.close"]);
 });
 
 test("page_read returns normalized page metadata", async () => {
@@ -196,6 +409,53 @@ test("page_read promotes bare domains to https before navigation", async () => {
 
   assert.equal(response.ok, true);
   assert.equal(response.result.url, "https://example.com/docs");
+test("page_read uses a managed local browser session when available", async () => {
+  const lifecycle = [];
+  const navigationLog = [];
+  const actionLog = [];
+  const page = createPage({
+    actionLog,
+    bodyText: "Hello from managed browser",
+    currentURL: "https://example.com/managed",
+    gotoURL: "https://example.com/managed",
+    navigationLog,
+    title: "Managed Article",
+    windowName: "cialloclaw-playwright-worker",
+  });
+  const response = await handleRequest({ action: "page_read", url: "https://example.com" }, createDeps({
+    lifecycle,
+    launchManagedBrowser: async () => ({
+      managed: true,
+      browserKind: "edge",
+      browserTransport: "cdp",
+      endpointURL: "http://127.0.0.1:9333",
+      source: "playwright_worker_local_browser",
+      browser: {
+        async close() {
+          lifecycle.push("managed.browser.close");
+        },
+        contexts() {
+          return [{
+            pages() {
+              return [page];
+            },
+            async newPage() {
+              lifecycle.push("managed.newPage");
+              return page;
+            },
+          }];
+        },
+      },
+    }),
+  }));
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.browser_kind, "edge");
+  assert.equal(response.result.browser_transport, "cdp");
+  assert.equal(response.result.endpoint_url, "http://127.0.0.1:9333");
+  assert.equal(response.result.source, "playwright_worker_local_browser");
+  assert.equal(response.result.title, "Managed Article");
+  assert.deepEqual(lifecycle, ["launchManagedBrowser", "managed.browser.close"]);
   assert.deepEqual(navigationLog, [{
     action: "goto",
     options: {
@@ -232,6 +492,118 @@ test("page_read still promotes public bare domains to https before navigation", 
   assert.equal(response.ok, true);
   assert.equal(response.result.url, "https://example.com/docs");
   assert.equal(navigationLog[0].url, "https://example.com/docs");
+    url: "https://example.com",
+  }]);
+  assert.deepEqual(actionLog.map((entry) => entry.action), ["isManagedWorkerPage"]);
+});
+
+test("page_read opens a managed tab when no reusable page is available", async () => {
+  const lifecycle = [];
+  const actionLog = [];
+  const page = createPage({
+    actionLog,
+    bodyText: "Managed tab created on demand",
+    currentURL: "https://example.com/new-managed",
+    gotoURL: "https://example.com/new-managed",
+    title: "Managed New Tab",
+  });
+  const response = await handleRequest({ action: "page_read", url: "https://example.com" }, createDeps({
+    lifecycle,
+    launchManagedBrowser: async () => ({
+      managed: true,
+      browserKind: "edge",
+      browserTransport: "cdp",
+      endpointURL: "http://127.0.0.1:9333",
+      source: "playwright_worker_local_browser",
+      browser: {
+        async close() {
+          lifecycle.push("managed.browser.close");
+        },
+        contexts() {
+          return [{
+            async newPage() {
+              lifecycle.push("managed.newPage");
+              return page;
+            },
+          }];
+        },
+      },
+    }),
+  }));
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.title, "Managed New Tab");
+  assert.deepEqual(lifecycle, ["launchManagedBrowser", "managed.newPage", "managed.browser.close"]);
+  assert.deepEqual(actionLog.map((entry) => entry.action), ["markManagedWorkerPage"]);
+});
+
+test("page_read does not reuse an unowned managed browser tab", async () => {
+  const lifecycle = [];
+  const actionLog = [];
+  const userPage = createPage({
+    actionLog,
+    currentURL: "https://example.com/user-tab",
+    title: "User Tab",
+    windowName: "user-owned-page",
+  });
+  const workerPage = createPage({
+    actionLog,
+    bodyText: "Fresh worker-owned tab",
+    currentURL: "https://example.com/worker-tab",
+    gotoURL: "https://example.com/worker-tab",
+    title: "Worker Tab",
+  });
+  const response = await handleRequest({ action: "page_read", url: "https://example.com" }, createDeps({
+    lifecycle,
+    launchManagedBrowser: async () => ({
+      managed: true,
+      browserKind: "edge",
+      browserTransport: "cdp",
+      endpointURL: "http://127.0.0.1:9333",
+      source: "playwright_worker_local_browser",
+      browser: {
+        async close() {
+          lifecycle.push("managed.browser.close");
+        },
+        contexts() {
+          return [{
+            pages() {
+              return [userPage];
+            },
+            async newPage() {
+              lifecycle.push("managed.newPage");
+              return workerPage;
+            },
+          }];
+        },
+      },
+    }),
+  }));
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.title, "Worker Tab");
+  assert.deepEqual(lifecycle, ["launchManagedBrowser", "managed.newPage", "managed.browser.close"]);
+  assert.deepEqual(actionLog.map((entry) => entry.action), ["isManagedWorkerPage", "markManagedWorkerPage"]);
+});
+
+test("health fails fast when a managed browser has no writable context", async () => {
+  await assert.rejects(
+    () => healthResponse(createDeps({
+      launchManagedBrowser: async () => ({
+        managed: true,
+        browserKind: "edge",
+        browserTransport: "cdp",
+        endpointURL: "http://127.0.0.1:9333",
+        source: "playwright_worker_local_browser",
+        browser: {
+          contexts() {
+            return [{}];
+          },
+        },
+      }),
+    })),
+    /managed browser did not expose a writable context/,
+  );
 });
 
 test("page_read uses the HTML title tag when Playwright title lookup is empty", async () => {
@@ -253,6 +625,185 @@ test("page_search returns bounded matches", async () => {
   assert.equal(response.ok, true);
   assert.equal(response.result.match_count, 2);
   assert.deepEqual(response.result.matches, ["First target"]);
+});
+
+test("web_search returns structured search hits", async () => {
+  const response = await handleRequest({ action: "web_search", query: "release notes", limit: 2 }, createDeps({
+    gotoURL: "https://duckduckgo.com/html/?q=release+notes",
+    searchResults: [
+      { title: "Release Notes", url: "https://example.com/release-notes", snippet: "Latest release notes." },
+      { title: "Docs", url: "https://example.com/docs", snippet: "Documentation home." },
+    ],
+  }));
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.query, "release notes");
+  assert.equal(response.result.search_url, "https://duckduckgo.com/html/?q=release+notes");
+  assert.equal(response.result.result_count, 2);
+  assert.deepEqual(response.result.results[0], {
+    title: "Release Notes",
+    url: "https://example.com/release-notes",
+    snippet: "Latest release notes.",
+  });
+});
+
+test("web_search accepts an explicit url even when query is blank", async () => {
+  const response = await handleRequest({
+    action: "web_search",
+    query: "   ",
+    url: "https://example.com/search?q=codex",
+  }, createDeps({
+    gotoURL: "https://example.com/search?q=codex",
+    searchResults: [
+      { title: "Codex Result", url: "https://example.com/docs", snippet: "Docs home." },
+    ],
+  }));
+
+  assert.equal(response.ok, true);
+  assert.equal(response.result.query, "");
+  assert.equal(response.result.search_url, "https://example.com/search?q=codex");
+  assert.equal(response.result.result_count, 1);
+});
+
+test("web_search fails when the default search page yields no parseable results", async () => {
+  const response = await handleRequest({
+    action: "web_search",
+    query: "release notes",
+  }, createDeps({
+    gotoURL: "https://duckduckgo.com/html/?q=release+notes",
+    searchResults: [],
+  }));
+
+  assert.equal(response.ok, false);
+  assert.equal(response.error.code, "search_results_unavailable");
+  assert.match(response.error.message, /could not extract results/i);
+});
+
+test("web_search still treats derived urls as default when the caller marks them implicit", async () => {
+  const response = await handleRequest({
+    action: "web_search",
+    query: "release notes",
+    url: "https://duckduckgo.com/html/?q=release+notes",
+    url_is_explicit: false,
+  }, createDeps({
+    gotoURL: "https://duckduckgo.com/html/?q=release+notes",
+    searchResults: [],
+  }));
+
+  assert.equal(response.ok, false);
+  assert.equal(response.error.code, "search_results_unavailable");
+  assert.match(response.error.message, /could not extract results/i);
+});
+
+test("web_search reports missing queries as structured input errors", async () => {
+  const response = await handleRequest({
+    action: "web_search",
+    query: "   ",
+  }, createDeps());
+
+  assert.equal(response.ok, false);
+  assert.equal(response.error.code, "invalid_input");
+  assert.match(response.error.message, /query is required for web_search/);
+});
+
+test("web_search collects deduplicated snippets from the page DOM", async () => {
+  const resultAnchor = {
+    href: "https://example.com/result-1",
+    textContent: "Result One",
+    parentElement: null,
+    closest(selector) {
+      if (selector === ".result") {
+        return {
+          querySelector() {
+            return { textContent: "Snippet One" };
+          },
+        };
+      }
+      return null;
+    },
+  };
+  const duplicateAnchor = {
+    href: "https://example.com/result-1",
+    textContent: "Result One Duplicate",
+    parentElement: null,
+    closest() {
+      return null;
+    },
+  };
+  const articleAnchor = {
+    href: "https://example.com/result-2",
+    textContent: "Result Two",
+    parentElement: {
+      querySelector() {
+        return { textContent: "Parent Snippet" };
+      },
+    },
+    closest(selector) {
+      if (selector === "article") {
+        return {
+          querySelector() {
+            return null;
+          },
+        };
+      }
+      return null;
+    },
+  };
+  const ignoredAnchor = {
+    href: "https://example.com/ignored",
+    textContent: "",
+    parentElement: null,
+    closest() {
+      return null;
+    },
+  };
+  const page = createPage({
+    gotoURL: "https://duckduckgo.com/html/?q=codex",
+  });
+  page.evaluate = async (callback, limit) => {
+    const originalDocument = globalThis.document;
+    globalThis.document = {
+      querySelectorAll(selector) {
+        switch (selector) {
+          case "a.result__a":
+            return [resultAnchor];
+          case ".result__body a[href]":
+            return [duplicateAnchor];
+          case "article a[href]":
+            return [articleAnchor];
+          case ".links_main a[href]":
+            return [ignoredAnchor];
+          default:
+            return [];
+        }
+      },
+    };
+    try {
+      return callback(limit);
+    } finally {
+      globalThis.document = originalDocument;
+    }
+  };
+
+  const response = await handleRequest({
+    action: "web_search",
+    query: "codex",
+    limit: 2,
+  }, createDeps({ page }));
+
+  assert.equal(response.ok, true);
+  assert.deepEqual(response.result.results, [
+    {
+      title: "Result One",
+      url: "https://example.com/result-1",
+      snippet: "Snippet One",
+    },
+    {
+      title: "Result Two",
+      url: "https://example.com/result-2",
+      snippet: "Parent Snippet",
+    },
+  ]);
 });
 
 test("page_read falls back to hostname and untitled titles when needed", async () => {
@@ -289,19 +840,18 @@ test("page_read keeps launch-path transport failures loud", async () => {
   );
 });
 
-test("structured_dom returns page snapshot", async () => {
-  const response = await handleRequest({ action: "structured_dom", url: "https://example.com" }, createDeps({
-    snapshot: {
-      headings: ["Heading A", "Heading B"],
-      links: ["Docs"],
-      buttons: ["Submit"],
-      inputs: ["email"],
-    },
-  }));
-
-  assert.equal(response.ok, true);
-  assert.deepEqual(response.result.headings, ["Heading A", "Heading B"]);
-  assert.deepEqual(response.result.links, ["Docs"]);
+test("page_read reports both managed and bundled launch failures", async () => {
+  await assert.rejects(
+    () => handleRequest({ action: "page_read", url: "https://example.com" }, createDeps({
+      launchManagedBrowser: async () => {
+        throw new Error("edge missing");
+      },
+      launchBrowser: async () => {
+        throw new Error("bundled missing");
+      },
+    })),
+    /local browser failed: edge missing; bundled browser failed: bundled missing/,
+  );
 });
 
 test("page_interact applies actions and returns updated content", async () => {
@@ -810,27 +1360,6 @@ test("page_interact uses attached tabs without forcing a new navigation", async 
   assert.equal(response.result.source, "playwright_worker_cdp");
   assert.deepEqual(actionLog.map((entry) => entry.action), ["click", "waitForTimeout"]);
   assert.deepEqual(navigationLog, []);
-});
-
-test("structured_dom can read an attached page chosen by page index", async () => {
-  const response = await handleRequest({
-    action: "structured_dom",
-    attach: {
-      browser_kind: "edge",
-      target: { page_index: 1 },
-    },
-  }, createDeps({
-    browserVersion: "Microsoft Edge/125.0.0.0",
-    connectedPages: [
-      createPage({ currentURL: "https://example.com/one", title: "One", snapshot: { headings: ["Ignore"], links: [], buttons: [], inputs: [] } }),
-      createPage({ currentURL: "https://example.com/two", title: "Two", snapshot: { headings: ["Chosen"], links: ["Docs"], buttons: ["Save"], inputs: ["email"] } }),
-    ],
-  }));
-
-  assert.equal(response.ok, true);
-  assert.equal(response.result.attached, true);
-  assert.equal(response.result.title, "Two");
-  assert.deepEqual(response.result.headings, ["Chosen"]);
 });
 
 test("page_interact rethrows unsupported interaction types", async () => {

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"path/filepath"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
@@ -183,6 +184,185 @@ func TestSQLiteEvalStoreEnforcesTraceForeignKey(t *testing.T) {
 	}
 	if !hasTraceForeignKey {
 		t.Fatal("expected eval_snapshots to keep foreign key back to trace_records")
+	}
+}
+
+func TestServiceInspectorTitleGenerationUsageFallsBackToFilteredInMemoryScan(t *testing.T) {
+	traceStore := newInMemoryTraceStore()
+	evalStore := newInMemoryEvalStore()
+	service := &Service{
+		traceStore: traceStore,
+		evalStore:  evalStore,
+	}
+
+	records := []TraceRecord{
+		{
+			TraceID:          "trace_manual_today",
+			TaskID:           "insp_001",
+			LLMInputSummary:  inspectorTitleGenerationIntent,
+			LLMOutputSummary: "generated note title",
+			Cost:             0.12,
+			CreatedAt:        "2026-05-11T08:00:00Z",
+		},
+		{
+			TraceID:          "trace_manual_other_intent",
+			TaskID:           "insp_002",
+			LLMInputSummary:  "task_inspector.other",
+			LLMOutputSummary: "ignored",
+			Cost:             9.99,
+			CreatedAt:        "2026-05-11T09:00:00Z",
+		},
+		{
+			TraceID:          "trace_other_owner",
+			TaskID:           "task_001",
+			LLMInputSummary:  inspectorTitleGenerationIntent,
+			LLMOutputSummary: "ignored",
+			Cost:             8.88,
+			CreatedAt:        "2026-05-11T10:00:00Z",
+		},
+		{
+			TraceID:          "trace_manual_yesterday",
+			TaskID:           "insp_003",
+			LLMInputSummary:  inspectorTitleGenerationIntent,
+			LLMOutputSummary: "ignored",
+			Cost:             7.77,
+			CreatedAt:        "2026-05-10T23:59:00Z",
+		},
+	}
+	for _, record := range records {
+		if err := traceStore.WriteTraceRecord(context.Background(), record); err != nil {
+			t.Fatalf("write trace record failed: %v", err)
+		}
+	}
+
+	evals := []EvalSnapshotRecord{
+		{
+			EvalSnapshotID: "eval_manual_today",
+			TraceID:        "trace_manual_today",
+			TaskID:         "insp_001",
+			Status:         "passed",
+			MetricsJSON:    `{"total_tokens":22}`,
+			CreatedAt:      "2026-05-11T08:00:00Z",
+		},
+		{
+			EvalSnapshotID: "eval_manual_other_intent",
+			TraceID:        "trace_manual_other_intent",
+			TaskID:         "insp_002",
+			Status:         "passed",
+			MetricsJSON:    `{"total_tokens":40}`,
+			CreatedAt:      "2026-05-11T09:00:00Z",
+		},
+		{
+			EvalSnapshotID: "eval_other_owner",
+			TraceID:        "trace_other_owner",
+			TaskID:         "task_001",
+			Status:         "passed",
+			MetricsJSON:    `{"total_tokens":50}`,
+			CreatedAt:      "2026-05-11T10:00:00Z",
+		},
+	}
+	for _, record := range evals {
+		if err := evalStore.WriteEvalSnapshot(context.Background(), record); err != nil {
+			t.Fatalf("write eval snapshot failed: %v", err)
+		}
+	}
+
+	summary, err := service.InspectorTitleGenerationUsage(context.Background(), time.Date(2026, 5, 11, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("InspectorTitleGenerationUsage returned error: %v", err)
+	}
+	if summary.TotalTokens != 22 || summary.TotalCost != 0.12 {
+		t.Fatalf("expected only today's inspector title usage to be counted, got %+v", summary)
+	}
+}
+
+func TestServiceInspectorTitleGenerationUsageUsesSQLiteAggregate(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "inspector-title-usage.db")
+	traceStore, err := NewSQLiteTraceStore(databasePath)
+	if err != nil {
+		t.Fatalf("new sqlite trace store failed: %v", err)
+	}
+	defer func() { _ = traceStore.Close() }()
+	evalStore, err := NewSQLiteEvalStore(databasePath)
+	if err != nil {
+		t.Fatalf("new sqlite eval store failed: %v", err)
+	}
+	defer func() { _ = evalStore.Close() }()
+
+	service := &Service{
+		traceStore: traceStore,
+		evalStore:  evalStore,
+	}
+
+	records := []TraceRecord{
+		{
+			TraceID:          "trace_sql_manual_today",
+			TaskID:           "insp_100",
+			LLMInputSummary:  inspectorTitleGenerationIntent,
+			LLMOutputSummary: "generated note title",
+			Cost:             0.34,
+			CreatedAt:        "2026-05-11T11:00:00Z",
+		},
+		{
+			TraceID:          "trace_sql_manual_today_no_eval",
+			TaskID:           "insp_101",
+			LLMInputSummary:  inspectorTitleGenerationIntent,
+			LLMOutputSummary: "fallback note title",
+			Cost:             0.11,
+			CreatedAt:        "2026-05-11T12:00:00Z",
+		},
+		{
+			TraceID:          "trace_sql_other_task",
+			TaskID:           "task_100",
+			LLMInputSummary:  inspectorTitleGenerationIntent,
+			LLMOutputSummary: "ignored",
+			Cost:             4.56,
+			CreatedAt:        "2026-05-11T13:00:00Z",
+		},
+		{
+			TraceID:          "trace_sql_yesterday",
+			TaskID:           "insp_102",
+			LLMInputSummary:  inspectorTitleGenerationIntent,
+			LLMOutputSummary: "ignored",
+			Cost:             5.67,
+			CreatedAt:        "2026-05-10T18:00:00Z",
+		},
+	}
+	for _, record := range records {
+		if err := traceStore.WriteTraceRecord(context.Background(), record); err != nil {
+			t.Fatalf("write sqlite trace failed: %v", err)
+		}
+	}
+
+	for _, record := range []EvalSnapshotRecord{
+		{
+			EvalSnapshotID: "eval_sql_manual_today",
+			TraceID:        "trace_sql_manual_today",
+			TaskID:         "insp_100",
+			Status:         "passed",
+			MetricsJSON:    `{"total_tokens":31}`,
+			CreatedAt:      "2026-05-11T11:00:00Z",
+		},
+		{
+			EvalSnapshotID: "eval_sql_other_task",
+			TraceID:        "trace_sql_other_task",
+			TaskID:         "task_100",
+			Status:         "passed",
+			MetricsJSON:    `{"total_tokens":88}`,
+			CreatedAt:      "2026-05-11T13:00:00Z",
+		},
+	} {
+		if err := evalStore.WriteEvalSnapshot(context.Background(), record); err != nil {
+			t.Fatalf("write sqlite eval failed: %v", err)
+		}
+	}
+
+	summary, err := service.InspectorTitleGenerationUsage(context.Background(), time.Date(2026, 5, 11, 16, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("InspectorTitleGenerationUsage returned error: %v", err)
+	}
+	if summary.TotalTokens != 31 || summary.TotalCost != 0.45 {
+		t.Fatalf("expected sqlite aggregate to count only today's inspector title usage, got %+v", summary)
 	}
 }
 

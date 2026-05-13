@@ -224,6 +224,9 @@ func (s *SQLiteTraceStore) initialize(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_trace_records_task_time ON trace_records(task_id, created_at DESC);`); err != nil {
 		return fmt.Errorf("create trace_records index: %w", err)
 	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_trace_records_summary_time ON trace_records(llm_input_summary, created_at DESC);`); err != nil {
+		return fmt.Errorf("create trace_records summary index: %w", err)
+	}
 	return nil
 }
 
@@ -338,6 +341,9 @@ func (s *SQLiteEvalStore) initialize(ctx context.Context) error {
 	}
 	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_eval_snapshots_task_time ON eval_snapshots(task_id, created_at DESC);`); err != nil {
 		return fmt.Errorf("create eval_snapshots index: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_eval_snapshots_trace_id ON eval_snapshots(trace_id);`); err != nil {
+		return fmt.Errorf("create eval_snapshots trace index: %w", err)
 	}
 	return nil
 }

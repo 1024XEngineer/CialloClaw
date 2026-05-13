@@ -196,6 +196,7 @@ func (s *Service) finishNotepadTask(snapshot taskcontext.TaskContextSnapshot, su
 		return governedResponse, nil
 	}
 	task = governedTask
+	s.refreshTitleAfterGovernance(task, snapshot, suggestion.Intent)
 
 	deliveryResult := map[string]any(nil)
 	var execErr error

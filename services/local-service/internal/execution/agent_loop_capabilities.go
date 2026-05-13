@@ -51,6 +51,24 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 		},
 	},
 	{
+		Name:      "extract_text",
+		UseWhen:   "Need readable text from a document, PDF, image, or another file that is not safe to consume through read_file directly.",
+		AvoidWhen: "The target is already a small plain-text file and read_file can return the exact content safely.",
+		Constraints: []string{
+			"Workspace files only",
+			"Returns extracted text instead of raw binary bytes",
+			"Prefer read_file for exact plain-text content and fall back to extract_text for document-style inputs",
+		},
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{"type": "string", "description": "Workspace-relative path to a document, image, or PDF."},
+			},
+			"required":             []string{"path"},
+			"additionalProperties": false,
+		},
+	},
+	{
 		Name:                   "browser_attach_current",
 		RequiresCurrentBrowser: true,
 		UseWhen:                "需要附着当前真实浏览器标签页，并确认当前页面 URL 或标题",
@@ -119,6 +137,25 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 				"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 20},
 			},
 			"required":             []string{"url", "query"},
+			"additionalProperties": false,
+		},
+	},
+	{
+		Name:      "web_search",
+		UseWhen:   "Need to search the web for sources before reading specific pages.",
+		AvoidWhen: "You already have the exact page URL and only need to read or search within that page.",
+		Constraints: []string{
+			"Read-only search over public web pages",
+			"Returns structured search hits rather than a full page transcript",
+			"Follow up with page_read after choosing a promising result",
+		},
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"query": map[string]any{"type": "string", "description": "Search query to look up on the web."},
+				"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 10},
+			},
+			"required":             []string{"query"},
 			"additionalProperties": false,
 		},
 	},
@@ -208,7 +245,44 @@ func (c agentLoopCapabilitySpec) toolDefinition(metadata tools.ToolMetadata) mod
 	return model.ToolDefinition{
 		Name:        metadata.Name,
 		Description: c.plannerDescription(metadata.Description),
-		InputSchema: cloneMap(c.InputSchema),
+		InputSchema: cloneSchemaMap(c.InputSchema),
+	}
+}
+
+// cloneSchemaMap preserves empty objects because JSON Schema treats `{}` as a
+// valid schema node while `null` is rejected by upstream providers.
+func cloneSchemaMap(values map[string]any) map[string]any {
+	if values == nil {
+		return nil
+	}
+
+	cloned := make(map[string]any, len(values))
+	for key, value := range values {
+		cloned[key] = cloneSchemaValue(value)
+	}
+	return cloned
+}
+
+func cloneSchemaValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneSchemaMap(typed)
+	case []map[string]any:
+		cloned := make([]map[string]any, 0, len(typed))
+		for _, item := range typed {
+			cloned = append(cloned, cloneSchemaMap(item))
+		}
+		return cloned
+	case []any:
+		cloned := make([]any, 0, len(typed))
+		for _, item := range typed {
+			cloned = append(cloned, cloneSchemaValue(item))
+		}
+		return cloned
+	case []string:
+		return append([]string(nil), typed...)
+	default:
+		return value
 	}
 }
 

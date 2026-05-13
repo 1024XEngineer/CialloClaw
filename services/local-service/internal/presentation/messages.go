@@ -476,6 +476,8 @@ func ResultSpecMessagesForIntent(intentName string) ResultSpecMessages {
 		return resultSpecMessages(MessageResultTitlePageRead, MessagePreviewBubble, MessageBubbleResultPageRead)
 	case "page_search":
 		return resultSpecMessages(MessageResultTitlePageSearch, MessagePreviewBubble, MessageBubbleResultPageSearch)
+	case "web_search":
+		return resultSpecMessages(MessageResultTitlePageSearch, MessagePreviewBubble, MessageBubbleResultPageSearch)
 	case "browser_attach_current":
 		return resultSpecMessages(MessageResultTitleBrowserAttach, MessagePreviewBubble, MessageBubbleResultBrowserAttach)
 	case "browser_snapshot":

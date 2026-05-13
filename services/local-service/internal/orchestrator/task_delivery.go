@@ -362,7 +362,7 @@ func deliveryTypeFromIntent(taskIntent map[string]any) string {
 	switch stringValue(taskIntent, "name", "summarize") {
 	case "agent_loop", "translate", "explain", "browser_attach_current", "browser_navigate", "browser_tab_focus", "browser_interact":
 		return "bubble"
-	case "page_read", "page_search", "structured_dom", "browser_snapshot", "browser_tabs_list":
+	case "page_read", "page_search", "web_search", "browser_snapshot", "browser_tabs_list":
 		return "result_page"
 	default:
 		return "workspace_document"

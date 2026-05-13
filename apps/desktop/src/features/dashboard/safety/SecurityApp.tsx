@@ -59,6 +59,12 @@ import {
   type SecurityRespondOutcome,
 } from "./securityService";
 import { getDashboardTaskSecurityRefreshPlan } from "../tasks/taskPage.query";
+import {
+  applySecurityBudgetDisplaySettings,
+  loadSecurityBudgetDisplaySettings,
+  SECURITY_BUDGET_DISPLAY_SETTINGS_KEY,
+  type SecurityBudgetDisplaySettings,
+} from "@/services/securityBudgetDisplayService";
 import "./securityPage.css";
 import "./securityBoard.css";
 
@@ -150,6 +156,14 @@ function formatCurrency(value: number) {
 
 function formatTokenCount(value: number) {
   return value.toLocaleString("zh-CN");
+}
+
+function isConfiguredBudgetLimit(value: number) {
+  return Number.isFinite(value) && value > 0;
+}
+
+function formatBudgetLimitValue(value: number) {
+  return isConfiguredBudgetLimit(value) ? `${formatTokenCount(value)} tokens` : "未配置";
 }
 
 function formatDateTime(value: string) {
@@ -510,6 +524,7 @@ function resolveActiveSafetyDetail(args: {
 function getCardPreview(
   key: SecurityCardKey,
   moduleData: SecurityModuleData,
+  tokenCostSummary: SecurityModuleData["summary"]["token_cost_summary"],
   approvalLookup: Map<string, ApprovalRequest>,
   activeApprovalOverride?: ApprovalRequest | null,
   activeRestorePointOverride?: RecoveryPoint | null,
@@ -544,7 +559,7 @@ function getCardPreview(
   }
 
   if (key === "budget") {
-    const tokenCost = moduleData.summary.token_cost_summary;
+    const tokenCost = tokenCostSummary;
 
     return {
       eyebrow: "token / cost",
@@ -553,7 +568,9 @@ function getCardPreview(
       badgeColor: "blue",
       headline: `${formatTokenCount(tokenCost.current_task_tokens)} tokens`,
       supporting: `当前任务 ${formatCurrency(tokenCost.current_task_cost)} · 当日 ${formatCurrency(tokenCost.today_cost)}`,
-      meta: `单任务上限 ${formatTokenCount(tokenCost.single_task_limit)} tokens`,
+      meta: isConfiguredBudgetLimit(tokenCost.single_task_limit)
+        ? `单任务上限 ${formatTokenCount(tokenCost.single_task_limit)} tokens`
+        : "单任务上限未配置",
       icon: Wallet,
     };
   }
@@ -618,6 +635,9 @@ export function SecurityApp() {
   const [pendingListData, setPendingListData] = useState<SecurityPendingListData | null>(null);
   const [pendingListError, setPendingListError] = useState<string | null>(null);
   const [pendingListLoading, setPendingListLoading] = useState(false);
+  const [budgetDisplaySettings, setBudgetDisplaySettings] = useState<SecurityBudgetDisplaySettings>(() =>
+    loadSecurityBudgetDisplaySettings(),
+  );
   const [pendingOffset, setPendingOffset] = useState(0);
   const [restorePointsData, setRestorePointsData] = useState<SecurityRestorePointListData | null>(null);
   const [restorePointsError, setRestorePointsError] = useState<string | null>(null);
@@ -640,6 +660,24 @@ export function SecurityApp() {
   const [draggingKey, setDraggingKey] = useState<SecurityCardKey | null>(null);
   const [activeDetailKey, setActiveDetailKey] = useState<SecurityCardKey | null>(null);
   const [boardReady, setBoardReady] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+
+    const handleStorageChange = (event: StorageEvent) => {
+      if (event.key !== SECURITY_BUDGET_DISPLAY_SETTINGS_KEY) {
+        return;
+      }
+
+      setBudgetDisplaySettings(loadSecurityBudgetDisplaySettings());
+    };
+
+    window.addEventListener("storage", handleStorageChange);
+    return () => window.removeEventListener("storage", handleStorageChange);
+  }, []);
+
   const approvalLookup = useMemo(
     () => new Map((moduleData?.pending ?? []).map((approval) => [`approval:${approval.approval_id}`, approval] as const)),
     [moduleData?.pending],
@@ -692,6 +730,10 @@ export function SecurityApp() {
   const activeAuditRecordsData = useMemo(
     () => (auditRecordsData?.taskId === auditFilterTaskId ? auditRecordsData : null),
     [auditFilterTaskId, auditRecordsData],
+  );
+  const displayTokenCostSummary = useMemo(
+    () => (moduleData ? applySecurityBudgetDisplaySettings(moduleData.summary.token_cost_summary, budgetDisplaySettings) : null),
+    [budgetDisplaySettings, moduleData],
   );
   const auditFilterOptions = useMemo(
     () => Array.from(new Set((activeAuditRecordsData?.items ?? []).map((record) => getAuditTypeKey(record)))),
@@ -1642,7 +1684,9 @@ export function SecurityApp() {
   };
 
   const renderBudgetDetail = () => {
-    const tokenCost = moduleData.summary.token_cost_summary;
+    const tokenCost = displayTokenCostSummary ?? moduleData.summary.token_cost_summary;
+    const singleTaskLimitConfigured = isConfiguredBudgetLimit(tokenCost.single_task_limit);
+    const dailyLimitConfigured = isConfiguredBudgetLimit(tokenCost.daily_limit);
 
     return (
       <div className="security-page__detail-stack">
@@ -1659,13 +1703,13 @@ export function SecurityApp() {
           </article>
           <article className="security-page__detail-card">
             <p className="security-page__detail-label">单任务上限</p>
-            <p className="security-page__detail-value">{formatTokenCount(tokenCost.single_task_limit)}</p>
-            <p className="security-page__detail-copy">tokens</p>
+            <p className="security-page__detail-value">{formatBudgetLimitValue(tokenCost.single_task_limit)}</p>
+            <p className="security-page__detail-copy">{singleTaskLimitConfigured ? "预算阈值" : "请在控制面板完成配置"}</p>
           </article>
           <article className="security-page__detail-card">
             <p className="security-page__detail-label">当日上限</p>
-            <p className="security-page__detail-value">{formatTokenCount(tokenCost.daily_limit)}</p>
-            <p className="security-page__detail-copy">tokens</p>
+            <p className="security-page__detail-value">{formatBudgetLimitValue(tokenCost.daily_limit)}</p>
+            <p className="security-page__detail-copy">{dailyLimitConfigured ? "预算阈值" : "请在控制面板完成配置"}</p>
           </article>
         </div>
       </div>
@@ -2075,6 +2119,7 @@ export function SecurityApp() {
     const preview = getCardPreview(
       activeDetailKey,
       moduleData,
+      displayTokenCostSummary ?? moduleData.summary.token_cost_summary,
       approvalLookup,
       resolvedDetail.approval,
       resolvedDetail.restorePoint,
@@ -2121,7 +2166,12 @@ export function SecurityApp() {
   };
 
   const renderDraggableCard = (key: SecurityCardKey, index: number) => {
-    const preview = getCardPreview(key, moduleData, approvalLookup);
+    const preview = getCardPreview(
+      key,
+      moduleData,
+      displayTokenCostSummary ?? moduleData.summary.token_cost_summary,
+      approvalLookup,
+    );
     const Icon = preview.icon;
     const isDragging = draggingKey === key;
     const isExpanded = activeDetailKey === key;
