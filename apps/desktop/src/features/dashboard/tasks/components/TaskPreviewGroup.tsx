@@ -28,7 +28,7 @@ export function TaskPreviewGroup({ activeTaskId, finishedGroups, onSelect, onTog
         <ScrollArea className="task-preview-section__scroll">
           <div className="task-preview-section__list">
             {unfinishedTasks.map((item) => (
-              <TaskPreviewCard key={item.task.task_id} isActive={item.task.task_id === activeTaskId} item={item} onOpenDetail={onSelect} onStage={onSelect} runwayLabel="Flow" />
+              <TaskPreviewCard key={item.task.task_id} isActive={item.task.task_id === activeTaskId} item={item} onOpenDetail={onSelect} onStage={onSelect} />
             ))}
           </div>
         </ScrollArea>
@@ -55,7 +55,7 @@ export function TaskPreviewGroup({ activeTaskId, finishedGroups, onSelect, onTog
 
               <div className="task-preview-group__list">
                 {group.items.map((item) => (
-                  <TaskPreviewCard key={item.task.task_id} isActive={item.task.task_id === activeTaskId} item={item} onOpenDetail={onSelect} onStage={onSelect} runwayLabel="Shelf" />
+                  <TaskPreviewCard key={item.task.task_id} isActive={item.task.task_id === activeTaskId} item={item} onOpenDetail={onSelect} onStage={onSelect} />
                 ))}
               </div>
             </div>
