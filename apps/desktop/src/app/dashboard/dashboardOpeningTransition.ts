@@ -1,4 +1,4 @@
-export const DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS = 300_000;
+export const DASHBOARD_OPENING_RECOVERY_TIMEOUT_MS = 720;
 
 type DashboardOpeningTransitionEnvironment = {
   cancelAnimationFrame: (handle: number) => void;
