@@ -3474,7 +3474,7 @@ func TestAssessGovernanceRequiresAuthorizationForRestoreWrite(t *testing.T) {
 	}
 }
 
-func TestAssessGovernanceWriteFileAllowsAbsolutePathOutsideWorkspaceWithinToolPolicy(t *testing.T) {
+func TestAssessGovernanceWriteFileDeniesAbsolutePathOutsideWorkspaceWithinToolPolicy(t *testing.T) {
 	service, workspaceRoot := newTestExecutionService(t, "unused")
 	toolPolicy, err := platform.NewLocalToolPathPolicy(workspaceRoot)
 	if err != nil {
@@ -3496,8 +3496,8 @@ func TestAssessGovernanceWriteFileAllowsAbsolutePathOutsideWorkspaceWithinToolPo
 	if !handled {
 		t.Fatal("expected write_file outside-workspace governance path to be handled")
 	}
-	if assessment.Deny || assessment.ApprovalRequired || assessment.RiskLevel != string(risk.RiskLevelGreen) {
-		t.Fatalf("expected write_file outside workspace within tool policy to stay low risk, got %+v", assessment)
+	if !assessment.Deny || assessment.ApprovalRequired || assessment.RiskLevel != string(risk.RiskLevelRed) {
+		t.Fatalf("expected write_file outside workspace within tool policy to be denied, got %+v", assessment)
 	}
 	files, _ := assessment.ImpactScope["files"].([]string)
 	if len(files) != 1 || files[0] != externalPath {
@@ -4014,7 +4014,7 @@ func TestExecuteDirectReadFileAllowsAbsolutePathOutsideWorkspace(t *testing.T) {
 	}
 }
 
-func TestExecuteToolWriteFileAllowsAbsolutePathOutsideWorkspaceWithoutRecoveryPoint(t *testing.T) {
+func TestExecuteToolWriteFileRejectsAbsolutePathOutsideWorkspace(t *testing.T) {
 	service, workspaceRoot := newTestExecutionService(t, "unused")
 	toolPolicy, err := platform.NewLocalToolPathPolicy(workspaceRoot)
 	if err != nil {
@@ -4024,8 +4024,8 @@ func TestExecuteToolWriteFileAllowsAbsolutePathOutsideWorkspaceWithoutRecoveryPo
 
 	externalPath := filepath.Join(t.TempDir(), "written.txt")
 	toolResult, recoveryPoint, err := service.executeTool(context.Background(), Request{TaskID: "task_write_outside_workspace", RunID: "run_write_outside_workspace"}, workspaceRoot, "write_file", map[string]any{"path": externalPath, "content": "hello"})
-	if err != nil {
-		t.Fatalf("executeTool returned error: %v", err)
+	if !errors.Is(err, tools.ErrWorkspaceBoundaryDenied) {
+		t.Fatalf("expected workspace boundary denial, got %v", err)
 	}
 	if len(recoveryPoint) != 0 {
 		t.Fatalf("expected write outside workspace not to create a recovery point, got %+v", recoveryPoint)
@@ -4033,15 +4033,11 @@ func TestExecuteToolWriteFileAllowsAbsolutePathOutsideWorkspaceWithoutRecoveryPo
 	if toolResult == nil {
 		t.Fatal("expected write_file tool result")
 	}
-	if pathValue, _ := toolResult.RawOutput["path"].(string); pathValue != externalPath {
-		t.Fatalf("expected write_file raw output path %q, got %+v", externalPath, toolResult.RawOutput)
+	if toolResult.Error == nil || toolResult.Error.Code != tools.ToolErrorCodeWorkspaceDenied {
+		t.Fatalf("expected write_file tool error to report workspace denial, got %+v", toolResult.Error)
 	}
-	content, err := os.ReadFile(externalPath)
-	if err != nil {
-		t.Fatalf("read external file: %v", err)
-	}
-	if string(content) != "hello" {
-		t.Fatalf("expected external file content to be written, got %q", string(content))
+	if _, statErr := os.Stat(externalPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("expected external file not to be created, stat err=%v", statErr)
 	}
 }
 

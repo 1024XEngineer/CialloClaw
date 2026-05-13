@@ -136,6 +136,11 @@ func BuildRiskPrecheckInput(metadata ToolMetadata, toolName string, execCtx *Too
 
 	safePath, ensureErr := execCtx.Platform.EnsureWithinWorkspace(targetPath)
 	within := ensureErr == nil
+	if ensureErr == nil && isWorkspaceWriteOperation(precheckInput.ToolName) {
+		if workspaceWithin := withinWorkspacePath(execCtx.WorkspacePath, safePath); workspaceWithin != nil {
+			within = *workspaceWithin
+		}
+	}
 	precheckInput.Workspace.Within = boolPtr(within)
 	if ensureErr == nil {
 		precheckInput.Workspace.TargetPath = safePath

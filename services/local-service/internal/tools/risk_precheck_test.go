@@ -484,6 +484,25 @@ func TestBuildRiskPrecheckInputDeniesMediaOutputOutsideWorkspace(t *testing.T) {
 	}
 }
 
+func TestBuildRiskPrecheckInputWriteFileMarksToolPolicyPathOutsideWorkspace(t *testing.T) {
+	execCtx := &ToolExecuteContext{
+		WorkspacePath: "/workspace",
+		Platform:      riskPlatformStub{workspacePath: "/tmp"},
+	}
+	input := BuildRiskPrecheckInput(
+		ToolMetadata{Name: "write_file", DisplayName: "Write File", Source: ToolSourceBuiltin},
+		"write_file",
+		execCtx,
+		map[string]any{"path": "/tmp/Desktop/report.md"},
+	)
+	if input.Workspace.TargetPath != "/tmp/Desktop/report.md" {
+		t.Fatalf("expected write_file target path to preserve resolved tool path, got %+v", input.Workspace)
+	}
+	if input.Workspace.Within == nil || *input.Workspace.Within {
+		t.Fatalf("expected write_file target outside workspace to be detected even when platform allows it, got %+v", input.Workspace)
+	}
+}
+
 func TestToolExecutorBlocksDeniedPrecheck(t *testing.T) {
 	sink := &InMemoryToolCallSink{}
 	tool := &stubTool{

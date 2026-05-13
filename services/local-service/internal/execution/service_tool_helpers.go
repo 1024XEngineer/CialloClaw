@@ -33,7 +33,7 @@ func (s *Service) executeTool(ctx context.Context, request Request, workspacePat
 	if s.executor == nil {
 		return nil, nil, fmt.Errorf("tool executor is required")
 	}
-	execCtx := s.toolExecutionContext(workspacePath, request)
+	execCtx := s.toolExecutionContext(workspacePath, request, toolName)
 	recoveryPoint, err := s.prepareGovernanceRecoveryPoint(ctx, request, workspacePath, toolName, input)
 	if err != nil {
 		return nil, cloneMap(recoveryPoint), err
@@ -66,10 +66,10 @@ func (s *Service) resolveGovernanceToolExecution(request Request) (string, map[s
 				return "", nil, nil, false, nil
 			}
 			if input, ok := resolveBrowserToolInput(intentName, args, request.Snapshot); ok {
-				return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
+				return intentName, input, s.toolExecutionContext(s.workspace, request, intentName), true, nil
 			}
 			if input, ok := resolveDirectToolInput(intentName, args, request.Snapshot); ok {
-				return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
+				return intentName, input, s.toolExecutionContext(s.workspace, request, intentName), true, nil
 			}
 		}
 	}
@@ -82,14 +82,21 @@ func (s *Service) resolveGovernanceToolExecution(request Request) (string, map[s
 		return "", nil, nil, false, nil
 	}
 	toolName, toolInput := "write_file", map[string]any{"path": writePath, "content": ""}
-	return toolName, toolInput, s.toolExecutionContext(s.workspace, request), true, nil
+	return toolName, toolInput, s.toolExecutionContext(s.workspace, request, toolName), true, nil
 }
 
-func (s *Service) toolExecutionContext(workspacePath string, request Request) *tools.ToolExecuteContext {
+func (s *Service) toolExecutionContext(workspacePath string, request Request, toolName string) *tools.ToolExecuteContext {
 	workspacePath = firstNonEmpty(strings.TrimSpace(workspacePath), s.workspace)
 	approvedOperation := firstNonEmpty(strings.TrimSpace(request.ApprovedOperation), stringValue(request.Intent, "name", ""))
 	approvedTargetObject := firstNonEmpty(strings.TrimSpace(request.ApprovedTargetObject), approvedTargetObject(request.Intent, s.workspace))
 	modelService := s.currentModel()
+	platformAdapter := firstNonNilFileSystem(s.toolPlatform, s.fileSystem)
+	if strings.TrimSpace(toolName) == "write_file" {
+		// write_file stays pinned to the real workspace adapter so broader
+		// desktop-folder read access does not silently widen mutation governance
+		// or bypass recovery-point coverage.
+		platformAdapter = s.fileSystem
+	}
 	return &tools.ToolExecuteContext{
 		TaskID:               request.TaskID,
 		RunID:                request.RunID,
@@ -98,7 +105,7 @@ func (s *Service) toolExecutionContext(workspacePath string, request Request) *t
 		ApprovedOperation:    approvedOperation,
 		ApprovedTargetObject: approvedTargetObject,
 		ApprovedToolInput:    cloneMap(request.ApprovedToolInput),
-		Platform:             firstNonNilFileSystem(s.toolPlatform, s.fileSystem),
+		Platform:             platformAdapter,
 		Execution:            s.execution,
 		Playwright:           s.playwright,
 		OCR:                  s.ocr,
