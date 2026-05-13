@@ -1,6 +1,6 @@
 /* global process, console */
 import { spawnSync } from "node:child_process";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, unlinkSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,6 +21,59 @@ function run(command, args, options) {
   const stdout = result.stdout?.trim();
   const details = stderr || stdout || `exit code ${result.status ?? "unknown"}`;
   throw new Error(`${command} ${args.join(" ")} failed: ${details}`);
+}
+
+function killWindowsProcess(imageName) {
+  const result = spawnSync("taskkill", ["/F", "/T", "/IM", imageName], {
+    stdio: "pipe",
+    encoding: "utf8",
+  });
+
+  // Windows reports a non-zero exit code when no matching process exists. That
+  // is a clean state for this dev-time cleanup path, so only surface output
+  // when callers still cannot delete the locked executable after retrying.
+  return {
+    details: result.stderr?.trim() || result.stdout?.trim() || "",
+  };
+}
+
+function unlinkIfPresent(filePath) {
+  if (!existsSync(filePath)) {
+    return false;
+  }
+
+  unlinkSync(filePath);
+  return true;
+}
+
+function removeCopiedSidecarTarget(srcTauriRoot) {
+  const targetSidecarPaths = [
+    resolve(srcTauriRoot, "target", "debug", "cialloclaw-service.exe"),
+    resolve(srcTauriRoot, "target", "release", "cialloclaw-service.exe"),
+  ];
+
+  for (const targetSidecarPath of targetSidecarPaths) {
+    try {
+      unlinkIfPresent(targetSidecarPath);
+    } catch (error) {
+      if (process.platform !== "win32" || !["EACCES", "EPERM"].includes(error?.code)) {
+        throw error;
+      }
+
+      const killResult = killWindowsProcess("cialloclaw-service.exe");
+
+      try {
+        unlinkIfPresent(targetSidecarPath);
+      } catch (retryError) {
+        const killDetails = killResult.details ? ` taskkill output: ${killResult.details}` : "";
+        throw new Error(
+          `Failed to remove stale Tauri sidecar target at ${targetSidecarPath}.`
+            + ` Close any running CialloClaw dev sessions and retry.${killDetails}`,
+          { cause: retryError },
+        );
+      }
+    }
+  }
 }
 
 function resolveRustTargetTriple(repoRoot) {
@@ -84,6 +137,10 @@ export function buildLocalServiceSidecar() {
   const sidecarPath = resolve(sidecarDirectory, sidecarFileName);
 
   mkdirSync(sidecarDirectory, { recursive: true });
+  // Tauri copies `externalBin` into target/{debug,release} without the target
+  // triple. Removing stale copies first avoids Windows file-lock panics when a
+  // previous dev sidecar is still holding target/debug/cialloclaw-service.exe.
+  removeCopiedSidecarTarget(srcTauriRoot);
   run("go", ["build", "-trimpath", "-o", sidecarPath, "./services/local-service/cmd/server"], {
     cwd: repoRoot,
     env: {
