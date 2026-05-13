@@ -79,7 +79,7 @@ func (p DefaultRiskPrechecker) riskService() *risksvc.Service {
 // Precheck implements RiskPrechecker.
 func (p DefaultRiskPrechecker) Precheck(_ context.Context, input RiskPrecheckInput) (RiskPrecheckResult, error) {
 	assessment := p.riskService().Assess(buildAssessmentInput(input))
-	return RiskPrecheckResult{
+	result := RiskPrecheckResult{
 		RiskLevel:          string(assessment.RiskLevel),
 		ApprovalRequired:   assessment.ApprovalRequired,
 		CheckpointRequired: assessment.CheckpointRequired,
@@ -87,7 +87,18 @@ func (p DefaultRiskPrechecker) Precheck(_ context.Context, input RiskPrecheckInp
 		Reason:             assessment.Reason,
 		DenyReason:         assessment.Reason,
 		ImpactScope:        impactScopeMap(assessment.ImpactScope),
-	}, nil
+	}
+	if requiresBrowserEndpointApproval(input.ToolName, input.Input) && !result.Deny {
+		result.ApprovalRequired = true
+		if result.RiskLevel == "" || result.RiskLevel == RiskLevelGreen {
+			result.RiskLevel = RiskLevelYellow
+		}
+		if strings.TrimSpace(result.Reason) == "" || result.Reason == risksvc.ReasonNormal {
+			result.Reason = risksvc.ReasonWebpageApproval
+		}
+		result.DenyReason = result.Reason
+	}
+	return result, nil
 }
 
 // BuildRiskPrecheckInput extracts the minimum governance context from one tool
@@ -315,6 +326,20 @@ func browserAttachKind(input map[string]any) string {
 	}
 	value, _ := attach["browser_kind"].(string)
 	return strings.TrimSpace(value)
+}
+
+func requiresBrowserEndpointApproval(toolName string, input map[string]any) bool {
+	switch strings.TrimSpace(toolName) {
+	case "browser_attach_current", "browser_snapshot", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact":
+		attach, ok := input["attach"].(map[string]any)
+		if !ok {
+			return false
+		}
+		endpointURL, _ := attach["endpoint_url"].(string)
+		return strings.TrimSpace(endpointURL) != ""
+	default:
+		return false
+	}
 }
 
 func browserAttachPageIndexValue(rawValue any) (int, bool) {

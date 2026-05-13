@@ -46,6 +46,7 @@ const (
 // Service owns the minimum executable task pipeline inside local-service.
 type Service struct {
 	fileSystem          platform.FileSystemAdapter
+	toolPlatform        platform.FileSystemAdapter
 	execution           tools.ExecutionCapability
 	playwright          tools.PlaywrightSidecarClient
 	ocr                 tools.OCRWorkerClient
@@ -76,6 +77,17 @@ func (s *Service) WithArtifactStore(store storage.ArtifactStore) *Service {
 		return nil
 	}
 	s.artifactStore = store
+	return s
+}
+
+// WithToolPlatform overrides the filesystem boundary used by direct tool
+// execution without changing the workspace-scoped filesystem used by task
+// inspection, recovery, and artifact bookkeeping.
+func (s *Service) WithToolPlatform(fileSystem platform.FileSystemAdapter) *Service {
+	if s == nil {
+		return nil
+	}
+	s.toolPlatform = fileSystem
 	return s
 }
 
@@ -218,23 +230,24 @@ func NewService(
 	}
 
 	return &Service{
-		fileSystem: fileSystem,
-		execution:  executionBackend,
-		playwright: playwrightClient,
-		ocr:        ocrClient,
-		media:      mediaClient,
-		screen:     screenClient,
-		lifecycle:  tools.NewScreenLifecycleManager(),
-		model:      modelService,
-		loop:       agentloop.NewRuntime(),
-		audit:      auditService,
-		checkpoint: checkpointService,
-		delivery:   deliveryService,
-		tools:      toolRegistry,
-		executor:   toolExecutor,
-		plugin:     pluginService,
-		loopStore:  nil,
-		workspace:  resolveWorkspaceRoot(fileSystem),
+		fileSystem:   fileSystem,
+		toolPlatform: fileSystem,
+		execution:    executionBackend,
+		playwright:   playwrightClient,
+		ocr:          ocrClient,
+		media:        mediaClient,
+		screen:       screenClient,
+		lifecycle:    tools.NewScreenLifecycleManager(),
+		model:        modelService,
+		loop:         agentloop.NewRuntime(),
+		audit:        auditService,
+		checkpoint:   checkpointService,
+		delivery:     deliveryService,
+		tools:        toolRegistry,
+		executor:     toolExecutor,
+		plugin:       pluginService,
+		loopStore:    nil,
+		workspace:    resolveWorkspaceRoot(fileSystem),
 	}
 }
 
@@ -1746,18 +1759,27 @@ func (s *Service) consumeWriteFileCandidates(ctx context.Context, taskID, runID 
 		}
 	}
 
-	if checkpointCandidate, ok := rawOutput["checkpoint_candidate"].(map[string]any); ok && s.checkpoint != nil {
+	if checkpointCandidate, ok := rawOutput["checkpoint_candidate"].(map[string]any); ok && s.checkpoint != nil && s.fileSystem != nil {
 		if _, hasRecoveryPoint := merged["recovery_point"].(map[string]any); !hasRecoveryPoint {
-			createInput, shouldCreate, err := checkpoint.BuildCreateInputFromCandidate(taskID, checkpointCandidate)
-			if err != nil {
-				return nil, nil, fmt.Errorf("build checkpoint input from candidate: %w", err)
-			}
-			if shouldCreate {
-				point, err := s.checkpoint.Create(ctx, createInput)
-				if err != nil {
-					return nil, nil, fmt.Errorf("create recovery point from candidate: %w", err)
+			withinWorkspace := true
+			targetPath, _ := checkpointCandidate["target_path"].(string)
+			if strings.TrimSpace(targetPath) != "" {
+				if _, err := s.fileSystem.EnsureWithinWorkspace(targetPath); err != nil {
+					withinWorkspace = false
 				}
-				merged["recovery_point"] = recoveryPointMap(point)
+			}
+			if withinWorkspace {
+				createInput, shouldCreate, err := checkpoint.BuildCreateInputFromCandidate(taskID, checkpointCandidate)
+				if err != nil {
+					return nil, nil, fmt.Errorf("build checkpoint input from candidate: %w", err)
+				}
+				if shouldCreate {
+					point, err := s.checkpoint.Create(ctx, createInput)
+					if err != nil {
+						return nil, nil, fmt.Errorf("create recovery point from candidate: %w", err)
+					}
+					merged["recovery_point"] = recoveryPointMap(point)
+				}
 			}
 		}
 	}
@@ -1807,6 +1829,9 @@ func (s *Service) prepareWriteFileRecoveryPoint(ctx context.Context, request Req
 	}
 	targetPath := stringValue(toolInput, "path", "")
 	if targetPath == "" {
+		return nil, nil
+	}
+	if _, err := s.fileSystem.EnsureWithinWorkspace(targetPath); err != nil {
 		return nil, nil
 	}
 	if _, err := s.fileSystem.Stat(targetPath); err != nil {
@@ -2083,22 +2108,20 @@ func (s *Service) fileSectionForLanguage(filePath, replyLanguage string) string 
 		}
 		return "文件: <empty>"
 	}
-	if s.fileSystem == nil {
+	fileSystem := firstNonNilFileSystem(s.toolPlatform, s.fileSystem)
+	if fileSystem == nil {
 		if replyLanguage == languagepolicy.ReplyLanguageEnglish {
 			return fmt.Sprintf("File: %s", trimmedPath)
 		}
 		return fmt.Sprintf("文件: %s", trimmedPath)
 	}
 
-	workspacePath := workspaceFSPath(trimmedPath)
-	if workspacePath == "" {
-		if replyLanguage == languagepolicy.ReplyLanguageEnglish {
-			return fmt.Sprintf("File: %s", trimmedPath)
-		}
-		return fmt.Sprintf("文件: %s", trimmedPath)
+	readPath := workspaceFSPath(trimmedPath)
+	if readPath == "" {
+		readPath = trimmedPath
 	}
 
-	content, err := s.fileSystem.ReadFile(workspacePath)
+	content, err := fileSystem.ReadFile(readPath)
 	if err != nil {
 		if replyLanguage == languagepolicy.ReplyLanguageEnglish {
 			return fmt.Sprintf("File: %s\nRead failed: %v", trimmedPath, err)
@@ -2108,6 +2131,9 @@ func (s *Service) fileSectionForLanguage(filePath, replyLanguage string) string 
 
 	decoded, err := textdecode.Decode(content)
 	if err != nil {
+		if errors.Is(err, textdecode.ErrUnsupportedEncoding) {
+			return unsupportedFileSection(trimmedPath, replyLanguage)
+		}
 		if replyLanguage == languagepolicy.ReplyLanguageEnglish {
 			return fmt.Sprintf("File: %s\nFile encoding could not be safely detected. Convert it to UTF-8, UTF-16 BOM, or GB18030 and try again.", trimmedPath)
 		}
@@ -2118,6 +2144,13 @@ func (s *Service) fileSectionForLanguage(filePath, replyLanguage string) string 
 		return fmt.Sprintf("File %s contents:\n%s", trimmedPath, truncateText(decoded.Text, 1600))
 	}
 	return fmt.Sprintf("文件 %s 内容:\n%s", trimmedPath, truncateText(decoded.Text, 1600))
+}
+
+func unsupportedFileSection(filePath, replyLanguage string) string {
+	if replyLanguage == languagepolicy.ReplyLanguageEnglish {
+		return fmt.Sprintf("File: %s\nThis attachment is not safe to read as plain text. If it is a PDF, image, scan, or document-style file, use extract_text instead.", filePath)
+	}
+	return fmt.Sprintf("文件: %s\n该附件不适合按纯文本直接读取；如果它是 PDF、图片、扫描件或其他文档型文件，请改用 extract_text。", filePath)
 }
 
 func (s *Service) generateOutput(ctx context.Context, request Request, inputText string) (generationTrace, error) {
@@ -2399,7 +2432,7 @@ func budgetToolCategory(toolName string) string {
 		return "command"
 	case "write_file":
 		return "filesystem_mutation"
-	case "page_interact":
+	case "page_interact", "browser_navigate", "browser_tab_focus", "browser_interact":
 		return "browser_mutation"
 	case "transcode_media", "normalize_recording", "extract_frames":
 		return "media_heavy"
@@ -2883,10 +2916,11 @@ func (s *Service) executeAgentLoopTool(ctx context.Context, request Request, cal
 	}
 	toolResult, _, err := s.executeTool(ctx, request, s.workspace, toolName, toolInput)
 	if err != nil {
+		observation := agentLoopToolFailureObservation(toolName, err, toolResult)
 		if toolResult != nil {
-			return fmt.Sprintf("Tool %s failed with error: %v", toolName, err), toolResult.ToolCall
+			return observation, toolResult.ToolCall
 		}
-		return fmt.Sprintf("Tool %s failed with error: %v", toolName, err), tools.ToolCallRecord{}
+		return observation, tools.ToolCallRecord{}
 	}
 
 	summary := map[string]any{}
@@ -2898,6 +2932,21 @@ func (s *Service) executeAgentLoopTool(ctx context.Context, request Request, cal
 		return fmt.Sprintf("Tool %s succeeded, but its summary could not be serialized.", toolName), annotateLoopRound(toolResult.ToolCall, loopRound)
 	}
 	return fmt.Sprintf("Tool %s succeeded. Summary: %s", toolName, string(summaryJSON)), annotateLoopRound(toolResult.ToolCall, loopRound)
+}
+
+func agentLoopToolFailureObservation(toolName string, err error, toolResult *tools.ToolExecutionResult) string {
+	base := fmt.Sprintf("Tool %s failed with error: %v", toolName, err)
+	if !errors.Is(err, textdecode.ErrUnsupportedEncoding) || strings.TrimSpace(toolName) != "read_file" {
+		return base
+	}
+	mimeType := ""
+	if toolResult != nil {
+		mimeType = stringValue(toolResult.SummaryOutput, "mime_type", "")
+	}
+	if strings.TrimSpace(mimeType) != "" {
+		return fmt.Sprintf("%s Hint: Detected %s. Use extract_text for PDFs, images, scans, and other document-style attachments instead of read_file.", base, mimeType)
+	}
+	return base + " Hint: Use extract_text for PDFs, images, scans, and other document-style attachments instead of read_file."
 }
 
 func (s *Service) persistAgentLoopRuntime(request Request, result agentloop.Result) {
@@ -3256,7 +3305,7 @@ func (s *Service) toolExecutionContext(workspacePath string, request Request) *t
 		ApprovedOperation:    approvedOperation,
 		ApprovedTargetObject: approvedTargetObject,
 		ApprovedToolInput:    cloneMap(request.ApprovedToolInput),
-		Platform:             s.fileSystem,
+		Platform:             firstNonNilFileSystem(s.toolPlatform, s.fileSystem),
 		Execution:            s.execution,
 		Playwright:           s.playwright,
 		OCR:                  s.ocr,
@@ -3265,14 +3314,27 @@ func (s *Service) toolExecutionContext(workspacePath string, request Request) *t
 	}
 }
 
+func firstNonNilFileSystem(primary, fallback platform.FileSystemAdapter) platform.FileSystemAdapter {
+	if primary != nil {
+		return primary
+	}
+	return fallback
+}
+
 func (s *Service) prepareGovernanceRecoveryPoint(ctx context.Context, request Request, workspacePath, toolName string, input map[string]any) (map[string]any, error) {
 	if s.checkpoint == nil {
 		return nil, nil
 	}
 	switch toolName {
 	case "write_file":
+		if s.fileSystem == nil {
+			return nil, nil
+		}
 		targetPath := stringValue(input, "path", "")
 		if targetPath == "" {
+			return nil, nil
+		}
+		if _, err := s.fileSystem.EnsureWithinWorkspace(targetPath); err != nil {
 			return nil, nil
 		}
 		point, err := s.checkpoint.CreateWithSnapshots(ctx, s.fileSystem, checkpoint.CreateInput{

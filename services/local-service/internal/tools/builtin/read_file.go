@@ -24,7 +24,7 @@ const readFileDefaultTextType = "text/plain"
 // ReadFileTool: workspace file reader
 // ---------------------------------------------------------------------------
 
-// ReadFileTool reads file content from the current workspace.
+// ReadFileTool reads file content from the current governed local path policy.
 //
 // It demonstrates the tools.Tool contract:
 //   - Metadata returns static tool metadata.
@@ -43,7 +43,7 @@ func NewReadFileTool() *ReadFileTool {
 		meta: tools.ToolMetadata{
 			Name:            "read_file",
 			DisplayName:     "读取文件",
-			Description:     "读取工作区内指定路径的文件内容",
+			Description:     "读取受控本地路径范围内指定文件的内容",
 			Source:          tools.ToolSourceBuiltin,
 			RiskHint:        "green",
 			TimeoutSec:      10,
@@ -69,7 +69,7 @@ func (t *ReadFileTool) Validate(input map[string]any) error {
 
 // Execute reads the target file through the injected platform adapter.
 //
-// The workspace boundary is validated before reading. Text bytes are decoded at
+// The configured local path boundary is validated before reading. Text bytes are decoded at
 // this boundary so unsafe encodings cannot leak replacement characters into
 // tool_call, event, delivery_result, or bubble previews.
 func (t *ReadFileTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteContext, input map[string]any) (*tools.ToolResult, error) {

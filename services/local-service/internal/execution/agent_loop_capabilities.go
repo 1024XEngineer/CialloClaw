@@ -15,17 +15,19 @@ import (
 var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 	{
 		Name:      "read_file",
-		UseWhen:   "需要读取工作区内某个已知文件的精确内容",
-		AvoidWhen: "用户只需要目录概览，或还不知道具体文件路径",
+		UseWhen:   "需要读取本地某个已知文件的精确内容",
+		AvoidWhen: "用户只需要目录概览、还不知道具体文件路径，或目标是 PDF/图片/其他文档型文件",
 		Constraints: []string{
-			"仅限工作区文件",
+			"支持工作区相对路径或受控本地绝对路径",
+			"支持 `~/Desktop`、`~/Documents`、`~/Downloads` 等已知文件夹别名",
+			"不适用于 PDF、图片、扫描件或其他文档型/二进制内容；这类输入优先用 extract_text",
 			"不会推断缺失路径",
 			"路径不确定时先用 list_dir",
 		},
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"path": map[string]any{"type": "string", "description": "Workspace-relative path to a file."},
+				"path": map[string]any{"type": "string", "description": "Workspace-relative or absolute local path to a file within the allowed tool boundary."},
 			},
 			"required":             []string{"path"},
 			"additionalProperties": false,
@@ -33,17 +35,18 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 	},
 	{
 		Name:      "list_dir",
-		UseWhen:   "需要查看某个已知工作区目录下有哪些文件或子目录",
+		UseWhen:   "需要查看某个已知本地目录下有哪些文件或子目录",
 		AvoidWhen: "用户已经给出明确文件路径，并且真正需要的是文件内容而不是目录列表",
 		Constraints: []string{
-			"仅限工作区目录",
+			"支持工作区相对路径或受控本地绝对路径",
+			"支持 `~/Desktop`、`~/Documents`、`~/Downloads` 等已知文件夹别名",
 			"返回受限数量的目录项",
 			"定位到目标文件后再用 read_file",
 		},
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"path":  map[string]any{"type": "string", "description": "Workspace-relative path to a directory."},
+				"path":  map[string]any{"type": "string", "description": "Workspace-relative or absolute local path to a directory within the allowed tool boundary."},
 				"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 50},
 			},
 			"required":             []string{"path"},
@@ -55,14 +58,15 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 		UseWhen:   "Need readable text from a document, PDF, image, or another file that is not safe to consume through read_file directly.",
 		AvoidWhen: "The target is already a small plain-text file and read_file can return the exact content safely.",
 		Constraints: []string{
-			"Workspace files only",
+			"Supports workspace-relative paths and allowed absolute local paths",
+			"Supports `~/Desktop`, `~/Documents`, and `~/Downloads` known-folder aliases",
 			"Returns extracted text instead of raw binary bytes",
 			"Prefer read_file for exact plain-text content and fall back to extract_text for document-style inputs",
 		},
 		InputSchema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"path": map[string]any{"type": "string", "description": "Workspace-relative path to a document, image, or PDF."},
+				"path": map[string]any{"type": "string", "description": "Workspace-relative or absolute local path to a document, image, or PDF within the allowed tool boundary."},
 			},
 			"required":             []string{"path"},
 			"additionalProperties": false,
@@ -93,6 +97,23 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 			"仅适用于当前真实浏览器标签页",
 			"执行层会自动注入附着线索",
 			"不会主动导航页面",
+		},
+		InputSchema: map[string]any{
+			"type":                 "object",
+			"properties":           map[string]any{},
+			"additionalProperties": false,
+		},
+	},
+	{
+		Name:                      "browser_tabs_list",
+		RequiresCurrentBrowser:    true,
+		AllowSparseBrowserContext: true,
+		UseWhen:                   "需要先看当前真实浏览器有哪些标签页，再决定后续聚焦或导航目标",
+		AvoidWhen:                 "任务并不依赖用户真实浏览器，或已经知道精确目标标签页",
+		Constraints: []string{
+			"只读取当前本地浏览器会话的标签页摘要",
+			"执行层会自动注入附着线索",
+			"显式 endpoint override 仍可能触发审批",
 		},
 		InputSchema: map[string]any{
 			"type":                 "object",
@@ -141,6 +162,49 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 		},
 	},
 	{
+		Name:                   "browser_navigate",
+		RequiresCurrentBrowser: true,
+		UseWhen:                "需要让当前真实浏览器标签页跳转到一个明确的公开网页",
+		AvoidWhen:              "只需要离线读取网页，或目标是 localhost / 内网等敏感地址",
+		Constraints: []string{
+			"只导航当前附着浏览器标签页",
+			"公开 http(s) URL 默认可直接执行",
+			"localhost、内网地址或显式 endpoint override 仍可能触发审批",
+		},
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"url": map[string]any{"type": "string", "description": "Public absolute URL to open in the currently attached browser tab."},
+			},
+			"required":             []string{"url"},
+			"additionalProperties": false,
+		},
+	},
+	{
+		Name:                      "browser_tab_focus",
+		RequiresCurrentBrowser:    true,
+		AllowSparseBrowserContext: true,
+		UseWhen:                   "已经知道目标标签页索引或 URL，需要切换到那个真实浏览器标签页",
+		AvoidWhen:                 "还不知道目标标签页，应该先用 browser_tabs_list",
+		Constraints: []string{
+			"需要 page_index 或 target_url 这类稳定目标",
+			"只切换当前本地浏览器会话中的标签页",
+			"显式 endpoint override 仍可能触发审批",
+		},
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"page_index": map[string]any{"type": "integer", "minimum": 0, "description": "Zero-based tab index returned by browser_tabs_list."},
+				"target_url": map[string]any{"type": "string", "description": "Exact URL of the target browser tab when page_index is unavailable."},
+			},
+			"anyOf": []map[string]any{
+				{"required": []string{"page_index"}},
+				{"required": []string{"target_url"}},
+			},
+			"additionalProperties": false,
+		},
+	},
+	{
 		Name:      "web_search",
 		UseWhen:   "Need to search the web for sources before reading specific pages.",
 		AvoidWhen: "You already have the exact page URL and only need to read or search within that page.",
@@ -162,12 +226,13 @@ var agentLoopCapabilityCatalog = []agentLoopCapabilitySpec{
 }
 
 type agentLoopCapabilitySpec struct {
-	Name                   string
-	RequiresCurrentBrowser bool
-	UseWhen                string
-	AvoidWhen              string
-	Constraints            []string
-	InputSchema            map[string]any
+	Name                      string
+	RequiresCurrentBrowser    bool
+	AllowSparseBrowserContext bool
+	UseWhen                   string
+	AvoidWhen                 string
+	Constraints               []string
+	InputSchema               map[string]any
 }
 
 // agentLoopToolDefinitions resolves the runtime-visible planner tools from the
@@ -285,6 +350,9 @@ func (c agentLoopCapabilitySpec) allowedForSnapshot(snapshot taskcontext.TaskCon
 	browserKind := strings.ToLower(strings.TrimSpace(snapshot.BrowserKind))
 	if browserKind != "chrome" && browserKind != "edge" {
 		return false
+	}
+	if c.AllowSparseBrowserContext {
+		return true
 	}
 	if strings.TrimSpace(snapshot.PageURL) != "" {
 		return true

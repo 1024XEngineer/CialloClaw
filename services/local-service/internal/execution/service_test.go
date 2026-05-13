@@ -1331,7 +1331,7 @@ func TestExecuteBudgetDowngradeRetainsReadOnlyWebToolsInPlannerCatalog(t *testin
 	if !strings.Contains(modelClient.plannerInputs[0], "默认按低风险只读处理") {
 		t.Fatalf("expected planner input to describe low-risk read-only web tools, got %q", modelClient.plannerInputs[0])
 	}
-	if strings.Contains(modelClient.plannerInputs[0], "page_interact") || strings.Contains(modelClient.plannerInputs[0], "browser_interact") || strings.Contains(modelClient.plannerInputs[0], "browser_navigate") {
+	if strings.Contains(modelClient.plannerInputs[0], "page_interact") || strings.Contains(modelClient.plannerInputs[0], "browser_interact") || strings.Contains(modelClient.plannerInputs[0], "browser_navigate") || strings.Contains(modelClient.plannerInputs[0], "browser_tab_focus") {
 		t.Fatalf("expected planner input to stay bounded to read-only web and browser capabilities, got %q", modelClient.plannerInputs[0])
 	}
 	if result.ModelInvocation["provider"] == "budget_downgrade_fallback" {
@@ -3474,6 +3474,37 @@ func TestAssessGovernanceRequiresAuthorizationForRestoreWrite(t *testing.T) {
 	}
 }
 
+func TestAssessGovernanceWriteFileAllowsAbsolutePathOutsideWorkspaceWithinToolPolicy(t *testing.T) {
+	service, workspaceRoot := newTestExecutionService(t, "unused")
+	toolPolicy, err := platform.NewLocalToolPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalToolPathPolicy returned error: %v", err)
+	}
+	service.WithToolPlatform(platform.NewLocalFileSystemAdapter(toolPolicy))
+
+	externalPath := filepath.Join(t.TempDir(), "notes", "result.md")
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID:       "task_write_outside_workspace",
+		RunID:        "run_write_outside_workspace",
+		Intent:       map[string]any{"name": "write_file", "arguments": map[string]any{"target_path": externalPath}},
+		DeliveryType: "workspace_document",
+		ResultTitle:  "外部文件写入",
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected write_file outside-workspace governance path to be handled")
+	}
+	if assessment.Deny || assessment.ApprovalRequired || assessment.RiskLevel != string(risk.RiskLevelGreen) {
+		t.Fatalf("expected write_file outside workspace within tool policy to stay low risk, got %+v", assessment)
+	}
+	files, _ := assessment.ImpactScope["files"].([]string)
+	if len(files) != 1 || files[0] != externalPath {
+		t.Fatalf("expected impact scope files to include %q, got %+v", externalPath, assessment.ImpactScope)
+	}
+}
+
 func TestAssessGovernanceExecCommandUsesWorkspaceTargetWithoutRecoveryPoint(t *testing.T) {
 	service, workspaceRoot := newTestExecutionService(t, "unused")
 
@@ -3872,8 +3903,192 @@ func TestAssessGovernanceBrowserNavigateUsesDestinationURL(t *testing.T) {
 	if assessment.OperationName != "browser_navigate" || assessment.TargetObject != "https://example.com/docs/start" {
 		t.Fatalf("unexpected browser_navigate assessment: %+v", assessment)
 	}
+	if assessment.ApprovalRequired || assessment.RiskLevel != string(risk.RiskLevelGreen) {
+		t.Fatalf("expected browser_navigate public target to stay low risk, got %+v", assessment)
+	}
+}
+
+func TestAssessGovernanceBrowserNavigateRequiresApprovalForLoopbackTarget(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_browser_navigate_loopback",
+		RunID:  "run_browser_navigate_loopback",
+		Intent: map[string]any{"name": "browser_navigate", "arguments": map[string]any{"url": "http://127.0.0.1:8080/admin"}},
+		Snapshot: taskcontext.TaskContextSnapshot{
+			BrowserKind: "edge",
+			PageURL:     "https://example.com/docs",
+			PageTitle:   "Example Docs",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected browser_navigate loopback governance path to be handled")
+	}
 	if !assessment.ApprovalRequired || assessment.RiskLevel != string(risk.RiskLevelYellow) {
-		t.Fatalf("expected browser_navigate to require approval, got %+v", assessment)
+		t.Fatalf("expected loopback browser_navigate to require approval, got %+v", assessment)
+	}
+}
+
+func TestAssessGovernanceBrowserTabsListStaysLowRisk(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_browser_tabs_list_default",
+		RunID:  "run_browser_tabs_list_default",
+		Intent: map[string]any{"name": "browser_tabs_list", "arguments": map[string]any{}},
+		Snapshot: taskcontext.TaskContextSnapshot{
+			BrowserKind: "chrome",
+			PageURL:     "https://example.com/docs",
+			PageTitle:   "Example Docs",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected browser_tabs_list governance path to be handled")
+	}
+	if assessment.ApprovalRequired || assessment.RiskLevel != string(risk.RiskLevelGreen) {
+		t.Fatalf("expected browser_tabs_list to stay low risk, got %+v", assessment)
+	}
+}
+
+func TestAssessGovernanceBrowserTabFocusStaysLowRisk(t *testing.T) {
+	service, _ := newTestExecutionServiceWithPlaywright(t, "unused", sidecarclient.NewNoopPlaywrightSidecarClient())
+	assessment, handled, err := service.AssessGovernance(context.Background(), Request{
+		TaskID: "task_browser_tab_focus_default",
+		RunID:  "run_browser_tab_focus_default",
+		Intent: map[string]any{"name": "browser_tab_focus", "arguments": map[string]any{"page_index": 2}},
+		Snapshot: taskcontext.TaskContextSnapshot{
+			BrowserKind: "chrome",
+			PageURL:     "https://example.com/docs",
+			PageTitle:   "Example Docs",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AssessGovernance returned error: %v", err)
+	}
+	if !handled {
+		t.Fatal("expected browser_tab_focus governance path to be handled")
+	}
+	if assessment.TargetObject != "browser_tab:2" {
+		t.Fatalf("expected browser_tab_focus target object browser_tab:2, got %+v", assessment)
+	}
+	if assessment.ApprovalRequired || assessment.RiskLevel != string(risk.RiskLevelGreen) {
+		t.Fatalf("expected browser_tab_focus to stay low risk, got %+v", assessment)
+	}
+}
+
+func TestExecuteDirectReadFileAllowsAbsolutePathOutsideWorkspace(t *testing.T) {
+	service, workspaceRoot := newTestExecutionService(t, "unused")
+	toolPolicy, err := platform.NewLocalToolPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalToolPathPolicy returned error: %v", err)
+	}
+	service.WithToolPlatform(platform.NewLocalFileSystemAdapter(toolPolicy))
+
+	externalPath := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(externalPath, []byte("outside content"), 0o644); err != nil {
+		t.Fatalf("write external file: %v", err)
+	}
+
+	result, err := service.Execute(context.Background(), Request{
+		TaskID:       "task_read_outside_workspace",
+		RunID:        "run_read_outside_workspace",
+		Intent:       map[string]any{"name": "read_file", "arguments": map[string]any{"path": externalPath}},
+		DeliveryType: "bubble",
+		ResultTitle:  "外部文件读取结果",
+	})
+	if err != nil {
+		t.Fatalf("Execute returned error: %v", err)
+	}
+	if result.ToolName != "read_file" {
+		t.Fatalf("expected read_file tool, got %+v", result)
+	}
+	if pathValue, _ := result.ToolOutput["path"].(string); pathValue != externalPath {
+		t.Fatalf("expected tool output path %q, got %+v", externalPath, result.ToolOutput)
+	}
+	if contentValue, _ := result.ToolOutput["content"].(string); contentValue != "outside content" {
+		t.Fatalf("expected tool output content to include external file bytes, got %+v", result.ToolOutput)
+	}
+}
+
+func TestExecuteToolWriteFileAllowsAbsolutePathOutsideWorkspaceWithoutRecoveryPoint(t *testing.T) {
+	service, workspaceRoot := newTestExecutionService(t, "unused")
+	toolPolicy, err := platform.NewLocalToolPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalToolPathPolicy returned error: %v", err)
+	}
+	service.WithToolPlatform(platform.NewLocalFileSystemAdapter(toolPolicy))
+
+	externalPath := filepath.Join(t.TempDir(), "written.txt")
+	toolResult, recoveryPoint, err := service.executeTool(context.Background(), Request{TaskID: "task_write_outside_workspace", RunID: "run_write_outside_workspace"}, workspaceRoot, "write_file", map[string]any{"path": externalPath, "content": "hello"})
+	if err != nil {
+		t.Fatalf("executeTool returned error: %v", err)
+	}
+	if len(recoveryPoint) != 0 {
+		t.Fatalf("expected write outside workspace not to create a recovery point, got %+v", recoveryPoint)
+	}
+	if toolResult == nil {
+		t.Fatal("expected write_file tool result")
+	}
+	if pathValue, _ := toolResult.RawOutput["path"].(string); pathValue != externalPath {
+		t.Fatalf("expected write_file raw output path %q, got %+v", externalPath, toolResult.RawOutput)
+	}
+	content, err := os.ReadFile(externalPath)
+	if err != nil {
+		t.Fatalf("read external file: %v", err)
+	}
+	if string(content) != "hello" {
+		t.Fatalf("expected external file content to be written, got %q", string(content))
+	}
+}
+
+func TestExecuteAgentLoopToolReadFileUnsupportedEncodingSuggestsExtractText(t *testing.T) {
+	service, workspaceRoot := newTestExecutionService(t, "unused")
+	toolPolicy, err := platform.NewLocalToolPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalToolPathPolicy returned error: %v", err)
+	}
+	service.WithToolPlatform(platform.NewLocalFileSystemAdapter(toolPolicy))
+
+	binaryPath := filepath.Join(t.TempDir(), "attachment.pdf")
+	if err := os.WriteFile(binaryPath, []byte{0x25, 0x50, 0x44, 0x46, 0x00, 0x01}, 0o644); err != nil {
+		t.Fatalf("write binary attachment: %v", err)
+	}
+
+	observation, _ := service.executeAgentLoopTool(context.Background(), Request{TaskID: "task_loop_pdf", RunID: "run_loop_pdf", Snapshot: taskcontext.TaskContextSnapshot{}}, model.ToolInvocation{Name: "read_file", Arguments: map[string]any{"path": binaryPath}}, 1)
+	if !strings.Contains(observation, "extract_text") {
+		t.Fatalf("expected agent-loop read_file failure observation to suggest extract_text, got %q", observation)
+	}
+	if !strings.Contains(observation, "Detected application/") {
+		t.Fatalf("expected agent-loop read_file failure observation to expose detected mime type, got %q", observation)
+	}
+}
+
+func TestExecuteAgentLoopToolListDirObservationIncludesEntriesPreview(t *testing.T) {
+	service, workspaceRoot := newTestExecutionService(t, "unused")
+	toolPolicy, err := platform.NewLocalToolPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalToolPathPolicy returned error: %v", err)
+	}
+	service.WithToolPlatform(platform.NewLocalFileSystemAdapter(toolPolicy))
+
+	desktopDir := filepath.Join(t.TempDir(), "Desktop")
+	if err := os.MkdirAll(filepath.Join(desktopDir, "Drafts"), 0o755); err != nil {
+		t.Fatalf("create desktop subdirectory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(desktopDir, "todo.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatalf("write desktop file: %v", err)
+	}
+
+	observation, _ := service.executeAgentLoopTool(context.Background(), Request{TaskID: "task_loop_dir", RunID: "run_loop_dir", Snapshot: taskcontext.TaskContextSnapshot{}}, model.ToolInvocation{Name: "list_dir", Arguments: map[string]any{"path": desktopDir}}, 1)
+	if !strings.Contains(observation, "entries_preview") {
+		t.Fatalf("expected list_dir observation to include entries_preview, got %q", observation)
+	}
+	if !strings.Contains(observation, "todo.txt") || !strings.Contains(observation, "Drafts/") {
+		t.Fatalf("expected list_dir observation to expose representative entry names, got %q", observation)
 	}
 }
 
@@ -4067,11 +4282,38 @@ func TestBuildExecutionInputAndFileSectionCoverFileBranches(t *testing.T) {
 		t.Fatalf("expected english missing file section, got %s", englishMissingSection)
 	}
 	service.fileSystem = nil
+	service.toolPlatform = nil
 	if section := service.fileSection("notes/demo.txt"); section != "文件: notes/demo.txt" {
 		t.Fatalf("expected no-filesystem branch, got %s", section)
 	}
 	if section := service.fileSectionForLanguage("notes/demo.txt", languagepolicy.ReplyLanguageEnglish); section != "File: notes/demo.txt" {
 		t.Fatalf("expected english no-filesystem branch, got %s", section)
+	}
+	service, workspaceRoot = newTestExecutionService(t, "unused")
+	toolPolicy, err := platform.NewLocalToolPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("NewLocalToolPathPolicy returned error: %v", err)
+	}
+	service.WithToolPlatform(platform.NewLocalFileSystemAdapter(toolPolicy))
+	externalPath := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(externalPath, []byte("external file content"), 0o644); err != nil {
+		t.Fatalf("write external file: %v", err)
+	}
+	externalSection := service.fileSection(externalPath)
+	if !strings.Contains(externalSection, "external file content") {
+		t.Fatalf("expected tool platform file section to read external content, got %s", externalSection)
+	}
+	binaryPath := filepath.Join(t.TempDir(), "attachment.pdf")
+	if err := os.WriteFile(binaryPath, []byte{0x25, 0x50, 0x44, 0x46, 0x00, 0x01}, 0o644); err != nil {
+		t.Fatalf("write binary attachment: %v", err)
+	}
+	binarySection := service.fileSection(binaryPath)
+	if !strings.Contains(binarySection, "extract_text") {
+		t.Fatalf("expected unsupported attachment section to recommend extract_text, got %s", binarySection)
+	}
+	englishBinarySection := service.fileSectionForLanguage(binaryPath, languagepolicy.ReplyLanguageEnglish)
+	if !strings.Contains(englishBinarySection, "use extract_text") {
+		t.Fatalf("expected english unsupported attachment section to recommend extract_text, got %s", englishBinarySection)
 	}
 	service, _ = newTestExecutionService(t, "unused")
 	inputText := service.buildExecutionInput(taskcontext.TaskContextSnapshot{
@@ -4554,7 +4796,7 @@ func TestExecutionHelperBranchesAndConfigurationAccessors(t *testing.T) {
 	if !budgetDowngradeBlocksAgentLoopTools(request) || !budgetDowngradeDisallowsDirectTool(request, "exec_command") || budgetDowngradeDisallowsDirectTool(request, "read_file") {
 		t.Fatal("expected budget downgrade helpers to classify expensive tools")
 	}
-	if budgetPlannerRetryBudget(request, 4) != 2 || len(budgetExpensiveToolCategories(request)) != 2 || budgetToolCategory("write_file") != "filesystem_mutation" || budgetToolCategory("page_interact") != "browser_mutation" || budgetToolCategory("normalize_recording") != "media_heavy" {
+	if budgetPlannerRetryBudget(request, 4) != 2 || len(budgetExpensiveToolCategories(request)) != 2 || budgetToolCategory("write_file") != "filesystem_mutation" || budgetToolCategory("page_interact") != "browser_mutation" || budgetToolCategory("browser_navigate") != "browser_mutation" || budgetToolCategory("normalize_recording") != "media_heavy" {
 		t.Fatal("expected budget helper branches to expose configured categories and overrides")
 	}
 	trace, ok := budgetDowngradeGenerationFallback(request, "input text", errors.New("provider unavailable"))

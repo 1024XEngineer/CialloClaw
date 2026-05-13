@@ -40,6 +40,63 @@ func TestEnsureWithinWorkspace(t *testing.T) {
 	}
 }
 
+func TestLocalToolPathPolicyAllowsAbsolutePathsOutsideWorkspace(t *testing.T) {
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	policy, err := NewLocalToolPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("create tool path policy: %v", err)
+	}
+
+	workspaceRelativePath, err := policy.EnsureWithinWorkspace(filepath.Join("notes", "demo.md"))
+	if err != nil {
+		t.Fatalf("expected workspace-relative path to pass tool policy: %v", err)
+	}
+	if workspaceRelativePath != filepath.Join(workspaceRoot, "notes", "demo.md") {
+		t.Fatalf("unexpected workspace-relative path resolution: %s", workspaceRelativePath)
+	}
+
+	externalDir := t.TempDir()
+	externalPath := filepath.Join(externalDir, "outside.md")
+	if _, err := policy.EnsureWithinWorkspace(externalPath); err != nil {
+		t.Fatalf("expected non-protected absolute path to pass tool policy: %v", err)
+	}
+}
+
+func TestLocalToolPathPolicyResolvesKnownFolderAliases(t *testing.T) {
+	originalLoader := loadKnownFoldersForToolPolicy
+	defer func() { loadKnownFoldersForToolPolicy = originalLoader }()
+	desktopRoot := filepath.Join(t.TempDir(), "DesktopRedirect")
+	downloadsRoot := filepath.Join(t.TempDir(), "DownloadsRedirect")
+	loadKnownFoldersForToolPolicy = func() map[string]string {
+		return map[string]string{
+			knownFolderDesktop:   desktopRoot,
+			knownFolderDownloads: downloadsRoot,
+		}
+	}
+
+	workspaceRoot := filepath.Join(t.TempDir(), "workspace")
+	policy, err := NewLocalToolPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("create tool path policy: %v", err)
+	}
+
+	desktopPath, err := policy.EnsureWithinWorkspace("~/Desktop/report.md")
+	if err != nil {
+		t.Fatalf("expected Desktop alias to pass tool policy: %v", err)
+	}
+	if want := filepath.Join(desktopRoot, "report.md"); desktopPath != want {
+		t.Fatalf("unexpected Desktop alias resolution: got %q want %q", desktopPath, want)
+	}
+
+	downloadsPath, err := policy.EnsureWithinWorkspace(`~\Downloads\archive.zip`)
+	if err != nil {
+		t.Fatalf("expected Downloads alias to pass tool policy: %v", err)
+	}
+	if want := filepath.Join(downloadsRoot, "archive.zip"); downloadsPath != want {
+		t.Fatalf("unexpected Downloads alias resolution: got %q want %q", downloadsPath, want)
+	}
+}
+
 func TestLocalFileSystemAdapterImplementsIOFS(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	policy, err := NewLocalPathPolicy(workspaceRoot)
