@@ -706,7 +706,9 @@ func (s *Service) resumeHumanLoopTask(task runengine.TaskRecord, reviewDecision 
 		if correctedIntent := mapValue(escalation, "corrected_intent"); len(correctedIntent) > 0 {
 			intentValue = correctedIntent
 		}
-		updatedTitle := s.intent.Suggest(snapshotFromTask(task), intentValue, false).TaskTitle
+		snapshot := snapshotFromTask(task)
+		fallbackTitle := s.intent.Suggest(snapshot, intentValue, false).TaskTitle
+		updatedTitle := s.fallbackTaskTitle(snapshot, intentValue, fallbackTitle)
 		replanBubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleReviewReplan, nil), task.UpdatedAt.Format(dateTimeLayout))
 		replannedTask, ok := s.runEngine.ReopenIntentConfirmation(task.TaskID, updatedTitle, intentValue, replanBubble)
 		if !ok {
@@ -715,6 +717,7 @@ func (s *Service) resumeHumanLoopTask(task runengine.TaskRecord, reviewDecision 
 		return replannedTask, replanBubble, nil, true, nil
 	}
 	resultBubble := s.delivery.BuildBubbleMessage(task.TaskID, "status", presentation.Text(presentation.MessageBubbleReviewContinue, nil), task.UpdatedAt.Format(dateTimeLayout))
+	s.refreshTitleAfterGovernance(task, snapshotFromTask(task), task.Intent)
 	updatedTask, bubble, deliveryResult, _, err := s.executeTask(task, snapshotFromTask(task), task.Intent)
 	if err != nil {
 		return runengine.TaskRecord{}, nil, nil, false, err

@@ -2,131 +2,104 @@
 
 [![code coverage](https://codecov.io/gh/1024XEngineer/CialloClaw/graph/badge.svg?branch=main)](https://codecov.io/gh/1024XEngineer/CialloClaw/tree/main)
 
-CialloClaw 是一个面向 Windows 优先落地的桌面协作 Agent 工程仓库，当前实现、目录边界与协作约束以根目录 `AGENTS.md` 和 `/docs` 下的最新英文文档主集为准。当前主集对应架构总览 v15、开发统一规范 v19、协议设计 v5、数据设计 v6、模块设计 v6、分工优先级 v14 与原子功能表。
+CialloClaw 是一个运行在本地电脑上的桌面 AI 助手。
+它会接住你正在处理的内容，帮你整理任务、给出结果，并把过程放到桌面工作台里继续跟进。
 
-## 技术基线
+## 先看效果
+
+- 项目网站：https://1024xengineer.github.io/CialloClaw/
+- 最新版本下载：https://github.com/1024XEngineer/CialloClaw/releases/latest
+
+如果你只是想先看看这个项目适不适合自己，建议先打开项目网站。
+
+## 它现在能做什么
+
+- 接住一句话输入、语音输入、选中文本和拖入文件
+- 帮你解释内容、整理重点、分析问题、生成草稿
+- 在执行关键操作前先向你确认
+- 把任务、结果和记录放到桌面工作台里统一查看
+
+## 技术栈
 
 - 桌面宿主：Tauri 2
-- 前端：React 18 + TypeScript + Vite + Tailwind CSS
-- 前端状态：Zustand + TanStack Query + zod
-- 本地 Harness 服务：Go
-- 前后端边界：JSON-RPC 2.0 + 本地受控 IPC
-- 存储：SQLite + WAL，本地 RAG 使用 FTS5 + sqlite-vec
+- 桌面前端：React 18、TypeScript、Vite
+- UI 与状态：Tailwind CSS、styled-components、Zustand、TanStack Query、zod
+- 本地服务：Go 本地 `local-service`
+- 协议边界：JSON-RPC 2.0
+- 本地存储：SQLite + WAL
 - Worker：Node.js sidecar，承载 Playwright、OCR、媒体处理能力
+
+## 适合谁
+
+- 想在本地电脑上使用桌面 AI 助手的人
+- 想把“提问、执行、跟进结果”放在同一个桌面流程里的人
+- 想参与 CialloClaw 开发或测试的协作者
+
+## 快速开始
+
+如果你想从源码启动当前先行版，按下面顺序执行：
+
+```bash
+pnpm install
+pnpm dev:service
+pnpm --dir apps/desktop exec tauri dev
+```
+
+启动后请保持 `pnpm dev:service` 所在终端继续运行，再在另一个终端启动桌面端。
+
+## 使用方式
+
+你可以先从这几个最简单的动作开始：
+
+- 对悬浮球输入一句话，让它直接帮你处理
+- 长按悬浮球说出需求
+- 选中一段文字后点击悬浮球，让它解释或翻译
+- 把文件拖到悬浮球附近，再补一句你想让它做什么
+- 双击悬浮球，打开工作台查看任务和结果
 
 ## 仓库结构
 
 ```text
 apps/
-  desktop/                桌面端主工程，包含 shell-ball、dashboard、control-panel 三个入口
+  desktop/                Tauri 桌面应用，包含悬浮球、气泡、工作台和控制面板
+  website/                项目官网与对外说明页面
 services/
-  local-service/          Go 本地 Harness Service，包含 RPC、编排、执行、治理、存储与工具链模块
+  local-service/          Go 本地服务，负责任务编排、执行、治理和交付
 workers/
-  playwright-worker/      浏览器自动化 worker 骨架
-  ocr-worker/             OCR worker 骨架
-  media-worker/           媒体处理 worker 骨架
+  playwright-worker/      浏览器自动化 worker
+  ocr-worker/             OCR worker
+  media-worker/           媒体处理 worker
 packages/
-  protocol/               共享主模型、RPC 方法、错误码、schema、example
-  ui/                     共享 UI 基础组件
-  config/                 共享 tsconfig、lint、Prompt 约束与工程配置
+  protocol/               共享协议、JSON-RPC 方法、schema 与类型
+  ui/                     共享 UI 组件与样式基础
+  config/                 共享工程配置
 docs/
-  architecture/           架构说明与边界说明
-  protocol/               协议文档入口
-  demo/                   P0 主链路文档
-  milestones/             里程碑说明
+  *.md                    架构、协议、数据、模块和排期真源文档
 scripts/
-  dev/                    开发阶段脚本说明
-  build/                  构建脚本说明
-  ci/                     CI 脚本说明
+  dev/                    本地联调脚本说明
+  ci/                     CI 与检查脚本
 ```
 
-## 当前已包含内容
+## 项目组成
 
-- `apps/desktop`：多入口桌面前端，已包含 `shell-ball`、`dashboard`、`control-panel` 及配套 `features`、`services`、`rpc`、`platform` 目录
-- `services/local-service`：已包含 `rpc`、`orchestrator`、`runengine`、`context`、`intent`、`execution`、`delivery`、`audit`、`risk`、`memory`、`storage`、`platform`、`model`、`tools`、`taskinspector` 等本地 Harness 模块
-- `packages/protocol`：统一维护协议模型、JSON-RPC 方法、错误码、schema 与示例
-- `packages/ui` 与 `packages/config`：共享 UI 基础能力与工程配置；协议真源仍统一收口到 `packages/protocol`
-- `workers/*`：Playwright、OCR、media 三类 sidecar worker
-- `docs/*` 与 `scripts/*`：当前文档真源与开发 / 构建 / CI 脚本目录
+- `apps/desktop`：用户真正直接交互的桌面端入口
+- `services/local-service`：任务主链路中枢，负责 `task`、`run`、风险治理和正式交付
+- `workers/*`：补充浏览器、OCR、媒体等侧边执行能力
+- `packages/protocol`：前后端共享的稳定协议边界
+- `packages/ui`、`packages/config`：共享 UI 能力和工程配置
+- `docs/`：当前实现与协作规则的真源文档
 
-## 当前 Agent Loop 状态
+## 开发者入口
 
-- 后端已具备独立 `Agent Loop / ReAct` runtime，不再只是一次性 intent 分类后生成总结
-- 已支持结构化 `runs / steps / events / delivery_results` 归一化持久化
-- 已支持 `agent.task.events.list` 查询任务运行时事件视图
-- 已支持 `agent.task.steer` 追加 follow-up 指令，并在后续 loop round 中消费 active-run steering
-- 已支持正式 `loop.*` 与 `task.steered` 通知方法，便于调试流与任务详情观察运行时进展
-- 已支持 loop stop reason 暴露、planner/tool retry 与最小 active-run steering
+如果你要继续参与开发或排查问题，再看这些内容：
 
-当前仍在持续补强：更细的 retry classification、更多 runtime 直接单测、以及更完整的前端承接。
-
-## 文档入口
-
-### 核心技术文档
-
-- `docs/architecture-overview.md`
-- `docs/development-guidelines.md`
-- `docs/protocol-design.md`
-- `docs/data-design.md`
-- `docs/module-design.md`
-- `docs/work-priority-plan.md`
-- `docs/atomic-features.md`
-
-### 产品设计文档
-
-- `docs/dashboard-design.md` - 仪表盘展示设计文档
-- `docs/control-panel-settings.md` - 控制面板设置设计文档
-- `docs/product-interaction-design.md` - 产品交互设计汇总文档
-
-产品设计文档统一存放在 `docs/` 下并使用英文文件名；若发生重命名、替换或真源迁移，必须删除旧版本，只保留一份正式文档真源。
-
-### Agent 工作规范
-
-- `AGENTS.md`
-
-## 统一协议口径
-
-- 对外主对象统一为 `task`，后端执行兼容层保留 `run / step / event / tool_call`
-- JSON-RPC 方法统一使用 `agent.domain.action`，例如 `agent.task.start`、`agent.task.confirm`、`agent.task.list`
-- Notification 统一使用 `dot.case`，例如 `task.updated`、`task.steered`、`loop.started`
-- 正式结果统一通过 `delivery_result / artifact / citation` 交付
-- Windows 正式传输链路优先使用 Named Pipe，本地 HTTP / SSE 仅保留调试兼容态
-
-## 协作约束
-
-- 新需求或新功能应先检查现有 `docs/` 文档；若不冲突，必须在同一次工作中自动补充或更新相关文档。
-- 项目代码注释统一使用英文；若在当前改动范围内发现中文注释，必须在同一次改动中删除并改写为英文注释，新代码也必须补充足够详细的英文注释。
-- Git 提交应保持细粒度，遵循约定式提交格式；一个可独立理解和回退的变更应对应一个 commit，不要把整条功能链路压成单个提交。
-
-## 快速开始
-
-```bash
-pnpm install
-go test ./...
-go run ./services/local-service/cmd/server
-pnpm --dir apps/desktop dev
-```
-
-### local-service 启动参数
-
-`services/local-service/cmd/server` 现在支持以下进程级启动覆盖参数，方便桌面打包器或本地运维显式指定运行时路径与传输监听：
-
-- `--data-dir=<path>`：覆盖 local-service 的每用户数据目录，并同步作为 runtime root 供默认工作区、数据库与 artifact 路径解析。
-- `--named-pipe=<name>`：覆盖 Windows named pipe 名称，用于打包后的桌面宿主和 sidecar 对接。
-- `--debug-http=<addr>`：覆盖本地调试 HTTP 监听地址，例如 `127.0.0.1:46321`。
-- `--debug-http=`：显式禁用调试 HTTP 监听；当打包环境不应暴露 loopback 调试入口时使用。
-
-示例：
-
-```bash
-go run ./services/local-service/cmd/server \
-  --data-dir="$HOME/.cialloclaw/runtime" \
-  --named-pipe="\\\\.\\pipe\\cialloclaw-desktop" \
-  --debug-http=127.0.0.1:46321
-```
+- 共享协作规则：`AGENTS.md`
+- 当前优先级与分工：`docs/work-priority-plan.md`
+- 架构总览：`docs/architecture-overview.md`
+- 开发规范：`docs/development-guidelines.md`
+- 项目设计与协议文档：`docs/`
 
 ## 说明
 
-- 当前阶段仍以 `task-centric` 主链路、正式协议边界和治理闭环为最高优先级。
-- 仓库已包含本地 Harness、协议真源、桌面前端与 sidecar worker 的主干目录和实现模块；新增改动应继续按根目录 `AGENTS.md` 与 `/docs` 主集对齐。
-- 若代码、注释与文档发生冲突，以仓库真源和最新英文文档主集为准，并在实现后同步回写文档。
+- 当前仓库仍在持续迭代，桌面端、本地服务和网站会一起更新
+- 如果代码和说明出现冲突，以仓库里的最新真源文档和实现为准

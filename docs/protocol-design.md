@@ -2324,7 +2324,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - **请求方式**：JSON-RPC 2.0
 - **接口调用时机**：用户手动点击“立即巡检”时
-- **系统处理**：执行一次任务巡检并返回摘要；当 `target_sources` 未提供时，服务端回退到 `settings.task_automation.task_sources`。若来源目录不存在、越界或不可访问，接口返回正式错误而不是成功的 `0/0/0` 摘要
+- **系统处理**：执行一次任务巡检并返回摘要；当 `target_sources` 未提供时，服务端回退到 `settings.task_automation.task_sources`。若来源目录不存在、越界或不可访问，接口返回正式错误而不是成功的 `0/0/0` 摘要。当前后端仅在手动原因 `notes_page_manual_run` 与 `control_panel_manual_run` 下允许对 note 内容触发新的模型化标题压缩；该路径会消耗模型配额，并写入对应的 audit / trace 记录。其他巡检原因继续只做本地解析与本地 fallback 计算，但当 note 内容未变化时仍会保留此前已生成的标题
 - **入参**：触发原因、目标来源
 - **出参**：巡检摘要、建议
 - **常见错误**：`1004003 WORKSPACE_BOUNDARY_DENIED`、`1007006 INSPECTION_FILESYSTEM_UNAVAILABLE`、`1007007 INSPECTION_SOURCE_NOT_FOUND`、`1007008 INSPECTION_SOURCE_UNREADABLE`
@@ -2333,7 +2333,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 | 字段             | 中文说明         |
 | ---------------- | ---------------- |
-| `reason`         | 触发原因         |
+| `reason`         | 触发原因；`notes_page_manual_run` / `control_panel_manual_run` 会额外允许 note 标题模型生成 |
 | `target_sources` | 本次巡检目标目录 |
 
 ### agent.task_inspector.run 入参示例

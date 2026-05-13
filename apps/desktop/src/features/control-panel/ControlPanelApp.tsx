@@ -38,6 +38,12 @@ import {
   type ControlPanelModelValidationOptions,
   type ControlPanelSaveResult,
 } from "@/services/controlPanelService";
+import {
+  buildDefaultSecurityBudgetDisplaySettings,
+  loadSecurityBudgetDisplaySettings,
+  saveSecurityBudgetDisplaySettings,
+  type SecurityBudgetDisplaySettings,
+} from "@/services/securityBudgetDisplayService";
 import { loadDesktopRuntimeDefaultsSnapshot, loadHydratedSettings } from "@/services/settingsService";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { buildDesktopOnboardingPresentation } from "@/features/onboarding/onboardingGeometry";
@@ -120,6 +126,8 @@ type TimeIntervalInputProps = {
   onUnitChange: (unit: string) => void;
   onValueChange: (value: number) => void;
 };
+
+type BudgetDisplayFieldKey = keyof SecurityBudgetDisplaySettings;
 
 type ChoiceOption<T extends string = string> = {
   label: string;
@@ -217,6 +225,24 @@ function normalizeIntervalNumberInput(rawValue: string, fallbackValue: number) {
   }
 
   return parsedValue;
+}
+
+function normalizeBudgetDisplayNumberInput(rawValue: string, allowDecimal: boolean) {
+  const trimmedValue = rawValue.trim();
+  if (trimmedValue.length === 0) {
+    return null;
+  }
+
+  const parsedValue = allowDecimal ? Number.parseFloat(trimmedValue) : Number.parseInt(trimmedValue, 10);
+  if (!Number.isFinite(parsedValue) || parsedValue < 0) {
+    return null;
+  }
+
+  return allowDecimal ? Number(parsedValue.toFixed(2)) : Math.trunc(parsedValue);
+}
+
+function formatBudgetDisplayInputValue(value: number | null) {
+  return value === null ? "" : String(value);
 }
 
 function normalizeDisplayPath(rawPath: string) {
@@ -652,6 +678,12 @@ export function ControlPanelApp() {
   const [isRestoreDefaultsConfirming, setIsRestoreDefaultsConfirming] = useState(false);
   const [panelData, setPanelData] = useState<ControlPanelData | null>(null);
   const [draft, setDraft] = useState<ControlPanelData | null>(null);
+  const [savedBudgetDisplaySettings, setSavedBudgetDisplaySettings] = useState<SecurityBudgetDisplaySettings>(() =>
+    loadSecurityBudgetDisplaySettings(),
+  );
+  const [budgetDisplayDraft, setBudgetDisplayDraft] = useState<SecurityBudgetDisplaySettings>(() =>
+    loadSecurityBudgetDisplaySettings(),
+  );
   const [loadError, setLoadError] = useState<string | null>(null);
   const [saveFeedback, setSaveFeedback] = useState<string | null>(null);
   const [modelValidationFeedback, setModelValidationFeedback] = useState<ModelValidationFeedback | null>(null);
@@ -695,6 +727,7 @@ export function ControlPanelApp() {
     void (async () => {
       try {
         const nextData = await loadControlPanelData();
+        const nextBudgetDisplaySettings = loadSecurityBudgetDisplaySettings();
 
         if (cancelled) {
           return;
@@ -703,6 +736,8 @@ export function ControlPanelApp() {
         setLoadError(null);
         setPanelData(nextData);
         setDraft(nextData);
+        setSavedBudgetDisplaySettings(nextBudgetDisplaySettings);
+        setBudgetDisplayDraft(nextBudgetDisplaySettings);
         setModelValidationFeedback(null);
       } catch (error) {
         if (cancelled) {
@@ -757,9 +792,12 @@ export function ControlPanelApp() {
 
     try {
       const nextData = await loadControlPanelData();
+      const nextBudgetDisplaySettings = loadSecurityBudgetDisplaySettings();
       setLoadError(null);
       setPanelData(nextData);
       setDraft(nextData);
+      setSavedBudgetDisplaySettings(nextBudgetDisplaySettings);
+      setBudgetDisplayDraft(nextBudgetDisplaySettings);
       setModelValidationFeedback(null);
     } catch (error) {
       setLoadError(error instanceof Error ? error.message : "控制面板加载失败。");
@@ -868,7 +906,8 @@ export function ControlPanelApp() {
   const inspectorDirty = !isEqual(draft.inspector, panelData.inspector);
   const settingsDirty = !isEqual(draft.settings, panelData.settings) || draft.providerApiKeyInput.trim() !== "";
   const modelSettingsDirty = !isEqual(draft.settings.models, panelData.settings.models) || draft.providerApiKeyInput.trim() !== "";
-  const hasChanges = inspectorDirty || settingsDirty;
+  const budgetDisplayDirty = !isEqual(budgetDisplayDraft, savedBudgetDisplaySettings);
+  const hasChanges = inspectorDirty || settingsDirty || budgetDisplayDirty;
   const providerApiKeyStatus = draft.settings.models.provider_api_key_configured ? "已配置" : "未配置";
   const providerApiKeyHint = "通过 JSON-RPC `agent.settings.update` 提交；只写入后端 Stronghold，不会回显明文。";
   const hasRpcLoadError = loadError !== null;
@@ -895,6 +934,13 @@ export function ControlPanelApp() {
       }
       return next;
     });
+  };
+
+  const updateBudgetDisplay = (key: BudgetDisplayFieldKey, rawValue: string, allowDecimal = false) => {
+    setBudgetDisplayDraft((current) => ({
+      ...current,
+      [key]: normalizeBudgetDisplayNumberInput(rawValue, allowDecimal),
+    }));
   };
 
   // The custom titlebar is draggable, but embedded controls must keep their own
@@ -924,6 +970,7 @@ export function ControlPanelApp() {
 
   const handleReset = () => {
     setDraft(panelData);
+    setBudgetDisplayDraft(savedBudgetDisplaySettings);
     setSaveFeedback("已恢复为上次载入的设置快照。");
     setModelValidationFeedback(null);
     setWorkspaceActionFeedback(null);
@@ -1021,23 +1068,40 @@ export function ControlPanelApp() {
 
     setIsSaving(true);
     try {
-      const result = await saveControlPanelData(draft, {
-        confirmedInspector: panelData.inspector,
-        saveInspector: inspectorDirty,
-        saveSettings: settingsDirty,
-        validateModel: modelSettingsDirty,
-      });
-      const nextPanelData = applyControlPanelSaveResult(panelData, result);
-      const nextDraft = applyControlPanelSaveResult(draft, result);
-      setLoadError(null);
+      let nextPanelData = panelData;
+      let nextDraft = draft;
+
+      if (settingsDirty || inspectorDirty) {
+        const result = await saveControlPanelData(draft, {
+          confirmedInspector: panelData.inspector,
+          saveInspector: inspectorDirty,
+          saveSettings: settingsDirty,
+          validateModel: modelSettingsDirty,
+        });
+        nextPanelData = applyControlPanelSaveResult(panelData, result);
+        nextDraft = applyControlPanelSaveResult(draft, result);
+        setSaveFeedback(getApplyModeCopy(result.applyMode, result.needRestart));
+        if (result.modelValidation) {
+          setModelValidationFeedback({
+            message: result.modelValidation.message,
+            tone: result.modelValidation.ok ? "neutral" : "warning",
+          });
+        }
+
+        // Only a successful RPC-backed save can clear the backend connectivity banner.
+        setLoadError(null);
+      }
+
+      if (budgetDisplayDirty) {
+        const savedBudgetDisplay = saveSecurityBudgetDisplaySettings(budgetDisplayDraft);
+        setSavedBudgetDisplaySettings(savedBudgetDisplay);
+        setBudgetDisplayDraft(savedBudgetDisplay);
+      }
+
       setPanelData(nextPanelData);
       setDraft(nextDraft);
-      setSaveFeedback(getApplyModeCopy(result.applyMode, result.needRestart));
-      if (result.modelValidation) {
-        setModelValidationFeedback({
-          message: result.modelValidation.message,
-          tone: result.modelValidation.ok ? "neutral" : "warning",
-        });
+      if (!settingsDirty && !inspectorDirty) {
+        setSaveFeedback("设置已即时生效。");
       }
     } catch (error) {
       if (error instanceof ControlPanelSaveError && error.partialResult) {
@@ -1076,6 +1140,7 @@ export function ControlPanelApp() {
     }
 
     const restoreDraft = buildControlPanelRestoreDefaultsData(draft, persistedPanelData);
+    const defaultBudgetDisplaySettings = buildDefaultSecurityBudgetDisplaySettings();
 
     setIsSaving(true);
     try {
@@ -1087,9 +1152,12 @@ export function ControlPanelApp() {
       });
       const nextPanelData = applyControlPanelSaveResult(restoreDraft, result);
       const nextDraft = applyControlPanelSaveResult(restoreDraft, result);
+      const savedBudgetDisplay = saveSecurityBudgetDisplaySettings(defaultBudgetDisplaySettings);
       setLoadError(null);
       setPanelData(nextPanelData);
       setDraft(nextDraft);
+      setSavedBudgetDisplaySettings(savedBudgetDisplay);
+      setBudgetDisplayDraft(savedBudgetDisplay);
       setSaveFeedback(`已恢复默认设置。${getApplyModeCopy(result.applyMode, result.needRestart)}`);
       if (result.modelValidation) {
         setModelValidationFeedback({
@@ -1727,6 +1795,56 @@ export function ControlPanelApp() {
               <InfoRow label="安全状态" value={hasRpcLoadError ? "暂不可用" : draft.securitySummary.security_status} />
               <InfoRow label="待确认授权" value={hasRpcLoadError ? "暂不可用" : draft.securitySummary.pending_authorizations} />
             </SettingsCard>
+
+            <SettingsCard title="预算与成本展示" description="用于设置安全卫士中的预算阈值和当日成本展示。">
+              <ControlLine label="当日 Tokens" hint="用于补充安全卫士中的当日 Token 展示。">
+                <TextField.Root
+                  className="control-panel-shell__input"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={formatBudgetDisplayInputValue(budgetDisplayDraft.today_tokens)}
+                  placeholder="留空则沿用安全卫士当前值"
+                  onChange={(event) => updateBudgetDisplay("today_tokens", event.target.value)}
+                />
+              </ControlLine>
+
+              <ControlLine label="今日成本" hint="用于补充安全卫士中的当日成本展示。">
+                <TextField.Root
+                  className="control-panel-shell__input"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={formatBudgetDisplayInputValue(budgetDisplayDraft.today_cost)}
+                  placeholder="留空则沿用安全卫士当前值"
+                  onChange={(event) => updateBudgetDisplay("today_cost", event.target.value, true)}
+                />
+              </ControlLine>
+
+              <ControlLine label="单任务上限" hint="用于设置安全卫士中的单任务预算阈值。">
+                <TextField.Root
+                  className="control-panel-shell__input"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={formatBudgetDisplayInputValue(budgetDisplayDraft.single_task_limit)}
+                  placeholder="留空则显示为未配置"
+                  onChange={(event) => updateBudgetDisplay("single_task_limit", event.target.value)}
+                />
+              </ControlLine>
+
+              <ControlLine label="当日上限" hint="用于设置安全卫士中的当日预算阈值。">
+                <TextField.Root
+                  className="control-panel-shell__input"
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={formatBudgetDisplayInputValue(budgetDisplayDraft.daily_limit)}
+                  placeholder="留空则显示为未配置"
+                  onChange={(event) => updateBudgetDisplay("daily_limit", event.target.value)}
+                />
+              </ControlLine>
+            </SettingsCard>
           </>
         );
 
@@ -1793,7 +1911,7 @@ export function ControlPanelApp() {
               {isRestoreDefaultsConfirming ? (
                 <div className="control-panel-shell__about-confirm">
                   <Text as="p" size="2" className="control-panel-shell__about-note">
-                    会重置通用设置、悬浮球、记忆设置、任务巡检与预算自动降级。
+                    会重置通用设置、悬浮球、记忆设置、任务巡检、预算自动降级，以及本地预算展示值。
                   </Text>
                   <Text as="p" size="2" className="control-panel-shell__about-note">
                     不会删除任务历史、记忆内容、本地文件，也不会改动当前已保存的 workspace 路径、任务来源、模型路由或已保存 API Key。

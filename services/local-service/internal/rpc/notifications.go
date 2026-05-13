@@ -61,7 +61,7 @@ func ownedTaskIDsForReplay(method string, trackedTaskIDs map[string]bool, respon
 			owned[trimmed] = true
 		}
 	}
-	if shouldClaimResponseTaskOwnership(method) {
+	if _, ok := response.(successEnvelope); ok && shouldClaimResponseTaskOwnership(method) {
 		for _, taskID := range taskIDsFromResponse(response) {
 			trimmed := strings.TrimSpace(taskID)
 			if trimmed != "" {
