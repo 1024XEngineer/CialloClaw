@@ -1,11 +1,10 @@
 import type { ApprovalPendingNotification, DeliveryReadyNotification, SettingsSnapshot } from "@cialloclaw/protocol";
 import { loadSettings } from "./settingsService";
+import { DEFAULT_VOICE_NOTIFICATION_VOICE_TYPE } from "./voiceNotificationConfig";
 
 type VoiceNotificationKind =
   | "startup_greeting"
-  | "idle_click_greeting"
-  | "selection_detected"
-  | "clipboard_detected"
+  | "selection_click_greeting"
   | "approval_pending"
   | "delivery_ready";
 
@@ -25,9 +24,7 @@ type SpeechSynthesisLike = {
 };
 
 const STARTUP_GREETING_TEXT = "CialloClaw 已启动";
-const IDLE_CLICK_GREETING_TEXT = "CialloClaw";
-const SELECTION_DETECTED_TEXT = "检测到选中文本";
-const CLIPBOARD_DETECTED_TEXT = "检测到剪贴板内容";
+const SELECTION_CLICK_GREETING_TEXT = "Ciallo";
 const APPROVAL_PENDING_TEXT = "有一个操作需要你确认";
 const DELIVERY_READY_TEXT = "任务结果已准备好";
 const VOICE_LIST_READY_TIMEOUT_MS = 600;
@@ -58,24 +55,59 @@ function getVoiceNotificationHost() {
 
 function getVoiceTypePreferences(voiceType: string, language: string) {
   const normalizedVoiceType = normalizeVoiceType(voiceType);
+  const languagePreference = language.toLowerCase();
 
   if (normalizedVoiceType === "default_female") {
     return [
-      language.toLowerCase(),
-      "xiaoyi",
+      languagePreference,
       "xiaoxiao",
+      "xiaoyi",
+      "tongtong",
+      "xiaohan",
+      "child",
+      "kid",
       "tingting",
       "yunxia",
       "girl",
       "young",
+      "cute",
       "female",
       "woman",
     ];
   }
 
+  if (normalizedVoiceType === "soft_girl") {
+    return [
+      languagePreference,
+      "xiaoxiao",
+      "xiaohan",
+      "tongtong",
+      "soft",
+      "gentle",
+      "cute",
+      "child",
+      "girl",
+      "female",
+    ];
+  }
+
+  if (normalizedVoiceType === "bright_girl") {
+    return [
+      languagePreference,
+      "xiaoyi",
+      "tingting",
+      "xiaoxuan",
+      "bright",
+      "lively",
+      "young",
+      "girl",
+      "female",
+    ];
+  }
+
   if (normalizedVoiceType === "default_male") {
     return [
-      language.toLowerCase(),
+      languagePreference,
       "male",
       "man",
       "boy",
@@ -86,7 +118,11 @@ function getVoiceTypePreferences(voiceType: string, language: string) {
     ];
   }
 
-  return normalizedVoiceType.length > 0 ? [normalizedVoiceType] : [language.toLowerCase()];
+  if (normalizedVoiceType.length === 0) {
+    return getVoiceTypePreferences(DEFAULT_VOICE_NOTIFICATION_VOICE_TYPE, language);
+  }
+
+  return [normalizedVoiceType];
 }
 
 /**
@@ -163,12 +199,13 @@ export function resolveShellBallStartupGreetingText() {
 }
 
 /**
- * Builds the idle-click acknowledgement spoken from the resting floating ball.
+ * Builds the short `Ciallo` acknowledgement spoken when the user accepts a
+ * fresh selected-text reminder from the floating ball.
  *
- * @returns The short idle greeting used for single-click acknowledgement.
+ * @returns The short acknowledgement used for the selected-text prompt click.
  */
-export function resolveShellBallIdleClickGreetingText() {
-  return IDLE_CLICK_GREETING_TEXT;
+export function resolveShellBallSelectionClickGreetingText() {
+  return SELECTION_CLICK_GREETING_TEXT;
 }
 
 function resolveVoiceNotificationText(kind: VoiceNotificationKind, payload?: ApprovalPendingNotification | DeliveryReadyNotification) {
@@ -176,16 +213,8 @@ function resolveVoiceNotificationText(kind: VoiceNotificationKind, payload?: App
     return resolveShellBallStartupGreetingText();
   }
 
-  if (kind === "idle_click_greeting") {
-    return resolveShellBallIdleClickGreetingText();
-  }
-
-  if (kind === "selection_detected") {
-    return SELECTION_DETECTED_TEXT;
-  }
-
-  if (kind === "clipboard_detected") {
-    return CLIPBOARD_DETECTED_TEXT;
+  if (kind === "selection_click_greeting") {
+    return resolveShellBallSelectionClickGreetingText();
   }
 
   if (kind === "approval_pending") {
@@ -301,30 +330,13 @@ export function speakShellBallStartupGreeting() {
 }
 
 /**
- * Plays a short idle acknowledgement when the resting shell-ball is clicked.
+ * Plays a short `Ciallo` acknowledgement when the user accepts a selected-text
+ * reminder from the floating ball.
  *
  * @returns Whether the local desktop runtime attempted speech playback.
  */
-export function speakShellBallIdleGreeting() {
-  return speakVoiceNotification({ kind: "idle_click_greeting" });
-}
-
-/**
- * Plays a short reminder when the shell-ball detects a fresh text selection.
- *
- * @returns Whether the local desktop runtime attempted speech playback.
- */
-export function speakShellBallSelectionDetectedNotification() {
-  return speakVoiceNotification({ kind: "selection_detected" });
-}
-
-/**
- * Plays a short reminder when the shell-ball receives a fresh clipboard prompt.
- *
- * @returns Whether the local desktop runtime attempted speech playback.
- */
-export function speakShellBallClipboardDetectedNotification() {
-  return speakVoiceNotification({ kind: "clipboard_detected" });
+export function speakShellBallSelectionClickGreeting() {
+  return speakVoiceNotification({ kind: "selection_click_greeting" });
 }
 
 /**

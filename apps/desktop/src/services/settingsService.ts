@@ -6,6 +6,7 @@ import {
 } from "../platform/desktopRuntimeDefaults";
 import { syncDesktopSettingsSnapshot } from "../platform/desktopSettingsSnapshot";
 import { loadStoredValue, saveStoredValue } from "../platform/storage";
+import { DEFAULT_VOICE_NOTIFICATION_VOICE_TYPE } from "./voiceNotificationConfig";
 
 // SETTINGS_KEY is the single storage key for the desktop snapshot.
 const SETTINGS_KEY = "cialloclaw.settings";
@@ -90,7 +91,7 @@ function createDefaultSettings(): DesktopSettings {
         auto_launch: true,
         theme_mode: "follow_system",
         voice_notification_enabled: true,
-        voice_type: "default_female",
+        voice_type: DEFAULT_VOICE_NOTIFICATION_VOICE_TYPE,
         download: {
           workspace_path: runtimeDefaults?.workspace_path ?? DEFAULT_WORKSPACE_PLACEHOLDER,
           ask_before_save_each_file: true,

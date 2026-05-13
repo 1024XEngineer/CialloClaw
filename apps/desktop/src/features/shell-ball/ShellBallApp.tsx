@@ -13,7 +13,6 @@ import { ShellBallAttachmentTray } from "./components/ShellBallAttachmentTray";
 import { ShellBallBubbleZone } from "./components/ShellBallBubbleZone";
 import { ShellBallInputBar } from "./components/ShellBallInputBar";
 import { ShellBallVoiceHints } from "./components/ShellBallVoiceHints";
-import { areShellBallSelectionSnapshotsEqual } from "./selection/selection.provider";
 import type { ShellBallSelectionSnapshot } from "./selection/selection.types";
 import { useShellBallInteraction } from "./useShellBallInteraction";
 import { getShellBallMotionConfig } from "./shellBall.motion";
@@ -41,9 +40,7 @@ import {
 } from "../../platform/shellBallWindow";
 import { loadSettings } from "../../services/settingsService";
 import {
-  speakShellBallClipboardDetectedNotification,
-  speakShellBallIdleGreeting,
-  speakShellBallSelectionDetectedNotification,
+  speakShellBallSelectionClickGreeting,
   speakShellBallStartupGreeting,
 } from "../../services/voiceNotificationService";
 import { openOrFocusDesktopWindow } from "../../platform/windowController";
@@ -80,7 +77,6 @@ const SHELL_BALL_SELECTION_PROMPT_WINDOW_MS = 10_000;
 const SHELL_BALL_CLIPBOARD_PROMPT_WINDOW_MS = 10_000;
 const SHELL_BALL_EDGE_DOCK_REVEAL_GUARD_PX = 16;
 const SHELL_BALL_EDGE_DOCK_REVEAL_HIDE_DELAY_MS = 90;
-const SHELL_BALL_IDLE_CLICK_GREETING_DELAY_MS = 220;
 
 export function normalizeShellBallFloatingSize(size: string | null | undefined): ShellBallFloatingSize {
   if (size === "small" || size === "medium" || size === "large") {
@@ -132,11 +128,6 @@ export function shouldRetainShellBallEdgeDockReveal(input: {
 type ShellBallClipboardPrompt = {
   text: string;
   expiresAt: number;
-};
-
-type ShellBallClipboardVoicePrompt = {
-  expiresAt: number;
-  text: string;
 };
 
 async function pickShellBallFiles(): Promise<string[]> {
@@ -238,37 +229,6 @@ export function isShellBallClipboardPromptActive(
   now = Date.now(),
 ) {
   return prompt !== null && prompt.expiresAt > now;
-}
-
-/**
- * Restricts the idle click greeting to the true resting shell-ball state so
- * local acknowledgement speech never competes with task intake or onboarding.
- *
- * @param input Local shell-ball state that can suppress the idle click voice.
- * @returns Whether an idle single click should schedule the local greeting.
- */
-export function shouldSpeakShellBallIdleClickGreeting(input: {
-  clipboardPromptActive: boolean;
-  hasPendingAgentLoading: boolean;
-  hasPendingApproval: boolean;
-  hasPendingFiles: boolean;
-  hasVisibleBubbleItems: boolean;
-  hasWrittenInput: boolean;
-  onboardingActive: boolean;
-  selectionPromptActive: boolean;
-  visualState: ShellBallVisualState;
-}) {
-  return (
-    input.visualState === "idle" &&
-    !input.selectionPromptActive &&
-    !input.clipboardPromptActive &&
-    !input.hasVisibleBubbleItems &&
-    !input.hasPendingAgentLoading &&
-    !input.hasPendingApproval &&
-    !input.hasWrittenInput &&
-    !input.hasPendingFiles &&
-    !input.onboardingActive
-  );
 }
 
 export function resolveShellBallInlineInputMode(input: {
@@ -438,12 +398,7 @@ export function ShellBallApp() {
   const previousVisualStateRef = useRef<ShellBallVisualState>(visualState);
   const transitionQueueRef = useRef(Promise.resolve());
   const edgeDockRevealHideTimeoutRef = useRef<number | null>(null);
-  const idleClickGreetingTimeoutRef = useRef<number | null>(null);
   const startupGreetingPlayedRef = useRef(false);
-  // Local prompt events can replay while helper windows sync state, so keep the
-  // last spoken keys here to avoid duplicate demo-time voice spam.
-  const selectionPromptVoiceSnapshotRef = useRef<ShellBallSelectionSnapshot | null>(null);
-  const clipboardPromptVoiceRef = useRef<ShellBallClipboardVoicePrompt | null>(null);
   const dragDropHandlersRef = useRef<{
     handleDroppedFiles: (paths: string[]) => Promise<void> | void;
   }>({
@@ -516,18 +471,6 @@ export function ShellBallApp() {
   const hasPendingAgentLoading = visibleBubbleItems.some((item) => item.role === "agent" && item.desktop.presentationHint === "loading");
   const hasPendingApproval = snapshot.bubbleItems.some((item) => item.desktop.inlineApproval?.status === "idle");
   const hasAlertOpportunity = isShellBallSelectionPromptActive(selectionPrompt) || isShellBallClipboardPromptActive(clipboardPrompt);
-  const onboardingActive = onboardingSession?.isOpen === true;
-  const idleClickGreetingEligible = shouldSpeakShellBallIdleClickGreeting({
-    clipboardPromptActive: isShellBallClipboardPromptActive(clipboardPrompt),
-    hasPendingAgentLoading,
-    hasPendingApproval,
-    hasPendingFiles: pendingFiles.length > 0,
-    hasVisibleBubbleItems: visibleBubbleItems.length > 0,
-    hasWrittenInput: inputValue.trim() !== "",
-    onboardingActive,
-    selectionPromptActive: isShellBallSelectionPromptActive(selectionPrompt),
-    visualState,
-  });
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -584,13 +527,6 @@ export function ShellBallApp() {
     if (edgeDockRevealHideTimeoutRef.current !== null) {
       window.clearTimeout(edgeDockRevealHideTimeoutRef.current);
       edgeDockRevealHideTimeoutRef.current = null;
-    }
-  }, []);
-
-  const cancelIdleClickGreeting = useCallback(() => {
-    if (idleClickGreetingTimeoutRef.current !== null) {
-      window.clearTimeout(idleClickGreetingTimeoutRef.current);
-      idleClickGreetingTimeoutRef.current = null;
     }
   }, []);
 
@@ -919,21 +855,12 @@ export function ShellBallApp() {
     // Reset native mascot hotspot state only when the shell-ball host actually
     // unmounts so ordinary frame updates do not churn IPC requests.
     return () => {
-      cancelIdleClickGreeting();
       cancelEdgeDockRevealHide();
       void setShellBallInteractiveRegions([]);
       void setShellBallPressLock(false);
       lastReportedInteractiveRegionsRef.current = "";
     };
-  }, [cancelEdgeDockRevealHide, cancelIdleClickGreeting]);
-
-  useEffect(() => {
-    if (idleClickGreetingEligible) {
-      return;
-    }
-
-    cancelIdleClickGreeting();
-  }, [cancelIdleClickGreeting, idleClickGreetingEligible]);
+  }, [cancelEdgeDockRevealHide]);
 
   useEffect(() => {
     if (getCurrentWindow().label !== shellBallWindowLabels.ball) {
@@ -944,8 +871,6 @@ export function ShellBallApp() {
   }, [inputFocused, reportInteractiveRegions]);
 
   function handleDoubleClick() {
-    cancelIdleClickGreeting();
-
     if (!shouldOpenDashboardFromDoubleClick) {
       return;
     }
@@ -994,12 +919,10 @@ export function ShellBallApp() {
   }, []);
 
   const clearSelectionPrompt = useCallback(() => {
-    selectionPromptVoiceSnapshotRef.current = null;
     setSelectionPrompt(null);
   }, []);
 
   const clearClipboardPrompt = useCallback(() => {
-    clipboardPromptVoiceRef.current = null;
     setClipboardPrompt(null);
   }, []);
 
@@ -1136,15 +1059,6 @@ export function ShellBallApp() {
             selectionPromptClearTimeoutRef.current = null;
           }
 
-          const normalizedSelectionText = payload.snapshot.text.trim();
-          if (
-            normalizedSelectionText.length > 0
-            && !areShellBallSelectionSnapshotsEqual(selectionPromptVoiceSnapshotRef.current, payload.snapshot)
-          ) {
-            selectionPromptVoiceSnapshotRef.current = payload.snapshot;
-            void speakShellBallSelectionDetectedNotification();
-          }
-
           setSelectionPrompt(payload.snapshot);
           return;
         }
@@ -1197,20 +1111,6 @@ export function ShellBallApp() {
           return;
         }
 
-        const normalizedClipboardText = payload.text.trim();
-        const activeVoicePrompt = clipboardPromptVoiceRef.current;
-        if (
-          activeVoicePrompt === null
-          || activeVoicePrompt.text !== normalizedClipboardText
-          || activeVoicePrompt.expiresAt <= Date.now()
-        ) {
-          clipboardPromptVoiceRef.current = {
-            text: normalizedClipboardText,
-            expiresAt: Date.now() + SHELL_BALL_CLIPBOARD_PROMPT_WINDOW_MS,
-          };
-          void speakShellBallClipboardDetectedNotification();
-        }
-
         setClipboardPrompt({
           text: payload.text,
           expiresAt: Date.now() + SHELL_BALL_CLIPBOARD_PROMPT_WINDOW_MS,
@@ -1243,13 +1143,13 @@ export function ShellBallApp() {
         return;
       }
 
+      void speakShellBallSelectionClickGreeting();
       clearSelectionPrompt();
       void handleCoordinatorSelectedTextPrompt(activeSelectionPrompt);
       return;
     }
 
     if (selectionPrompt !== null) {
-      cancelIdleClickGreeting();
       clearSelectionPrompt();
       return;
     }
@@ -1261,29 +1161,18 @@ export function ShellBallApp() {
       }
 
       clearClipboardPrompt();
-      cancelIdleClickGreeting();
       void handleCoordinatorClipboardPrompt(clipboardPrompt.text);
       return;
     }
 
-    if (idleClickGreetingEligible) {
-      cancelIdleClickGreeting();
-      idleClickGreetingTimeoutRef.current = window.setTimeout(() => {
-        idleClickGreetingTimeoutRef.current = null;
-        void speakShellBallIdleGreeting();
-      }, SHELL_BALL_IDLE_CLICK_GREETING_DELAY_MS);
-    }
-
     handlePrimaryClick();
   }, [
-    cancelIdleClickGreeting,
     clearClipboardPrompt,
     clearSelectionPrompt,
     clipboardPrompt,
     handleCoordinatorClipboardPrompt,
     handleCoordinatorSelectedTextPrompt,
     handlePrimaryClick,
-    idleClickGreetingEligible,
     selectionPrompt,
   ]);
 
