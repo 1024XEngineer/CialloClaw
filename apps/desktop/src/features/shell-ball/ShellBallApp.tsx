@@ -39,7 +39,11 @@ import {
   setShellBallPressLock,
 } from "../../platform/shellBallWindow";
 import { loadSettings } from "../../services/settingsService";
-import { speakShellBallStartupGreeting } from "../../services/voiceNotificationService";
+import {
+  speakShellBallClipboardDetectedNotification,
+  speakShellBallSelectionDetectedNotification,
+  speakShellBallStartupGreeting,
+} from "../../services/voiceNotificationService";
 import { openOrFocusDesktopWindow } from "../../platform/windowController";
 import { buildDesktopOnboardingPresentation } from "@/features/onboarding/onboardingGeometry";
 import {
@@ -396,6 +400,10 @@ export function ShellBallApp() {
   const transitionQueueRef = useRef(Promise.resolve());
   const edgeDockRevealHideTimeoutRef = useRef<number | null>(null);
   const startupGreetingPlayedRef = useRef(false);
+  // Local prompt events can replay while helper windows sync state, so keep the
+  // last spoken keys here to avoid duplicate demo-time voice spam.
+  const selectionPromptVoiceKeyRef = useRef<string>("");
+  const clipboardPromptVoiceTextRef = useRef<string>("");
   const dragDropHandlersRef = useRef<{
     handleDroppedFiles: (paths: string[]) => Promise<void> | void;
   }>({
@@ -491,7 +499,7 @@ export function ShellBallApp() {
     }
 
     startupGreetingPlayedRef.current = true;
-    speakShellBallStartupGreeting();
+    void speakShellBallStartupGreeting();
   }, []);
 
   const {
@@ -1048,6 +1056,13 @@ export function ShellBallApp() {
             selectionPromptClearTimeoutRef.current = null;
           }
 
+          const normalizedSelectionText = payload.snapshot.text.trim();
+          const voiceKey = `${payload.snapshot.updated_at}:${normalizedSelectionText}`;
+          if (normalizedSelectionText.length > 0 && selectionPromptVoiceKeyRef.current !== voiceKey) {
+            selectionPromptVoiceKeyRef.current = voiceKey;
+            void speakShellBallSelectionDetectedNotification();
+          }
+
           setSelectionPrompt(payload.snapshot);
           return;
         }
@@ -1096,8 +1111,15 @@ export function ShellBallApp() {
     void currentWindow
       .listen<ShellBallClipboardSnapshotPayload>(shellBallWindowSyncEvents.clipboardSnapshot, ({ payload }) => {
         if (payload.text.trim() === "") {
+          clipboardPromptVoiceTextRef.current = "";
           setClipboardPrompt(null);
           return;
+        }
+
+        const normalizedClipboardText = payload.text.trim();
+        if (clipboardPromptVoiceTextRef.current !== normalizedClipboardText) {
+          clipboardPromptVoiceTextRef.current = normalizedClipboardText;
+          void speakShellBallClipboardDetectedNotification();
         }
 
         setClipboardPrompt({

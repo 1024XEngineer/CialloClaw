@@ -2538,7 +2538,7 @@ test("shell-ball speech transcript collection merges recognition chunks", () => 
 });
 
 test("voice notification helpers keep startup greeting and formal delivery reminders short", () => {
-  assert.equal(resolveShellBallStartupGreetingText(), "Ciallo!");
+  assert.equal(resolveShellBallStartupGreetingText(), "CialloClaw 已启动");
   assert.equal(
     resolveDeliveryReadyVoiceNotificationText({
       task_id: "task-bubble-delivery",
@@ -2561,7 +2561,7 @@ test("voice notification helpers keep startup greeting and formal delivery remin
 
 test("voice notification helpers prefer the saved voice type and matching locale", () => {
   const resolvedDefaultFemale = resolveVoiceNotificationVoice({
-    language: "ja-JP",
+    language: "zh-CN",
     voiceType: "default_female",
     voices: [
       { lang: "en-US", name: "Alloy" },
@@ -2569,7 +2569,7 @@ test("voice notification helpers prefer the saved voice type and matching locale
       { lang: "zh-CN", name: "Xiaoxiao" },
     ],
   });
-  assert.equal(resolvedDefaultFemale?.name, "Sakura Female");
+  assert.equal(resolvedDefaultFemale?.name, "Xiaoxiao");
 
   const resolvedCustomVoice = resolveVoiceNotificationVoice({
     language: "zh-CN",
@@ -8925,15 +8925,25 @@ test("shell-ball voice notifications are consumed locally from startup and forma
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
   const voiceServiceSource = readFileSync(resolve(desktopRoot, "src/services/voiceNotificationService.ts"), "utf8");
 
-  assert.match(appSource, /import \{ speakShellBallStartupGreeting \} from "..\/..\/services\/voiceNotificationService";/);
+  assert.match(appSource, /speakShellBallClipboardDetectedNotification/);
+  assert.match(appSource, /speakShellBallSelectionDetectedNotification/);
+  assert.match(appSource, /speakShellBallStartupGreeting/);
   assert.match(appSource, /const startupGreetingPlayedRef = useRef\(false\);/);
-  assert.match(appSource, /startupGreetingPlayedRef\.current = true;\s*speakShellBallStartupGreeting\(\);/);
+  assert.match(appSource, /const selectionPromptVoiceKeyRef = useRef\(""\);/);
+  assert.match(appSource, /const clipboardPromptVoiceTextRef = useRef\(""\);/);
+  assert.match(appSource, /startupGreetingPlayedRef\.current = true;\s*void speakShellBallStartupGreeting\(\);/);
+  assert.match(appSource, /void speakShellBallSelectionDetectedNotification\(\);/);
+  assert.match(appSource, /void speakShellBallClipboardDetectedNotification\(\);/);
   assert.match(coordinatorSource, /import \{ speakApprovalPendingNotification, speakDeliveryReadyNotification \} from "@\/services\/voiceNotificationService";/);
   assert.match(coordinatorSource, /speakApprovalPendingNotification\(\{\s*approval_request: input\.approvalRequest,\s*task_id: input\.taskId,\s*\}\);/);
   assert.match(coordinatorSource, /speakDeliveryReadyNotification\(\{\s*delivery_result: input\.deliveryResult,\s*task_id: input\.taskId,\s*\}\);/);
-  assert.match(voiceServiceSource, /const STARTUP_GREETING_TEXT = "Ciallo!";/);
+  assert.match(voiceServiceSource, /const STARTUP_GREETING_TEXT = "CialloClaw 已启动";/);
+  assert.match(voiceServiceSource, /const SELECTION_DETECTED_TEXT = "检测到选中文本";/);
+  assert.match(voiceServiceSource, /const CLIPBOARD_DETECTED_TEXT = "检测到剪贴板内容";/);
   assert.match(voiceServiceSource, /const APPROVAL_PENDING_TEXT = "有一个操作需要你确认";/);
   assert.match(voiceServiceSource, /const DELIVERY_READY_TEXT = "任务结果已准备好";/);
+  assert.match(voiceServiceSource, /const VOICE_LIST_READY_TIMEOUT_MS = 600;/);
+  assert.match(voiceServiceSource, /addEventListener\("voiceschanged", handleVoicesChanged\)/);
   assert.match(voiceServiceSource, /return payload\.delivery_result\.type === "bubble" \? null : DELIVERY_READY_TEXT;/);
 });
 

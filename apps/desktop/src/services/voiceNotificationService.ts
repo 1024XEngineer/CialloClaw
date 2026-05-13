@@ -1,7 +1,12 @@
 import type { ApprovalPendingNotification, DeliveryReadyNotification, SettingsSnapshot } from "@cialloclaw/protocol";
 import { loadSettings } from "./settingsService";
 
-type VoiceNotificationKind = "startup_greeting" | "approval_pending" | "delivery_ready";
+type VoiceNotificationKind =
+  | "startup_greeting"
+  | "selection_detected"
+  | "clipboard_detected"
+  | "approval_pending"
+  | "delivery_ready";
 
 type VoiceNotificationSettings = SettingsSnapshot["settings"]["general"];
 
@@ -11,14 +16,19 @@ type SpeechVoiceLike = {
 };
 
 type SpeechSynthesisLike = {
+  addEventListener?: (type: "voiceschanged", listener: () => void) => void;
   cancel: () => void;
   getVoices: () => SpeechVoiceLike[];
+  removeEventListener?: (type: "voiceschanged", listener: () => void) => void;
   speak: (utterance: SpeechSynthesisUtterance) => void;
 };
 
-const STARTUP_GREETING_TEXT = "Ciallo!";
+const STARTUP_GREETING_TEXT = "CialloClaw 已启动";
+const SELECTION_DETECTED_TEXT = "检测到选中文本";
+const CLIPBOARD_DETECTED_TEXT = "检测到剪贴板内容";
 const APPROVAL_PENDING_TEXT = "有一个操作需要你确认";
 const DELIVERY_READY_TEXT = "任务结果已准备好";
+const VOICE_LIST_READY_TIMEOUT_MS = 600;
 
 function normalizeVoiceType(voiceType: string) {
   return voiceType.trim().toLowerCase();
@@ -48,16 +58,14 @@ function getVoiceTypePreferences(voiceType: string, language: string) {
 
   if (normalizedVoiceType === "default_female") {
     return [
-      "ja-jp",
+      language.toLowerCase(),
       "female",
       "woman",
       "girl",
-      "kyoko",
-      "sakura",
-      "nanami",
-      "sayaka",
       "xiaoxiao",
+      "xiaoyi",
       "tingting",
+      "yunxia",
     ];
   }
 
@@ -155,6 +163,14 @@ function resolveVoiceNotificationText(kind: VoiceNotificationKind, payload?: App
     return resolveShellBallStartupGreetingText();
   }
 
+  if (kind === "selection_detected") {
+    return SELECTION_DETECTED_TEXT;
+  }
+
+  if (kind === "clipboard_detected") {
+    return CLIPBOARD_DETECTED_TEXT;
+  }
+
   if (kind === "approval_pending") {
     return APPROVAL_PENDING_TEXT;
   }
@@ -166,11 +182,45 @@ function resolveVoiceNotificationText(kind: VoiceNotificationKind, payload?: App
   return resolveDeliveryReadyVoiceNotificationText(payload);
 }
 
-function resolveVoiceNotificationLanguage(kind: VoiceNotificationKind) {
-  return kind === "startup_greeting" ? "ja-JP" : "zh-CN";
+function resolveVoiceNotificationLanguage() {
+  return "zh-CN";
 }
 
-function speakVoiceNotification(input: {
+function waitForVoiceNotificationVoices(synthesizer: SpeechSynthesisLike) {
+  const availableVoices = synthesizer.getVoices();
+  if (availableVoices.length > 0 || synthesizer.addEventListener === undefined || synthesizer.removeEventListener === undefined) {
+    return Promise.resolve(availableVoices);
+  }
+
+  return new Promise<SpeechVoiceLike[]>((resolve) => {
+    let settled = false;
+
+    const finalize = () => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      window.clearTimeout(timeoutId);
+      synthesizer.removeEventListener?.("voiceschanged", handleVoicesChanged);
+      resolve(synthesizer.getVoices());
+    };
+
+    const handleVoicesChanged = () => {
+      finalize();
+    };
+
+    // Chromium can populate speech voices after the first startup paint, so a
+    // short bounded wait keeps the saved desktop voice preference effective.
+    const timeoutId = window.setTimeout(() => {
+      finalize();
+    }, VOICE_LIST_READY_TIMEOUT_MS);
+
+    synthesizer.addEventListener("voiceschanged", handleVoicesChanged);
+  });
+}
+
+async function speakVoiceNotification(input: {
   kind: VoiceNotificationKind;
   payload?: ApprovalPendingNotification | DeliveryReadyNotification;
 }) {
@@ -189,9 +239,9 @@ function speakVoiceNotification(input: {
     return false;
   }
 
-  const language = resolveVoiceNotificationLanguage(input.kind);
+  const language = resolveVoiceNotificationLanguage();
   const utterance = new host.utteranceConstructor(text);
-  const availableVoices = host.synthesizer.getVoices();
+  const availableVoices = await waitForVoiceNotificationVoices(host.synthesizer);
   const resolvedVoice = resolveVoiceNotificationVoice({
     language,
     voiceType: settings.voice_type,
@@ -215,6 +265,24 @@ function speakVoiceNotification(input: {
  */
 export function speakShellBallStartupGreeting() {
   return speakVoiceNotification({ kind: "startup_greeting" });
+}
+
+/**
+ * Plays a short reminder when the shell-ball detects a fresh text selection.
+ *
+ * @returns Whether the local desktop runtime attempted speech playback.
+ */
+export function speakShellBallSelectionDetectedNotification() {
+  return speakVoiceNotification({ kind: "selection_detected" });
+}
+
+/**
+ * Plays a short reminder when the shell-ball receives a fresh clipboard prompt.
+ *
+ * @returns Whether the local desktop runtime attempted speech playback.
+ */
+export function speakShellBallClipboardDetectedNotification() {
+  return speakVoiceNotification({ kind: "clipboard_detected" });
 }
 
 /**

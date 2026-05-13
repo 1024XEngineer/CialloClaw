@@ -1281,7 +1281,7 @@ export function ControlPanelApp() {
 
               <ToggleLine
                 label="语音通知"
-                description="控制应用内语音提示和音效反馈。"
+                description="控制悬浮球启动、文本承接和正式任务通知的本地语音提示。"
                 checked={draft.settings.general.voice_notification_enabled}
                 onCheckedChange={(checked) =>
                   updateSettings((current) => ({
@@ -1296,7 +1296,7 @@ export function ControlPanelApp() {
 
               <ControlLine
                 label="提示声线"
-                hint="控制正式 `general.voice_type`，保存后重新打开控制面板会回显当前值。"
+                hint="控制桌面端本地语音播报使用的 `general.voice_type`，保存后重新打开控制面板会回显当前值。"
                 disabled={!draft.settings.general.voice_notification_enabled}
               >
                 <TextField.Root
