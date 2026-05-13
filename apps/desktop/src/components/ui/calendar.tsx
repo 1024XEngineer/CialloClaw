@@ -1,4 +1,6 @@
 import * as React from "react"
+import { format } from "date-fns"
+import { zhCN } from "date-fns/locale"
 import { DayPicker } from "react-day-picker"
 
 import { cn } from "@/lib/utils"
@@ -12,28 +14,37 @@ function Calendar({
 }: React.ComponentProps<typeof DayPicker>) {
   return (
     <DayPicker
+      locale={zhCN}
       showOutsideDays={showOutsideDays}
-      className={cn("p-3", className)}
+      weekStartsOn={1}
+      className={cn("p-0", className)}
       classNames={{
-        button_next: cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "size-8 rounded-md"),
-        button_previous: cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "size-8 rounded-md"),
-        caption_label: "text-sm font-medium text-foreground",
-        day: "text-center text-sm p-0 relative [&:has([aria-selected])]:bg-accent first:[&:has([aria-selected])]:rounded-l-md last:[&:has([aria-selected])]:rounded-r-md focus-within:relative focus-within:z-20",
-        day_button: cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "size-9 rounded-md p-0 font-normal aria-selected:opacity-100"),
-        disabled: "text-muted-foreground opacity-50",
+        button_next: cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "size-7 rounded-full text-[#7a5a33] hover:bg-white/70"),
+        button_previous: cn(buttonVariants({ variant: "ghost", size: "icon-sm" }), "size-7 rounded-full text-[#7a5a33] hover:bg-white/70"),
+        caption_label: "text-sm font-medium text-[#5b3f24]",
+        day: "relative text-center text-sm p-0 focus-within:relative focus-within:z-20",
+        day_button: cn(
+          buttonVariants({ variant: "ghost", size: "icon-sm" }),
+          "size-8 rounded-full border border-transparent p-0 font-normal text-[#6f5535] hover:bg-[rgba(232,190,104,0.2)] hover:text-[#5b3f24] aria-selected:rounded-full aria-selected:border-[rgba(210,160,70,0.35)] aria-selected:bg-[rgba(232,190,104,0.35)] aria-selected:text-[#5b3f24]",
+        ),
+        disabled: "text-muted-foreground opacity-35",
         hidden: "invisible",
-        month: "space-y-4",
-        month_grid: "w-full border-collapse space-y-1",
-        months: "flex flex-col sm:flex-row gap-4",
+        month: "space-y-3",
+        month_grid: "w-full border-collapse",
+        months: "flex flex-col gap-3",
         nav: "flex items-center gap-1",
-        outside: "text-muted-foreground opacity-50 aria-selected:bg-accent/50 aria-selected:text-muted-foreground aria-selected:opacity-30",
+        outside: "text-[#b5a389] opacity-70",
         root: "w-fit",
-        selected: "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground focus:bg-primary focus:text-primary-foreground",
-        today: "bg-accent text-accent-foreground",
-        week: "flex w-full mt-2",
-        weekday: "text-muted-foreground rounded-md w-9 font-normal text-[0.8rem]",
-        weekdays: "flex",
+        selected: "",
+        today: "text-[#5b3f24]",
+        week: "flex w-full mt-1.5",
+        weekday: "w-8 text-center text-[0.75rem] font-medium text-[#8d7350]",
+        weekdays: "flex mb-1",
         ...classNames,
+      }}
+      formatters={{
+        formatCaption: (month) => format(month, "yyyy年M月", { locale: zhCN }),
+        formatWeekdayName: (date) => format(date, "EEEEE", { locale: zhCN }),
       }}
       {...props}
     />

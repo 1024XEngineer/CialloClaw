@@ -4,6 +4,9 @@
   --memory-right-offset: clamp(28px, 3.6vw, 52px);
   --memory-left-offset: clamp(320px, 26vw, 470px);
   --memory-session-max-height: calc(100vh - var(--memory-header-offset) - var(--memory-bottom-offset));
+  --memory-stack-card-height: 400px;
+  --memory-left-column-gap: clamp(16px, 1.8vw, 22px);
+  --memory-spotlight-height: calc(var(--memory-stack-card-height) * 2 + var(--memory-left-column-gap));
   min-height: 100vh;
   height: 100vh;
   overflow: hidden;
@@ -48,7 +51,8 @@
 .mirror-memory-left-column {
   display: flex;
   flex-direction: column;
-  gap: clamp(16px, 1.8vw, 22px);
+  gap: var(--memory-left-column-gap);
+  height: var(--memory-spotlight-height);
 }
 
 .mirror-memory-card,
@@ -71,14 +75,16 @@
 
 .mirror-memory-card--recent,
 .mirror-memory-card--history {
-  height: 400px;
-  min-height: 400px;
-  max-height: 400px;
+  height: var(--memory-stack-card-height);
+  min-height: var(--memory-stack-card-height);
+  max-height: var(--memory-stack-card-height);
 }
 
 .mirror-memory-card--spotlight {
   width: min(560px, 100%);
-  min-height: 0;
+  height: var(--memory-spotlight-height);
+  min-height: var(--memory-spotlight-height);
+  max-height: var(--memory-spotlight-height);
   padding: 20px;
   overflow: hidden;
 }
@@ -222,6 +228,8 @@
 }
 
 .mirror-memory-date-picker-shell {
+  position: relative;
+  z-index: 2;
   margin-bottom: 12px;
 }
 .mirror-memory-session-card {
@@ -259,12 +267,68 @@
 }
 
 .mirror-memory-date-picker-popover {
-  border-radius: 18px;
-  border: 1px solid rgba(255, 255, 255, 0.72);
-  background: rgba(255, 250, 244, 0.96);
-  box-shadow: 0 24px 48px -36px rgba(125, 92, 48, 0.45);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  width: 260px;
+  max-width: 280px;
+  margin-bottom: 12px;
+  padding: 12px;
+  overflow: hidden;
+  border-radius: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  background: rgba(255, 250, 242, 0.8);
+  box-shadow: 0 20px 50px rgba(120, 84, 38, 0.12);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+.mirror-memory-calendar {
+  width: 100%;
+}
+
+.mirror-memory-calendar .rdp-root {
+  width: 100%;
+}
+
+.mirror-memory-calendar .rdp-months,
+.mirror-memory-calendar .rdp-month,
+.mirror-memory-calendar .rdp-month_grid {
+  width: 100%;
+}
+
+.mirror-memory-calendar .rdp-month_caption {
+  margin-bottom: 8px;
+}
+
+.mirror-memory-calendar .rdp-nav {
+  gap: 6px;
+}
+
+.mirror-memory-calendar .rdp-weekdays {
+  margin-bottom: 4px;
+}
+
+.mirror-memory-calendar .rdp-weekday {
+  font-size: 0.72rem;
+}
+
+.mirror-memory-calendar .rdp-day_button {
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    transform 140ms ease;
+}
+
+.mirror-memory-calendar .mirror-memory-calendar-day--has-data .rdp-day_button::after,
+.mirror-memory-calendar .mirror-memory-calendar-day--has-data button::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 4px;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  transform: translateX(-50%);
+  background: rgba(210, 160, 70, 0.95);
 }
 
 .mirror-memory-empty-state {
@@ -488,7 +552,6 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 16px 18px;
   min-height: 0;
 }
 
@@ -496,6 +559,7 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
+  padding: 16px 18px;
   max-width: 500px;
 }
 
@@ -513,8 +577,10 @@
 }
 
 .mirror-memory-heatmap-cell {
+  width: 100%;
   aspect-ratio: 1;
   max-width: 35px;
+  justify-self: center;
   border-radius: 7px;
   border: 1px solid rgba(208, 208, 208, 0.55);
 }

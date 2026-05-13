@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { format } from "date-fns";
+import { zhCN } from "date-fns/locale";
 import { ArrowRight, Calendar as CalendarIcon, Copy, Sparkles, X } from "lucide-react";
 import memoryBackground from "@/assets/background_memory.png";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,7 @@ type MemoryModalState =
   | null;
 
 const defaultHistoryDate = new Date(2026, 4, 14);
+const historyDataDate = new Date(2026, 4, 14);
 
 function formatHistoryDate(date: Date) {
   return format(date, "yyyy.MM.dd");
@@ -39,6 +41,7 @@ function formatHistoryDate(date: Date) {
 export function MockMirrorMemoryOverview() {
   const [mainTab, setMainTab] = useState<MainTab>("profile");
   const [selectedHistoryDate, setSelectedHistoryDate] = useState<Date | undefined>(defaultHistoryDate);
+  const [historyCalendarMonth, setHistoryCalendarMonth] = useState(defaultHistoryDate);
   const [activeModal, setActiveModal] = useState<MemoryModalState>(null);
   const recentMemory = mockRecentMemories[0] ?? null;
   const selectedHistoryDateKey = useMemo<HistoryDate>(() => (selectedHistoryDate ? formatHistoryDate(selectedHistoryDate) : formatHistoryDate(defaultHistoryDate)), [selectedHistoryDate]);
@@ -71,6 +74,15 @@ export function MockMirrorMemoryOverview() {
     if (session) {
       setActiveModal({ kind: "session", session });
     }
+  }
+
+  function handleHistoryDateSelect(date: Date | undefined) {
+    if (!date) {
+      return;
+    }
+
+    setSelectedHistoryDate(date);
+    setHistoryCalendarMonth(date);
   }
 
   return (
@@ -126,8 +138,20 @@ export function MockMirrorMemoryOverview() {
                   <CalendarIcon />
                   {selectedHistoryDate ? formatHistoryDate(selectedHistoryDate) : <span>Pick a date</span>}
                 </PopoverTrigger>
-                <PopoverContent align="start" className="mirror-memory-date-picker-popover w-auto p-0">
-                  <Calendar mode="single" onSelect={setSelectedHistoryDate} selected={selectedHistoryDate} />
+                <PopoverContent align="start" className="mirror-memory-date-picker-popover" side="top" sideOffset={8}>
+                  <Calendar
+                    className="mirror-memory-calendar"
+                    defaultMonth={defaultHistoryDate}
+                    locale={zhCN}
+                    mode="single"
+                    month={historyCalendarMonth}
+                    modifiers={{ hasData: historyDataDate }}
+                    modifiersClassNames={{ hasData: "mirror-memory-calendar-day--has-data" }}
+                    onMonthChange={setHistoryCalendarMonth}
+                    onSelect={handleHistoryDateSelect}
+                    selected={selectedHistoryDate}
+                    weekStartsOn={1}
+                  />
                 </PopoverContent>
               </Popover>
             </div>
@@ -224,7 +248,6 @@ export function MockMirrorMemoryOverview() {
 
               <section className="mirror-memory-heatmap-card">
                 <div className="mirror-memory-eyebrow">活跃时段热力图</div>
-                <p className="mirror-memory-section-copy">只有周四 13:00–13:30 出现一次活跃记录，其余时间暂无样本。</p>
                 <HeatmapGrid />
               </section>
             </div>
