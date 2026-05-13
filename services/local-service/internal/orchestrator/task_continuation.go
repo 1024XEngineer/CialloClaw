@@ -16,7 +16,7 @@ import (
 
 const implicitSessionReuseWindow = 15 * time.Minute
 
-var taskContinuationModelTimeout = 3 * time.Second
+var taskContinuationModelTimeout = 5 * time.Minute
 
 type taskContinuationDecision struct {
 	Decision string `json:"decision"`

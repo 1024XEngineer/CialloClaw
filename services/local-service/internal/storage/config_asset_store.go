@@ -507,7 +507,7 @@ func configureConfigAssetSQLiteDatabase(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, `PRAGMA journal_mode=WAL;`); err != nil {
 		return fmt.Errorf("enable sqlite wal mode: %w", err)
 	}
-	if _, err := db.ExecContext(ctx, `PRAGMA busy_timeout=5000;`); err != nil {
+	if _, err := db.ExecContext(ctx, `PRAGMA busy_timeout=300000;`); err != nil {
 		return fmt.Errorf("set sqlite busy timeout: %w", err)
 	}
 	return nil

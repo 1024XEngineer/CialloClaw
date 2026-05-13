@@ -30,7 +30,7 @@ import type {
   SourceNoteSnapshot,
 } from "./notePage.types";
 
-const NOTE_SOURCE_TIMEOUT_MS = 10_000;
+const NOTE_SOURCE_TIMEOUT_MS = 300_000;
 const LEGACY_TASK_SOURCE_PLACEHOLDERS = new Set(["workspace/todos"]);
 
 function createRequestMeta(scope: string): RequestMeta {

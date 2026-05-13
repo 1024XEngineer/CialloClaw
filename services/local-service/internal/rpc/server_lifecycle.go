@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const defaultTransportShutdownTimeout = 5 * time.Second
+const defaultTransportShutdownTimeout = 5 * time.Minute
 
 var (
 	errTransportShutdownIncomplete = errors.New("transport shutdown incomplete")

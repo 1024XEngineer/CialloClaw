@@ -90,7 +90,7 @@ func (s *SQLiteSettingsStore) initialize(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, `PRAGMA journal_mode=WAL;`); err != nil {
 		return fmt.Errorf("%w: enable sqlite wal mode: %v", ErrStructuredStoreUnavailable, err)
 	}
-	if _, err := s.db.ExecContext(ctx, `PRAGMA busy_timeout=5000;`); err != nil {
+	if _, err := s.db.ExecContext(ctx, `PRAGMA busy_timeout=300000;`); err != nil {
 		return fmt.Errorf("%w: set sqlite busy timeout: %v", ErrStructuredStoreUnavailable, err)
 	}
 	if _, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS settings_snapshots (snapshot_key TEXT PRIMARY KEY, snapshot_json TEXT NOT NULL, updated_at TEXT NOT NULL)`); err != nil {

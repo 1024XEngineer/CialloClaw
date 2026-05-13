@@ -36,7 +36,7 @@ export type TaskOpenExecutionOptions = {
   }) => Promise<string | void> | string | void;
 };
 
-const TASK_OUTPUT_RPC_TIMEOUT_MS = 2_500;
+const TASK_OUTPUT_RPC_TIMEOUT_MS = 300_000;
 
 function createRequestMeta(scope: string): RequestMeta {
   return {

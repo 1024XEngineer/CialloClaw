@@ -16,7 +16,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 )
 
-const taskConfirmQuestionModelTimeout = 3 * time.Second
+const taskConfirmQuestionModelTimeout = 5 * time.Minute
 
 func (s *Service) bubbleTextForInput(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) string {
 	return s.bubbleTextForConfirmation(task, snapshot, suggestion, false)

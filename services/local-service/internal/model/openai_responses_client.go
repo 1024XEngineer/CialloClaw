@@ -83,7 +83,7 @@ func (e *OpenAIHTTPStatusError) Unwrap() error {
 	return ErrOpenAIHTTPStatus
 }
 
-const defaultOpenAIResponsesTimeout = 30 * time.Second
+const defaultOpenAIResponsesTimeout = 5 * time.Minute
 
 // NewOpenAIResponsesClient validates provider config and returns an SDK-backed client.
 func NewOpenAIResponsesClient(cfg OpenAIResponsesClientConfig) (*OpenAIResponsesClient, error) {

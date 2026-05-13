@@ -22,7 +22,7 @@ const INITIAL_TASK_PAGE_LIMIT: Record<TaskListGroup, number> = {
   finished: 24,
   unfinished: 12,
 };
-const TASK_RPC_TIMEOUT_MS = 2_500;
+const TASK_RPC_TIMEOUT_MS = 300_000;
 
 export const DEFAULT_TASK_EVENT_FILTERS: TaskEventFilters = {
   eventType: "",

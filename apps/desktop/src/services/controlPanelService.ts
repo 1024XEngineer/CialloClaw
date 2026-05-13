@@ -65,7 +65,7 @@ export type ControlPanelModelValidationOptions = {
 
 type ControlPanelSaveErrorKind = "general" | "model_validation_failed";
 
-const CONTROL_PANEL_RPC_TIMEOUT_MS = 10_000;
+const CONTROL_PANEL_RPC_TIMEOUT_MS = 300_000;
 
 const CONTROL_PANEL_INSPECTOR_UPDATED_KEYS = [
   "task_automation.task_sources",

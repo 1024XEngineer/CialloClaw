@@ -8,7 +8,7 @@ const (
 	executionSegmentInitial     = "initial"
 	executionSegmentResume      = "resume"
 	executionSegmentRestart     = "restart"
-	defaultTaskExecutionTimeout = 95 * time.Second
+	defaultTaskExecutionTimeout = 5 * time.Minute
 	subjectPreviewMaxLength     = 24
 	resultPreviewMaxLength      = 120
 )

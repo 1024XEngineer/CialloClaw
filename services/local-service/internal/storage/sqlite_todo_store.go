@@ -187,7 +187,7 @@ func (s *SQLiteTodoStore) initialize(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, `PRAGMA journal_mode=WAL;`); err != nil {
 		return fmt.Errorf("enable sqlite wal mode: %w", err)
 	}
-	if _, err := s.db.ExecContext(ctx, `PRAGMA busy_timeout=5000;`); err != nil {
+	if _, err := s.db.ExecContext(ctx, `PRAGMA busy_timeout=300000;`); err != nil {
 		return fmt.Errorf("set sqlite busy timeout: %w", err)
 	}
 	if _, err := s.db.ExecContext(ctx, `

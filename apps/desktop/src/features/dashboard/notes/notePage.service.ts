@@ -16,7 +16,7 @@ import { isDashboardTaskDeliveryHref } from "../tasks/taskDeliveryNavigation";
 import type { NoteConvertOutcome, NoteDetailExperience, NoteListItem, NoteResource, NoteUpdateOutcome, SourceNoteDocument } from "./notePage.types";
 import { sanitizeSourceNoteBodyText } from "./sourceNoteEditor";
 
-const NOTEPAD_RPC_TIMEOUT_MS = 2_500;
+const NOTEPAD_RPC_TIMEOUT_MS = 300_000;
 const NOTE_HIDDEN_METADATA_KEYS = new Set([
   "agent",
   "bucket",

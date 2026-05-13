@@ -88,17 +88,17 @@ const TRAY_MENU_OPEN_CONTROL_PANEL_ID: &str = "open-control-panel";
 const TRAY_MENU_QUIT_ID: &str = "quit-app";
 const DESKTOP_SETTINGS_CLIENT_TIME: &str = "1970-01-01T00:00:00Z";
 const LOCAL_SERVICE_LOG_FILE_NAME: &str = "local-service-sidecar.log";
-const LOCAL_SERVICE_READY_TIMEOUT: Duration = Duration::from_secs(20);
+const LOCAL_SERVICE_READY_TIMEOUT: Duration = Duration::from_secs(300);
 const LOCAL_SERVICE_READY_RETRY_DELAY: Duration = Duration::from_millis(100);
-const LOCAL_SERVICE_REQUEST_TIMEOUT: Duration = Duration::from_secs(100);
-const LOCAL_SERVICE_PIPE_BUSY_RETRY_TIMEOUT: Duration = Duration::from_secs(2);
+const LOCAL_SERVICE_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
+const LOCAL_SERVICE_PIPE_BUSY_RETRY_TIMEOUT: Duration = Duration::from_secs(300);
 const LOCAL_SERVICE_PIPE_BUSY_RETRY_DELAY: Duration = Duration::from_millis(40);
 const LOCAL_SERVICE_LOG_MAX_BYTES: u64 = 256 * 1024;
 static LOCAL_SERVICE_LOG_WRITE_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 static DESKTOP_SETTINGS_REQUEST_ID: AtomicU32 = AtomicU32::new(1);
 static CONTROL_PANEL_WINDOW_CREATION_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 static ONBOARDING_WINDOW_CREATION_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
-const DESKTOP_SETTINGS_REQUEST_TIMEOUT_MS: u64 = 1_500;
+const DESKTOP_SETTINGS_REQUEST_TIMEOUT_MS: u64 = 300_000;
 
 #[cfg(windows)]
 macro_rules! makelparam {

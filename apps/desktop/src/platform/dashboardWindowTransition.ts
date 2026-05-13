@@ -18,7 +18,7 @@ export type ShellBallDashboardTransitionComplete = {
   requestId?: string;
 };
 
-const SHELL_BALL_DASHBOARD_CLOSE_TRANSITION_TIMEOUT_MS = 1_200;
+const SHELL_BALL_DASHBOARD_CLOSE_TRANSITION_TIMEOUT_MS = 300_000;
 
 async function getShellBallWindowHandle() {
   const currentWindow = getCurrentWindow();

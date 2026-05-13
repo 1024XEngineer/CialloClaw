@@ -15,7 +15,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 )
 
-const taskConfirmCorrectionModelTimeout = 3 * time.Second
+const taskConfirmCorrectionModelTimeout = 5 * time.Minute
 
 var errTaskConfirmCorrectionPayloadInvalid = errors.New("task confirm correction payload invalid")
 

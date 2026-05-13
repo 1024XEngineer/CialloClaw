@@ -58,7 +58,7 @@ func NewServer(cfg serviceconfig.RPCConfig, orchestrator *orchestrator.Service) 
 		server.debugHTTPServer = &http.Server{
 			Addr:              cfg.DebugHTTPAddress,
 			Handler:           mux,
-			ReadHeaderTimeout: 5 * time.Second,
+			ReadHeaderTimeout: 5 * time.Minute,
 		}
 	}
 
