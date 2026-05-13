@@ -14,6 +14,7 @@ import { ShellBallBubbleZone } from "./components/ShellBallBubbleZone";
 import { ShellBallInputBar } from "./components/ShellBallInputBar";
 import { ShellBallVoiceHints } from "./components/ShellBallVoiceHints";
 import type { ShellBallSelectionSnapshot } from "./selection/selection.types";
+import { areShellBallSelectionSnapshotsEqual } from "./selection/selection.provider";
 import { useShellBallInteraction } from "./useShellBallInteraction";
 import { getShellBallMotionConfig } from "./shellBall.motion";
 import type { ShellBallInputBarMode, ShellBallVisualState } from "./shellBall.types";
@@ -34,6 +35,7 @@ import {
   showShellBallWindow,
 } from "../../platform/shellBallWindowController";
 import {
+  readShellBallSelectionSnapshot,
   setShellBallAlwaysOnTop,
   setShellBallInteractiveRegions,
   setShellBallPressLock,
@@ -70,6 +72,7 @@ type ShellBallEdgeDockRevealBounds = {
 const SHELL_BALL_DASHBOARD_TRANSITION_DURATION_MS = 260;
 const SHELL_BALL_SELECTION_PROMPT_CLEAR_DELAY_MS = 240;
 const SHELL_BALL_SELECTION_PROMPT_WINDOW_MS = 10_000;
+const SHELL_BALL_SELECTION_REVALIDATION_INTERVAL_MS = 2_000;
 const SHELL_BALL_CLIPBOARD_PROMPT_WINDOW_MS = 10_000;
 const SHELL_BALL_EDGE_DOCK_REVEAL_GUARD_PX = 16;
 const SHELL_BALL_EDGE_DOCK_REVEAL_HIDE_DELAY_MS = 90;
@@ -987,6 +990,67 @@ export function ShellBallApp() {
         window.clearTimeout(selectionPromptExpiryTimeoutRef.current);
         selectionPromptExpiryTimeoutRef.current = null;
       }
+    };
+  }, [selectionPrompt]);
+
+  useEffect(() => {
+    if (selectionPrompt === null) {
+      return;
+    }
+
+    let disposed = false;
+    let revalidationInFlight = false;
+
+    // Host-side selection hooks can miss destructive shortcuts like Ctrl+X, so
+    // re-query the native selection while the shell-ball prompt is visible.
+    async function revalidateSelectionPrompt() {
+      if (revalidationInFlight) {
+        return;
+      }
+
+      revalidationInFlight = true;
+
+      try {
+        const nextSnapshot = await readShellBallSelectionSnapshot();
+        if (disposed) {
+          return;
+        }
+
+        if (selectionPromptClearTimeoutRef.current !== null) {
+          window.clearTimeout(selectionPromptClearTimeoutRef.current);
+          selectionPromptClearTimeoutRef.current = null;
+        }
+
+        if (nextSnapshot === null) {
+          setSelectionPrompt(null);
+          return;
+        }
+
+        setSelectionPrompt((current) => {
+          if (
+            current !== null
+            && current.updated_at === nextSnapshot.updated_at
+            && areShellBallSelectionSnapshotsEqual(current, nextSnapshot)
+          ) {
+            return current;
+          }
+
+          return nextSnapshot;
+        });
+      } catch (error) {
+        console.warn("Failed to revalidate shell-ball selection prompt.", error);
+      } finally {
+        revalidationInFlight = false;
+      }
+    }
+
+    const intervalId = window.setInterval(() => {
+      void revalidateSelectionPrompt();
+    }, SHELL_BALL_SELECTION_REVALIDATION_INTERVAL_MS);
+
+    return () => {
+      disposed = true;
+      window.clearInterval(intervalId);
     };
   }, [selectionPrompt]);
 

@@ -47,6 +47,7 @@ static SHELL_BALL_SELECTION_MONITOR_STATE: Lazy<Mutex<SelectionMonitorState>> =
 
 #[derive(Default)]
 struct SelectionMonitorState {
+    invalidated_fingerprint: Option<String>,
     last_fingerprint: Option<String>,
     probe_pending: bool,
 }
@@ -133,6 +134,13 @@ pub fn install_selection_listener(app: &AppHandle) -> Result<(), String> {
 pub fn read_selection_snapshot(
     app: &AppHandle,
 ) -> Result<Option<SelectionSnapshotPayload>, String> {
+    let snapshot = read_selection_snapshot_raw(app)?;
+    Ok(suppress_invalidated_selection_snapshot(snapshot))
+}
+
+fn read_selection_snapshot_raw(
+    app: &AppHandle,
+) -> Result<Option<SelectionSnapshotPayload>, String> {
     let _com_guard = ComGuard::initialize()?;
     let foreground_window = unsafe { GetForegroundWindow() };
 
@@ -174,6 +182,22 @@ pub fn read_selection_snapshot(
     )))
 }
 
+fn suppress_invalidated_selection_snapshot(
+    snapshot: Option<SelectionSnapshotPayload>,
+) -> Option<SelectionSnapshotPayload> {
+    let fingerprint = selection_snapshot_fingerprint(snapshot.as_ref());
+    let invalidated_fingerprint = SHELL_BALL_SELECTION_MONITOR_STATE
+        .lock()
+        .ok()
+        .and_then(|state| state.invalidated_fingerprint.clone());
+
+    if fingerprint.is_some() && fingerprint == invalidated_fingerprint {
+        return None;
+    }
+
+    snapshot
+}
+
 unsafe extern "system" fn shell_ball_selection_mouse_hook(
     n_code: i32,
     w_param: WPARAM,
@@ -183,6 +207,7 @@ unsafe extern "system" fn shell_ball_selection_mouse_hook(
     // left click will re-probe the selection and clear shell-ball alert state
     // if the user no longer has a live selection.
     if n_code >= 0 && w_param.0 as u32 == WM_LBUTTONUP {
+        clear_invalidated_selection_fingerprint();
         schedule_selection_probe(SHELL_BALL_SELECTION_MOUSE_DELAY_MS);
     }
 
@@ -196,6 +221,12 @@ unsafe extern "system" fn shell_ball_selection_keyboard_hook(
 ) -> LRESULT {
     if n_code >= 0 && (w_param.0 as u32 == WM_KEYDOWN || w_param.0 as u32 == WM_SYSKEYDOWN) {
         let keyboard_info = *(l_param.0 as *const KBDLLHOOKSTRUCT);
+        if should_invalidate_selection_from_key_event(keyboard_info.vkCode) {
+            invalidate_current_selection();
+        } else if should_clear_selection_invalidation_from_key_event(keyboard_info.vkCode) {
+            clear_invalidated_selection_fingerprint();
+        }
+
         if should_probe_selection_from_key_event(keyboard_info.vkCode) {
             schedule_selection_probe(SHELL_BALL_SELECTION_KEYBOARD_DELAY_MS);
         }
@@ -216,6 +247,10 @@ fn should_probe_selection_from_key_event(vk_code: u32) -> bool {
         return true;
     }
 
+    if ctrl_down && vk_code == b'X' as u32 {
+        return true;
+    }
+
     if !shift_down {
         return false;
     }
@@ -231,6 +266,76 @@ fn should_probe_selection_from_key_event(vk_code: u32) -> bool {
             || code == VK_PRIOR.0 as u32
             || code == VK_NEXT.0 as u32
     )
+}
+
+fn should_invalidate_selection_from_key_event(vk_code: u32) -> bool {
+    let ctrl_down = unsafe { (GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0 };
+    ctrl_down && vk_code == b'X' as u32
+}
+
+fn should_clear_selection_invalidation_from_key_event(vk_code: u32) -> bool {
+    let ctrl_down = unsafe { (GetAsyncKeyState(VK_CONTROL.0 as i32) as u16 & 0x8000) != 0 };
+    let shift_down = unsafe { (GetAsyncKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0 };
+
+    if ctrl_down && vk_code == b'A' as u32 {
+        return true;
+    }
+
+    if !shift_down {
+        return false;
+    }
+
+    matches!(
+        vk_code,
+        code if code == VK_LEFT.0 as u32
+            || code == VK_RIGHT.0 as u32
+            || code == VK_UP.0 as u32
+            || code == VK_DOWN.0 as u32
+            || code == VK_HOME.0 as u32
+            || code == VK_END.0 as u32
+            || code == VK_PRIOR.0 as u32
+            || code == VK_NEXT.0 as u32
+    )
+}
+
+fn invalidate_current_selection() {
+    thread::spawn(move || {
+        let Some(app) = SHELL_BALL_SELECTION_APP_HANDLE
+            .lock()
+            .ok()
+            .and_then(|guard| guard.as_ref().cloned())
+        else {
+            return;
+        };
+
+        let snapshot = read_selection_snapshot_raw(&app).ok().flatten();
+        let fingerprint = selection_snapshot_fingerprint(snapshot.as_ref());
+
+        let should_emit = {
+            let mut state = match SHELL_BALL_SELECTION_MONITOR_STATE.lock() {
+                Ok(guard) => guard,
+                Err(_) => return,
+            };
+
+            state.invalidated_fingerprint = fingerprint;
+            if state.last_fingerprint.is_none() {
+                false
+            } else {
+                state.last_fingerprint = None;
+                true
+            }
+        };
+
+        if should_emit {
+            emit_selection_snapshot(&app, None);
+        }
+    });
+}
+
+fn clear_invalidated_selection_fingerprint() {
+    if let Ok(mut state) = SHELL_BALL_SELECTION_MONITOR_STATE.lock() {
+        state.invalidated_fingerprint = None;
+    }
 }
 
 fn schedule_selection_probe(delay_ms: u64) {
@@ -281,14 +386,18 @@ fn schedule_selection_probe(delay_ms: u64) {
             return;
         }
 
-        let _ = app.emit_to(
-            "shell-ball",
-            SHELL_BALL_SELECTION_SNAPSHOT_EVENT,
-            serde_json::json!({
-                "snapshot": snapshot,
-            }),
-        );
+        emit_selection_snapshot(&app, snapshot);
     });
+}
+
+fn emit_selection_snapshot(app: &AppHandle, snapshot: Option<SelectionSnapshotPayload>) {
+    let _ = app.emit_to(
+        "shell-ball",
+        SHELL_BALL_SELECTION_SNAPSHOT_EVENT,
+        serde_json::json!({
+            "snapshot": snapshot,
+        }),
+    );
 }
 
 fn reset_probe_pending() {
