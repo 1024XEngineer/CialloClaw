@@ -200,8 +200,8 @@ func (s *Service) attachMemoryReadPlans(taskID, runID string, snapshot taskconte
 }
 
 // previewMemoryContext performs the same storage-backed retrieval as execution
-// planning, but it only returns the matched summaries so clarification bubbles
-// can acknowledge recent context without changing task ownership decisions.
+// planning, but it only returns retrieval hits for downstream reuse in the
+// clarification and confirmation flow without changing task ownership decisions.
 func (s *Service) previewMemoryContext(taskID, runID string, snapshot taskcontext.TaskContextSnapshot) []memory.RetrievalHit {
 	if s == nil || s.memory == nil {
 		return nil
@@ -221,8 +221,8 @@ func (s *Service) previewMemoryContext(taskID, runID string, snapshot taskcontex
 }
 
 // clarificationPreviewHits prefers the retrieval_context already materialized on
-// the task so clarification bubbles and later execution reuse the same memory
-// evidence even after storage round-trips or follow-up confirmation RPCs.
+// the task so clarification, confirmation, and later execution reuse the same
+// memory evidence even after storage round-trips or follow-up confirmation RPCs.
 func (s *Service) clarificationPreviewHits(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot) []memory.RetrievalHit {
 	if s == nil {
 		return nil
