@@ -409,6 +409,9 @@ test("page_read promotes bare domains to https before navigation", async () => {
 
   assert.equal(response.ok, true);
   assert.equal(response.result.url, "https://example.com/docs");
+  assert.equal(navigationLog[0].url, "https://example.com/docs");
+});
+
 test("page_read uses a managed local browser session when available", async () => {
   const lifecycle = [];
   const navigationLog = [];
@@ -462,8 +465,9 @@ test("page_read uses a managed local browser session when available", async () =
       timeout: 30000,
       waitUntil: "load",
     },
-    url: "https://example.com/docs",
+    url: "https://example.com",
   }]);
+  assert.deepEqual(actionLog.map((entry) => entry.action), ["isManagedWorkerPage"]);
 });
 
 test("page_read promotes loopback hosts to http before navigation", async () => {
@@ -492,9 +496,6 @@ test("page_read still promotes public bare domains to https before navigation", 
   assert.equal(response.ok, true);
   assert.equal(response.result.url, "https://example.com/docs");
   assert.equal(navigationLog[0].url, "https://example.com/docs");
-    url: "https://example.com",
-  }]);
-  assert.deepEqual(actionLog.map((entry) => entry.action), ["isManagedWorkerPage"]);
 });
 
 test("page_read opens a managed tab when no reusable page is available", async () => {
