@@ -158,11 +158,9 @@ export function TaskMainPanel({
               if (isSafety) {
                 return (
                   <Tooltip key={item.label}>
-                    <TooltipTrigger>
-                      <Button className="task-capsule-soft-button h-10 rounded-full px-4 text-sm" onClick={() => onPrimaryAction(item.action)} variant="ghost">
-                        {item.label}
-                        <ArrowUpRight className="h-4 w-4" />
-                      </Button>
+                    <TooltipTrigger render={<Button className="task-capsule-soft-button h-10 rounded-full px-4 text-sm" onClick={() => onPrimaryAction(item.action)} variant="ghost" />}>
+                      {item.label}
+                      <ArrowUpRight className="h-4 w-4" />
                     </TooltipTrigger>
                     <TooltipContent className="rounded-full bg-slate-900/90 px-3 py-1.5 text-[0.72rem] text-white">{item.tooltip}</TooltipContent>
                   </Tooltip>
@@ -171,14 +169,8 @@ export function TaskMainPanel({
 
               return (
                 <Tooltip key={item.label}>
-                  <TooltipTrigger>
-                    <Button
-                      className="task-capsule-soft-button h-10 rounded-full px-4 text-sm"
-                      onClick={() => onPrimaryAction(item.action)}
-                      variant="ghost"
-                    >
-                      {item.label}
-                    </Button>
+                  <TooltipTrigger render={<Button className="task-capsule-soft-button h-10 rounded-full px-4 text-sm" onClick={() => onPrimaryAction(item.action)} variant="ghost" />}>
+                    {item.label}
                   </TooltipTrigger>
                   <TooltipContent className="rounded-full bg-slate-900/90 px-3 py-1.5 text-[0.72rem] text-white">{item.tooltip}</TooltipContent>
                 </Tooltip>

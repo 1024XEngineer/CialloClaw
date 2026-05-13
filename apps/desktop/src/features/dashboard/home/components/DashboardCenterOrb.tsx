@@ -21,6 +21,8 @@ type DragState = {
   startY: number;
 };
 
+type OrbPointerEvent = ReactPointerEvent<HTMLDivElement>;
+
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.min(maximum, Math.max(minimum, value));
 }
@@ -117,7 +119,7 @@ export function DashboardCenterOrb({ activeColor, onDragOffset, onLongPress, vis
     }, LONG_PRESS_DURATION);
   }, [cancelLongPress, onLongPress]);
 
-  function handlePointerDown(event: ReactPointerEvent<HTMLButtonElement>) {
+  function handlePointerDown(event: OrbPointerEvent) {
     event.preventDefault();
     window.cancelAnimationFrame(returnFrameRef.current);
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -128,7 +130,7 @@ export function DashboardCenterOrb({ activeColor, onDragOffset, onLongPress, vis
     beginLongPress();
   }
 
-  function handlePointerMove(event: ReactPointerEvent<HTMLButtonElement>) {
+  function handlePointerMove(event: OrbPointerEvent) {
     if (!dragState || dragState.pointerId !== event.pointerId) {
       return;
     }
@@ -152,7 +154,7 @@ export function DashboardCenterOrb({ activeColor, onDragOffset, onLongPress, vis
     setOffset(next);
   }
 
-  function handlePointerEnd(event: ReactPointerEvent<HTMLButtonElement>) {
+  function handlePointerEnd(event: OrbPointerEvent) {
     if (!dragState || dragState.pointerId !== event.pointerId) {
       return;
     }
@@ -200,14 +202,13 @@ export function DashboardCenterOrb({ activeColor, onDragOffset, onLongPress, vis
         </svg>
       ) : null}
 
-      <button
+      <div
         className={cn("dashboard-orbit-center__core", isDragging && "is-dragging", isReturning && "is-returning")}
         onLostPointerCapture={handlePointerEnd}
         onPointerCancel={handlePointerEnd}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerEnd}
-        type="button"
       >
         <div className="dashboard-orbit-center__shell">
           <ShellBallMascot
@@ -222,7 +223,7 @@ export function DashboardCenterOrb({ activeColor, onDragOffset, onLongPress, vis
             voicePreview={null}
           />
         </div>
-      </button>
+      </div>
 
       <div className="dashboard-orbit-center__caption">
         <div className="dashboard-orbit-center__status-line">

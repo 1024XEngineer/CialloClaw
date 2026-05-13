@@ -1,17 +1,17 @@
 import { DashboardBackHomeLink } from "@/features/dashboard/shared/DashboardBackHomeLink";
 import { DashboardModuleFloatingNav } from "@/features/dashboard/shared/DashboardModuleFloatingNav";
-import { MockMirrorMemoryOverview } from "./MockMirrorMemoryPage";
+import { MirrorApp } from "./MirrorApp";
 
 /**
- * Mounts the new mock-only mirror memory routes while preserving the previous
- * implementation in `LegacyMemoryPage` for future reference.
+ * Preserves the previous protocol-backed mirror page while the new mock memory
+ * surface takes over the default dashboard route.
  */
-export function MemoryPage() {
+export function LegacyMemoryPage() {
   return (
     <>
       <DashboardBackHomeLink />
       <DashboardModuleFloatingNav />
-      <MockMirrorMemoryOverview />
+      <MirrorApp />
     </>
   );
 }

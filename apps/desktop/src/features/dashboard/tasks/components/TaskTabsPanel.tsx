@@ -153,10 +153,11 @@ function renderTabBody({
                     <p className="mt-1 text-xs uppercase tracking-[0.18em] text-slate-500">{artifact.artifact_type}</p>
                   </div>
                   <Tooltip>
-                    <TooltipTrigger className="inline-flex">
-                      <button className="rounded-full border border-slate-200 bg-white/80 px-3 py-1.5 text-xs text-slate-600" type="button">
-                        打开
-                      </button>
+                    <TooltipTrigger
+                      className="inline-flex"
+                      render={<button className="rounded-full border border-slate-200 bg-white/80 px-3 py-1.5 text-xs text-slate-600" type="button" />}
+                    >
+                      打开
                     </TooltipTrigger>
                     <TooltipContent className="rounded-full bg-slate-900/90 px-3 py-1.5 text-[0.72rem] text-white">
                       当前结果入口以任务详情里的真实产出为准
