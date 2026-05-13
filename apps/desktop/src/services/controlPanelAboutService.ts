@@ -65,12 +65,12 @@ const CONTROL_PANEL_ABOUT_FEEDBACK_CHANNELS = [
   },
   {
     actionLabel: "复制链接",
-    description: "访问官网查看产品介绍、使用入口与最新公开信息。",
+    description: "访问官网展示页，查看产品介绍、界面预览与公开说明。",
     href: CONTROL_PANEL_ABOUT_URLS.officialSite,
     hrefLabel: "1024xengineer.github.io/CialloClaw/",
     id: "official_site",
     kind: "link",
-    title: "官方网站",
+    title: "官网展示页",
   },
 ] as const satisfies readonly ControlPanelAboutFeedbackChannel[];
 

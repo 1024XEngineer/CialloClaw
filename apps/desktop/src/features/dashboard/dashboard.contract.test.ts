@@ -3551,12 +3551,12 @@ test("control panel about service exposes fallback metadata and feedback channel
     },
     {
       actionLabel: "复制链接",
-      description: "访问官网查看产品介绍、使用入口与最新公开信息。",
+      description: "访问官网展示页，查看产品介绍、界面预览与公开说明。",
       href: "https://1024xengineer.github.io/CialloClaw/",
       hrefLabel: "1024xengineer.github.io/CialloClaw/",
       id: "official_site",
       kind: "link",
-      title: "官方网站",
+      title: "官网展示页",
     },
   ]);
 });
