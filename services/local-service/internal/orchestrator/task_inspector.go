@@ -1,12 +1,19 @@
 package orchestrator
 
 import (
+	"context"
+	"fmt"
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/audit"
 	serviceconfig "github.com/cialloclaw/cialloclaw/services/local-service/internal/config"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/titlegen"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/traceeval"
 )
 
 // TaskInspectorConfigGet returns the inspector configuration projected from the
@@ -37,21 +44,30 @@ func (s *Service) TaskInspectorRun(params map[string]any) (map[string]any, error
 	notepadItems, _ := s.runEngine.NotepadItems("", 0, 0)
 	unfinishedTasks, _ := s.runEngine.ListTasks("unfinished", "updated_at", "desc", 0, 0)
 	finishedTasks, _ := s.runEngine.ListTasks("finished", "finished_at", "desc", 0, 0)
+	reason := stringValue(params, "reason", "")
+	inspectionID := fmt.Sprintf("insp_%d", time.Now().UTC().UnixNano())
 
 	result, err := s.inspector.Run(taskinspector.RunInput{
-		Reason:          stringValue(params, "reason", ""),
-		TargetSources:   targetSources,
-		Config:          config,
-		UnfinishedTasks: unfinishedTasks,
-		FinishedTasks:   finishedTasks,
-		NotepadItems:    notepadItems,
+		Reason:               reason,
+		InspectionID:         inspectionID,
+		AllowGeneratedTitles: inspectorAllowsGeneratedTitles(reason),
+		TitleGenerationOwner: titlegen.GenerationOwner{TaskID: inspectionID, RunID: inspectionID},
+		TargetSources:        targetSources,
+		Config:               config,
+		UnfinishedTasks:      unfinishedTasks,
+		FinishedTasks:        finishedTasks,
+		NotepadItems:         notepadItems,
 	})
 	if err != nil {
 		return nil, err
 	}
+	// Manual title generation can spend model quota before note syncing writes the
+	// derived notepad state. Persist the audit/trace owner first so later sync
+	// failures do not erase already-consumed model usage from governance views.
+	s.recordInspectorTitleGeneration(result.InspectionID, reason, result.TitleGenerationAuditData)
 	if result.SourceSynced {
 		if err := s.runEngine.SyncNotepadItems(result.NotepadItems); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("sync notepad items for inspection %s: %w", result.InspectionID, err)
 		}
 	}
 
@@ -60,6 +76,70 @@ func (s *Service) TaskInspectorRun(params map[string]any) (map[string]any, error
 		"summary":       result.Summary,
 		"suggestions":   append([]string(nil), result.Suggestions...),
 	}, nil
+}
+
+func inspectorAllowsGeneratedTitles(reason string) bool {
+	switch strings.TrimSpace(reason) {
+	case "notes_page_manual_run", "control_panel_manual_run":
+		return true
+	default:
+		return false
+	}
+}
+
+// recordInspectorTitleGeneration projects manual note-title generation into one
+// durable audit and metering owner keyed by inspection_id, because inspector
+// runs do not create formal tasks yet still spend model quota on workspace
+// content.
+func (s *Service) recordInspectorTitleGeneration(inspectionID string, reason string, invocations []taskinspector.TitleGenerationAuditRecord) {
+	inspectionID = strings.TrimSpace(inspectionID)
+	if s == nil || inspectionID == "" || len(invocations) == 0 {
+		return
+	}
+
+	for _, invocation := range invocations {
+		summary := "generate compact note title during manual inspector run"
+		result := "success"
+		outputText := "manual note title generated"
+		if !invocation.Generated {
+			summary = "note title model call fell back to local manual inspector title"
+			result = "fallback"
+			outputText = "manual note title fallback kept"
+		}
+		_, _ = s.audit.Write(context.Background(), audit.RecordInput{
+			TaskID:  inspectionID,
+			RunID:   inspectionID,
+			Type:    "model",
+			Action:  "note_title.generate",
+			Summary: summary,
+			Target:  firstNonEmptyString(strings.TrimSpace(reason), "task_inspector.run"),
+			Result:  result,
+		})
+		if s.traceEval == nil {
+			continue
+		}
+		traceResult, err := s.traceEval.Capture(traceeval.CaptureInput{
+			TaskID:          inspectionID,
+			RunID:           inspectionID,
+			IntentName:      "task_inspector.generate_note_title",
+			OutputText:      outputText,
+			ModelInvocation: invocation.Invocation.Map(),
+			TokenUsage:      modelInvocationTokenUsage(invocation.Invocation),
+			DurationMS:      invocation.Invocation.LatencyMS,
+		})
+		if err == nil {
+			_ = s.traceEval.Record(context.Background(), traceResult)
+		}
+	}
+}
+
+func modelInvocationTokenUsage(invocation model.InvocationRecord) map[string]any {
+	return auxiliaryTokenUsageSummary{
+		InputTokens:   invocation.Usage.InputTokens,
+		OutputTokens:  invocation.Usage.OutputTokens,
+		TotalTokens:   invocation.Usage.TotalTokens,
+		EstimatedCost: 0.0,
+	}.Map()
 }
 
 func inspectorConfigFromSettings(settings map[string]any) map[string]any {

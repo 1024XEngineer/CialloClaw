@@ -23,6 +23,7 @@ func (s *Service) StartTask(params map[string]any) (map[string]any, error) {
 	}
 
 	flow.Suggestion = s.suggestStartTaskIntent(flow)
+	flow.Suggestion.TaskTitle = s.fallbackTaskTitle(flow.Snapshot, flow.Suggestion.Intent, flow.Suggestion.TaskTitle)
 	if response, handled, err := s.maybeHandleSuggestedScreenStart(flow); err != nil || handled {
 		return response, err
 	}
@@ -148,6 +149,7 @@ func (s *Service) finishStartTask(flow taskEntryFlow, task runengine.TaskRecord)
 		return governedResponse, nil
 	}
 	task = governedTask
+	s.refreshTitleAfterGovernance(task, flow.Snapshot, flow.Suggestion.Intent)
 
 	deliveryResult := map[string]any(nil)
 	var execErr error

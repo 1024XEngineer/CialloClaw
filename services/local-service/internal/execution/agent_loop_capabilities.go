@@ -310,7 +310,44 @@ func (c agentLoopCapabilitySpec) toolDefinition(metadata tools.ToolMetadata) mod
 	return model.ToolDefinition{
 		Name:        metadata.Name,
 		Description: c.plannerDescription(metadata.Description),
-		InputSchema: cloneMap(c.InputSchema),
+		InputSchema: cloneSchemaMap(c.InputSchema),
+	}
+}
+
+// cloneSchemaMap preserves empty objects because JSON Schema treats `{}` as a
+// valid schema node while `null` is rejected by upstream providers.
+func cloneSchemaMap(values map[string]any) map[string]any {
+	if values == nil {
+		return nil
+	}
+
+	cloned := make(map[string]any, len(values))
+	for key, value := range values {
+		cloned[key] = cloneSchemaValue(value)
+	}
+	return cloned
+}
+
+func cloneSchemaValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		return cloneSchemaMap(typed)
+	case []map[string]any:
+		cloned := make([]map[string]any, 0, len(typed))
+		for _, item := range typed {
+			cloned = append(cloned, cloneSchemaMap(item))
+		}
+		return cloned
+	case []any:
+		cloned := make([]any, 0, len(typed))
+		for _, item := range typed {
+			cloned = append(cloned, cloneSchemaValue(item))
+		}
+		return cloned
+	case []string:
+		return append([]string(nil), typed...)
+	default:
+		return value
 	}
 }
 

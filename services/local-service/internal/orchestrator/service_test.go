@@ -35,6 +35,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskcontext"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/titlegen"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/builtin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools/sidecarclient"
@@ -91,6 +92,37 @@ type stubToolCallingModelClient struct {
 type blockingModelClient struct {
 	started  chan string
 	released chan struct{}
+}
+
+type titleBlockingModelClient struct {
+	started         chan string
+	released        chan struct{}
+	allowReturn     chan struct{}
+	immediateOutput string
+}
+
+type stagedTitleModelClient struct {
+	mu              sync.Mutex
+	titleCallCount  int
+	firstStarted    chan struct{}
+	allowFirstReply chan struct{}
+}
+
+type orderedTitleModelClient struct {
+	mu               sync.Mutex
+	titleCallCount   int
+	firstStarted     chan struct{}
+	secondStarted    chan struct{}
+	allowFirstReply  chan struct{}
+	allowSecondReply chan struct{}
+}
+
+type cancelAwareTitleModelClient struct {
+	mu             sync.Mutex
+	titleCallCount int
+	firstStarted   chan struct{}
+	firstCanceled  chan struct{}
+	secondStarted  chan struct{}
 }
 
 type delayedModelClient struct {
@@ -786,6 +818,196 @@ func (s *blockingModelClient) GenerateToolCalls(ctx context.Context, request mod
 		}
 	}
 	return model.ToolCallResult{}, ctx.Err()
+}
+
+func (s *titleBlockingModelClient) GenerateText(ctx context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	if !isTaskTitleGenerationRequest(request) {
+		return model.GenerateTextResponse{
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			RequestID:  "req_immediate_text",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: s.immediateOutput,
+		}, nil
+	}
+	if s.started != nil {
+		select {
+		case s.started <- request.TaskID:
+		default:
+		}
+	}
+	if s.allowReturn != nil {
+		select {
+		case <-ctx.Done():
+			if s.released != nil {
+				select {
+				case s.released <- struct{}{}:
+				default:
+				}
+			}
+			return model.GenerateTextResponse{}, ctx.Err()
+		case <-s.allowReturn:
+			if s.released != nil {
+				select {
+				case s.released <- struct{}{}:
+				default:
+				}
+			}
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_title_release",
+				Provider:   "openai_responses",
+				ModelID:    "gpt-5.4",
+				OutputText: `{"title":"发布复盘风险跟进"}`,
+			}, nil
+		}
+	}
+	<-ctx.Done()
+	if s.released != nil {
+		select {
+		case s.released <- struct{}{}:
+		default:
+		}
+	}
+	return model.GenerateTextResponse{}, ctx.Err()
+}
+
+func (s *titleBlockingModelClient) GenerateToolCalls(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+	return model.ToolCallResult{
+		RequestID:  "req_tool_unused",
+		Provider:   "openai_responses",
+		ModelID:    "gpt-5.4",
+		OutputText: s.immediateOutput,
+	}, nil
+}
+
+func (s *stagedTitleModelClient) GenerateText(_ context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	if !isTaskTitleGenerationRequest(request) {
+		return model.GenerateTextResponse{
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			RequestID:  "req_staged_immediate",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "执行结果",
+		}, nil
+	}
+	s.mu.Lock()
+	s.titleCallCount++
+	callIndex := s.titleCallCount
+	s.mu.Unlock()
+	if callIndex == 1 {
+		if s.firstStarted != nil {
+			close(s.firstStarted)
+		}
+		<-s.allowFirstReply
+		return model.GenerateTextResponse{OutputText: `{"title":"旧上下文标题"}`}, nil
+	}
+	if s.allowFirstReply != nil {
+		close(s.allowFirstReply)
+	}
+	return model.GenerateTextResponse{OutputText: `{"title":"最新上下文标题"}`}, nil
+}
+
+func (s *stagedTitleModelClient) GenerateToolCalls(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+	return model.ToolCallResult{
+		RequestID:  "req_tool_unused",
+		Provider:   "openai_responses",
+		ModelID:    "gpt-5.4",
+		OutputText: "执行结果",
+	}, nil
+}
+
+func (s *orderedTitleModelClient) GenerateText(_ context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	if !isTaskTitleGenerationRequest(request) {
+		return model.GenerateTextResponse{
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			RequestID:  "req_ordered_immediate",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "执行结果",
+		}, nil
+	}
+	s.mu.Lock()
+	s.titleCallCount++
+	callIndex := s.titleCallCount
+	s.mu.Unlock()
+	switch callIndex {
+	case 1:
+		if s.firstStarted != nil {
+			close(s.firstStarted)
+		}
+		<-s.allowFirstReply
+		return model.GenerateTextResponse{OutputText: `{"title":"旧上下文标题"}`}, nil
+	case 2:
+		if s.secondStarted != nil {
+			close(s.secondStarted)
+		}
+		<-s.allowSecondReply
+		return model.GenerateTextResponse{OutputText: `{"title":"最新上下文标题"}`}, nil
+	default:
+		return model.GenerateTextResponse{OutputText: `{"title":"额外标题调用"}`}, nil
+	}
+}
+
+func (s *orderedTitleModelClient) GenerateToolCalls(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+	return model.ToolCallResult{
+		RequestID:  "req_tool_unused",
+		Provider:   "openai_responses",
+		ModelID:    "gpt-5.4",
+		OutputText: "执行结果",
+	}, nil
+}
+
+func (s *cancelAwareTitleModelClient) GenerateText(ctx context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+	if !isTaskTitleGenerationRequest(request) {
+		return model.GenerateTextResponse{
+			TaskID:     request.TaskID,
+			RunID:      request.RunID,
+			RequestID:  "req_cancel_aware_immediate",
+			Provider:   "openai_responses",
+			ModelID:    "gpt-5.4",
+			OutputText: "执行结果",
+		}, nil
+	}
+	s.mu.Lock()
+	s.titleCallCount++
+	callIndex := s.titleCallCount
+	s.mu.Unlock()
+	switch callIndex {
+	case 1:
+		if s.firstStarted != nil {
+			close(s.firstStarted)
+		}
+		<-ctx.Done()
+		if s.firstCanceled != nil {
+			close(s.firstCanceled)
+		}
+		return model.GenerateTextResponse{}, ctx.Err()
+	case 2:
+		if s.secondStarted != nil {
+			close(s.secondStarted)
+		}
+		return model.GenerateTextResponse{OutputText: `{"title":"最新上下文标题"}`}, nil
+	default:
+		return model.GenerateTextResponse{OutputText: `{"title":"额外标题调用"}`}, nil
+	}
+}
+
+func (s *cancelAwareTitleModelClient) GenerateToolCalls(_ context.Context, _ model.ToolCallRequest) (model.ToolCallResult, error) {
+	return model.ToolCallResult{
+		RequestID:  "req_tool_unused",
+		Provider:   "openai_responses",
+		ModelID:    "gpt-5.4",
+		OutputText: "执行结果",
+	}, nil
+}
+
+func isTaskTitleGenerationRequest(request model.GenerateTextRequest) bool {
+	return strings.Contains(request.Input, "You generate one compact task title subject for a desktop agent task.")
 }
 
 func (s delayedModelClient) GenerateText(ctx context.Context, request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
@@ -2815,7 +3037,7 @@ func TestServiceConfirmTaskRewritesPlaceholderTitleAfterCorrection(t *testing.T)
 	}
 
 	task := confirmResult["task"].(map[string]any)
-	if task["title"] != "翻译：你好" {
+	if task["title"] != "你好" {
 		t.Fatalf("expected corrected intent to rewrite placeholder title, got %v", task["title"])
 	}
 }
@@ -2927,9 +3149,7 @@ func TestServiceConfirmTaskRejectsCorrectionPayloadConflicts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start task failed: %v", err)
 	}
-	startTask := startResult["task"].(map[string]any)
-
-	taskID := startTask["task_id"].(string)
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
 	_, err = service.ConfirmTask(map[string]any{
 		"task_id":   taskID,
 		"confirmed": true,
@@ -3434,6 +3654,285 @@ func TestTaskInspectorRunReturnsExplicitErrorForMissingSource(t *testing.T) {
 	}
 }
 
+func taskInspectorTitleGeneratorForTest(service *taskinspector.Service) *titlegen.Service {
+	if service == nil {
+		return nil
+	}
+	serviceValue := reflect.ValueOf(service).Elem()
+	field := serviceValue.FieldByName("titlegen")
+	value := reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem()
+	if value.IsNil() {
+		return nil
+	}
+	generator, _ := value.Interface().(*titlegen.Service)
+	return generator
+}
+
+func TestWithTaskInspectorPreservesExistingTitleGenerator(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, `{"title":"本周阻塞项复盘"}`)
+	generator := titlegen.NewService(service.model)
+	service.WithTitleGenerator(generator)
+
+	pathPolicy, err := platform.NewLocalPathPolicy(workspaceRoot)
+	if err != nil {
+		t.Fatalf("new local path policy: %v", err)
+	}
+	replacementInspector := taskinspector.NewService(platform.NewLocalFileSystemAdapter(pathPolicy))
+	service.WithTaskInspector(replacementInspector)
+
+	if taskInspectorTitleGeneratorForTest(service.inspector) != generator {
+		t.Fatal("expected replacement task inspector to inherit the existing title generator")
+	}
+}
+
+func TestTaskInspectorRunManualReasonAllowsGeneratedNoteTitles(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, `{"title":"本周阻塞项复盘"}`)
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+
+	todosRoot := filepath.Join(workspaceRoot, "todos")
+	if err := os.MkdirAll(todosRoot, 0o755); err != nil {
+		t.Fatalf("mkdir todos root: %v", err)
+	}
+	content := strings.Join([]string{
+		"- [ ] 复盘",
+		"note: 继续整理本周阻塞项和行动项",
+		"agent: 输出更紧凑标题",
+		"",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(todosRoot, "manual.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write manual note source: %v", err)
+	}
+
+	if _, err := service.TaskInspectorRun(map[string]any{
+		"target_sources": []any{"workspace/todos"},
+		"reason":         "notes_page_manual_run",
+	}); err != nil {
+		t.Fatalf("TaskInspectorRun returned error: %v", err)
+	}
+
+	notepadItems, _ := service.runEngine.NotepadItems("", 0, 0)
+	if len(notepadItems) != 1 {
+		t.Fatalf("expected one notepad item, got %+v", notepadItems)
+	}
+	if got := stringValue(notepadItems[0], "title", ""); got != "本周阻塞项复盘" {
+		t.Fatalf("expected manual inspector run to persist generated title, got %+v", notepadItems[0])
+	}
+}
+
+func TestTaskInspectorRunManualReasonRecordsGeneratedTitleAuditAndTrace(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, `{"title":"本周阻塞项复盘"}`)
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+
+	todosRoot := filepath.Join(workspaceRoot, "todos")
+	if err := os.MkdirAll(todosRoot, 0o755); err != nil {
+		t.Fatalf("mkdir todos root: %v", err)
+	}
+	content := strings.Join([]string{
+		"- [ ] 复盘",
+		"note: 继续整理本周阻塞项和行动项",
+		"agent: 输出更紧凑标题",
+		"",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(todosRoot, "manual.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write manual note source: %v", err)
+	}
+
+	result, err := service.TaskInspectorRun(map[string]any{
+		"target_sources": []any{"workspace/todos"},
+		"reason":         "notes_page_manual_run",
+	})
+	if err != nil {
+		t.Fatalf("TaskInspectorRun returned error: %v", err)
+	}
+	inspectionID, ok := result["inspection_id"].(string)
+	if !ok || inspectionID == "" {
+		t.Fatalf("expected inspection_id in response, got %+v", result["inspection_id"])
+	}
+
+	auditRecords, total, err := service.storage.AuditStore().ListAuditRecords(context.Background(), inspectionID, inspectionID, 10, 0)
+	if err != nil || total != 1 || len(auditRecords) != 1 {
+		t.Fatalf("expected one persisted audit record for manual title generation, total=%d len=%d err=%v", total, len(auditRecords), err)
+	}
+	if auditRecords[0].TaskID != inspectionID || auditRecords[0].RunID != inspectionID {
+		t.Fatalf("expected audit record to stay attributed to inspection owner, got %+v", auditRecords[0])
+	}
+	if auditRecords[0].Result != "success" {
+		t.Fatalf("expected successful generated title audit record, got %+v", auditRecords[0])
+	}
+
+	traces, total, err := service.storage.TraceStore().ListTraceRecords(context.Background(), inspectionID, 10, 0)
+	if err != nil || total != 1 || len(traces) != 1 {
+		t.Fatalf("expected one trace record for manual title generation, total=%d len=%d err=%v", total, len(traces), err)
+	}
+	if traces[0].TaskID != inspectionID || traces[0].RunID != inspectionID {
+		t.Fatalf("expected trace owner attribution to stay on inspection owner, got %+v", traces[0])
+	}
+	evals, total, err := service.storage.EvalStore().ListEvalSnapshots(context.Background(), inspectionID, 10, 0)
+	if err != nil || total != 1 || len(evals) != 1 {
+		t.Fatalf("expected one eval snapshot for manual title generation, total=%d len=%d err=%v", total, len(evals), err)
+	}
+}
+
+func TestTaskInspectorRunManualReasonRecordsFallbackAuditWhenTitleModelDoesNotGenerate(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, `{}`)
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+
+	todosRoot := filepath.Join(workspaceRoot, "todos")
+	if err := os.MkdirAll(todosRoot, 0o755); err != nil {
+		t.Fatalf("mkdir todos root: %v", err)
+	}
+	content := strings.Join([]string{
+		"- [ ] 复盘",
+		"note: 继续整理本周阻塞项和行动项",
+		"agent: 输出更紧凑标题",
+		"",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(todosRoot, "manual.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write manual note source: %v", err)
+	}
+
+	result, err := service.TaskInspectorRun(map[string]any{
+		"target_sources": []any{"workspace/todos"},
+		"reason":         "notes_page_manual_run",
+	})
+	if err != nil {
+		t.Fatalf("TaskInspectorRun returned error: %v", err)
+	}
+	inspectionID, ok := result["inspection_id"].(string)
+	if !ok || inspectionID == "" {
+		t.Fatalf("expected inspection_id in response, got %+v", result["inspection_id"])
+	}
+
+	auditRecords, total, err := service.storage.AuditStore().ListAuditRecords(context.Background(), inspectionID, inspectionID, 10, 0)
+	if err != nil || total != 1 || len(auditRecords) != 1 {
+		t.Fatalf("expected one persisted audit record for fallback title generation, total=%d len=%d err=%v", total, len(auditRecords), err)
+	}
+	if auditRecords[0].Result != "fallback" {
+		t.Fatalf("expected fallback audit result when model output is unusable, got %+v", auditRecords[0])
+	}
+
+	traces, total, err := service.storage.TraceStore().ListTraceRecords(context.Background(), inspectionID, 10, 0)
+	if err != nil || total != 1 || len(traces) != 1 {
+		t.Fatalf("expected one trace record for fallback title generation, total=%d len=%d err=%v", total, len(traces), err)
+	}
+	if traces[0].TaskID != inspectionID || traces[0].RunID != inspectionID {
+		t.Fatalf("expected fallback trace owner attribution to stay on inspection owner, got %+v", traces[0])
+	}
+	if traces[0].LLMInputSummary != "task_inspector.generate_note_title" {
+		t.Fatalf("expected fallback trace intent summary to be recorded, got %+v", traces[0])
+	}
+}
+
+func TestTaskInspectorRunManualReasonRecordsGeneratedTitleAuditAndTraceWhenSyncFails(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithExecution(t, `{"title":"本周阻塞项复盘"}`)
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+
+	baseTodoStore := storage.NewInMemoryTodoStore()
+	if err := service.runEngine.WithTodoStore(baseTodoStore); err != nil {
+		t.Fatalf("attach base todo store failed: %v", err)
+	}
+	if err := service.runEngine.WithTodoStore(failingTodoStore{
+		base:       baseTodoStore,
+		replaceErr: errors.New("todo replace failed"),
+	}); err != nil {
+		t.Fatalf("swap to failing todo store failed: %v", err)
+	}
+
+	todosRoot := filepath.Join(workspaceRoot, "todos")
+	if err := os.MkdirAll(todosRoot, 0o755); err != nil {
+		t.Fatalf("mkdir todos root: %v", err)
+	}
+	content := strings.Join([]string{
+		"- [ ] 复盘",
+		"note: 继续整理本周阻塞项和行动项",
+		"agent: 输出更紧凑标题",
+		"",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(todosRoot, "manual.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write manual note source: %v", err)
+	}
+
+	result, err := service.TaskInspectorRun(map[string]any{
+		"target_sources": []any{"workspace/todos"},
+		"reason":         "notes_page_manual_run",
+	})
+	if err == nil || !strings.Contains(err.Error(), "todo replace failed") {
+		t.Fatalf("expected todo sync failure after title generation, result=%+v err=%v", result, err)
+	}
+
+	auditRecords, total, auditErr := service.storage.AuditStore().ListAuditRecords(context.Background(), "", "", 10, 0)
+	if auditErr != nil || total != 1 || len(auditRecords) != 1 {
+		t.Fatalf("expected one persisted audit record despite sync failure, total=%d len=%d err=%v", total, len(auditRecords), auditErr)
+	}
+	inspectionID := auditRecords[0].TaskID
+	if inspectionID == "" || auditRecords[0].RunID != inspectionID {
+		t.Fatalf("expected failed sync audit record to stay on inspection owner, got %+v", auditRecords[0])
+	}
+	if !strings.Contains(err.Error(), inspectionID) {
+		t.Fatalf("expected sync failure to expose inspection_id for audit correlation, inspection_id=%s err=%v", inspectionID, err)
+	}
+
+	traces, total, traceErr := service.storage.TraceStore().ListTraceRecords(context.Background(), inspectionID, 10, 0)
+	if traceErr != nil || total != 1 || len(traces) != 1 {
+		t.Fatalf("expected one trace record despite sync failure, total=%d len=%d err=%v", total, len(traces), traceErr)
+	}
+	if traces[0].TaskID != inspectionID || traces[0].RunID != inspectionID {
+		t.Fatalf("expected failed sync trace owner attribution to stay on inspection owner, got %+v", traces[0])
+	}
+}
+
+func TestServiceSecuritySummaryIncludesManualInspectorTitleGenerationUsageInTodayTotals(t *testing.T) {
+	service, workspaceRoot := newTestServiceWithModelClient(t, stubModelClient{
+		generateText: func(request model.GenerateTextRequest) (model.GenerateTextResponse, error) {
+			return model.GenerateTextResponse{
+				TaskID:     request.TaskID,
+				RunID:      request.RunID,
+				RequestID:  "req_manual_inspector_title",
+				Provider:   "openai",
+				ModelID:    "gpt-manual-title",
+				OutputText: `{"title":"本周阻塞项复盘"}`,
+				Usage:      model.TokenUsage{InputTokens: 9, OutputTokens: 13, TotalTokens: 22},
+				LatencyMS:  120,
+			}, nil
+		},
+	})
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+
+	todosRoot := filepath.Join(workspaceRoot, "todos")
+	if err := os.MkdirAll(todosRoot, 0o755); err != nil {
+		t.Fatalf("mkdir todos root: %v", err)
+	}
+	content := strings.Join([]string{
+		"- [ ] 复盘",
+		"note: 继续整理本周阻塞项和行动项",
+		"agent: 输出更紧凑标题",
+		"",
+	}, "\n")
+	if err := os.WriteFile(filepath.Join(todosRoot, "manual.md"), []byte(content), 0o644); err != nil {
+		t.Fatalf("write manual note source: %v", err)
+	}
+
+	if _, err := service.TaskInspectorRun(map[string]any{
+		"target_sources": []any{"workspace/todos"},
+		"reason":         "notes_page_manual_run",
+	}); err != nil {
+		t.Fatalf("TaskInspectorRun returned error: %v", err)
+	}
+
+	securityResult, err := service.SecuritySummaryGet()
+	if err != nil {
+		t.Fatalf("security summary failed: %v", err)
+	}
+
+	tokenCostSummary := securityResult["summary"].(map[string]any)["token_cost_summary"].(map[string]any)
+	if tokenCostSummary["current_task_tokens"] != 0 {
+		t.Fatalf("expected manual inspector usage to stay out of current_task_tokens, got %+v", tokenCostSummary)
+	}
+	if tokenCostSummary["today_tokens"] != 22 {
+		t.Fatalf("expected manual inspector usage to contribute to today_tokens, got %+v", tokenCostSummary)
+	}
+}
+
 func TestTaskInspectorConfigUpdatePropagatesSettingsStoreErrors(t *testing.T) {
 	service := newTestService()
 	if err := service.runEngine.WithSettingsStore(taskInspectorFailingSettingsStore{}); err != nil {
@@ -3658,7 +4157,7 @@ func TestServiceNotepadConvertToTaskUsesRuntimeItemWithoutClosingTodo(t *testing
 	}
 
 	task := result["task"].(map[string]any)
-	if task["title"] != "处理：Finish the computer h..." {
+	if task["title"] != "Finish the computer h..." {
 		t.Fatalf("expected converted task title to stay anchored on notepad note text, got %v", task["title"])
 	}
 	if task["source_type"] != "todo" {
@@ -4989,6 +5488,59 @@ func TestServiceTaskControlResumeHumanLoopReplanReturnsToIntentConfirmation(t *t
 	}
 	if !foundReviewAudit {
 		t.Fatalf("expected replanned task to retain human review audit metadata, got %+v", record.AuditRecords)
+	}
+}
+
+func TestServiceTaskControlResumeHumanLoopReplanDoesNotGenerateTitleBeforeReconfirmation(t *testing.T) {
+	modelClient := &blockingModelClient{
+		started:  make(chan string, 1),
+		released: make(chan struct{}, 1),
+	}
+	service, _ := newTestServiceWithModelClient(t, modelClient)
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+	task := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_hitl_replan_title_boundary",
+		Title:       "Please summarize this after review",
+		SourceType:  "hover_input",
+		Status:      "processing",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		CurrentStep: "generate_output",
+		RiskLevel:   "green",
+		Snapshot: taskcontext.TaskContextSnapshot{
+			Text:      "Please summarize this after review",
+			InputType: "text",
+			Trigger:   "hover_text_input",
+		},
+	})
+	if _, ok := service.runEngine.EscalateHumanLoop(task.TaskID, map[string]any{
+		"reason":           "doom_loop",
+		"status":           "pending",
+		"suggested_action": "review_and_replan",
+	}, map[string]any{"task_id": task.TaskID, "type": "status", "text": "需要人工介入"}); !ok {
+		t.Fatal("expected human escalation to succeed")
+	}
+
+	result, err := service.TaskControl(map[string]any{
+		"task_id": task.TaskID,
+		"action":  "resume",
+		"arguments": map[string]any{
+			"review": map[string]any{
+				"decision":         "replan",
+				"corrected_intent": map[string]any{"name": "translate", "arguments": map[string]any{"target_language": "en"}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("resume with replan failed: %v", err)
+	}
+	if result["task"].(map[string]any)["status"] != "confirming_intent" {
+		t.Fatalf("expected replan decision to return task to confirming_intent, got %+v", result["task"])
+	}
+
+	select {
+	case taskID := <-modelClient.started:
+		t.Fatalf("expected replanned confirming_intent task to avoid title generation, got %s", taskID)
+	case <-time.After(200 * time.Millisecond):
 	}
 }
 
@@ -18036,6 +18588,52 @@ func TestServiceSubmitInputPlainTextKeepsConfirmingTaskBehindConfirmation(t *tes
 	}
 	if len(modelTaskIDs) > 0 {
 		t.Fatalf("expected plain text follow-up to keep confirmation gate without model execution, got model calls %v", modelTaskIDs)
+	}
+}
+
+func TestServiceSubmitInputConfirmingTaskDoesNotGenerateTitleBeforeConfirmation(t *testing.T) {
+	modelClient := &blockingModelClient{
+		started:  make(chan string, 1),
+		released: make(chan struct{}, 1),
+	}
+	service, _ := newTestServiceWithModelClient(t, modelClient)
+	service.WithTitleGenerator(titlegen.NewService(service.model))
+	activeTask := service.runEngine.CreateTask(runengine.CreateTaskInput{
+		SessionID:   "sess_confirming_title_follow_up",
+		Title:       "Confirm build analysis",
+		SourceType:  "hover_input",
+		Status:      "confirming_intent",
+		CurrentStep: "intent_confirmation",
+		RiskLevel:   "green",
+		Intent:      map[string]any{"name": "summarize", "arguments": map[string]any{}},
+		Snapshot: taskcontext.TaskContextSnapshot{
+			InputType: "text",
+			Text:      "Analyze the build failure.",
+			Trigger:   "hover_text_input",
+		},
+	})
+
+	result, err := service.SubmitInput(map[string]any{
+		"session_id": activeTask.SessionID,
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type":       "text",
+			"text":       "Use the latest customer impact numbers.",
+			"input_mode": "text",
+		},
+	})
+	if err != nil {
+		t.Fatalf("submit plain text follow-up for confirming task failed: %v", err)
+	}
+	if result["task"].(map[string]any)["status"] != "confirming_intent" {
+		t.Fatalf("expected follow-up task to stay in confirming_intent, got %+v", result["task"])
+	}
+
+	select {
+	case taskID := <-modelClient.started:
+		t.Fatalf("expected confirming_intent follow-up to avoid title generation, got %s", taskID)
+	case <-time.After(200 * time.Millisecond):
 	}
 }
 func TestServiceStartTaskPlainTextImplicitPendingTaskStartsNewWithoutExplicitConfirmation(t *testing.T) {

@@ -66,8 +66,24 @@ func TestAgentLoopToolDefinitionsExposeBrowserToolsWhenSnapshotSupportsAttach(t 
 			t.Fatalf("unexpected browser-aware tool definition order at %d: got %q want %q", index, definitions[index].Name, want)
 		}
 	}
-	if !strings.Contains(definitions[3].Description, "Chrome/Edge") {
-		t.Fatalf("expected browser_attach_current description to explain attach boundary, got %q", definitions[3].Description)
+	for _, want := range []string{"read_file", "list_dir", "extract_text", "browser_attach_current", "browser_snapshot", "page_read", "page_search", "web_search"} {
+		if !containsString(names, want) {
+			t.Fatalf("expected browser-capable snapshot to expose %q, got %+v", want, names)
+		}
+	}
+	if browserAttachIndex < 0 {
+		t.Fatalf("expected browser_attach_current to stay visible, got %+v", definitions)
+	}
+	browserAttachDefinition := definitions[browserAttachIndex]
+	if !strings.Contains(browserAttachDefinition.Description, "Chrome/Edge") {
+		t.Fatalf("expected browser_attach_current description to explain attach boundary, got %q", browserAttachDefinition.Description)
+	}
+	properties, ok := browserAttachDefinition.InputSchema["properties"].(map[string]any)
+	if !ok || properties == nil {
+		t.Fatalf("expected browser_attach_current schema properties to stay an empty object, got %+v", browserAttachDefinition.InputSchema)
+	}
+	if len(properties) != 0 {
+		t.Fatalf("expected browser_attach_current schema properties to stay empty, got %+v", properties)
 	}
 }
 

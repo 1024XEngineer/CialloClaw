@@ -164,21 +164,96 @@ func TestHandleStreamConnSkipsBufferedLiveRuntimeReplay(t *testing.T) {
 	}
 }
 
-func TestHandleStreamConnStreamsLiveRuntimeForNotepadConvertToTask(t *testing.T) {
-	modelClient := &stubLoopModelClient{
-		generateToolWait: make(chan struct{}),
-		generateToolSeen: make(chan struct{}),
+func TestStreamConnNotificationTrackerSkipsBufferedIdenticalTaskUpdate(t *testing.T) {
+	tracker := newStreamConnNotificationTracker()
+
+	key := tracker.reserve("task.updated", "task_001", map[string]any{
+		"task_id":    "task_001",
+		"session_id": "sess_001",
+		"status":     "processing",
+	})
+	if key == "" {
+		t.Fatal("expected tracker to reserve a task.updated key")
 	}
-	server := newTestServerWithModelClient(modelClient)
-	if err := server.orchestrator.RunEngine().SyncNotepadItems([]map[string]any{{
-		"item_id":   "todo_stream_runtime",
-		"title":     "整理工作区说明",
-		"bucket":    "upcoming",
-		"status":    "normal",
-		"type":      "todo_item",
-		"note_text": "inspect this workspace and answer directly",
-	}}); err != nil {
-		t.Fatalf("seed notepad item: %v", err)
+	if !tracker.shouldSkipBuffered("task.updated", "task_001", map[string]any{
+		"task_id":    "task_001",
+		"session_id": "sess_001",
+		"status":     "processing",
+	}) {
+		t.Fatal("expected one live task.updated to suppress the identical buffered task.updated")
+	}
+	if tracker.shouldSkipBuffered("task.updated", "task_001", map[string]any{
+		"task_id":    "task_001",
+		"session_id": "sess_001",
+		"status":     "processing",
+	}) {
+		t.Fatal("expected reservation to be consumed after one buffered replay skip")
+	}
+}
+
+func TestStreamConnNotificationTrackerDoesNotSkipDifferentTaskUpdatePayloads(t *testing.T) {
+	tracker := newStreamConnNotificationTracker()
+
+	tracker.reserve("task.updated", "task_001", map[string]any{
+		"task_id":    "task_001",
+		"session_id": "sess_001",
+		"status":     "processing",
+	})
+	if tracker.shouldSkipBuffered("task.updated", "task_001", map[string]any{
+		"task_id":    "task_001",
+		"session_id": "sess_001",
+		"status":     "completed",
+	}) {
+		t.Fatal("expected different task.updated payloads to replay instead of being swallowed")
+	}
+}
+
+func TestStreamConnNotificationTrackerDoesNotSkipDifferentTaskUpdates(t *testing.T) {
+	tracker := newStreamConnNotificationTracker()
+
+	tracker.reserve("task.updated", "task_001", map[string]any{
+		"task_id":    "task_001",
+		"session_id": "sess_001",
+		"status":     "processing",
+	})
+	if tracker.shouldSkipBuffered("task.updated", "task_002", map[string]any{
+		"task_id":    "task_002",
+		"session_id": "sess_001",
+		"status":     "processing",
+	}) {
+		t.Fatal("expected live updates to stay scoped to their own task")
+	}
+	if tracker.shouldSkipBuffered("loop.tool.started", "task_001", map[string]any{
+		"event": map[string]any{"payload": map[string]any{"tool_call_id": "call_001"}},
+	}) {
+		t.Fatal("expected task.updated reservations not to swallow different runtime methods")
+	}
+}
+
+func TestHandleStreamConnDoesNotSubscribeFailedTaskScopedRequests(t *testing.T) {
+	server := newTestServer()
+
+	startResult, err := server.orchestrator.StartTask(map[string]any{
+		"session_id": "sess_stream_failed_task_scope",
+		"source":     "floating_ball",
+		"trigger":    "hover_text_input",
+		"input": map[string]any{
+			"type": "text",
+			"text": "task updates should stay private after failed task requests",
+		},
+		"intent": map[string]any{
+			"name": "write_file",
+			"arguments": map[string]any{
+				"require_authorization": true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("start task failed: %v", err)
+	}
+	taskID := startResult["task"].(map[string]any)["task_id"].(string)
+	if _, err := server.orchestrator.DrainNotifications(taskID); err != nil {
+		t.Fatalf("drain seed notifications: %v", err)
 	}
 
 	left, right := net.Pipe()
@@ -191,70 +266,41 @@ func TestHandleStreamConnStreamsLiveRuntimeForNotepadConvertToTask(t *testing.T)
 	decoder := json.NewDecoder(right)
 	request := requestEnvelope{
 		JSONRPC: "2.0",
-		ID:      json.RawMessage(`"req-stream-notepad-runtime"`),
-		Method:  "agent.notepad.convert_to_task",
+		ID:      json.RawMessage(`"req-stream-failed-task-scope"`),
+		Method:  "agent.task.control",
 		Params: mustMarshal(t, map[string]any{
-			"request_meta": map[string]any{
-				"trace_id": "trace_stream_notepad_runtime",
-			},
-			"item_id":   "todo_stream_runtime",
-			"confirmed": true,
+			"task_id": taskID,
+			"action":  "skip",
 		}),
 	}
-
 	if err := encoder.Encode(request); err != nil {
-		t.Fatalf("encode notepad stream request: %v", err)
-	}
-	if err := right.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
-		t.Fatalf("set live notification deadline: %v", err)
+		t.Fatalf("encode failed task-scoped request: %v", err)
 	}
 
-	var liveNotification notificationEnvelope
-	if err := decoder.Decode(&liveNotification); err != nil {
-		t.Fatalf("decode live runtime notification: %v", err)
+	var response errorEnvelope
+	if err := decoder.Decode(&response); err != nil {
+		t.Fatalf("decode failed task-scoped response: %v", err)
 	}
-	if !isLiveRuntimeMethod(liveNotification.Method) {
-		t.Fatalf("expected live runtime notification before response, got %+v", liveNotification)
-	}
-	if err := right.SetReadDeadline(time.Time{}); err != nil {
-		t.Fatalf("clear live notification deadline: %v", err)
+	if response.Error.Code != errInvalidParams {
+		t.Fatalf("expected invalid params error for unsupported action, got %+v", response)
 	}
 
-	close(modelClient.generateToolWait)
-
-	if err := right.SetReadDeadline(time.Now().Add(500 * time.Millisecond)); err != nil {
-		t.Fatalf("set response deadline: %v", err)
-	}
-	responseSeen := false
-	for index := 0; index < 8; index++ {
-		var envelope map[string]any
-		if err := decoder.Decode(&envelope); err != nil {
-			t.Fatalf("decode response envelope: %v", err)
-		}
-		if envelope["id"] == nil {
-			continue
-		}
-		responseSeen = true
-		break
-	}
-	if !responseSeen {
-		t.Fatal("expected final response after live runtime notification")
+	if _, err := server.orchestrator.TaskControl(map[string]any{
+		"task_id":   taskID,
+		"action":    "cancel",
+		"arguments": map[string]any{"reason": "separate_update"},
+	}); err != nil {
+		t.Fatalf("cancel task after failed request: %v", err)
 	}
 
-	if err := right.SetReadDeadline(time.Now().Add(250 * time.Millisecond)); err != nil {
-		t.Fatalf("set replay deadline: %v", err)
+	if err := right.SetReadDeadline(time.Now().Add(200 * time.Millisecond)); err != nil {
+		t.Fatalf("set post-failure deadline: %v", err)
 	}
-	for {
-		var replayed notificationEnvelope
-		if err := decoder.Decode(&replayed); err != nil {
-			break
-		}
-		if isLiveRuntimeMethod(replayed.Method) {
-			t.Fatalf("expected drain replay to skip already streamed runtime notification, got %+v", replayed)
-		}
-	}
-	if err := right.SetReadDeadline(time.Time{}); err != nil {
-		t.Fatalf("clear replay deadline: %v", err)
+	defer right.SetReadDeadline(time.Time{})
+
+	var envelope notificationEnvelope
+	if err := decoder.Decode(&envelope); err == nil {
+		t.Fatalf("expected failed task-scoped request to avoid future task subscription, got %+v", envelope)
 	}
 }
 
