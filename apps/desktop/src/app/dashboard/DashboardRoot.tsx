@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -11,6 +11,7 @@ import {
 import { MemoryPage } from "@/features/dashboard/memory/MemoryPage";
 import { NotesPage } from "@/features/dashboard/notes/NotesPage";
 import { SafetyPage } from "@/features/dashboard/safety/SafetyPage";
+import { DashboardModuleFloatingNav } from "@/features/dashboard/shared/DashboardModuleFloatingNav";
 import {
   dashboardTaskDetailNavigationEvent,
   navigateToDashboardTaskDetail,
@@ -21,6 +22,7 @@ import {
   useDashboardEscapeCoordinator,
   useDashboardEscapeHandler,
 } from "@/features/dashboard/shared/dashboardEscapeCoordinator";
+import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import { resolveDashboardModuleRoutePath, resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import {
   dashboardTaskDeliveryNavigationEvent,
@@ -318,13 +320,21 @@ function DashboardRoutes() {
         />
       );
 
+  const activeSharedModule = useMemo(
+    () => dashboardModules.find((module) => module.path === location.pathname) ?? null,
+    [location.pathname],
+  );
+
   return (
     <div className={cn("dashboard-app", isOpening && "is-opening")}>
+      {activeSharedModule ? (
+        <DashboardModuleFloatingNav accentColor={activeSharedModule.accent} includeHomeLink />
+      ) : null}
       <AnimatePresence mode="wait">
         <motion.div
           key={location.pathname}
           animate={{ opacity: 1, scale: 1, y: 0 }}
-          className="dashboard-route-layer"
+          className={cn("dashboard-route-layer", activeSharedModule && "dashboard-route-layer--with-shared-topbar")}
           exit={{ opacity: 0, scale: 0.988, y: -16 }}
           initial={{ opacity: 0, scale: 0.958, y: 30 }}
           style={{ transformOrigin: "50% 53.2%" }}

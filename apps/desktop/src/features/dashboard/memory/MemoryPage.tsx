@@ -1,16 +1,8 @@
-import { DashboardBackHomeLink } from "@/features/dashboard/shared/DashboardBackHomeLink";
-import { DashboardModuleFloatingNav } from "@/features/dashboard/shared/DashboardModuleFloatingNav";
 import { MockMirrorMemoryOverview } from "./MockMirrorMemoryPage";
 
 /**
  * Mounts the current mock-only mirror memory route for the dashboard.
  */
 export function MemoryPage() {
-  return (
-    <>
-      <DashboardBackHomeLink />
-      <DashboardModuleFloatingNav />
-      <MockMirrorMemoryOverview />
-    </>
-  );
+  return <MockMirrorMemoryOverview />;
 }

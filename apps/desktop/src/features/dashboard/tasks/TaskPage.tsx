@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   Archive,
-  ArrowLeft,
   Clock3,
   PlaneTakeoff,
   Radar,
@@ -18,7 +17,6 @@ import { useDashboardEscapeHandler } from "@/features/dashboard/shared/dashboard
 import { readDashboardTaskDetailRouteState } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { buildDashboardSafetyNavigationState } from "@/features/dashboard/shared/dashboardSafetyNavigation";
 import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
-import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import { cn } from "@/utils/cn";
 import {
   buildTaskTowerCode,
@@ -788,22 +786,7 @@ export function TaskPage() {
 
   return (
     <main className="dashboard-page task-tower-page task-cloud-page" style={pageStyle}>
-      <header className="dashboard-page__topbar">
-        <div className="task-tower__topbar-actions">
-          <Link className="dashboard-page__home-link" to={resolveDashboardRoutePath("home")}>
-            <ArrowLeft className="h-4 w-4" />
-            返回首页
-          </Link>
-        </div>
-
-        <nav aria-label="Dashboard modules" className="dashboard-page__module-nav">
-          {dashboardModules.map((item) => (
-            <NavLink key={item.route} className={({ isActive }) => cn("dashboard-page__module-link", isActive && "is-active")} to={item.path}>
-              {item.title}
-            </NavLink>
-          ))}
-        </nav>
-      </header>
+      <div aria-hidden="true" className="dashboard-page__topbar-spacer" />
 
       <section className="task-tower task-cloud">
         <LayoutGroup id="task-cloud-layout">
