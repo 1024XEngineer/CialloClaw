@@ -13,6 +13,7 @@ import { ShellBallAttachmentTray } from "./components/ShellBallAttachmentTray";
 import { ShellBallBubbleZone } from "./components/ShellBallBubbleZone";
 import { ShellBallInputBar } from "./components/ShellBallInputBar";
 import { ShellBallVoiceHints } from "./components/ShellBallVoiceHints";
+import { areShellBallSelectionSnapshotsEqual } from "./selection/selection.provider";
 import type { ShellBallSelectionSnapshot } from "./selection/selection.types";
 import { useShellBallInteraction } from "./useShellBallInteraction";
 import { getShellBallMotionConfig } from "./shellBall.motion";
@@ -40,6 +41,8 @@ import {
 } from "../../platform/shellBallWindow";
 import { loadSettings } from "../../services/settingsService";
 import {
+  speakShellBallClipboardDetectedNotification,
+  speakShellBallSelectionDetectedNotification,
   speakShellBallSelectionClickGreeting,
   speakShellBallStartupGreeting,
 } from "../../services/voiceNotificationService";
@@ -395,6 +398,8 @@ export function ShellBallApp() {
   const clipboardPromptClearTimeoutRef = useRef<number | null>(null);
   const selectionPromptClearTimeoutRef = useRef<number | null>(null);
   const selectionPromptExpiryTimeoutRef = useRef<number | null>(null);
+  const lastSpokenSelectionPromptRef = useRef<ShellBallSelectionSnapshot | null>(null);
+  const lastSpokenClipboardPromptTextRef = useRef<string | null>(null);
   const previousVisualStateRef = useRef<ShellBallVisualState>(visualState);
   const transitionQueueRef = useRef(Promise.resolve());
   const edgeDockRevealHideTimeoutRef = useRef<number | null>(null);
@@ -919,10 +924,12 @@ export function ShellBallApp() {
   }, []);
 
   const clearSelectionPrompt = useCallback(() => {
+    lastSpokenSelectionPromptRef.current = null;
     setSelectionPrompt(null);
   }, []);
 
   const clearClipboardPrompt = useCallback(() => {
+    lastSpokenClipboardPromptTextRef.current = null;
     setClipboardPrompt(null);
   }, []);
 
@@ -1059,6 +1066,11 @@ export function ShellBallApp() {
             selectionPromptClearTimeoutRef.current = null;
           }
 
+          if (!areShellBallSelectionSnapshotsEqual(lastSpokenSelectionPromptRef.current, payload.snapshot)) {
+            lastSpokenSelectionPromptRef.current = payload.snapshot;
+            void speakShellBallSelectionDetectedNotification();
+          }
+
           setSelectionPrompt(payload.snapshot);
           return;
         }
@@ -1109,6 +1121,11 @@ export function ShellBallApp() {
         if (payload.text.trim() === "") {
           clearClipboardPrompt();
           return;
+        }
+
+        if (lastSpokenClipboardPromptTextRef.current !== payload.text) {
+          lastSpokenClipboardPromptTextRef.current = payload.text;
+          void speakShellBallClipboardDetectedNotification();
         }
 
         setClipboardPrompt({

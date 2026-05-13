@@ -1289,7 +1289,7 @@ export function ControlPanelApp() {
 
               <ToggleLine
                 label="语音通知"
-                description="控制悬浮球启动、选中文本提醒态点击确认和正式任务通知的本地语音提示；保存后同步到其他桌面窗口。"
+                description="控制悬浮球启动、选中文本检测、剪贴板检测、选中确认和正式任务通知的本地语音提示；保存后同步到其他桌面窗口。"
                 checked={draft.settings.general.voice_notification_enabled}
                 onCheckedChange={(checked) =>
                   updateSettings((current) => ({

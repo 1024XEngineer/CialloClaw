@@ -29,6 +29,8 @@ import {
 import { getShellBallMotionConfig } from "./shellBall.motion";
 import { collectShellBallSpeechTranscript, composeShellBallSpeechDraft } from "./shellBall.speech";
 import {
+  resolveShellBallClipboardDetectedNotificationText,
+  resolveShellBallSelectionDetectedNotificationText,
   resolveDeliveryReadyVoiceNotificationText,
   resolveShellBallSelectionClickGreetingText,
   resolveShellBallStartupGreetingText,
@@ -2538,9 +2540,19 @@ test("shell-ball speech transcript collection merges recognition chunks", () => 
   );
 });
 
-test("voice notification helpers keep startup greeting, selection click greeting, and formal delivery reminders short", () => {
+test("voice notification helpers keep startup greeting, detection prompts, selection click greeting, and formal delivery reminders short", () => {
   assert.equal(resolveShellBallStartupGreetingText(), "CialloClaw 已启动");
+  assert.equal(resolveShellBallSelectionDetectedNotificationText(0), "发现一段高亮文字啦");
+  assert.equal(resolveShellBallSelectionDetectedNotificationText(0.2), "我接住新选中的内容啦");
+  assert.equal(resolveShellBallSelectionDetectedNotificationText(0.4), "新的选中内容到啦");
+  assert.equal(resolveShellBallSelectionDetectedNotificationText(0.6), "这段选中文字交给我吧");
+  assert.equal(resolveShellBallSelectionDetectedNotificationText(0.8), "我看到你圈出的这段话啦");
   assert.equal(resolveShellBallSelectionClickGreetingText(), "Ciallo");
+  assert.equal(resolveShellBallClipboardDetectedNotificationText(0), "剪贴板刚刚更新啦");
+  assert.equal(resolveShellBallClipboardDetectedNotificationText(0.2), "我接住新复制的内容啦");
+  assert.equal(resolveShellBallClipboardDetectedNotificationText(0.4), "新的剪贴板内容到啦");
+  assert.equal(resolveShellBallClipboardDetectedNotificationText(0.6), "这段复制内容交给我吧");
+  assert.equal(resolveShellBallClipboardDetectedNotificationText(0.8), "我看到你刚复制的小纸条啦");
   assert.equal(
     resolveDeliveryReadyVoiceNotificationText({
       task_id: "task-bubble-delivery",
@@ -8934,7 +8946,7 @@ test("shell-ball routes active resumable text follow-ups through task steer", ()
   assert.match(coordinatorSource, /message: submittedText/);
 });
 
-test("shell-ball voice notifications are consumed locally from startup, selection acceptance, and formal task notifications", () => {
+test("shell-ball voice notifications are consumed locally from startup, selection and clipboard prompts, selection acceptance, and formal task notifications", () => {
   const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
   const mascotSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallMascot.tsx"), "utf8");
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
@@ -8942,14 +8954,19 @@ test("shell-ball voice notifications are consumed locally from startup, selectio
   const voiceConfigSource = readFileSync(resolve(desktopRoot, "src/services/voiceNotificationConfig.ts"), "utf8");
   const voiceServiceSource = readFileSync(resolve(desktopRoot, "src/services/voiceNotificationService.ts"), "utf8");
 
+  assert.match(appSource, /areShellBallSelectionSnapshotsEqual/);
+  assert.match(appSource, /speakShellBallClipboardDetectedNotification/);
+  assert.match(appSource, /speakShellBallSelectionDetectedNotification/);
   assert.match(appSource, /speakShellBallSelectionClickGreeting/);
   assert.match(appSource, /speakShellBallStartupGreeting/);
   assert.match(appSource, /const startupGreetingPlayedRef = useRef\(false\);/);
+  assert.match(appSource, /const lastSpokenSelectionPromptRef = useRef<ShellBallSelectionSnapshot \| null>\(null\);/);
+  assert.match(appSource, /const lastSpokenClipboardPromptTextRef = useRef<string \| null>\(null\);/);
   assert.match(appSource, /startupGreetingPlayedRef\.current = true;\s*void speakShellBallStartupGreeting\(\);/);
+  assert.match(appSource, /void speakShellBallSelectionDetectedNotification\(\);/);
   assert.match(appSource, /void speakShellBallSelectionClickGreeting\(\);/);
-  assert.doesNotMatch(appSource, /speakShellBallClipboardDetectedNotification/);
+  assert.match(appSource, /void speakShellBallClipboardDetectedNotification\(\);/);
   assert.doesNotMatch(appSource, /speakShellBallIdleGreeting/);
-  assert.doesNotMatch(appSource, /speakShellBallSelectionDetectedNotification/);
   assert.match(mascotSource, /input\.selectionIndicatorVisible \|\| input\.alertOpportunityAvailable \|\| input\.visualState === "idle"/);
   assert.match(controlPanelSource, /VOICE_NOTIFICATION_VOICE_PRESET_OPTIONS/);
   assert.match(controlPanelSource, /resolveVoiceNotificationVoicePreset\(draft\.settings\.general\.voice_type\)/);
@@ -8961,9 +8978,15 @@ test("shell-ball voice notifications are consumed locally from startup, selectio
   assert.match(coordinatorSource, /speakApprovalPendingNotification\(\{\s*approval_request: input\.approvalRequest,\s*task_id: input\.taskId,\s*\}\);/);
   assert.match(coordinatorSource, /speakDeliveryReadyNotification\(\{\s*delivery_result: input\.deliveryResult,\s*task_id: input\.taskId,\s*\}\);/);
   assert.match(voiceServiceSource, /const STARTUP_GREETING_TEXT = "CialloClaw 已启动";/);
+  assert.match(voiceServiceSource, /const SELECTION_DETECTED_TEXT_1 = "发现一段高亮文字啦";/);
+  assert.match(voiceServiceSource, /const SELECTION_DETECTED_TEXT_5 = "我看到你圈出的这段话啦";/);
   assert.match(voiceServiceSource, /const SELECTION_CLICK_GREETING_TEXT = "Ciallo";/);
+  assert.match(voiceServiceSource, /const CLIPBOARD_DETECTED_TEXT_1 = "剪贴板刚刚更新啦";/);
+  assert.match(voiceServiceSource, /const CLIPBOARD_DETECTED_TEXT_5 = "我看到你刚复制的小纸条啦";/);
   assert.match(voiceServiceSource, /const APPROVAL_PENDING_TEXT = "有一个操作需要你确认";/);
   assert.match(voiceServiceSource, /const DELIVERY_READY_TEXT = "任务结果已准备好";/);
+  assert.match(voiceServiceSource, /resolveShellBallSelectionDetectedNotificationText/);
+  assert.match(voiceServiceSource, /resolveShellBallClipboardDetectedNotificationText/);
   assert.match(voiceServiceSource, /const VOICE_LIST_READY_TIMEOUT_MS = 600;/);
   assert.match(voiceServiceSource, /let latestVoiceNotificationRequestId = 0;/);
   assert.match(voiceServiceSource, /const requestId = \+\+latestVoiceNotificationRequestId;/);

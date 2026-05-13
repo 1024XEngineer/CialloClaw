@@ -4,7 +4,9 @@ import { DEFAULT_VOICE_NOTIFICATION_VOICE_TYPE } from "./voiceNotificationConfig
 
 type VoiceNotificationKind =
   | "startup_greeting"
+  | "selection_detected"
   | "selection_click_greeting"
+  | "clipboard_detected"
   | "approval_pending"
   | "delivery_ready";
 
@@ -25,6 +27,16 @@ type SpeechSynthesisLike = {
 
 const STARTUP_GREETING_TEXT = "CialloClaw 已启动";
 const SELECTION_CLICK_GREETING_TEXT = "Ciallo";
+const SELECTION_DETECTED_TEXT_1 = "发现一段高亮文字啦";
+const SELECTION_DETECTED_TEXT_2 = "我接住新选中的内容啦";
+const SELECTION_DETECTED_TEXT_3 = "新的选中内容到啦";
+const SELECTION_DETECTED_TEXT_4 = "这段选中文字交给我吧";
+const SELECTION_DETECTED_TEXT_5 = "我看到你圈出的这段话啦";
+const CLIPBOARD_DETECTED_TEXT_1 = "剪贴板刚刚更新啦";
+const CLIPBOARD_DETECTED_TEXT_2 = "我接住新复制的内容啦";
+const CLIPBOARD_DETECTED_TEXT_3 = "新的剪贴板内容到啦";
+const CLIPBOARD_DETECTED_TEXT_4 = "这段复制内容交给我吧";
+const CLIPBOARD_DETECTED_TEXT_5 = "我看到你刚复制的小纸条啦";
 const APPROVAL_PENDING_TEXT = "有一个操作需要你确认";
 const DELIVERY_READY_TEXT = "任务结果已准备好";
 const VOICE_LIST_READY_TIMEOUT_MS = 600;
@@ -36,6 +48,18 @@ function normalizeVoiceType(voiceType: string) {
 
 function normalizeVoiceLabel(value: string) {
   return value.trim().toLowerCase();
+}
+
+function resolveRandomVoiceNotificationText(options: readonly string[], randomValue = Math.random()) {
+  if (options.length === 0) {
+    return "";
+  }
+
+  const normalizedRandomValue = Number.isFinite(randomValue) ? randomValue : 0;
+  const boundedRandomValue = Math.min(Math.max(normalizedRandomValue, 0), 0.999_999_999_999);
+  const resolvedIndex = Math.min(options.length - 1, Math.floor(boundedRandomValue * options.length));
+
+  return options[resolvedIndex] ?? options[0] ?? "";
 }
 
 function getVoiceNotificationSettings(): VoiceNotificationSettings {
@@ -199,6 +223,23 @@ export function resolveShellBallStartupGreetingText() {
 }
 
 /**
+ * Builds a playful selection-detected reminder for the floating ball so
+ * repeated demos feel less robotic without expanding the notification scope.
+ *
+ * @param randomValue Optional deterministic random input for contract tests.
+ * @returns One of five local selection-detected reminder lines.
+ */
+export function resolveShellBallSelectionDetectedNotificationText(randomValue = Math.random()) {
+  return resolveRandomVoiceNotificationText([
+    SELECTION_DETECTED_TEXT_1,
+    SELECTION_DETECTED_TEXT_2,
+    SELECTION_DETECTED_TEXT_3,
+    SELECTION_DETECTED_TEXT_4,
+    SELECTION_DETECTED_TEXT_5,
+  ], randomValue);
+}
+
+/**
  * Builds the short `Ciallo` acknowledgement spoken when the user accepts a
  * fresh selected-text reminder from the floating ball.
  *
@@ -208,13 +249,38 @@ export function resolveShellBallSelectionClickGreetingText() {
   return SELECTION_CLICK_GREETING_TEXT;
 }
 
+/**
+ * Builds a playful clipboard-detected reminder for the floating ball so local
+ * clipboard prompts feel lively during repeated desktop demos.
+ *
+ * @param randomValue Optional deterministic random input for contract tests.
+ * @returns One of five local clipboard-detected reminder lines.
+ */
+export function resolveShellBallClipboardDetectedNotificationText(randomValue = Math.random()) {
+  return resolveRandomVoiceNotificationText([
+    CLIPBOARD_DETECTED_TEXT_1,
+    CLIPBOARD_DETECTED_TEXT_2,
+    CLIPBOARD_DETECTED_TEXT_3,
+    CLIPBOARD_DETECTED_TEXT_4,
+    CLIPBOARD_DETECTED_TEXT_5,
+  ], randomValue);
+}
+
 function resolveVoiceNotificationText(kind: VoiceNotificationKind, payload?: ApprovalPendingNotification | DeliveryReadyNotification) {
   if (kind === "startup_greeting") {
     return resolveShellBallStartupGreetingText();
   }
 
+  if (kind === "selection_detected") {
+    return resolveShellBallSelectionDetectedNotificationText();
+  }
+
   if (kind === "selection_click_greeting") {
     return resolveShellBallSelectionClickGreetingText();
+  }
+
+  if (kind === "clipboard_detected") {
+    return resolveShellBallClipboardDetectedNotificationText();
   }
 
   if (kind === "approval_pending") {
@@ -330,6 +396,16 @@ export function speakShellBallStartupGreeting() {
 }
 
 /**
+ * Plays a short local reminder when the floating ball captures new selected
+ * text and exposes the click-to-start affordance.
+ *
+ * @returns Whether the local desktop runtime attempted speech playback.
+ */
+export function speakShellBallSelectionDetectedNotification() {
+  return speakVoiceNotification({ kind: "selection_detected" });
+}
+
+/**
  * Plays a short `Ciallo` acknowledgement when the user accepts a selected-text
  * reminder from the floating ball.
  *
@@ -337,6 +413,16 @@ export function speakShellBallStartupGreeting() {
  */
 export function speakShellBallSelectionClickGreeting() {
   return speakVoiceNotification({ kind: "selection_click_greeting" });
+}
+
+/**
+ * Plays a short local reminder when the floating ball captures new clipboard
+ * text and exposes the click-to-submit affordance.
+ *
+ * @returns Whether the local desktop runtime attempted speech playback.
+ */
+export function speakShellBallClipboardDetectedNotification() {
+  return speakVoiceNotification({ kind: "clipboard_detected" });
 }
 
 /**
