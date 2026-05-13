@@ -29,6 +29,11 @@ import {
 import { getShellBallMotionConfig } from "./shellBall.motion";
 import { collectShellBallSpeechTranscript, composeShellBallSpeechDraft } from "./shellBall.speech";
 import {
+  resolveDeliveryReadyVoiceNotificationText,
+  resolveShellBallStartupGreetingText,
+  resolveVoiceNotificationVoice,
+} from "../../services/voiceNotificationService";
+import {
   compactPageContext,
   mapDesktopWindowSnapshotToPageContext,
   resolveTaskPageContext,
@@ -2530,6 +2535,51 @@ test("shell-ball speech transcript collection merges recognition chunks", () => 
     }),
     "hello dashboard",
   );
+});
+
+test("voice notification helpers keep startup greeting and formal delivery reminders short", () => {
+  assert.equal(resolveShellBallStartupGreetingText(), "Ciallo!");
+  assert.equal(
+    resolveDeliveryReadyVoiceNotificationText({
+      task_id: "task-bubble-delivery",
+      delivery_result: {
+        type: "bubble",
+      },
+    } as any),
+    null,
+  );
+  assert.equal(
+    resolveDeliveryReadyVoiceNotificationText({
+      task_id: "task-formal-delivery",
+      delivery_result: {
+        type: "task_detail",
+      },
+    } as any),
+    "任务结果已准备好",
+  );
+});
+
+test("voice notification helpers prefer the saved voice type and matching locale", () => {
+  const resolvedDefaultFemale = resolveVoiceNotificationVoice({
+    language: "ja-JP",
+    voiceType: "default_female",
+    voices: [
+      { lang: "en-US", name: "Alloy" },
+      { lang: "ja-JP", name: "Sakura Female" },
+      { lang: "zh-CN", name: "Xiaoxiao" },
+    ],
+  });
+  assert.equal(resolvedDefaultFemale?.name, "Sakura Female");
+
+  const resolvedCustomVoice = resolveVoiceNotificationVoice({
+    language: "zh-CN",
+    voiceType: "voice_nebula",
+    voices: [
+      { lang: "zh-CN", name: "voice_nebula" },
+      { lang: "zh-CN", name: "Xiaoxiao" },
+    ],
+  });
+  assert.equal(resolvedCustomVoice?.name, "voice_nebula");
 });
 
 test("shell-ball voice recognition final state routes final transcript out of the input draft and restores draft on cancel", () => {
@@ -8868,6 +8918,23 @@ test("shell-ball routes active resumable text follow-ups through task steer", ()
   assert.match(coordinatorSource, /request_meta: createShellBallRequestMeta\(\)/);
   assert.match(coordinatorSource, /task_id: activeShellBallTaskId/);
   assert.match(coordinatorSource, /message: submittedText/);
+});
+
+test("shell-ball voice notifications are consumed locally from startup and formal task notifications", () => {
+  const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
+  const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
+  const voiceServiceSource = readFileSync(resolve(desktopRoot, "src/services/voiceNotificationService.ts"), "utf8");
+
+  assert.match(appSource, /import \{ speakShellBallStartupGreeting \} from "..\/..\/services\/voiceNotificationService";/);
+  assert.match(appSource, /const startupGreetingPlayedRef = useRef\(false\);/);
+  assert.match(appSource, /startupGreetingPlayedRef\.current = true;\s*speakShellBallStartupGreeting\(\);/);
+  assert.match(coordinatorSource, /import \{ speakApprovalPendingNotification, speakDeliveryReadyNotification \} from "@\/services\/voiceNotificationService";/);
+  assert.match(coordinatorSource, /speakApprovalPendingNotification\(\{\s*approval_request: input\.approvalRequest,\s*task_id: input\.taskId,\s*\}\);/);
+  assert.match(coordinatorSource, /speakDeliveryReadyNotification\(\{\s*delivery_result: input\.deliveryResult,\s*task_id: input\.taskId,\s*\}\);/);
+  assert.match(voiceServiceSource, /const STARTUP_GREETING_TEXT = "Ciallo!";/);
+  assert.match(voiceServiceSource, /const APPROVAL_PENDING_TEXT = "有一个操作需要你确认";/);
+  assert.match(voiceServiceSource, /const DELIVERY_READY_TEXT = "任务结果已准备好";/);
+  assert.match(voiceServiceSource, /return payload\.delivery_result\.type === "bubble" \? null : DELIVERY_READY_TEXT;/);
 });
 
 test("shell-ball falls back to regular submit when active steer status races", () => {

@@ -39,6 +39,7 @@ import {
   setShellBallPressLock,
 } from "../../platform/shellBallWindow";
 import { loadSettings } from "../../services/settingsService";
+import { speakShellBallStartupGreeting } from "../../services/voiceNotificationService";
 import { openOrFocusDesktopWindow } from "../../platform/windowController";
 import { buildDesktopOnboardingPresentation } from "@/features/onboarding/onboardingGeometry";
 import {
@@ -394,6 +395,7 @@ export function ShellBallApp() {
   const previousVisualStateRef = useRef<ShellBallVisualState>(visualState);
   const transitionQueueRef = useRef(Promise.resolve());
   const edgeDockRevealHideTimeoutRef = useRef<number | null>(null);
+  const startupGreetingPlayedRef = useRef(false);
   const dragDropHandlersRef = useRef<{
     handleDroppedFiles: (paths: string[]) => Promise<void> | void;
   }>({
@@ -482,6 +484,16 @@ export function ShellBallApp() {
       window.removeEventListener("storage", syncFloatingBallSizeFromStorage);
     };
   }, []);
+
+  useEffect(() => {
+    if (startupGreetingPlayedRef.current) {
+      return;
+    }
+
+    startupGreetingPlayedRef.current = true;
+    speakShellBallStartupGreeting();
+  }, []);
+
   const {
     ballDockSettling,
     ballDragActive,
