@@ -1,5 +1,5 @@
 /* global process, console */
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -120,6 +120,26 @@ function installRuntimeCache(options) {
   writeFileSync(manifestPath, JSON.stringify(createRuntimeCacheManifest(playwrightVersion), null, 2) + "\n", "utf8");
 }
 
+// Materialize symlinked Playwright runtime assets so bundlers like NSIS only
+// see real files inside the packaged resource tree.
+function materializeDirectoryCopy(sourceRoot, targetRoot) {
+  const sourceInfo = lstatSync(sourceRoot);
+  if (sourceInfo.isSymbolicLink()) {
+    const linkTarget = readlinkSync(sourceRoot, "utf8");
+    const resolvedSourceTarget = resolve(dirname(sourceRoot), linkTarget);
+    materializeDirectoryCopy(resolvedSourceTarget, targetRoot);
+    return;
+  }
+  if (sourceInfo.isDirectory()) {
+    mkdirSync(targetRoot, { recursive: true });
+    for (const entryName of readdirSync(sourceRoot)) {
+      materializeDirectoryCopy(resolve(sourceRoot, entryName), resolve(targetRoot, entryName));
+    }
+    return;
+  }
+  cpSync(sourceRoot, targetRoot);
+}
+
 /**
  * Prepare the packaged Playwright runtime by reusing a local build cache for
  * the heavyweight browser/runtime install and recreating the final resource
@@ -174,8 +194,8 @@ export function preparePlaywrightRuntime() {
   cpSync(sourceNodeExecutable, resolve(packagedNodeRoot, process.platform === "win32" ? "node.exe" : "node"));
   cpSync(sourceWorkerEntry, resolve(packagedWorkerSourceRoot, "index.js"));
   writeRuntimeWorkerPackage(resolve(packagedWorkerRoot, "package.json"), playwrightVersion);
-  cpSync(resolve(cachedWorkerRoot, "node_modules"), resolve(packagedWorkerRoot, "node_modules"), { recursive: true });
-  cpSync(cachedBrowsersRoot, browsersRoot, { recursive: true });
+  materializeDirectoryCopy(resolve(cachedWorkerRoot, "node_modules"), resolve(packagedWorkerRoot, "node_modules"));
+  materializeDirectoryCopy(cachedBrowsersRoot, browsersRoot);
 
   return runtimeRoot;
 }
