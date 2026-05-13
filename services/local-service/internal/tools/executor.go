@@ -12,7 +12,7 @@ import (
 )
 
 // DefaultTimeoutSec is the default tool execution timeout in seconds.
-const DefaultTimeoutSec = 30
+const DefaultTimeoutSec = 300
 
 // ToolExecutorOption customizes ToolExecutor behavior.
 type ToolExecutorOption func(*ToolExecutor)

@@ -9,7 +9,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 )
 
-const settingsModelValidateTimeout = 8 * time.Second
+const settingsModelValidateTimeout = 5 * time.Minute
 
 // SettingsModelValidate probes the effective model route that future tasks will
 // use and reports whether text generation plus tool calling are ready.

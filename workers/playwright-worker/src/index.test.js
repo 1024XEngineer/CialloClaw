@@ -391,7 +391,7 @@ test("page_read returns normalized page metadata", async () => {
   assert.deepEqual(navigationLog, [{
     action: "goto",
     options: {
-      timeout: 30000,
+      timeout: 300000,
       waitUntil: "load",
     },
     url: "https://example.com",
@@ -448,7 +448,7 @@ test("page_read uses a managed local browser session when available", async () =
   assert.deepEqual(navigationLog, [{
     action: "goto",
     options: {
-      timeout: 30000,
+      timeout: 300000,
       waitUntil: "load",
     },
     url: "https://example.com",
@@ -1044,7 +1044,7 @@ test("browser_navigate drives the attached tab to a new url", async () => {
   assert.deepEqual(navigationLog, [{
     action: "goto",
     options: {
-      timeout: 30000,
+      timeout: 300000,
       waitUntil: "load",
     },
     url: "https://example.com/next",

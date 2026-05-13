@@ -323,7 +323,7 @@ func assertSQLiteConfigAssetPragmas(t *testing.T, db *sql.DB) {
 	if err := db.QueryRow(`PRAGMA busy_timeout;`).Scan(&busyTimeout); err != nil {
 		t.Fatalf("read busy_timeout pragma failed: %v", err)
 	}
-	if busyTimeout != 5000 {
-		t.Fatalf("expected busy_timeout=5000, got %d", busyTimeout)
+	if busyTimeout != 300000 {
+		t.Fatalf("expected busy_timeout=300000, got %d", busyTimeout)
 	}
 }
