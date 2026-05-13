@@ -12,7 +12,7 @@ export const dashboardEntranceOrbs: DashboardEntranceOrbConfig[] = [
     orbitSpeed: 2.2,
     orbitOffset: 264,
     route: resolveDashboardModuleRoutePath("tasks"),
-    size: 66,
+    size: 90,
   },
   {
     key: "entrance-notes",
@@ -24,7 +24,7 @@ export const dashboardEntranceOrbs: DashboardEntranceOrbConfig[] = [
     orbitSpeed: 1.76,
     orbitOffset: 28,
     route: resolveDashboardModuleRoutePath("notes"),
-    size: 58,
+    size: 90,
   },
   {
     key: "entrance-memory",
@@ -36,7 +36,7 @@ export const dashboardEntranceOrbs: DashboardEntranceOrbConfig[] = [
     orbitSpeed: 1.5,
     orbitOffset: 132,
     route: resolveDashboardModuleRoutePath("memory"),
-    size: 56,
+    size: 90,
   },
   {
     key: "entrance-safety",
@@ -48,7 +48,7 @@ export const dashboardEntranceOrbs: DashboardEntranceOrbConfig[] = [
     orbitSpeed: 1.22,
     orbitOffset: 324,
     route: resolveDashboardModuleRoutePath("safety"),
-    size: 58,
+    size: 90,
   },
 ];
 
