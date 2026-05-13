@@ -1277,8 +1277,6 @@ function loadControlPanelPluginServiceModule(rpcMethods?: DashboardContractRpcMe
           live_enabled: number;
           mock_overrides: number;
         };
-        metrics: unknown[];
-        events: unknown[];
       }>;
       loadControlPanelPluginDetail: (pluginId: string) => Promise<{
         plugin: {
@@ -4786,6 +4784,7 @@ test("control panel data clears stale runtime workspace paths when host verifica
 test("control-panel plugin snapshot keeps live runtime data separate from local mock toggles", async () => {
   const originalWindow = globalThis.window;
   const storage = new Map<string, string>();
+  const listPluginCalls: Array<{ limit: number; offset: number }> = [];
   const localStorage = {
     getItem(key: string) {
       return storage.get(key) ?? null;
@@ -4822,44 +4821,60 @@ test("control-panel plugin snapshot keeps live runtime data separate from local 
           };
         };
 
+        listPluginCalls.push({
+          limit: request.page.limit,
+          offset: request.page.offset,
+        });
         assert.equal(request.page.limit, 100);
-        assert.equal(request.page.offset, 0);
         assert.match(request.request_meta?.trace_id ?? "", /^trace_control_panel_plugin_/);
+
+        if (request.page.offset === 0) {
+          return {
+            items: [
+              {
+                plugin_id: "ocr_worker",
+                name: "ocr_worker",
+                display_name: "OCR Worker",
+                summary: "Read text from images and PDFs.",
+                version: "1.0.0",
+                source: "builtin",
+                entry: "workers/ocr",
+                enabled: true,
+                permissions: ["workspace.read"],
+                capabilities: [
+                  {
+                    tool_name: "extract_text",
+                    display_name: "Extract Text",
+                    description: "Extract OCR text.",
+                    source: "worker",
+                    risk_hint: "green",
+                  },
+                ],
+                runtimes: [
+                  {
+                    name: "ocr_worker",
+                    kind: "worker",
+                    status: "running",
+                    transport: "stdio",
+                    health: "healthy",
+                    last_seen_at: "2026-05-13T04:29:00.000Z",
+                    last_error: null,
+                    capabilities: ["extract_text"],
+                  },
+                ],
+              },
+            ],
+            page: {
+              limit: 100,
+              offset: 0,
+              total: 2,
+              has_more: true,
+            },
+          };
+        }
 
         return {
           items: [
-            {
-              plugin_id: "ocr_worker",
-              name: "ocr_worker",
-              display_name: "OCR Worker",
-              summary: "Read text from images and PDFs.",
-              version: "1.0.0",
-              source: "builtin",
-              entry: "workers/ocr",
-              enabled: true,
-              permissions: ["workspace.read"],
-              capabilities: [
-                {
-                  tool_name: "extract_text",
-                  display_name: "Extract Text",
-                  description: "Extract OCR text.",
-                  source: "worker",
-                  risk_hint: "green",
-                },
-              ],
-              runtimes: [
-                {
-                  name: "ocr_worker",
-                  kind: "worker",
-                  status: "running",
-                  transport: "stdio",
-                  health: "healthy",
-                  last_seen_at: "2026-05-13T04:29:00.000Z",
-                  last_error: null,
-                  capabilities: ["extract_text"],
-                },
-              ],
-            },
             {
               plugin_id: "browser_sidecar",
               name: "browser_sidecar",
@@ -4887,16 +4902,12 @@ test("control-panel plugin snapshot keeps live runtime data separate from local 
           ],
           page: {
             limit: 100,
-            offset: 0,
+            offset: 1,
             total: 2,
+            has_more: false,
           },
         };
       },
-      listPluginRuntimes: async () => ({
-        items: [],
-        metrics: [{ name: "ocr_worker", kind: "worker", start_count: 2, success_count: 10, failure_count: 1, last_started_at: "", last_failed_at: "", last_seen_at: "" }],
-        events: [{ name: "ocr_worker", kind: "worker", event_type: "plugin.runtime.healthy", payload: {}, created_at: "2026-05-13T04:29:00.000Z" }],
-      }),
       getPluginDetail: async (params) => {
         const request = params as { plugin_id: string };
         assert.equal(request.plugin_id, "ocr_worker");
@@ -4932,8 +4943,10 @@ test("control-panel plugin snapshot keeps live runtime data separate from local 
     assert.equal(snapshot.items[1]?.runtime_health, "healthy");
     assert.equal(snapshot.items[1]?.control.source, "mock");
     assert.equal(snapshot.items[1]?.control.effective_enabled, false);
-    assert.equal(snapshot.metrics.length, 1);
-    assert.equal(snapshot.events.length, 1);
+    assert.deepEqual(listPluginCalls, [
+      { limit: 100, offset: 0 },
+      { limit: 100, offset: 1 },
+    ]);
 
     const detail = await loadControlPanelPluginDetail("ocr_worker");
     assert.equal(detail.control.source, "mock");

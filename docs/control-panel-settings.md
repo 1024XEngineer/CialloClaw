@@ -72,7 +72,7 @@
 补充说明：
 
 - 控制面板保存时会拆分设置快照与巡检配置，只提交发生变化的分组，不额外触发无关配置写入。
-- 插件扩展分组当前只把 `agent.plugin.list`、`agent.plugin.detail.get`、`agent.plugin.runtime.list` 作为正式读侧；启停按钮只写入桌面端本地 mock 状态，用于预览控制流，不代表正式 enable / disable 已经提交到后端。
+- 插件扩展分组当前只把 `agent.plugin.list` 与 `agent.plugin.detail.get` 作为正式读侧；启停按钮只写入桌面端本地 mock 状态，用于预览控制流，不代表正式 enable / disable 已经提交到后端。
 
 ### 2.2 预留展示分组
 

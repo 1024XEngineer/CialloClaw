@@ -1,12 +1,10 @@
 import type {
   AgentPluginDetailGetResult,
   PluginListItem,
-  PluginMetricSnapshot,
-  PluginRuntimeEvent,
   PluginRuntimeState,
   RequestMeta,
 } from "@cialloclaw/protocol";
-import { getPluginDetail, listPluginRuntimes, listPlugins } from "@/rpc/methods";
+import { getPluginDetail, listPlugins } from "@/rpc/methods";
 import { isRpcChannelUnavailable } from "@/rpc/fallback";
 import { loadStoredValue, saveStoredValue } from "@/platform/storage";
 
@@ -38,8 +36,6 @@ export type ControlPanelPluginSummary = {
 
 export type ControlPanelPluginSnapshot = {
   items: ControlPanelPluginSummary[];
-  metrics: PluginMetricSnapshot[];
-  events: PluginRuntimeEvent[];
   summary: {
     total: number;
     healthy: number;
@@ -167,31 +163,47 @@ function sortPluginItems(items: PluginListItem[]) {
 }
 
 /**
+ * Reads every plugin list page because the control-panel surface has no paging
+ * affordance and therefore needs a complete registered-plugin snapshot.
+ */
+async function listAllPlugins() {
+  const items: PluginListItem[] = [];
+  let offset = 0;
+
+  for (;;) {
+    const result = await listPlugins({
+      request_meta: createRequestMeta(),
+      page: {
+        limit: CONTROL_PANEL_PLUGIN_PAGE_LIMIT,
+        offset,
+      },
+    });
+
+    items.push(...result.items);
+    if (!result.page.has_more) {
+      return items;
+    }
+
+    offset += result.items.length;
+    if (result.items.length === 0) {
+      return items;
+    }
+  }
+}
+
+/**
  * Reads the formal plugin query endpoints and projects them into a control-panel
  * view model while keeping mock enable/disable state local to the desktop shell.
  */
 export async function loadControlPanelPluginSnapshot(): Promise<ControlPanelPluginSnapshot> {
   try {
     const storedMocks = loadStoredPluginMocks();
-    const [pluginListResult, runtimeResult] = await Promise.all([
-      listPlugins({
-        request_meta: createRequestMeta(),
-        page: {
-          limit: CONTROL_PANEL_PLUGIN_PAGE_LIMIT,
-          offset: 0,
-        },
-      }),
-      listPluginRuntimes({
-        request_meta: createRequestMeta(),
-      }),
-    ]);
+    const pluginItems = await listAllPlugins();
 
-    const items = sortPluginItems(pluginListResult.items).map((plugin) => buildPluginSummary(plugin, storedMocks));
+    const items = sortPluginItems(pluginItems).map((plugin) => buildPluginSummary(plugin, storedMocks));
 
     return {
       items,
-      metrics: runtimeResult.metrics,
-      events: runtimeResult.events,
       summary: buildPluginSnapshotSummary(items),
     };
   } catch (error) {

@@ -2039,7 +2039,7 @@ export function ControlPanelApp() {
               </div>
             </SettingsCard>
 
-            <SettingsCard title="插件详情" description="详情面板展示正式 manifest、runtime、metrics、recent events 与 tools 合同。">
+            <SettingsCard title="插件详情" description="详情面板展示正式 manifest、runtime、recent events 与 tools 合同。">
               {selectedPluginSummary ? (
                 <div className="control-panel-shell__plugin-detail-stack">
                   <div className="control-panel-shell__plugin-detail-header">
