@@ -39,7 +39,9 @@ export type ControlPanelAboutFeedbackChannel =
 
 const CONTROL_PANEL_ABOUT_URLS = {
   feedback: "https://github.com/1024XEngineer/CialloClaw/issues",
+  officialSite: "https://1024xengineer.github.io/CialloClaw/",
   share: "https://github.com/1024XEngineer/CialloClaw",
+  wechatQrImage: "/src/assets/about/wechat-qr.jpg",
 } as const;
 
 const CONTROL_PANEL_ABOUT_FEEDBACK_CHANNELS = [
@@ -53,20 +55,22 @@ const CONTROL_PANEL_ABOUT_FEEDBACK_CHANNELS = [
     title: "GitHub Issues",
   },
   {
-    description: "预留微信群、QQ群或 Discord 等社群二维码图片。",
+    description: "扫码加入微信社群，获取版本动态与协作交流入口。",
     id: "community_qr",
-    kind: "placeholder",
-    note: "后续放入二维码图片后，会在这里直接显示预览。",
-    placeholderLabel: "待放置二维码图片",
-    title: "社群二维码",
+    kind: "image",
+    note: "微信扫码后可加入 CialloClaw 社群。",
+    previewAlt: "CialloClaw 微信社群二维码",
+    previewSrc: CONTROL_PANEL_ABOUT_URLS.wechatQrImage,
+    title: "微信社群",
   },
   {
-    description: "预留邮箱、工单表单或其它定向联系入口。",
-    id: "contact_form",
-    kind: "placeholder",
-    note: "支持后续替换成链接、表单地址或其它说明文本。",
-    placeholderLabel: "待放置链接或表单",
-    title: "邮箱 / 表单",
+    actionLabel: "复制链接",
+    description: "访问官网展示页，查看产品介绍、界面预览与公开说明。",
+    href: CONTROL_PANEL_ABOUT_URLS.officialSite,
+    hrefLabel: "1024xengineer.github.io/CialloClaw/",
+    id: "official_site",
+    kind: "link",
+    title: "官网展示页",
   },
 ] as const satisfies readonly ControlPanelAboutFeedbackChannel[];
 
