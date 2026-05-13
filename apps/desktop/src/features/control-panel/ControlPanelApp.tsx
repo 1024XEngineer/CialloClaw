@@ -8,6 +8,9 @@ import {
   BrainCircuit,
   CircleHelp,
   GripHorizontal,
+  PlugZap,
+  Power,
+  RefreshCw,
   Settings2,
   ShieldCheck,
   Sparkles,
@@ -31,13 +34,21 @@ import {
   buildControlPanelRestoreDefaultsData,
   ControlPanelSaveError,
   loadControlPanelData,
+  type ControlPanelData,
   runControlPanelInspection,
   saveControlPanelData,
   validateControlPanelModel,
-  type ControlPanelData,
   type ControlPanelModelValidationOptions,
   type ControlPanelSaveResult,
 } from "@/services/controlPanelService";
+import {
+  loadControlPanelPluginDetail,
+  loadControlPanelPluginSnapshot,
+  saveControlPanelPluginMockEnabled,
+  type ControlPanelPluginDetail,
+  type ControlPanelPluginSnapshot,
+  type ControlPanelPluginSummary,
+} from "@/services/controlPanelPluginService";
 import {
   buildDefaultSecurityBudgetDisplaySettings,
   loadSecurityBudgetDisplaySettings,
@@ -59,7 +70,7 @@ import { requestCurrentDesktopWindowClose, startCurrentDesktopWindowDragging } f
 import { ensureOnboardingWindow } from "@/platform/onboardingWindowController";
 import "./controlPanel.css";
 
-type ControlPanelSectionId = "general" | "desktop" | "memory" | "automation" | "models" | "about";
+type ControlPanelSectionId = "general" | "desktop" | "memory" | "automation" | "plugins" | "models" | "about";
 type ControlPanelAppearance = "light" | "dark";
 
 type NavigationGroup = {
@@ -76,7 +87,7 @@ type SectionMeta = {
 
 type StatusPillProps = {
   children: ReactNode;
-  tone: "live" | "pending" | "synced";
+  tone: "danger" | "live" | "mock" | "pending" | "synced" | "warning";
 };
 
 type ModelValidationFeedback = {
@@ -133,6 +144,8 @@ type ChoiceOption<T extends string = string> = {
   label: string;
   value: T;
 };
+
+type PluginHealthTone = "danger" | "live" | "synced" | "warning";
 
 const LANGUAGE_OPTIONS = [
   { label: "简体中文", value: "zh-CN" },
@@ -302,6 +315,12 @@ const SECTION_META: Record<ControlPanelSectionId, SectionMeta> = {
     navLabel: "镜子记忆",
     title: "记忆设置",
   },
+  plugins: {
+    group: "治理与应用",
+    icon: PlugZap,
+    navLabel: "插件扩展",
+    title: "插件扩展",
+  },
   about: {
     group: "治理与应用",
     icon: CircleHelp,
@@ -327,7 +346,7 @@ const NAVIGATION_GROUPS: NavigationGroup[] = [
   },
   {
     label: "治理与应用",
-    items: ["models", "about"],
+    items: ["plugins", "models", "about"],
   },
 ];
 
@@ -585,6 +604,121 @@ function InfoRow({ label, value }: InfoRowProps) {
   );
 }
 
+function formatPluginHealthLabel(health: ControlPanelPluginSummary["runtime_health"]) {
+  switch (health) {
+    case "healthy":
+      return "健康";
+    case "degraded":
+      return "降级";
+    case "failed":
+      return "失败";
+    case "stopped":
+      return "已停止";
+    case "unavailable":
+      return "不可用";
+    default:
+      return "未知";
+  }
+}
+
+function getPluginHealthTone(health: ControlPanelPluginSummary["runtime_health"]): PluginHealthTone {
+  switch (health) {
+    case "healthy":
+      return "live";
+    case "degraded":
+      return "warning";
+    case "failed":
+      return "danger";
+    default:
+      return "synced";
+  }
+}
+
+function formatPluginSourceLabel(source: ControlPanelPluginSummary["plugin"]["source"]) {
+  switch (source) {
+    case "builtin":
+      return "内置";
+    case "local_dir":
+      return "本地目录";
+    case "github":
+      return "GitHub";
+    case "marketplace":
+      return "应用市场";
+    default:
+      return source;
+  }
+}
+
+function formatPluginRuntimeKindLabel(kind: string) {
+  switch (kind) {
+    case "worker":
+      return "工作进程";
+    case "sidecar":
+      return "辅助进程";
+    default:
+      return kind;
+  }
+}
+
+function formatPluginRiskHintLabel(riskHint: string) {
+  switch (riskHint) {
+    case "green":
+      return "低风险";
+    case "yellow":
+      return "需确认";
+    case "red":
+      return "高风险";
+    default:
+      return riskHint;
+  }
+}
+
+function formatPluginControlLabel(plugin: { control: ControlPanelPluginSummary["control"] }) {
+  if (plugin.control.source === "mock") {
+    return plugin.control.effective_enabled ? "本页已启用" : "本页已停用";
+  }
+
+  return plugin.control.effective_enabled ? "正式已启用" : "正式已停用";
+}
+
+function formatPluginEnabledLabel(enabled: boolean) {
+  return enabled ? "已启用" : "已停用";
+}
+
+function formatPluginRuntimeStatusLabel(status: string) {
+  switch (status) {
+    case "declared":
+      return "已声明";
+    case "starting":
+      return "启动中";
+    case "running":
+      return "运行中";
+    case "stopped":
+      return "已停止";
+    case "unavailable":
+      return "不可用";
+    case "failed":
+      return "失败";
+    default:
+      return status;
+  }
+}
+
+function formatPluginTimestampLabel(timestamp: string | null) {
+  if (!timestamp) {
+    return "暂无记录";
+  }
+
+  const parsed = Date.parse(timestamp);
+  if (Number.isNaN(parsed)) {
+    return timestamp;
+  }
+
+  return new Date(parsed).toLocaleString("zh-CN", {
+    hour12: false,
+  });
+}
+
 function FeedbackChannelCard({ channel, onCopyLink }: { channel: ControlPanelAboutFeedbackChannel; onCopyLink: (url: string) => void }) {
   return (
     <article className="control-panel-shell__feedback-card" data-kind={channel.kind}>
@@ -688,10 +822,18 @@ export function ControlPanelApp() {
   const [saveFeedback, setSaveFeedback] = useState<string | null>(null);
   const [modelValidationFeedback, setModelValidationFeedback] = useState<ModelValidationFeedback | null>(null);
   const [inspectionSummary, setInspectionSummary] = useState<string | null>(null);
+  const [pluginFeedback, setPluginFeedback] = useState<string | null>(null);
+  const [pluginSnapshot, setPluginSnapshot] = useState<ControlPanelPluginSnapshot | null>(null);
+  const [pluginDetail, setPluginDetail] = useState<ControlPanelPluginDetail | null>(null);
+  const [selectedPluginId, setSelectedPluginId] = useState<string | null>(null);
+  const [pluginLoadError, setPluginLoadError] = useState<string | null>(null);
+  const [pluginReloadToken, setPluginReloadToken] = useState(0);
   const [isSaving, setIsSaving] = useState(false);
   const [isValidatingModel, setIsValidatingModel] = useState(false);
   const [isRunningInspection, setIsRunningInspection] = useState(false);
   const [isReplayingOnboarding, setIsReplayingOnboarding] = useState(false);
+  const [isLoadingPlugins, setIsLoadingPlugins] = useState(false);
+  const [isLoadingPluginDetail, setIsLoadingPluginDetail] = useState(false);
   const [systemAppearance, setSystemAppearance] = useState<ControlPanelAppearance>(() => {
     if (typeof window === "undefined") {
       return "light";
@@ -758,6 +900,125 @@ export function ControlPanelApp() {
       cancelled = true;
     };
   }, []);
+
+  const applyPluginControlState = (pluginId: string, effectiveControl: ControlPanelPluginSummary["control"]) => {
+    setPluginSnapshot((current) => {
+      if (!current) {
+        return current;
+      }
+
+      const items = current.items.map((item) =>
+        item.plugin.plugin_id === pluginId
+          ? {
+              ...item,
+              control: effectiveControl,
+            }
+          : item,
+      );
+
+      return {
+        ...current,
+        items,
+        summary: {
+          ...current.summary,
+          live_enabled: current.summary.live_enabled,
+          mock_overrides: items.filter((item) => item.control.source === "mock").length,
+          total: items.length,
+        },
+      };
+    });
+    setPluginDetail((current) =>
+      current?.plugin.plugin_id === pluginId
+        ? {
+            ...current,
+            control: effectiveControl,
+          }
+        : current,
+    );
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    setIsLoadingPlugins(true);
+    void loadControlPanelPluginSnapshot().then(
+      (snapshot) => {
+        if (cancelled) {
+          return;
+        }
+
+        setPluginSnapshot(snapshot);
+        setPluginLoadError(null);
+        if (pluginReloadToken > 0) {
+          setPluginFeedback("插件运行态已刷新。");
+        }
+      },
+      (error: unknown) => {
+        if (!cancelled) {
+          setPluginLoadError(error instanceof Error ? error.message : "插件扩展加载失败。");
+        }
+      },
+    ).finally(() => {
+      if (!cancelled) {
+        setIsLoadingPlugins(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [pluginReloadToken]);
+
+  useEffect(() => {
+    if (!pluginSnapshot) {
+      return;
+    }
+
+    if (pluginSnapshot.items.length === 0) {
+      setSelectedPluginId(null);
+      setPluginDetail(null);
+      return;
+    }
+
+    setSelectedPluginId((current) =>
+      pluginSnapshot.items.some((item) => item.plugin.plugin_id === current)
+        ? current
+        : pluginSnapshot.items[0].plugin.plugin_id,
+    );
+  }, [pluginSnapshot]);
+
+  useEffect(() => {
+    if (!selectedPluginId) {
+      setPluginDetail(null);
+      return;
+    }
+
+    let cancelled = false;
+    setPluginDetail(null);
+    setIsLoadingPluginDetail(true);
+
+    void loadControlPanelPluginDetail(selectedPluginId).then(
+      (detail) => {
+        if (!cancelled) {
+          setPluginLoadError(null);
+          setPluginDetail(detail);
+        }
+      },
+      (error: unknown) => {
+        if (!cancelled) {
+          setPluginLoadError(error instanceof Error ? error.message : "插件详情加载失败。");
+        }
+      },
+    ).finally(() => {
+      if (!cancelled) {
+        setIsLoadingPluginDetail(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedPluginId, pluginReloadToken]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1213,6 +1474,22 @@ export function ControlPanelApp() {
   const handleAboutLinkCopy = async (url: string) => {
     const feedback = await copyControlPanelAboutValue(url, "已复制反馈渠道链接。");
     setAboutActionFeedback(feedback);
+  };
+
+  const selectedPluginSummary = pluginSnapshot?.items.find((item) => item.plugin.plugin_id === selectedPluginId) ?? null;
+
+  const handlePluginRefresh = () => {
+    setPluginReloadToken((current) => current + 1);
+  };
+
+  const handlePluginToggle = (plugin: ControlPanelPluginSummary, nextEnabled: boolean) => {
+    const nextControl = saveControlPanelPluginMockEnabled(plugin.plugin.plugin_id, nextEnabled, plugin.plugin.enabled);
+    applyPluginControlState(plugin.plugin.plugin_id, nextControl);
+    setPluginFeedback(
+      nextControl.source === "mock"
+        ? `已更新 ${plugin.plugin.display_name || plugin.plugin.name} 的本页开关状态；实时运行态仍以当前插件查询结果为准。`
+        : `已清除 ${plugin.plugin.display_name || plugin.plugin.name} 的本页临时调整，页面恢复显示正式状态。`,
+    );
   };
 
   const renderSectionContent = () => {
@@ -1681,6 +1958,269 @@ export function ControlPanelApp() {
           </>
         );
 
+      case "plugins":
+        return (
+          <>
+            <SettingsCard title="插件运行态总览" description="列表、详情与运行态来自正式插件查询；开关按钮仅调整当前页面的展示状态。">
+              <InfoRow label="已注册插件" value={pluginSnapshot ? `${pluginSnapshot.summary.total} 个` : "载入中…"} />
+              <InfoRow label="健康插件" value={pluginSnapshot ? `${pluginSnapshot.summary.healthy} 个` : "载入中…"} />
+              <InfoRow label="失败 / 降级" value={pluginSnapshot ? `${pluginSnapshot.summary.failed + pluginSnapshot.summary.degraded} 个` : "载入中…"} />
+              <InfoRow label="本页临时调整" value={pluginSnapshot ? `${pluginSnapshot.summary.mock_overrides} 个` : "载入中…"} />
+              <ControlLine
+                label="刷新运行态"
+                hint="重新读取插件列表、运行态和最近事件；不会清空当前页面的临时开关状态。"
+                className="control-panel-shell__row--stacked"
+              >
+                <div className="control-panel-shell__plugin-toolbar">
+                  <Button
+                    type="button"
+                    variant="soft"
+                    color="gray"
+                    className="control-panel-shell__button control-panel-shell__button--ghost"
+                    onClick={() => void handlePluginRefresh()}
+                    disabled={isLoadingPlugins}
+                  >
+                    <RefreshCw size={15} strokeWidth={1.8} />
+                    <span>{isLoadingPlugins ? "刷新中…" : "刷新插件状态"}</span>
+                  </Button>
+                </div>
+              </ControlLine>
+              {pluginLoadError ? (
+                <Text as="p" size="2" color="amber" className="control-panel-shell__action-feedback">
+                  {pluginLoadError}
+                </Text>
+              ) : null}
+            </SettingsCard>
+
+            <SettingsCard title="已注册插件" description="每张卡片同时展示正式运行态和当前页面的开关状态。">
+              <div className="control-panel-shell__plugin-grid">
+                {pluginSnapshot && pluginSnapshot.items.length > 0 ? (
+                  pluginSnapshot.items.map((item) => {
+                    const selected = item.plugin.plugin_id === selectedPluginId;
+                    const pluginLabel = item.plugin.display_name || item.plugin.name;
+                    return (
+                      <article
+                        key={item.plugin.plugin_id}
+                        className="control-panel-shell__plugin-card"
+                        data-active={selected ? "true" : "false"}
+                      >
+                        <button
+                          type="button"
+                          className="control-panel-shell__plugin-card-button"
+                          onClick={() => setSelectedPluginId(item.plugin.plugin_id)}
+                        >
+                          <div className="control-panel-shell__plugin-card-heading">
+                            <div>
+                              <Text as="p" size="2" weight="medium" className="control-panel-shell__plugin-card-title">
+                                {pluginLabel}
+                              </Text>
+                              <Text as="p" size="1" className="control-panel-shell__plugin-card-subtitle">
+                                {item.plugin.plugin_id}
+                              </Text>
+                            </div>
+                            <StatusPill tone={getPluginHealthTone(item.runtime_health)}>{formatPluginHealthLabel(item.runtime_health)}</StatusPill>
+                          </div>
+                          <Text as="p" size="2" className="control-panel-shell__plugin-card-copy">
+                            {item.plugin.summary}
+                          </Text>
+                          <div className="control-panel-shell__plugin-pill-row">
+                            <StatusPill tone={item.control.source === "mock" ? "mock" : "synced"}>{formatPluginControlLabel(item)}</StatusPill>
+                            <span className="control-panel-shell__plugin-meta-pill">{formatPluginSourceLabel(item.plugin.source)}</span>
+                            <span className="control-panel-shell__plugin-meta-pill">v{item.plugin.version}</span>
+                          </div>
+                          <div className="control-panel-shell__plugin-stat-grid">
+                            <span>{item.runtime_count} 个运行实例</span>
+                            <span>{item.capability_count} 个工具</span>
+                            <span>{item.permission_count} 项权限</span>
+                          </div>
+                        </button>
+                        <div className="control-panel-shell__plugin-card-actions">
+                          <Button
+                            type="button"
+                            variant={item.control.effective_enabled ? "soft" : undefined}
+                            color="gray"
+                            className="control-panel-shell__button control-panel-shell__button--ghost"
+                            onClick={() => handlePluginToggle(item, !item.control.effective_enabled)}
+                          >
+                            <Power size={15} strokeWidth={1.8} />
+                            <span>{item.control.effective_enabled ? "本页停用" : "本页启用"}</span>
+                          </Button>
+                        </div>
+                      </article>
+                    );
+                  })
+                ) : (
+                  <div className="control-panel-shell__plugin-empty">
+                    <Text as="p" size="2" className="control-panel-shell__plugin-card-copy">
+                      {isLoadingPlugins ? "正在读取插件扩展…" : "当前还没有可展示的已注册插件。"}
+                    </Text>
+                  </div>
+                )}
+              </div>
+            </SettingsCard>
+
+            <SettingsCard title="插件详情" description="详情面板展示正式配置、运行态、最近事件与工具合同。">
+              {selectedPluginSummary ? (
+                <div className="control-panel-shell__plugin-detail-stack">
+                  <div className="control-panel-shell__plugin-detail-header">
+                    <div>
+                      <Heading as="h3" size="4" className="control-panel-shell__card-title">
+                        {selectedPluginSummary.plugin.display_name || selectedPluginSummary.plugin.name}
+                      </Heading>
+                      <Text as="p" size="1" className="control-panel-shell__plugin-card-subtitle">
+                        {selectedPluginSummary.plugin.plugin_id}
+                      </Text>
+                    </div>
+                    <div className="control-panel-shell__plugin-pill-row">
+                      <StatusPill tone={getPluginHealthTone(selectedPluginSummary.runtime_health)}>
+                        {formatPluginHealthLabel(selectedPluginSummary.runtime_health)}
+                      </StatusPill>
+                      <StatusPill tone={selectedPluginSummary.control.source === "mock" ? "mock" : "synced"}>
+                        {formatPluginControlLabel(selectedPluginSummary)}
+                      </StatusPill>
+                    </div>
+                  </div>
+
+                  <Text as="p" size="2" className="control-panel-shell__plugin-card-copy">
+                    {selectedPluginSummary.plugin.summary}
+                  </Text>
+
+                  {isLoadingPluginDetail && !pluginDetail ? (
+                    <Text as="p" size="2" className="control-panel-shell__plugin-card-copy">
+                      正在加载插件详情…
+                    </Text>
+                  ) : pluginDetail ? (
+                    <>
+                      <div className="control-panel-shell__plugin-detail-grid">
+                        <InfoRow label="入口" value={<code className="control-panel-shell__about-link">{pluginDetail.plugin.entry}</code>} />
+                        <InfoRow label="来源" value={formatPluginSourceLabel(pluginDetail.plugin.source)} />
+                        <InfoRow label="正式状态" value={formatPluginEnabledLabel(pluginDetail.plugin.enabled)} />
+                        <InfoRow label="本页状态" value={formatPluginControlLabel(pluginDetail)} />
+                      </div>
+
+                      <section className="control-panel-shell__plugin-block">
+                        <Text as="p" size="2" weight="medium" className="control-panel-shell__plugin-block-title">
+                          权限与能力
+                        </Text>
+                        <div className="control-panel-shell__plugin-pill-row">
+                          {pluginDetail.plugin.permissions.map((permission) => (
+                            <span key={permission} className="control-panel-shell__plugin-meta-pill">
+                              {permission}
+                            </span>
+                          ))}
+                          {pluginDetail.plugin.permissions.length === 0 ? (
+                            <span className="control-panel-shell__plugin-meta-pill">未声明权限</span>
+                          ) : null}
+                        </div>
+                      </section>
+
+                      <section className="control-panel-shell__plugin-block">
+                        <Text as="p" size="2" weight="medium" className="control-panel-shell__plugin-block-title">
+                          运行态
+                        </Text>
+                        <div className="control-panel-shell__plugin-runtime-list">
+                          {pluginDetail.runtimes.map((runtime) => (
+                            <article key={`${runtime.kind}:${runtime.name}`} className="control-panel-shell__plugin-runtime-card">
+                              <div className="control-panel-shell__plugin-card-heading">
+                                <div>
+                                  <Text as="p" size="2" weight="medium" className="control-panel-shell__plugin-card-title">
+                                    {runtime.name}
+                                  </Text>
+                                  <Text as="p" size="1" className="control-panel-shell__plugin-card-subtitle">
+                                    {formatPluginRuntimeKindLabel(runtime.kind)} · {runtime.transport}
+                                  </Text>
+                                </div>
+                                <StatusPill tone={getPluginHealthTone(runtime.health)}>{formatPluginHealthLabel(runtime.health)}</StatusPill>
+                              </div>
+                              <Text as="p" size="1" className="control-panel-shell__plugin-card-copy">
+                                状态：{formatPluginRuntimeStatusLabel(runtime.status)} · 最近上报：{formatPluginTimestampLabel(runtime.last_seen_at)}
+                              </Text>
+                            </article>
+                          ))}
+                          {pluginDetail.runtimes.length === 0 ? (
+                            <Text as="p" size="2" className="control-panel-shell__plugin-card-copy">
+                              当前插件没有返回运行态实例。
+                            </Text>
+                          ) : null}
+                        </div>
+                      </section>
+
+                      <section className="control-panel-shell__plugin-block">
+                        <Text as="p" size="2" weight="medium" className="control-panel-shell__plugin-block-title">
+                          Tools 合同
+                        </Text>
+                        <div className="control-panel-shell__plugin-tool-list">
+                          {pluginDetail.tools.map((tool) => (
+                            <article key={tool.tool_name} className="control-panel-shell__plugin-tool-card">
+                              <div className="control-panel-shell__plugin-card-heading">
+                                <div>
+                                  <Text as="p" size="2" weight="medium" className="control-panel-shell__plugin-card-title">
+                                    {tool.display_name}
+                                  </Text>
+                                  <Text as="p" size="1" className="control-panel-shell__plugin-card-subtitle">
+                                    {tool.tool_name}
+                                  </Text>
+                                </div>
+                                <StatusPill tone={tool.risk_hint === "red" ? "danger" : tool.risk_hint === "yellow" ? "warning" : "live"}>
+                                  {formatPluginRiskHintLabel(tool.risk_hint)}
+                                </StatusPill>
+                              </div>
+                              <Text as="p" size="2" className="control-panel-shell__plugin-card-copy">
+                                {tool.description}
+                              </Text>
+                              <div className="control-panel-shell__plugin-stat-grid">
+                                <span>{tool.input_contract.fields.length} 个输入字段</span>
+                                <span>{tool.output_contract.fields.length} 个输出字段</span>
+                                <span>{tool.supports_dry_run ? "支持预演" : "直接执行"}</span>
+                              </div>
+                            </article>
+                          ))}
+                          {pluginDetail.tools.length === 0 ? (
+                            <Text as="p" size="2" className="control-panel-shell__plugin-card-copy">
+                              当前插件没有声明工具合同。
+                            </Text>
+                          ) : null}
+                        </div>
+                      </section>
+
+                      <section className="control-panel-shell__plugin-block">
+                        <Text as="p" size="2" weight="medium" className="control-panel-shell__plugin-block-title">
+                          最近事件
+                        </Text>
+                        <div className="control-panel-shell__plugin-event-list">
+                          {pluginDetail.recent_events.slice(0, 5).map((event, index) => (
+                            <article key={`${event.event_type}:${event.created_at}:${index}`} className="control-panel-shell__plugin-event-card">
+                              <Text as="p" size="2" weight="medium" className="control-panel-shell__plugin-card-title">
+                                {event.event_type}
+                              </Text>
+                              <Text as="p" size="1" className="control-panel-shell__plugin-card-copy">
+                                {formatPluginTimestampLabel(event.created_at)}
+                              </Text>
+                            </article>
+                          ))}
+                          {pluginDetail.recent_events.length === 0 ? (
+                            <Text as="p" size="2" className="control-panel-shell__plugin-card-copy">
+                              当前插件没有可展示的最近事件。
+                            </Text>
+                          ) : null}
+                        </div>
+                      </section>
+                    </>
+                  ) : (
+                    <Text as="p" size="2" className="control-panel-shell__plugin-card-copy">
+                      选择左侧插件卡片后，可在这里查看运行态、权限、工具合同与最近事件。
+                    </Text>
+                  )}
+                </div>
+              ) : (
+                <Text as="p" size="2" className="control-panel-shell__plugin-card-copy">
+                  当前没有已选插件。
+                </Text>
+              )}
+            </SettingsCard>
+          </>
+        );
+
       case "models":
         return (
           <>
@@ -2075,6 +2615,11 @@ export function ControlPanelApp() {
               {inspectionSummary ? (
                 <Text as="p" size="2" className="control-panel-shell__action-feedback" aria-live="polite">
                   {inspectionSummary}
+                </Text>
+              ) : null}
+              {pluginFeedback ? (
+                <Text as="p" size="2" className="control-panel-shell__action-feedback" aria-live="polite">
+                  {pluginFeedback}
                 </Text>
               ) : null}
               {aboutActionFeedback ? (
