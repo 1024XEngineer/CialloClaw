@@ -307,23 +307,8 @@ func readPlanRetrievalContextItems(plan map[string]any) []map[string]any {
 	}
 }
 
-func clarificationBubbleTextForLanguage(suggestionIntent map[string]any, hits []memory.RetrievalHit, replyLanguage string) string {
-	base := clarificationBaseTextForLanguage(suggestionIntent, replyLanguage)
-	if len(hits) == 0 {
-		return base
-	}
-
-	summary := strings.TrimSpace(hits[0].Summary)
-	if summary == "" {
-		return base
-	}
-
-	trimmedSummary := truncateText(summary, 72)
-	if replyLanguage == languagepolicy.ReplyLanguageEnglish {
-		return fmt.Sprintf("Based on your earlier context (%s), %s", trimmedSummary, clarificationFollowUpPrompt(suggestionIntent, true))
-	}
-
-	return fmt.Sprintf("结合你之前提到的内容（%s），%s", trimmedSummary, clarificationFollowUpPrompt(suggestionIntent, false))
+func clarificationBubbleTextForLanguage(suggestionIntent map[string]any, _ []memory.RetrievalHit, replyLanguage string) string {
+	return clarificationBaseTextForLanguage(suggestionIntent, replyLanguage)
 }
 
 func clarificationBaseTextForLanguage(suggestionIntent map[string]any, replyLanguage string) string {
@@ -335,7 +320,11 @@ func clarificationBaseTextForLanguage(suggestionIntent map[string]any, replyLang
 
 func initialClarificationPromptForLanguage(snapshot taskcontext.TaskContextSnapshot, startFlow bool, replyLanguage string) string {
 	if strings.TrimSpace(replyLanguage) == "" {
-		replyLanguage = clarificationReplyLanguage(snapshot)
+		preferredInput := firstNonEmptyString(snapshot.Text, snapshot.ErrorText)
+		if preferredInput == "" {
+			preferredInput = firstNonEmptyString(snapshot.SelectionText, memoryQueryFromSnapshot(snapshot))
+		}
+		replyLanguage = languagepolicy.PreferredReplyLanguage(preferredInput)
 	}
 	if replyLanguage == languagepolicy.ReplyLanguageEnglish {
 		if startFlow {
@@ -347,18 +336,6 @@ func initialClarificationPromptForLanguage(snapshot taskcontext.TaskContextSnaps
 		return "我还不确定你想如何处理当前对象，请先确认。"
 	}
 	return "我还不确定你想如何处理这段内容，请确认目标。"
-}
-
-func clarificationReplyLanguage(snapshot taskcontext.TaskContextSnapshot) string {
-	preferredInput := firstNonEmptyString(snapshot.Text, snapshot.ErrorText)
-	if preferredInput == "" {
-		preferredInput = firstNonEmptyString(snapshot.SelectionText, memoryQueryFromSnapshot(snapshot))
-	}
-	currentLanguage := languagepolicy.PreferredReplyLanguage(preferredInput)
-	if shouldPreferRememberedSessionLanguage(snapshot, currentLanguage) {
-		return strings.TrimSpace(snapshot.SessionReplyLanguage)
-	}
-	return currentLanguage
 }
 
 func clarificationFollowUpPrompt(taskIntent map[string]any, english bool) string {

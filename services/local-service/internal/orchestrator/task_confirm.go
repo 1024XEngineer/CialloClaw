@@ -27,7 +27,7 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		return nil, err
 	}
 	snapshot := snapshotFromTask(task)
-	replyLanguage := taskConfirmReplyLanguage(snapshot, correctionText)
+	replyLanguage := s.taskConfirmReplyLanguage(snapshot, correctionText)
 	intentValue := cloneMap(task.Intent)
 	updatedTitle := task.Title
 	if !confirmed && correctionText != "" {
@@ -45,7 +45,7 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 				return nil, err
 			}
 			snapshot := snapshotFromTask(updatedTask)
-			replyLanguage := taskConfirmReplyLanguage(snapshot, correctionText)
+			replyLanguage := s.taskConfirmReplyLanguage(snapshot, correctionText)
 			clarificationText := rejectedIntentClarificationText(replyLanguage)
 			if clarificationHits := s.clarificationPreviewHits(updatedTask, snapshot); len(clarificationHits) > 0 {
 				clarificationText = clarificationText + " " + clarificationBubbleTextForLanguage(map[string]any{}, clarificationHits, replyLanguage)
@@ -68,7 +68,7 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 			return nil, err
 		}
 		snapshot := snapshotFromTask(updatedTask)
-		replyLanguage := taskConfirmReplyLanguage(snapshot, correctionText)
+		replyLanguage := s.taskConfirmReplyLanguage(snapshot, correctionText)
 		clarificationText := rejectedIntentClarificationText(replyLanguage)
 		if clarificationHits := s.clarificationPreviewHits(updatedTask, snapshot); len(clarificationHits) > 0 {
 			clarificationText = clarificationText + " " + clarificationBubbleTextForLanguage(map[string]any{}, clarificationHits, replyLanguage)
@@ -87,7 +87,7 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 	}
 	if strings.TrimSpace(stringValue(intentValue, "name", "")) == "" {
 		snapshot := snapshotFromTask(task)
-		replyLanguage := taskConfirmReplyLanguage(snapshot, correctionText)
+		replyLanguage := s.taskConfirmReplyLanguage(snapshot, correctionText)
 		clarificationText := missingIntentClarificationText(replyLanguage)
 		if clarificationHits := s.clarificationPreviewHits(task, snapshot); len(clarificationHits) > 0 {
 			clarificationText = clarificationText + " " + clarificationBubbleTextForLanguage(map[string]any{}, clarificationHits, replyLanguage)
@@ -157,11 +157,11 @@ func confirmationAcceptedText(replyLanguage string) string {
 	return "已按新的要求开始处理"
 }
 
-func taskConfirmReplyLanguage(snapshot taskcontext.TaskContextSnapshot, correctionText string) string {
+func (s *Service) taskConfirmReplyLanguage(snapshot taskcontext.TaskContextSnapshot, correctionText string) string {
 	if trimmed := strings.TrimSpace(correctionText); trimmed != "" {
 		return languagepolicy.PreferredReplyLanguage(trimmed)
 	}
-	return clarificationReplyLanguage(snapshot)
+	return s.confirmationReplyLanguage(snapshot)
 }
 
 func isEnglishReplyLanguage(replyLanguage string) bool {
