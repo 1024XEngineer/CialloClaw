@@ -838,9 +838,18 @@ export function TaskPage() {
                     </div>
 
                     <div className="task-cloud__stage-dock-meta">
-                      <span className="task-cloud__stage-chip">{getTaskPreviewStatusLabel(selectedTaskPreview.task.status)}</span>
-                      <span className="task-cloud__stage-chip">{selectedProgress.currentLabel}</span>
-                      <span className="task-cloud__stage-chip">{selectedTaskEnded ? "已结束" : `更新于 ${selectedUpdateLabel}`}</span>
+                      <span className="task-cloud__stage-chip" data-tone="status">
+                        <span className="task-cloud__stage-chip-label">状态</span>
+                        <span className="task-cloud__stage-chip-value">{getTaskPreviewStatusLabel(selectedTaskPreview.task.status)}</span>
+                      </span>
+                      <span className="task-cloud__stage-chip" data-tone="progress">
+                        <span className="task-cloud__stage-chip-label">阶段</span>
+                        <span className="task-cloud__stage-chip-value">{selectedProgress.currentLabel}</span>
+                      </span>
+                      <span className="task-cloud__stage-chip" data-tone="time">
+                        <span className="task-cloud__stage-chip-label">时间</span>
+                        <span className="task-cloud__stage-chip-value">{selectedTaskEnded ? "已结束" : `更新于 ${selectedUpdateLabel}`}</span>
+                      </span>
                     </div>
                     <p className="task-cloud__stage-description">{selectedStageDescription ?? selectedStateVoice.body}</p>
                   </section>

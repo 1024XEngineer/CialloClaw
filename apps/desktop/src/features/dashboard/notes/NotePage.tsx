@@ -1149,7 +1149,7 @@ export function NotePage() {
   );
   const sourceNoteAvailabilityMessage = useMemo(() => {
     if (dataMode !== "rpc") {
-      return "Mock 模式下不会读写真实 markdown 便签。";
+      return "当前不会读写真实 markdown 便签。";
     }
 
     if (!desktopSourceNotesAvailable) {
@@ -1285,7 +1285,7 @@ export function NotePage() {
 
   async function refreshInspection(reason: string, prefix?: string) {
     if (dataMode !== "rpc") {
-      showFeedback("Mock 模式下不会执行真实巡检。");
+      showFeedback("当前不会执行真实巡检。");
       return;
     }
 
@@ -1770,7 +1770,7 @@ export function NotePage() {
     }
 
     if (selectedItem.sourceNote?.localOnly && action !== "edit" && action !== "open-resource") {
-      showFeedback("这张源便签还没进入正式事项流，先编辑源文件或等待巡检同步。");
+      showFeedback("这张源便签还没进入事项流，先编辑源文件或等待巡检同步。");
       return;
     }
 
@@ -2381,7 +2381,7 @@ export function NotePage() {
     setSelectedItemId(nextItemId);
     pinNoteToCanvasRef.current(nextItemId);
     if (nextItem.sourceNote?.localOnly) {
-      showFeedback("新便签已放到网格里，正在同步正式分组。");
+      showFeedback("新便签已放到网格里，正在同步分组。");
       return;
     }
     pendingCreatedSourceNoteRef.current = null;
@@ -2461,7 +2461,7 @@ export function NotePage() {
         if (drawerOpen) {
           setExpandedBucket(sourceBucket);
         }
-        presentRailFeedback(`这张源便签还没进入正式事项流，先放回${sourceLabel}。`);
+        presentRailFeedback(`这张源便签还没进入事项流，先放回${sourceLabel}。`);
         return;
       }
 
@@ -2515,14 +2515,14 @@ export function NotePage() {
         if (drawerOpen) {
           setExpandedBucket(restoredBucket);
         }
-        presentRailFeedback(`当前正式状态还不能直接拖到${targetLabel}，已恢复到${getNoteBucketLabel(restoredBucket)}。`);
+        presentRailFeedback(`当前状态还不能直接拖到${targetLabel}，已恢复到${getNoteBucketLabel(restoredBucket)}。`);
         return;
       }
 
       if (drawerOpen) {
         setExpandedBucket(sourceBucket);
       }
-      presentRailFeedback(`当前正式状态还不能直接拖到${targetLabel}，已放回${sourceLabel}。`);
+      presentRailFeedback(`当前状态还不能直接拖到${targetLabel}，已放回${sourceLabel}。`);
     } catch (error) {
       if (drawerOpen) {
         setExpandedBucket(sourceBucket);

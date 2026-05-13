@@ -39,6 +39,7 @@ import { submitShellBallInput } from "./shellBallSubmit";
 import { isRpcChannelUnavailable } from "@/rpc/fallback";
 import { readClipboardText } from "@/services/clipboardService";
 import { startTaskFromSelectedText } from "@/services/taskService";
+import { speakApprovalPendingNotification, speakDeliveryReadyNotification } from "@/services/voiceNotificationService";
 import { requestDashboardTaskDetailOpen } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import {
   buildShellBallIntentCorrectionPlaceholder,
@@ -1402,6 +1403,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
       ]),
     );
     revealBubbleRegionRef.current();
+    speakApprovalPendingNotification({
+      approval_request: input.approvalRequest,
+      task_id: input.taskId,
+    });
   }, []);
 
   const appendDeliveryReadyBubble = useCallback((input: QueuedDeliveryReadyNotification) => {
@@ -1442,6 +1447,10 @@ export function useShellBallCoordinator(input: ShellBallCoordinatorInput) {
     });
     revealBubbleRegionRef.current();
     void autoOpenShellBallDeliveryResultRef.current(input.taskId, input.deliveryResult);
+    speakDeliveryReadyNotification({
+      delivery_result: input.deliveryResult,
+      task_id: input.taskId,
+    });
   }, [allocateBubbleTurnIndex, bindTaskToBubbleTurn, getTaskBubbleTurnIndex]);
 
   const appendRuntimeObservationBubble = useCallback((taskId: string, payload: ShellBallRuntimeNotification) => {

@@ -155,7 +155,7 @@ func isApprovalCommand(commandPreview string) bool {
 
 func isApprovalBrowserOperation(operationName string) bool {
 	switch strings.TrimSpace(operationName) {
-	case "page_interact", "browser_navigate", "browser_tabs_list", "browser_tab_focus", "browser_interact":
+	case "page_interact", "browser_interact":
 		return true
 	default:
 		return false
@@ -179,7 +179,7 @@ func isLowRiskBrowserObservationOperation(operationName string) bool {
 // startup does not block on name service or reinterpret explicit user targets.
 func (s *Service) requiresApprovalForSensitiveWebTarget(operationName, targetObject string) bool {
 	switch strings.TrimSpace(operationName) {
-	case "page_read", "page_search", "web_search":
+	case "page_read", "page_search", "web_search", "browser_navigate":
 		return s.isSensitiveWebTarget(targetObject)
 	default:
 		return false

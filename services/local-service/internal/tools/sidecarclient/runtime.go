@@ -20,7 +20,7 @@ import (
 )
 
 const sidecarHealthTimeout = 5 * time.Second
-const sidecarDefaultTimeout = 20 * time.Second
+const sidecarDefaultTimeout = 5 * time.Minute
 const playwrightWorkerRelativePath = "workers/playwright-worker/src/index.js"
 
 type workerInvoker interface {

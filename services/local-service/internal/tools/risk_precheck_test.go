@@ -278,12 +278,35 @@ func TestBuildRiskPrecheckInputBrowserNavigateUsesDestinationURL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.RiskLevel != RiskLevelYellow || !result.ApprovalRequired {
-		t.Fatalf("expected browser navigate to require approval, got %+v", result)
+	if result.RiskLevel != RiskLevelGreen || result.ApprovalRequired {
+		t.Fatalf("expected browser navigate public target to stay low risk, got %+v", result)
 	}
 }
 
-func TestBuildRiskPrecheckInputBrowserTabsListRequiresApproval(t *testing.T) {
+func TestBuildRiskPrecheckInputBrowserNavigateRequiresApprovalForLoopbackTarget(t *testing.T) {
+	execCtx := &ToolExecuteContext{
+		WorkspacePath: "/workspace",
+		Platform:      riskPlatformStub{workspacePath: "/workspace"},
+	}
+	input := BuildRiskPrecheckInput(
+		ToolMetadata{Name: "browser_navigate", DisplayName: "Browser Navigate", Source: ToolSourceSidecar},
+		"browser_navigate",
+		execCtx,
+		map[string]any{
+			"url":    "http://127.0.0.1:8080/admin",
+			"attach": map[string]any{"browser_kind": "edge", "target": map[string]any{"url": "https://example.com/current"}},
+		},
+	)
+	result, err := DefaultRiskPrechecker{}.Precheck(context.Background(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RiskLevel != RiskLevelYellow || !result.ApprovalRequired {
+		t.Fatalf("expected loopback browser navigate to require approval, got %+v", result)
+	}
+}
+
+func TestBuildRiskPrecheckInputBrowserTabsListStaysLowRisk(t *testing.T) {
 	execCtx := &ToolExecuteContext{
 		WorkspacePath: "/workspace",
 		Platform:      riskPlatformStub{workspacePath: "/workspace"},
@@ -301,12 +324,55 @@ func TestBuildRiskPrecheckInputBrowserTabsListRequiresApproval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if result.RiskLevel != RiskLevelYellow || !result.ApprovalRequired {
-		t.Fatalf("expected browser_tabs_list to require approval, got %+v", result)
+	if result.RiskLevel != RiskLevelGreen || result.ApprovalRequired {
+		t.Fatalf("expected browser_tabs_list to stay low risk, got %+v", result)
 	}
 	apps := result.ImpactScope["apps"].([]string)
 	if len(apps) != 1 || apps[0] != "chrome" {
 		t.Fatalf("expected browser_tabs_list app scope, got %+v", result.ImpactScope)
+	}
+}
+
+func TestBuildRiskPrecheckInputBrowserTabsListEndpointOverrideRequiresApproval(t *testing.T) {
+	execCtx := &ToolExecuteContext{
+		WorkspacePath: "/workspace",
+		Platform:      riskPlatformStub{workspacePath: "/workspace"},
+	}
+	input := BuildRiskPrecheckInput(
+		ToolMetadata{Name: "browser_tabs_list", DisplayName: "Browser Tabs List", Source: ToolSourceSidecar},
+		"browser_tabs_list",
+		execCtx,
+		map[string]any{"attach": map[string]any{"browser_kind": "chrome", "endpoint_url": "http://127.0.0.1:9333"}},
+	)
+	result, err := DefaultRiskPrechecker{}.Precheck(context.Background(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RiskLevel != RiskLevelYellow || !result.ApprovalRequired {
+		t.Fatalf("expected browser_tabs_list endpoint override to require approval, got %+v", result)
+	}
+}
+
+func TestBuildRiskPrecheckInputBrowserTabFocusStaysLowRisk(t *testing.T) {
+	execCtx := &ToolExecuteContext{
+		WorkspacePath: "/workspace",
+		Platform:      riskPlatformStub{workspacePath: "/workspace"},
+	}
+	input := BuildRiskPrecheckInput(
+		ToolMetadata{Name: "browser_tab_focus", DisplayName: "Browser Tab Focus", Source: ToolSourceSidecar},
+		"browser_tab_focus",
+		execCtx,
+		map[string]any{"attach": map[string]any{"browser_kind": "chrome", "target": map[string]any{"page_index": 2}}},
+	)
+	if input.Workspace.TargetPath != "browser_tab:2" {
+		t.Fatalf("expected browser_tab_focus target to use stable attach selector, got %+v", input.Workspace)
+	}
+	result, err := DefaultRiskPrechecker{}.Precheck(context.Background(), input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.RiskLevel != RiskLevelGreen || result.ApprovalRequired {
+		t.Fatalf("expected browser_tab_focus to stay low risk, got %+v", result)
 	}
 }
 
@@ -415,6 +481,25 @@ func TestBuildRiskPrecheckInputDeniesMediaOutputOutsideWorkspace(t *testing.T) {
 	}
 	if result.RiskLevel != RiskLevelRed || !result.Deny {
 		t.Fatalf("expected out-of-workspace media write to be denied, got %+v", result)
+	}
+}
+
+func TestBuildRiskPrecheckInputWriteFileMarksToolPolicyPathOutsideWorkspace(t *testing.T) {
+	execCtx := &ToolExecuteContext{
+		WorkspacePath: "/workspace",
+		Platform:      riskPlatformStub{workspacePath: "/tmp"},
+	}
+	input := BuildRiskPrecheckInput(
+		ToolMetadata{Name: "write_file", DisplayName: "Write File", Source: ToolSourceBuiltin},
+		"write_file",
+		execCtx,
+		map[string]any{"path": "/tmp/Desktop/report.md"},
+	)
+	if input.Workspace.TargetPath != "/tmp/Desktop/report.md" {
+		t.Fatalf("expected write_file target path to preserve resolved tool path, got %+v", input.Workspace)
+	}
+	if input.Workspace.Within == nil || *input.Workspace.Within {
+		t.Fatalf("expected write_file target outside workspace to be detected even when platform allows it, got %+v", input.Workspace)
 	}
 }
 

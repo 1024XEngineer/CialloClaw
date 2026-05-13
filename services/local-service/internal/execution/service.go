@@ -8,8 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"net"
-	"net/url"
 	"path"
 	"path/filepath"
 	"strconv"
@@ -36,7 +34,7 @@ import (
 
 const (
 	defaultAgentLoopIntentName  = "agent_loop"
-	defaultAgentLoopTimeout     = 90 * time.Second
+	defaultAgentLoopTimeout     = 5 * time.Minute
 	internalScreenAnalyzeIntent = "screen_analyze_candidate"
 	deliveryPreviewMaxLength    = 120
 	inputPreviewMaxLength       = 96
@@ -46,6 +44,7 @@ const (
 // Service owns the minimum executable task pipeline inside local-service.
 type Service struct {
 	fileSystem          platform.FileSystemAdapter
+	toolPlatform        platform.FileSystemAdapter
 	execution           tools.ExecutionCapability
 	playwright          tools.PlaywrightSidecarClient
 	ocr                 tools.OCRWorkerClient
@@ -76,6 +75,17 @@ func (s *Service) WithArtifactStore(store storage.ArtifactStore) *Service {
 		return nil
 	}
 	s.artifactStore = store
+	return s
+}
+
+// WithToolPlatform overrides the filesystem boundary used by direct tool
+// execution without changing the workspace-scoped filesystem used by task
+// inspection, recovery, and artifact bookkeeping.
+func (s *Service) WithToolPlatform(fileSystem platform.FileSystemAdapter) *Service {
+	if s == nil {
+		return nil
+	}
+	s.toolPlatform = fileSystem
 	return s
 }
 
@@ -218,23 +228,24 @@ func NewService(
 	}
 
 	return &Service{
-		fileSystem: fileSystem,
-		execution:  executionBackend,
-		playwright: playwrightClient,
-		ocr:        ocrClient,
-		media:      mediaClient,
-		screen:     screenClient,
-		lifecycle:  tools.NewScreenLifecycleManager(),
-		model:      modelService,
-		loop:       agentloop.NewRuntime(),
-		audit:      auditService,
-		checkpoint: checkpointService,
-		delivery:   deliveryService,
-		tools:      toolRegistry,
-		executor:   toolExecutor,
-		plugin:     pluginService,
-		loopStore:  nil,
-		workspace:  resolveWorkspaceRoot(fileSystem),
+		fileSystem:   fileSystem,
+		toolPlatform: fileSystem,
+		execution:    executionBackend,
+		playwright:   playwrightClient,
+		ocr:          ocrClient,
+		media:        mediaClient,
+		screen:       screenClient,
+		lifecycle:    tools.NewScreenLifecycleManager(),
+		model:        modelService,
+		loop:         agentloop.NewRuntime(),
+		audit:        auditService,
+		checkpoint:   checkpointService,
+		delivery:     deliveryService,
+		tools:        toolRegistry,
+		executor:     toolExecutor,
+		plugin:       pluginService,
+		loopStore:    nil,
+		workspace:    resolveWorkspaceRoot(fileSystem),
 	}
 }
 
@@ -1746,18 +1757,27 @@ func (s *Service) consumeWriteFileCandidates(ctx context.Context, taskID, runID 
 		}
 	}
 
-	if checkpointCandidate, ok := rawOutput["checkpoint_candidate"].(map[string]any); ok && s.checkpoint != nil {
+	if checkpointCandidate, ok := rawOutput["checkpoint_candidate"].(map[string]any); ok && s.checkpoint != nil && s.fileSystem != nil {
 		if _, hasRecoveryPoint := merged["recovery_point"].(map[string]any); !hasRecoveryPoint {
-			createInput, shouldCreate, err := checkpoint.BuildCreateInputFromCandidate(taskID, checkpointCandidate)
-			if err != nil {
-				return nil, nil, fmt.Errorf("build checkpoint input from candidate: %w", err)
-			}
-			if shouldCreate {
-				point, err := s.checkpoint.Create(ctx, createInput)
-				if err != nil {
-					return nil, nil, fmt.Errorf("create recovery point from candidate: %w", err)
+			withinWorkspace := true
+			targetPath, _ := checkpointCandidate["target_path"].(string)
+			if strings.TrimSpace(targetPath) != "" {
+				if _, err := s.fileSystem.EnsureWithinWorkspace(targetPath); err != nil {
+					withinWorkspace = false
 				}
-				merged["recovery_point"] = recoveryPointMap(point)
+			}
+			if withinWorkspace {
+				createInput, shouldCreate, err := checkpoint.BuildCreateInputFromCandidate(taskID, checkpointCandidate)
+				if err != nil {
+					return nil, nil, fmt.Errorf("build checkpoint input from candidate: %w", err)
+				}
+				if shouldCreate {
+					point, err := s.checkpoint.Create(ctx, createInput)
+					if err != nil {
+						return nil, nil, fmt.Errorf("create recovery point from candidate: %w", err)
+					}
+					merged["recovery_point"] = recoveryPointMap(point)
+				}
 			}
 		}
 	}
@@ -1807,6 +1827,9 @@ func (s *Service) prepareWriteFileRecoveryPoint(ctx context.Context, request Req
 	}
 	targetPath := stringValue(toolInput, "path", "")
 	if targetPath == "" {
+		return nil, nil
+	}
+	if _, err := s.fileSystem.EnsureWithinWorkspace(targetPath); err != nil {
 		return nil, nil
 	}
 	if _, err := s.fileSystem.Stat(targetPath); err != nil {
@@ -2083,22 +2106,20 @@ func (s *Service) fileSectionForLanguage(filePath, replyLanguage string) string 
 		}
 		return "文件: <empty>"
 	}
-	if s.fileSystem == nil {
+	fileSystem := firstNonNilFileSystem(s.toolPlatform, s.fileSystem)
+	if fileSystem == nil {
 		if replyLanguage == languagepolicy.ReplyLanguageEnglish {
 			return fmt.Sprintf("File: %s", trimmedPath)
 		}
 		return fmt.Sprintf("文件: %s", trimmedPath)
 	}
 
-	workspacePath := workspaceFSPath(trimmedPath)
-	if workspacePath == "" {
-		if replyLanguage == languagepolicy.ReplyLanguageEnglish {
-			return fmt.Sprintf("File: %s", trimmedPath)
-		}
-		return fmt.Sprintf("文件: %s", trimmedPath)
+	readPath := workspaceFSPath(trimmedPath)
+	if readPath == "" {
+		readPath = trimmedPath
 	}
 
-	content, err := s.fileSystem.ReadFile(workspacePath)
+	content, err := fileSystem.ReadFile(readPath)
 	if err != nil {
 		if replyLanguage == languagepolicy.ReplyLanguageEnglish {
 			return fmt.Sprintf("File: %s\nRead failed: %v", trimmedPath, err)
@@ -2108,6 +2129,9 @@ func (s *Service) fileSectionForLanguage(filePath, replyLanguage string) string 
 
 	decoded, err := textdecode.Decode(content)
 	if err != nil {
+		if errors.Is(err, textdecode.ErrUnsupportedEncoding) {
+			return unsupportedFileSection(trimmedPath, replyLanguage)
+		}
 		if replyLanguage == languagepolicy.ReplyLanguageEnglish {
 			return fmt.Sprintf("File: %s\nFile encoding could not be safely detected. Convert it to UTF-8, UTF-16 BOM, or GB18030 and try again.", trimmedPath)
 		}
@@ -2118,6 +2142,13 @@ func (s *Service) fileSectionForLanguage(filePath, replyLanguage string) string 
 		return fmt.Sprintf("File %s contents:\n%s", trimmedPath, truncateText(decoded.Text, 1600))
 	}
 	return fmt.Sprintf("文件 %s 内容:\n%s", trimmedPath, truncateText(decoded.Text, 1600))
+}
+
+func unsupportedFileSection(filePath, replyLanguage string) string {
+	if replyLanguage == languagepolicy.ReplyLanguageEnglish {
+		return fmt.Sprintf("File: %s\nThis attachment is not safe to read as plain text. If it is a PDF, image, scan, or document-style file, use extract_text instead.", filePath)
+	}
+	return fmt.Sprintf("文件: %s\n该附件不适合按纯文本直接读取；如果它是 PDF、图片、扫描件或其他文档型文件，请改用 extract_text。", filePath)
 }
 
 func (s *Service) generateOutput(ctx context.Context, request Request, inputText string) (generationTrace, error) {
@@ -2399,7 +2430,7 @@ func budgetToolCategory(toolName string) string {
 		return "command"
 	case "write_file":
 		return "filesystem_mutation"
-	case "page_interact":
+	case "page_interact", "browser_navigate", "browser_tab_focus", "browser_interact":
 		return "browser_mutation"
 	case "transcode_media", "normalize_recording", "extract_frames":
 		return "media_heavy"
@@ -2883,10 +2914,11 @@ func (s *Service) executeAgentLoopTool(ctx context.Context, request Request, cal
 	}
 	toolResult, _, err := s.executeTool(ctx, request, s.workspace, toolName, toolInput)
 	if err != nil {
+		observation := agentLoopToolFailureObservation(toolName, err, toolResult)
 		if toolResult != nil {
-			return fmt.Sprintf("Tool %s failed with error: %v", toolName, err), toolResult.ToolCall
+			return observation, toolResult.ToolCall
 		}
-		return fmt.Sprintf("Tool %s failed with error: %v", toolName, err), tools.ToolCallRecord{}
+		return observation, tools.ToolCallRecord{}
 	}
 
 	summary := map[string]any{}
@@ -2898,6 +2930,21 @@ func (s *Service) executeAgentLoopTool(ctx context.Context, request Request, cal
 		return fmt.Sprintf("Tool %s succeeded, but its summary could not be serialized.", toolName), annotateLoopRound(toolResult.ToolCall, loopRound)
 	}
 	return fmt.Sprintf("Tool %s succeeded. Summary: %s", toolName, string(summaryJSON)), annotateLoopRound(toolResult.ToolCall, loopRound)
+}
+
+func agentLoopToolFailureObservation(toolName string, err error, toolResult *tools.ToolExecutionResult) string {
+	base := fmt.Sprintf("Tool %s failed with error: %v", toolName, err)
+	if !errors.Is(err, textdecode.ErrUnsupportedEncoding) || strings.TrimSpace(toolName) != "read_file" {
+		return base
+	}
+	mimeType := ""
+	if toolResult != nil {
+		mimeType = stringValue(toolResult.SummaryOutput, "mime_type", "")
+	}
+	if strings.TrimSpace(mimeType) != "" {
+		return fmt.Sprintf("%s Hint: Detected %s. Use extract_text for PDFs, images, scans, and other document-style attachments instead of read_file.", base, mimeType)
+	}
+	return base + " Hint: Use extract_text for PDFs, images, scans, and other document-style attachments instead of read_file."
 }
 
 func (s *Service) persistAgentLoopRuntime(request Request, result agentloop.Result) {
@@ -3102,696 +3149,6 @@ func marshalEventPayload(value map[string]any) string {
 	return string(payload)
 }
 
-func (s *Service) availableToolNames() []string {
-	if s.tools == nil {
-		return nil
-	}
-	return s.tools.Names()
-}
-
-func (s *Service) availableWorkers() []string {
-	if s.plugin == nil {
-		return nil
-	}
-	return s.plugin.Workers()
-}
-
-func (s *Service) executeTool(ctx context.Context, request Request, workspacePath, toolName string, input map[string]any) (*tools.ToolExecutionResult, map[string]any, error) {
-	if s.executor == nil {
-		return nil, nil, fmt.Errorf("tool executor is required")
-	}
-	execCtx := s.toolExecutionContext(workspacePath, request)
-	recoveryPoint, err := s.prepareGovernanceRecoveryPoint(ctx, request, workspacePath, toolName, input)
-	if err != nil {
-		return nil, cloneMap(recoveryPoint), err
-	}
-	toolResult, err := s.executor.ExecuteToolWithContext(ctx, execCtx, toolName, input)
-	if toolResult != nil && len(recoveryPoint) > 0 {
-		if toolResult.RawOutput == nil {
-			toolResult.RawOutput = map[string]any{}
-		}
-		toolResult.RawOutput["recovery_point"] = cloneMap(recoveryPoint)
-	}
-	return toolResult, cloneMap(recoveryPoint), err
-}
-
-func (s *Service) resolveGovernanceToolExecution(request Request) (string, map[string]any, *tools.ToolExecuteContext, bool, error) {
-	intentName := stringValue(request.Intent, "name", "")
-	args := mapValue(request.Intent, "arguments")
-	deliveryType := firstNonEmpty(strings.TrimSpace(request.DeliveryType), "workspace_document")
-	previewText := previewTextForDeliveryType(deliveryType)
-	deliveryResult := s.delivery.BuildDeliveryResultWithTargetPath(
-		request.TaskID,
-		deliveryType,
-		firstNonEmpty(strings.TrimSpace(request.ResultTitle), presentation.Text(presentation.MessageResultTitleGeneric, nil)),
-		previewText,
-		targetPathFromIntent(request.Intent),
-	)
-	if s.tools != nil && intentName != "" && intentName != "write_file" {
-		if _, err := s.tools.Get(intentName); err == nil {
-			if budgetDowngradeDisallowsDirectTool(request, intentName) {
-				return "", nil, nil, false, nil
-			}
-			if input, ok := resolveBrowserToolInput(intentName, args, request.Snapshot); ok {
-				return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
-			}
-			switch intentName {
-			case "read_file":
-				pathValue := stringValue(args, "path", stringValue(args, "target_path", ""))
-				if pathValue != "" {
-					return intentName, map[string]any{"path": pathValue}, s.toolExecutionContext(s.workspace, request), true, nil
-				}
-			case "list_dir":
-				pathValue := stringValue(args, "path", stringValue(args, "target_path", ""))
-				if pathValue != "" {
-					input := map[string]any{"path": pathValue}
-					if limit, ok := args["limit"]; ok {
-						input["limit"] = limit
-					}
-					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
-				}
-			case "exec_command":
-				input := map[string]any{}
-				for _, key := range []string{"command", "args", "working_dir"} {
-					if value, ok := args[key]; ok {
-						input[key] = value
-					}
-				}
-				if len(input) > 0 {
-					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
-				}
-			case "page_read":
-				if input, ok := resolvePageToolInput(intentName, args, request.Snapshot); ok {
-					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
-				}
-			case "page_search":
-				if input, ok := resolvePageToolInput(intentName, args, request.Snapshot); ok {
-					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
-				}
-			case "web_search":
-				if input, ok := resolveWebSearchToolInput(args); ok {
-					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
-				}
-			case "page_interact":
-				if input, ok := resolvePageToolInput(intentName, args, request.Snapshot); ok {
-					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
-				}
-			case "extract_text", "ocr_image", "ocr_pdf":
-				pathValue := stringValue(args, "path", stringValue(args, "file_path", ""))
-				if pathValue != "" {
-					input := map[string]any{"path": pathValue}
-					if language, ok := args["language"]; ok {
-						input["language"] = language
-					}
-					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
-				}
-			case "transcode_media", "normalize_recording":
-				pathValue := stringValue(args, "path", stringValue(args, "file_path", ""))
-				outputPath := stringValue(args, "output_path", "")
-				if pathValue != "" && outputPath != "" {
-					input := map[string]any{"path": pathValue, "output_path": outputPath}
-					if format, ok := args["format"]; ok {
-						input["format"] = format
-					}
-					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
-				}
-			case "extract_frames":
-				pathValue := stringValue(args, "path", stringValue(args, "file_path", ""))
-				outputDir := stringValue(args, "output_dir", "")
-				if pathValue != "" && outputDir != "" {
-					input := map[string]any{"path": pathValue, "output_dir": outputDir}
-					if everySeconds, ok := args["every_seconds"]; ok {
-						input["every_seconds"] = everySeconds
-					}
-					if limit, ok := args["limit"]; ok {
-						input["limit"] = limit
-					}
-					return intentName, input, s.toolExecutionContext(s.workspace, request), true, nil
-				}
-			}
-		}
-	}
-	rawTargetPath := firstNonEmpty(targetPathFromIntent(request.Intent), deliveryPayloadPath(deliveryResult))
-	writePath := workspaceFSPath(rawTargetPath)
-	if writePath == "" {
-		writePath = strings.TrimSpace(strings.ReplaceAll(rawTargetPath, "\\", "/"))
-	}
-	if writePath == "" {
-		return "", nil, nil, false, nil
-	}
-	toolName, toolInput := "write_file", map[string]any{"path": writePath, "content": ""}
-	return toolName, toolInput, s.toolExecutionContext(s.workspace, request), true, nil
-}
-
-func (s *Service) toolExecutionContext(workspacePath string, request Request) *tools.ToolExecuteContext {
-	workspacePath = firstNonEmpty(strings.TrimSpace(workspacePath), s.workspace)
-	approvedOperation := firstNonEmpty(strings.TrimSpace(request.ApprovedOperation), stringValue(request.Intent, "name", ""))
-	approvedTargetObject := firstNonEmpty(strings.TrimSpace(request.ApprovedTargetObject), approvedTargetObject(request.Intent, s.workspace))
-	modelService := s.currentModel()
-	return &tools.ToolExecuteContext{
-		TaskID:               request.TaskID,
-		RunID:                request.RunID,
-		WorkspacePath:        workspacePath,
-		ApprovalGranted:      request.ApprovalGranted,
-		ApprovedOperation:    approvedOperation,
-		ApprovedTargetObject: approvedTargetObject,
-		ApprovedToolInput:    cloneMap(request.ApprovedToolInput),
-		Platform:             s.fileSystem,
-		Execution:            s.execution,
-		Playwright:           s.playwright,
-		OCR:                  s.ocr,
-		Media:                s.media,
-		Model:                modelService,
-	}
-}
-
-func (s *Service) prepareGovernanceRecoveryPoint(ctx context.Context, request Request, workspacePath, toolName string, input map[string]any) (map[string]any, error) {
-	if s.checkpoint == nil {
-		return nil, nil
-	}
-	switch toolName {
-	case "write_file":
-		targetPath := stringValue(input, "path", "")
-		if targetPath == "" {
-			return nil, nil
-		}
-		point, err := s.checkpoint.CreateWithSnapshots(ctx, s.fileSystem, checkpoint.CreateInput{
-			TaskID:  request.TaskID,
-			Summary: "write_file_before_change",
-			Objects: []string{checkpointObjectPath(targetPath)},
-		})
-		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrRecoveryPointPrepareFailed, err)
-		}
-		return recoveryPointMap(point), nil
-	case "exec_command":
-		return nil, nil
-	default:
-		return nil, nil
-	}
-}
-
-func recoveryPointMap(point checkpoint.RecoveryPoint) map[string]any {
-	return map[string]any{
-		"recovery_point_id": point.RecoveryPointID,
-		"task_id":           point.TaskID,
-		"summary":           point.Summary,
-		"created_at":        point.CreatedAt,
-		"objects":           append([]string(nil), point.Objects...),
-	}
-}
-
-// GovernanceTargetObject derives the stable approval boundary for a concrete
-// tool invocation. Orchestrator runtime-approval recovery reuses the same
-// target-object rules so resumed approval checks match the executor's
-// preflight and replay behavior.
-func GovernanceTargetObject(toolName string, toolInput map[string]any, execCtx *tools.ToolExecuteContext) string {
-	switch toolName {
-	case "write_file":
-		return stringValue(toolInput, "path", "")
-	case "exec_command":
-		if execCtx == nil {
-			return stringValue(toolInput, "working_dir", "")
-		}
-		return firstNonEmpty(stringValue(toolInput, "working_dir", ""), execCtx.WorkspacePath)
-	case "page_read", "page_search", "page_interact", "web_search":
-		return stringValue(toolInput, "url", "")
-	case "browser_navigate":
-		return firstNonEmpty(strings.TrimSpace(stringValue(toolInput, "url", "")), browserStableTargetObject(mapValue(toolInput, "attach")))
-	case "browser_tab_focus", "browser_interact":
-		return browserStableTargetObject(mapValue(toolInput, "attach"))
-	case "browser_attach_current", "browser_snapshot", "browser_tabs_list":
-		return browserTargetObject(mapValue(toolInput, "attach"))
-	default:
-		for _, key := range governedTargetKeys(toolName) {
-			if value := stringValue(toolInput, key, ""); value != "" {
-				return value
-			}
-		}
-		return ""
-	}
-}
-
-func governanceTargetObject(toolName string, toolInput map[string]any, execCtx *tools.ToolExecuteContext) string {
-	return GovernanceTargetObject(toolName, toolInput, execCtx)
-}
-
-func approvedTargetObject(intent map[string]any, workspacePath string) string {
-	intentName := stringValue(intent, "name", "")
-	arguments := mapValue(intent, "arguments")
-	if browserTarget := browserIntentTargetObject(intentName, arguments); browserTarget != "" {
-		return browserTarget
-	}
-	for _, key := range approvedTargetKeys(intentName) {
-		if value := strings.TrimSpace(stringValue(arguments, key, "")); value != "" {
-			normalized := strings.ReplaceAll(value, "\\", "/")
-			if key != "working_dir" {
-				if candidate := workspaceFSPath(normalized); candidate != "" {
-					normalized = candidate
-				}
-			}
-			workspaceRoot := strings.ReplaceAll(strings.TrimSpace(workspacePath), "\\", "/")
-			if workspaceRoot != "" && !path.IsAbs(normalized) && !isWindowsAbsolutePath(normalized) {
-				return path.Join(workspaceRoot, normalized)
-			}
-			return normalized
-		}
-	}
-	if intentName == "exec_command" {
-		return workspacePath
-	}
-	if intentName == "browser_navigate" {
-		if url := strings.TrimSpace(stringValue(arguments, "url", "")); url != "" {
-			return url
-		}
-	}
-	if target := browserIntentTargetObject(intentName, arguments); target != "" {
-		return target
-	}
-	if url := strings.TrimSpace(stringValue(arguments, "url", "")); url != "" {
-		return url
-	}
-	return ""
-}
-
-func governedTargetKeys(toolName string) []string {
-	switch strings.TrimSpace(toolName) {
-	case "transcode_media", "normalize_recording":
-		return []string{"output_path", "path"}
-	case "extract_frames":
-		return []string{"output_dir", "path"}
-	default:
-		return []string{"path", "target_path", "file_path"}
-	}
-}
-
-func approvedTargetKeys(intentName string) []string {
-	switch strings.TrimSpace(intentName) {
-	case "transcode_media", "normalize_recording":
-		return []string{"output_path", "target_path", "path", "working_dir"}
-	case "extract_frames":
-		return []string{"output_dir", "target_path", "path", "working_dir"}
-	default:
-		return []string{"target_path", "path", "working_dir"}
-	}
-}
-
-func resolveBrowserToolInput(intentName string, arguments map[string]any, snapshot taskcontext.TaskContextSnapshot) (map[string]any, bool) {
-	if explicitInput, ok := resolveExplicitBrowserToolInput(intentName, arguments); ok {
-		return explicitInput, true
-	}
-
-	browserKind := strings.ToLower(strings.TrimSpace(snapshot.BrowserKind))
-	if browserKind != "chrome" && browserKind != "edge" {
-		return nil, false
-	}
-
-	useSnapshotTarget := true
-	allowEmptyTarget := false
-	requireStableTarget := requiresStableBrowserTarget(intentName)
-	if intentName == "browser_tabs_list" {
-		allowEmptyTarget = true
-	}
-	if intentName == "browser_tab_focus" {
-		useSnapshotTarget = browserTargetOverrideMissing(arguments)
-	}
-
-	attach := buildBrowserAttachInput(browserKind, snapshot, arguments, useSnapshotTarget, allowEmptyTarget, requireStableTarget)
-	if len(attach) == 0 {
-		return nil, false
-	}
-
-	input := map[string]any{"attach": attach}
-	switch strings.TrimSpace(intentName) {
-	case "browser_attach_current", "browser_snapshot", "browser_tabs_list", "browser_tab_focus":
-		return input, true
-	case "browser_navigate":
-		urlValue := strings.TrimSpace(stringValue(arguments, "url", ""))
-		if urlValue == "" {
-			return nil, false
-		}
-		input["url"] = urlValue
-		return input, true
-	case "browser_interact":
-		actions, ok := arguments["actions"]
-		if !ok {
-			return nil, false
-		}
-		input["actions"] = actions
-		return input, true
-	default:
-		return nil, false
-	}
-}
-
-func resolveExplicitBrowserToolInput(intentName string, arguments map[string]any) (map[string]any, bool) {
-	attach := mergeExplicitBrowserAttachInput(mapValue(arguments, "attach"), arguments)
-	if len(attach) == 0 {
-		return nil, false
-	}
-	if requiresStableBrowserTarget(intentName) && !hasStableBrowserAttachTarget(attach) {
-		return nil, false
-	}
-
-	input := map[string]any{"attach": cloneMap(attach)}
-	switch strings.TrimSpace(intentName) {
-	case "browser_attach_current", "browser_snapshot", "browser_tabs_list", "browser_tab_focus":
-		return input, true
-	case "browser_navigate":
-		urlValue := strings.TrimSpace(stringValue(arguments, "url", ""))
-		if urlValue == "" {
-			return nil, false
-		}
-		input["url"] = urlValue
-		return input, true
-	case "browser_interact":
-		actions, ok := arguments["actions"]
-		if !ok {
-			return nil, false
-		}
-		input["actions"] = actions
-		return input, true
-	default:
-		return nil, false
-	}
-}
-
-func mergeExplicitBrowserAttachInput(attachInput map[string]any, arguments map[string]any) map[string]any {
-	merged := cloneMap(attachInput)
-	if merged == nil {
-		merged = map[string]any{}
-	}
-	target := cloneMap(mapValue(merged, "target"))
-	if target == nil {
-		target = map[string]any{}
-	}
-	if targetURL := strings.TrimSpace(stringValue(arguments, "target_url", "")); targetURL != "" {
-		target["url"] = targetURL
-	}
-	if titleContains := strings.TrimSpace(stringValue(arguments, "title_contains", "")); titleContains != "" {
-		target["title_contains"] = titleContains
-	}
-	if pageIndex, ok := browserAttachPageIndex(arguments["page_index"]); ok {
-		target["page_index"] = pageIndex
-	}
-	if len(target) > 0 {
-		merged["target"] = target
-	}
-	return merged
-}
-
-func buildBrowserAttachInput(browserKind string, snapshot taskcontext.TaskContextSnapshot, arguments map[string]any, useSnapshotTarget, allowEmptyTarget, requireStableTarget bool) map[string]any {
-	target := map[string]any{}
-	if pageIndex, ok := browserAttachPageIndex(arguments["page_index"]); ok {
-		target["page_index"] = pageIndex
-	}
-	if targetURL := strings.TrimSpace(stringValue(arguments, "target_url", "")); targetURL != "" {
-		target["url"] = targetURL
-	} else if useSnapshotTarget && strings.TrimSpace(snapshot.PageURL) != "" {
-		target["url"] = strings.TrimSpace(snapshot.PageURL)
-	}
-	if !requireStableTarget {
-		if titleContains := strings.TrimSpace(stringValue(arguments, "title_contains", "")); titleContains != "" {
-			target["title_contains"] = titleContains
-		} else if useSnapshotTarget {
-			if pageTitle := strings.TrimSpace(snapshot.PageTitle); pageTitle != "" {
-				target["title_contains"] = pageTitle
-			} else if windowTitle := strings.TrimSpace(snapshot.WindowTitle); windowTitle != "" {
-				target["title_contains"] = windowTitle
-			}
-		}
-	}
-	if requireStableTarget && !hasStableBrowserTarget(target) {
-		return nil
-	}
-	if len(target) == 0 && !allowEmptyTarget {
-		return nil
-	}
-
-	attach := map[string]any{
-		"mode":         string(tools.BrowserAttachModeCDP),
-		"browser_kind": browserKind,
-	}
-	if len(target) > 0 {
-		attach["target"] = target
-	}
-	return attach
-}
-
-func browserIntentTargetObject(intentName string, arguments map[string]any) string {
-	if requiresStableBrowserTarget(intentName) {
-		if strings.TrimSpace(intentName) == "browser_navigate" {
-			if value := strings.TrimSpace(stringValue(arguments, "url", "")); value != "" {
-				return value
-			}
-		}
-		if targetURL := strings.TrimSpace(stringValue(arguments, "target_url", "")); targetURL != "" {
-			return targetURL
-		}
-		if pageIndex, ok := browserAttachPageIndex(arguments["page_index"]); ok {
-			return fmt.Sprintf("browser_tab:%d", pageIndex)
-		}
-		return browserStableTargetObject(mapValue(arguments, "attach"))
-	}
-
-	if strings.TrimSpace(intentName) == "browser_navigate" {
-		if value := strings.TrimSpace(stringValue(arguments, "url", "")); value != "" {
-			return value
-		}
-	}
-	if targetURL := strings.TrimSpace(stringValue(arguments, "target_url", "")); targetURL != "" {
-		return targetURL
-	}
-	if titleContains := strings.TrimSpace(stringValue(arguments, "title_contains", "")); titleContains != "" {
-		return titleContains
-	}
-	if pageIndex, ok := browserAttachPageIndex(arguments["page_index"]); ok {
-		return fmt.Sprintf("browser_tab:%d", pageIndex)
-	}
-	return browserTargetObject(mapValue(arguments, "attach"))
-}
-
-func browserStableTargetObject(attach map[string]any) string {
-	if len(attach) == 0 {
-		return ""
-	}
-	target := mapValue(attach, "target")
-	if value := strings.TrimSpace(stringValue(target, "url", "")); value != "" {
-		return value
-	}
-	if pageIndex, ok := browserAttachPageIndex(target["page_index"]); ok {
-		return fmt.Sprintf("browser_tab:%d", pageIndex)
-	}
-	return ""
-}
-
-func browserTargetObject(attach map[string]any) string {
-	if len(attach) == 0 {
-		return ""
-	}
-	target := mapValue(attach, "target")
-	if value := strings.TrimSpace(stringValue(target, "url", "")); value != "" {
-		return value
-	}
-	if pageIndex, ok := browserAttachPageIndex(target["page_index"]); ok {
-		return fmt.Sprintf("browser_tab:%d", pageIndex)
-	}
-	if value := strings.TrimSpace(stringValue(target, "title_contains", "")); value != "" {
-		return value
-	}
-	return strings.TrimSpace(stringValue(attach, "browser_kind", ""))
-}
-
-func requiresStableBrowserTarget(intentName string) bool {
-	switch strings.TrimSpace(intentName) {
-	case "browser_navigate", "browser_tab_focus", "browser_interact":
-		return true
-	default:
-		return false
-	}
-}
-
-func hasStableBrowserAttachTarget(attach map[string]any) bool {
-	return hasStableBrowserTarget(mapValue(attach, "target"))
-}
-
-func hasStableBrowserTarget(target map[string]any) bool {
-	if len(target) == 0 {
-		return false
-	}
-	if strings.TrimSpace(stringValue(target, "url", "")) != "" {
-		return true
-	}
-	_, ok := browserAttachPageIndex(target["page_index"])
-	return ok
-}
-
-func browserAttachPageIndex(rawValue any) (int, bool) {
-	switch typed := rawValue.(type) {
-	case int:
-		if typed >= 0 {
-			return typed, true
-		}
-	case float64:
-		if typed >= 0 && typed == float64(int(typed)) {
-			return int(typed), true
-		}
-	}
-	return 0, false
-}
-
-func browserTargetOverrideMissing(arguments map[string]any) bool {
-	if _, ok := browserAttachPageIndex(arguments["page_index"]); ok {
-		return false
-	}
-	if strings.TrimSpace(stringValue(arguments, "target_url", "")) != "" {
-		return false
-	}
-	return strings.TrimSpace(stringValue(arguments, "title_contains", "")) == ""
-}
-
-func resolvePageToolInput(intentName string, arguments map[string]any, snapshot taskcontext.TaskContextSnapshot) (map[string]any, bool) {
-	urlValue := strings.TrimSpace(stringValue(arguments, "url", ""))
-	if urlValue == "" {
-		return nil, false
-	}
-	input := map[string]any{"url": urlValue}
-	switch intentName {
-	case "page_search":
-		queryValue := strings.TrimSpace(stringValue(arguments, "query", ""))
-		if queryValue == "" {
-			return nil, false
-		}
-		input["query"] = queryValue
-		if limit, ok := arguments["limit"]; ok {
-			input["limit"] = limit
-		}
-	case "page_interact":
-		if actions, ok := arguments["actions"]; ok {
-			input["actions"] = actions
-		}
-	}
-	if attach := pageAttachInput(urlValue, arguments, snapshot); len(attach) > 0 {
-		input["attach"] = attach
-	}
-	return input, true
-}
-
-func resolveWebSearchToolInput(arguments map[string]any) (map[string]any, bool) {
-	queryValue := strings.TrimSpace(stringValue(arguments, "query", ""))
-	if queryValue == "" {
-		return nil, false
-	}
-
-	// Keep the derived search URL for governance/audit targeting, but mark it as
-	// implicit so the worker still treats "no parseable results from the default
-	// search page" as a structured failure instead of a silent empty success.
-	input := map[string]any{
-		"query":           queryValue,
-		"url":             defaultWebSearchURL(queryValue),
-		"url_is_explicit": false,
-	}
-	if limit, ok := arguments["limit"]; ok {
-		input["limit"] = limit
-	}
-	return input, true
-}
-
-func defaultWebSearchURL(query string) string {
-	if strings.TrimSpace(query) == "" {
-		return ""
-	}
-	return "https://duckduckgo.com/html/?q=" + url.QueryEscape(strings.TrimSpace(query))
-}
-
-func pageAttachInput(urlValue string, arguments map[string]any, snapshot taskcontext.TaskContextSnapshot) map[string]any {
-	// Page-level attach hints must come from trusted desktop context. The planner
-	// can request a page tool, but it must not steer browser kind or CDP endpoint
-	// away from the observed foreground session.
-	browserKind := strings.ToLower(strings.TrimSpace(snapshot.BrowserKind))
-	if browserKind != "chrome" && browserKind != "edge" {
-		return nil
-	}
-	pageURL := comparablePageURL(snapshot.PageURL)
-	requestURL := comparablePageURL(urlValue)
-	if pageURL == "" || requestURL == "" || pageURL != requestURL {
-		return nil
-	}
-	target := map[string]any{"url": pageURL}
-	if pageTitle := strings.TrimSpace(snapshot.PageTitle); pageTitle != "" {
-		target["title_contains"] = pageTitle
-	}
-	attach := map[string]any{
-		"mode":         string(tools.BrowserAttachModeCDP),
-		"browser_kind": browserKind,
-		"target":       target,
-	}
-	return attach
-}
-
-func comparablePageURL(raw string) string {
-	trimmed := strings.TrimSpace(raw)
-	if trimmed == "" {
-		return ""
-	}
-	parsed, err := url.Parse(trimmed)
-	if err != nil {
-		return trimmed
-	}
-	parsed.Scheme = strings.ToLower(strings.TrimSpace(parsed.Scheme))
-	hostname := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
-	port := strings.TrimSpace(parsed.Port())
-	switch {
-	case hostname == "":
-		parsed.Host = ""
-	case port == "":
-		parsed.Host = hostname
-	case parsed.Scheme == "http" && port == "80":
-		parsed.Host = hostname
-	case parsed.Scheme == "https" && port == "443":
-		parsed.Host = hostname
-	default:
-		parsed.Host = net.JoinHostPort(hostname, port)
-	}
-	if parsed.Path == "" {
-		parsed.Path = "/"
-	}
-	parsed.Fragment = ""
-	return parsed.String()
-}
-
-func requireAuthorizationFlag(intent map[string]any) bool {
-	return boolValue(mapValue(intent, "arguments"), "require_authorization")
-}
-
-func resolveWorkspaceRoot(fileSystem platform.FileSystemAdapter) string {
-	if fileSystem == nil {
-		return ""
-	}
-
-	workspaceRoot, err := fileSystem.EnsureWithinWorkspace(".")
-	if err != nil {
-		return ""
-	}
-	return workspaceRoot
-}
-
-func latestToolCall(toolCalls []tools.ToolCallRecord) tools.ToolCallRecord {
-	if len(toolCalls) == 0 {
-		return tools.ToolCallRecord{}
-	}
-	return toolCalls[len(toolCalls)-1]
-}
-
-func internalScreenAnalysisCapabilities(request Request) []string {
-	capabilities := []string{"ocr_image"}
-	arguments := mapValue(request.Intent, "arguments")
-	if tools.ScreenCaptureMode(stringValue(arguments, "capture_mode", string(tools.ScreenCaptureModeScreenshot))) == tools.ScreenCaptureModeClip {
-		capabilities = append(capabilities, "extract_frames")
-	}
-	return capabilities
-}
-
 func (s *Service) finalizeExecutionResult(ctx context.Context, request Request, startedAt time.Time, result Result, directCapabilities ...string) Result {
 	if result.DurationMS <= 0 {
 		result.DurationMS = time.Since(startedAt).Milliseconds()
@@ -3882,71 +3239,4 @@ func extensionAssetReferenceMaps(items []storage.ExtensionAssetReference) []map[
 		result = append(result, entry)
 	}
 	return result
-}
-
-func assignLatestToolTrace(result *Result, toolCall tools.ToolCallRecord) {
-	if result == nil || toolCall.ToolName == "" {
-		return
-	}
-	result.ToolName = toolCall.ToolName
-	result.ToolInput = cloneMap(toolCall.Input)
-	result.ToolOutput = cloneMap(toolCall.Output)
-}
-
-func enrichToolTrace(result *Result, extras map[string]any) {
-	if result == nil || len(extras) == 0 {
-		return
-	}
-	if result.ToolOutput == nil {
-		result.ToolOutput = map[string]any{}
-	}
-	for key, value := range extras {
-		result.ToolOutput[key] = value
-	}
-}
-
-func enrichLatestToolCall(result *Result, extras map[string]any) {
-	if result == nil || len(result.ToolCalls) == 0 || len(extras) == 0 {
-		return
-	}
-
-	lastIndex := len(result.ToolCalls) - 1
-	if result.ToolCalls[lastIndex].Output == nil {
-		result.ToolCalls[lastIndex].Output = map[string]any{}
-	}
-	for key, value := range extras {
-		result.ToolCalls[lastIndex].Output[key] = value
-	}
-}
-
-func cloneMap(values map[string]any) map[string]any {
-	if len(values) == 0 {
-		return nil
-	}
-
-	cloned := make(map[string]any, len(values))
-	for key, value := range values {
-		switch typed := value.(type) {
-		case map[string]any:
-			cloned[key] = cloneMap(typed)
-		case []map[string]any:
-			cloned[key] = cloneMapSlice(typed)
-		case []string:
-			cloned[key] = append([]string(nil), typed...)
-		default:
-			cloned[key] = value
-		}
-	}
-	return cloned
-}
-
-func cloneMapSlice(values []map[string]any) []map[string]any {
-	if len(values) == 0 {
-		return nil
-	}
-	cloned := make([]map[string]any, 0, len(values))
-	for _, value := range values {
-		cloned = append(cloned, cloneMap(value))
-	}
-	return cloned
 }

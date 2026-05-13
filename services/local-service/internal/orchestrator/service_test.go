@@ -11302,7 +11302,7 @@ func TestServiceConfirmTaskReusesRetrievalHitsAfterConfirmation(t *testing.T) {
 	}
 }
 
-func TestServiceSubmitInputClarificationIncludesRetrievedMemoryContext(t *testing.T) {
+func TestServiceSubmitInputClarificationDoesNotExposeRetrievedMemoryContext(t *testing.T) {
 	service, _ := newTestServiceWithModelClient(t, stubModelClient{
 		output: `{"route":"clarification_needed","reply":""}`,
 	})
@@ -11332,11 +11332,11 @@ func TestServiceSubmitInputClarificationIncludesRetrievedMemoryContext(t *testin
 
 	bubble := result["bubble_message"].(map[string]any)
 	text := stringValue(bubble, "text", "")
-	if !strings.Contains(text, "Based on your earlier context") {
-		t.Fatalf("expected clarification bubble to mention prior memory context, got %+v", bubble)
+	if strings.Contains(text, "Based on your earlier context") {
+		t.Fatalf("expected clarification bubble to hide prior memory framing, got %+v", bubble)
 	}
-	if !strings.Contains(text, "project alpha focuses on rollout notes") {
-		t.Fatalf("expected clarification bubble to include retrieved summary, got %+v", bubble)
+	if strings.Contains(text, "project alpha focuses on rollout notes") {
+		t.Fatalf("expected clarification bubble to hide retrieved summary, got %+v", bubble)
 	}
 }
 
@@ -11375,11 +11375,8 @@ func TestServiceClarificationReusesMaterializedMemoryHits(t *testing.T) {
 
 	startBubble := result["bubble_message"].(map[string]any)
 	startText := stringValue(startBubble, "text", "")
-	if !strings.Contains(startText, "first retrieved summary should stay stable") {
-		t.Fatalf("expected start clarification bubble to reuse stored retrieval hit, got %+v", startBubble)
-	}
-	if strings.Contains(startText, "second search result should not replace clarification context") {
-		t.Fatalf("expected start clarification bubble to avoid fresh search drift, got %+v", startBubble)
+	if strings.Contains(startText, "first retrieved summary should stay stable") || strings.Contains(startText, "second search result should not replace clarification context") {
+		t.Fatalf("expected start clarification bubble to hide retrieved summaries, got %+v", startBubble)
 	}
 
 	taskID := result["task"].(map[string]any)["task_id"].(string)
@@ -11393,11 +11390,8 @@ func TestServiceClarificationReusesMaterializedMemoryHits(t *testing.T) {
 
 	confirmBubble := confirmResult["bubble_message"].(map[string]any)
 	confirmText := stringValue(confirmBubble, "text", "")
-	if !strings.Contains(confirmText, "first retrieved summary should stay stable") {
-		t.Fatalf("expected confirm clarification bubble to reuse stored retrieval hit, got %+v", confirmBubble)
-	}
-	if strings.Contains(confirmText, "second search result should not replace clarification context") {
-		t.Fatalf("expected confirm clarification bubble to avoid fresh search drift, got %+v", confirmBubble)
+	if strings.Contains(confirmText, "first retrieved summary should stay stable") || strings.Contains(confirmText, "second search result should not replace clarification context") {
+		t.Fatalf("expected confirm clarification bubble to hide retrieved summaries, got %+v", confirmBubble)
 	}
 	if memoryStore.SearchCalls() != 1 {
 		t.Fatalf("expected clarification flow to reuse materialized hits without re-searching, calls=%d", memoryStore.SearchCalls())

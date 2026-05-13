@@ -492,7 +492,7 @@
   gap: 0.72rem;
   overflow: hidden;
   padding: 0.92rem 0.98rem 0.98rem;
-  margin-top: 6px;
+  margin-top: 7px;
   position: relative;
   text-align: left;
   transition:
@@ -793,7 +793,7 @@
 .task-cloud__stage-dock-meta {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.55rem;
+  gap: 0.7rem;
 }
 
 .task-cloud__stage-description {
@@ -810,14 +810,52 @@
 
 .task-cloud__stage-chip {
   align-items: center;
-  background: rgba(255, 255, 255, 0.58);
+  background: rgb(218 218 218 / 94%);
+  border-radius: 1rem;
+  box-shadow:
+    0 16px 30px -24px rgba(91, 66, 42, 0.2),
+    inset 0 1px 0 rgba(255, 255, 255, 0.82);
+  color: var(--task-ink);
+  display: inline-flex;
+  gap: 0.55rem;
+  padding: 0.36rem 0.78rem 0.36rem 0.42rem;
+  height: 3rem;
+}
+
+.task-cloud__stage-chip-label {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.74);
   border: 1px solid rgba(146, 171, 193, 0.14);
   border-radius: 999px;
-  color: color-mix(in srgb, var(--task-ink) 78%, var(--task-accent) 22%);
+  color: color-mix(in srgb, var(--task-accent-strong) 72%, #5a4330 28%);
   display: inline-flex;
-  font-size: 0.78rem;
-  min-height: 1.95rem;
-  padding: 0.3rem 0.72rem;
+  font-family: var(--task-font-mono);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  line-height: 1;
+  min-height: 1.45rem;
+  padding: 0.18rem 0.48rem;
+  text-transform: uppercase;
+}
+
+.task-cloud__stage-chip-value {
+  color: color-mix(in srgb, var(--task-ink) 82%, var(--task-accent) 18%);
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.task-cloud__stage-chip[data-tone="status"] {
+  border-color: color-mix(in srgb, var(--task-accent) 22%, rgba(146, 171, 193, 0.18) 78%);
+}
+
+.task-cloud__stage-chip[data-tone="progress"] {
+  border-color: color-mix(in srgb, var(--task-success) 18%, rgba(146, 171, 193, 0.18) 82%);
+}
+
+.task-cloud__stage-chip[data-tone="time"] {
+  border-color: color-mix(in srgb, var(--task-alert) 20%, rgba(146, 171, 193, 0.18) 80%);
 }
 
 .task-cloud__stage-title-row {

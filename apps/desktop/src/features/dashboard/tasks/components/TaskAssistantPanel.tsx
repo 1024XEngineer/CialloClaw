@@ -100,7 +100,7 @@ export function TaskAssistantPanel({ detailData, highlightedCard }: TaskAssistan
                 ) : null}
 
                 {item.key === "files" ? (
-                  <p className="text-xs uppercase tracking-[0.18em] text-slate-500">本次详情已挂载 {detail.artifacts.length} 项成果记录</p>
+                  <p className="text-xs uppercase tracking-[0.18em] text-slate-500">本次详情已加载 {detail.artifacts.length} 项产物</p>
                 ) : null}
               </CardContent>
             </Card>

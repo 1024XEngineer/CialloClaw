@@ -281,7 +281,7 @@ test("buildMirrorProfileView keeps backend fields and local recent statistics se
   assert.equal(view.backend_items.length, 3);
   assert.equal(view.local_stat_items.length, 3);
   assert.equal(view.total_items, 6);
-  assert.equal(backendItem?.source_label, "后端画像字段");
+  assert.equal(backendItem?.source_label, "你的画像");
   assert.equal(localStatItem?.source_label, "最近本地统计");
   assert.match(localStatItem?.hint ?? "", /本地记录机械统计/);
 });

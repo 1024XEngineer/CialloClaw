@@ -73,7 +73,9 @@ export function getShellBallMascotHotspotGestureAction(input: {
   }
 
   if (input.gesture === "single_click") {
-    return input.selectionIndicatorVisible || input.alertOpportunityAvailable ? "primary_click" : "noop";
+    return input.selectionIndicatorVisible || input.alertOpportunityAvailable || input.visualState === "idle"
+      ? "primary_click"
+      : "noop";
   }
 
   if (canTriggerShellBallMascotSecondaryGestures(input.visualState)) {

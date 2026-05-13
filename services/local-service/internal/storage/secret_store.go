@@ -153,7 +153,7 @@ func (s *SQLiteSecretStore) initialize(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, `PRAGMA journal_mode=WAL;`); err != nil {
 		return err
 	}
-	if _, err := s.db.ExecContext(ctx, `PRAGMA busy_timeout=5000;`); err != nil {
+	if _, err := s.db.ExecContext(ctx, `PRAGMA busy_timeout=300000;`); err != nil {
 		return err
 	}
 	if _, err := s.db.ExecContext(ctx, `

@@ -10,13 +10,15 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
-// FileSystemAdapter defines the workspace file-system boundary used by local services.
+// FileSystemAdapter defines the policy-bounded file-system adapter used by
+// local services.
 type FileSystemAdapter interface {
 	fs.FS
 	fs.ReadDirFS
@@ -35,10 +37,13 @@ type FileSystemAdapter interface {
 	MkdirAll(path string) error
 }
 
-// PathPolicy defines path normalization and workspace containment checks.
+// PathPolicy defines the lexical and real-path boundary checks shared by local
+// file adapters. Implementations may represent a strict workspace root or a
+// broader tool-specific allow/deny policy.
 type PathPolicy interface {
 	Normalize(path string) string
 	EnsureWithinWorkspace(path string) (string, error)
+	ResolveExisting(path string) (string, error)
 }
 
 // OSCapabilityAdapter defines the minimal host OS capability boundary.
@@ -183,6 +188,236 @@ func (p *LocalPathPolicy) realPathForBoundaryCheck(cleanTarget string, requireEx
 	}
 }
 
+// LocalToolPathPolicy expands local tool access beyond the workspace while
+// still denying protected system roots and sibling user-profile roots. Relative
+// tool paths stay anchored to the workspace so existing task flows preserve
+// their workspace-first behavior, while `~/Desktop`, `~/Documents`, and
+// `~/Downloads` resolve through the current OS known-folder mapping.
+type LocalToolPathPolicy struct {
+	workspaceRoot     string
+	realWorkspaceRoot string
+	deniedRoots       []policyRoot
+	knownFolders      map[string]string
+}
+
+type policyRoot struct {
+	clean string
+	real  string
+}
+
+// NewLocalToolPathPolicy creates the policy used by high-permission local file
+// tools. Absolute paths may target any non-protected local folder, relative
+// paths continue resolving from the workspace root, and OS-known-folder aliases
+// keep redirected Desktop/Documents/Downloads paths stable for end users.
+func NewLocalToolPathPolicy(workspaceRoot string) (*LocalToolPathPolicy, error) {
+	cleanRoot, realRoot, err := resolvePolicyRoot(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+
+	deniedRoots := make([]policyRoot, 0)
+	for _, root := range protectedToolRoots(runtime.GOOS) {
+		if policyRoot, ok := resolveOptionalPolicyRoot(root); ok {
+			deniedRoots = append(deniedRoots, policyRoot)
+		}
+	}
+	for _, root := range siblingProfileRoots() {
+		if policyRoot, ok := resolveOptionalPolicyRoot(root); ok {
+			deniedRoots = append(deniedRoots, policyRoot)
+		}
+	}
+
+	return &LocalToolPathPolicy{
+		workspaceRoot:     cleanRoot,
+		realWorkspaceRoot: realRoot,
+		deniedRoots:       uniquePolicyRoots(deniedRoots),
+		knownFolders:      loadKnownFoldersForToolPolicy(),
+	}, nil
+}
+
+// Normalize returns a slash-separated clean path.
+func (p *LocalToolPathPolicy) Normalize(path string) string {
+	return filepath.ToSlash(filepath.Clean(path))
+}
+
+// EnsureWithinWorkspace validates the requested tool path against the broader
+// local-tool policy boundary.
+func (p *LocalToolPathPolicy) EnsureWithinWorkspace(path string) (string, error) {
+	return p.resolveToolPath(path, false)
+}
+
+// ResolveExisting validates an already-existing path against the broader local
+// tool boundary before read-only operations open it.
+func (p *LocalToolPathPolicy) ResolveExisting(path string) (string, error) {
+	return p.resolveToolPath(path, true)
+}
+
+func (p *LocalToolPathPolicy) resolveToolPath(path string, requireExisting bool) (string, error) {
+	if p == nil {
+		return "", ErrPathOutsideWorkspace
+	}
+	trimmed := strings.TrimSpace(path)
+	candidate := filepath.Clean(filepath.Join(p.workspaceRoot, trimmed))
+	if knownFolderPath, ok := resolveToolKnownFolderAlias(trimmed, p.knownFolders); ok {
+		candidate = knownFolderPath
+	} else if filepath.IsAbs(trimmed) {
+		candidate = filepath.Clean(trimmed)
+	}
+	if p.isDeniedPath(candidate, false) {
+		return "", ErrPathOutsideWorkspace
+	}
+
+	realProbe, err := realPathForBoundaryCheck(candidate, requireExisting, p.realWorkspaceRoot)
+	if err != nil {
+		return "", err
+	}
+	if p.isDeniedPath(realProbe, true) {
+		return "", ErrPathOutsideWorkspace
+	}
+	return candidate, nil
+}
+
+func (p *LocalToolPathPolicy) isDeniedPath(candidate string, real bool) bool {
+	cleanCandidate := filepath.Clean(candidate)
+	for _, root := range p.deniedRoots {
+		boundary := root.clean
+		if real {
+			boundary = root.real
+		}
+		if boundary != "" && pathWithinRoot(cleanCandidate, boundary) {
+			return true
+		}
+	}
+	return false
+}
+
+func resolvePolicyRoot(root string) (string, string, error) {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", "", err
+	}
+	cleanRoot := filepath.Clean(absRoot)
+	realRoot, err := filepath.EvalSymlinks(cleanRoot)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			return "", "", err
+		}
+		realRoot = cleanRoot
+	}
+	return cleanRoot, filepath.Clean(realRoot), nil
+}
+
+func resolveOptionalPolicyRoot(root string) (policyRoot, bool) {
+	trimmed := strings.TrimSpace(root)
+	if trimmed == "" {
+		return policyRoot{}, false
+	}
+	cleanRoot, realRoot, err := resolvePolicyRoot(trimmed)
+	if err != nil {
+		return policyRoot{}, false
+	}
+	return policyRoot{clean: cleanRoot, real: realRoot}, true
+}
+
+func uniquePolicyRoots(roots []policyRoot) []policyRoot {
+	if len(roots) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(roots))
+	unique := make([]policyRoot, 0, len(roots))
+	for _, root := range roots {
+		key := root.clean + "\n" + root.real
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		unique = append(unique, root)
+	}
+	return unique
+}
+
+func protectedToolRoots(goos string) []string {
+	switch goos {
+	case "windows":
+		return []string{
+			os.Getenv("WINDIR"),
+			os.Getenv("SystemRoot"),
+			os.Getenv("ProgramFiles"),
+			os.Getenv("ProgramFiles(x86)"),
+			os.Getenv("ProgramW6432"),
+			os.Getenv("ProgramData"),
+		}
+	case "darwin":
+		return []string{"/Applications", "/Library", "/System", "/bin", "/sbin", "/usr", "/private/etc", "/private/var/db"}
+	default:
+		return []string{"/bin", "/boot", "/dev", "/etc", "/lib", "/lib64", "/proc", "/root", "/run", "/sbin", "/sys", "/usr", "/var/lib"}
+	}
+}
+
+func siblingProfileRoots() []string {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	homeDir = strings.TrimSpace(homeDir)
+	if homeDir == "" {
+		return nil
+	}
+	homeDir = filepath.Clean(homeDir)
+	parentDir := filepath.Dir(homeDir)
+	if parentDir == homeDir {
+		return nil
+	}
+	entries, err := os.ReadDir(parentDir)
+	if err != nil {
+		return nil
+	}
+	roots := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		candidate := filepath.Join(parentDir, entry.Name())
+		if filepath.Clean(candidate) == homeDir {
+			continue
+		}
+		roots = append(roots, candidate)
+	}
+	return roots
+}
+
+func realPathForBoundaryCheck(cleanTarget string, requireExisting bool, fallbackRoot string) (string, error) {
+	realTarget, err := filepath.EvalSymlinks(cleanTarget)
+	if err == nil {
+		return filepath.Clean(realTarget), nil
+	}
+	if requireExisting || !errors.Is(err, fs.ErrNotExist) {
+		return "", err
+	}
+	if cleanTarget == fallbackRoot {
+		return filepath.Clean(fallbackRoot), nil
+	}
+
+	probe := filepath.Dir(cleanTarget)
+	for {
+		realProbe, probeErr := filepath.EvalSymlinks(probe)
+		if probeErr == nil {
+			return filepath.Clean(realProbe), nil
+		}
+		if !errors.Is(probeErr, fs.ErrNotExist) {
+			return "", probeErr
+		}
+		if filepath.Clean(probe) == filepath.Clean(fallbackRoot) {
+			return filepath.Clean(fallbackRoot), nil
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			return filepath.Clean(probe), nil
+		}
+		probe = parent
+	}
+}
+
 func pathWithinRoot(target, root string) bool {
 	cleanTarget := filepath.Clean(target)
 	cleanRoot := filepath.Clean(root)
@@ -190,19 +425,22 @@ func pathWithinRoot(target, root string) bool {
 	return cleanTarget == cleanRoot || strings.HasPrefix(cleanTarget, rootWithSeparator)
 }
 
-// LocalFileSystemAdapter implements workspace-bounded filesystem operations.
+// LocalFileSystemAdapter implements filesystem operations constrained by the
+// injected path policy.
 type LocalFileSystemAdapter struct {
-	policy *LocalPathPolicy
+	policy PathPolicy
 }
 
-// NewLocalFileSystemAdapter creates a filesystem adapter backed by the path policy.
-func NewLocalFileSystemAdapter(policy *LocalPathPolicy) *LocalFileSystemAdapter {
+// NewLocalFileSystemAdapter creates a filesystem adapter backed by the supplied
+// path policy.
+func NewLocalFileSystemAdapter(policy PathPolicy) *LocalFileSystemAdapter {
 	return &LocalFileSystemAdapter{policy: policy}
 }
 
-// Open validates and opens an existing workspace path without following symlinks outside the boundary.
+// Open validates and opens an existing path without following symlinks outside
+// the configured policy boundary.
 func (a *LocalFileSystemAdapter) Open(name string) (fs.File, error) {
-	safePath, err := a.resolveExistingWorkspacePath("open", name)
+	safePath, err := a.resolveExistingBoundedPath("open", name)
 	if err != nil {
 		return nil, err
 	}
@@ -240,9 +478,9 @@ func (a *LocalFileSystemAdapter) EnsureWithinWorkspace(path string) (string, err
 	return a.policy.EnsureWithinWorkspace(path)
 }
 
-// ReadFile validates the real target path before reading workspace content.
+// ReadFile validates the real target path before reading content.
 func (a *LocalFileSystemAdapter) ReadFile(path string) ([]byte, error) {
-	safePath, err := a.resolveExistingWorkspacePath("read", path)
+	safePath, err := a.resolveExistingBoundedPath("read", path)
 	if err != nil {
 		return nil, err
 	}
@@ -250,9 +488,9 @@ func (a *LocalFileSystemAdapter) ReadFile(path string) ([]byte, error) {
 	return os.ReadFile(safePath)
 }
 
-// ReadDir validates the real directory path before listing workspace entries.
+// ReadDir validates the real directory path before listing directory entries.
 func (a *LocalFileSystemAdapter) ReadDir(path string) ([]fs.DirEntry, error) {
-	safePath, err := a.resolveExistingWorkspacePath("readdir", path)
+	safePath, err := a.resolveExistingBoundedPath("readdir", path)
 	if err != nil {
 		return nil, err
 	}
@@ -260,9 +498,9 @@ func (a *LocalFileSystemAdapter) ReadDir(path string) ([]fs.DirEntry, error) {
 	return os.ReadDir(safePath)
 }
 
-// Stat validates the real target path before returning workspace metadata.
+// Stat validates the real target path before returning metadata.
 func (a *LocalFileSystemAdapter) Stat(path string) (fs.FileInfo, error) {
-	safePath, err := a.resolveExistingWorkspacePath("stat", path)
+	safePath, err := a.resolveExistingBoundedPath("stat", path)
 	if err != nil {
 		return nil, err
 	}
@@ -270,9 +508,9 @@ func (a *LocalFileSystemAdapter) Stat(path string) (fs.FileInfo, error) {
 	return os.Stat(safePath)
 }
 
-// Sub creates a bounded adapter rooted at an existing workspace subdirectory.
+// Sub creates a bounded adapter rooted at an existing validated subdirectory.
 func (a *LocalFileSystemAdapter) Sub(dir string) (fs.FS, error) {
-	safePath, err := a.resolveExistingWorkspacePath("sub", dir)
+	safePath, err := a.resolveExistingBoundedPath("sub", dir)
 	if err != nil {
 		return nil, err
 	}
@@ -302,7 +540,7 @@ func (a *LocalFileSystemAdapter) WriteFile(path string, content []byte) error {
 	return os.WriteFile(safePath, content, 0o644)
 }
 
-// Remove validates the existing real target before deleting workspace content.
+// Remove validates the existing real target before deleting content.
 func (a *LocalFileSystemAdapter) Remove(path string) error {
 	safePath, err := a.policy.ResolveExisting(path)
 	if err != nil {
@@ -344,11 +582,8 @@ func (a *LocalFileSystemAdapter) MkdirAll(path string) error {
 	return os.MkdirAll(safePath, 0o755)
 }
 
-func (a *LocalFileSystemAdapter) resolveExistingWorkspacePath(op, name string) (string, error) {
+func (a *LocalFileSystemAdapter) resolveExistingBoundedPath(op, name string) (string, error) {
 	if filepath.IsAbs(name) {
-		if !pathWithinRoot(name, a.policy.workspaceRoot) {
-			return "", &fs.PathError{Op: op, Path: name, Err: fs.ErrInvalid}
-		}
 		return a.policy.ResolveExisting(name)
 	}
 

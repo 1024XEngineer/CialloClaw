@@ -1244,6 +1244,66 @@ function loadMirrorServiceModule() {
   });
 }
 
+function loadControlPanelPluginServiceModule(rpcMethods?: DashboardContractRpcMethodOverrides) {
+  return withDesktopAliasRuntime((requireFn) => {
+    const modulePath = resolve(desktopRoot, "src/services/controlPanelPluginService.ts");
+    delete requireFn.cache[modulePath];
+
+    return requireFn(modulePath) as {
+      loadControlPanelPluginSnapshot: () => Promise<{
+        items: Array<{
+          plugin: {
+            plugin_id: string;
+            enabled: boolean;
+            display_name: string;
+            name: string;
+          };
+          runtime_health: string;
+          control: {
+            baseline_enabled: boolean;
+            effective_enabled: boolean;
+            source: string;
+            updated_at: string | null;
+          };
+        }>;
+        summary: {
+          total: number;
+          healthy: number;
+          degraded: number;
+          failed: number;
+          stopped: number;
+          unavailable: number;
+          unknown: number;
+          live_enabled: number;
+          mock_overrides: number;
+        };
+      }>;
+      loadControlPanelPluginDetail: (pluginId: string) => Promise<{
+        plugin: {
+          plugin_id: string;
+          enabled: boolean;
+        };
+        control: {
+          baseline_enabled: boolean;
+          effective_enabled: boolean;
+          source: string;
+          updated_at: string | null;
+        };
+      }>;
+      saveControlPanelPluginMockEnabled: (
+        pluginId: string,
+        nextEnabled: boolean,
+        baselineEnabled: boolean,
+      ) => {
+        baseline_enabled: boolean;
+        effective_enabled: boolean;
+        source: string;
+        updated_at: string | null;
+      };
+    };
+  }, rpcMethods);
+}
+
 function findRenderedElement(
   node: unknown,
   predicate: (element: { props: Record<string, unknown>; type: unknown }) => boolean,
@@ -1285,6 +1345,7 @@ type DashboardContractRpcMethodOverrides = {
   getDashboardModule?: (params: unknown) => Promise<unknown>;
   getDashboardOverview?: (params: unknown) => Promise<unknown>;
   getMirrorOverview?: (params: unknown) => Promise<unknown>;
+  getPluginDetail?: (params: unknown) => Promise<unknown>;
   getRecommendations?: (params: unknown) => Promise<unknown>;
   getMirrorOverviewDetailed?: (params: unknown) => Promise<unknown>;
   getSecuritySummary?: (params: unknown) => Promise<unknown>;
@@ -1297,6 +1358,8 @@ type DashboardContractRpcMethodOverrides = {
   listSecurityAuditDetailed?: (params: unknown) => Promise<unknown>;
   listSecurityPendingDetailed?: (params: unknown) => Promise<unknown>;
   listSecurityRestorePointsDetailed?: (params: unknown) => Promise<unknown>;
+  listPluginRuntimes?: (params: unknown) => Promise<unknown>;
+  listPlugins?: (params: unknown) => Promise<unknown>;
   listTaskArtifacts?: (params: AgentTaskArtifactListParams) => Promise<AgentTaskArtifactListResult>;
   listNotepad?: (params: AgentNotepadListParams) => Promise<AgentNotepadListResult>;
   listTasks?: (params: AgentTaskListParams) => Promise<AgentTaskListResult>;
@@ -1449,6 +1512,9 @@ function withDesktopAliasRuntime<T>(
         getMirrorOverview:
           rpcMethods?.getMirrorOverview ??
           (() => Promise.reject(new Error("getMirrorOverview should not run in dashboard contract tests"))),
+        getPluginDetail:
+          rpcMethods?.getPluginDetail ??
+          (() => Promise.reject(new Error("getPluginDetail should not run in dashboard contract tests"))),
         getRecommendations:
           rpcMethods?.getRecommendations ??
           (() => Promise.reject(new Error("getRecommendations should not run in dashboard contract tests"))),
@@ -1464,6 +1530,12 @@ function withDesktopAliasRuntime<T>(
         listSecurityPendingDetailed:
           rpcMethods?.listSecurityPendingDetailed ??
           (() => Promise.reject(new Error("listSecurityPendingDetailed should not run in dashboard contract tests"))),
+        listPluginRuntimes:
+          rpcMethods?.listPluginRuntimes ??
+          (() => Promise.reject(new Error("listPluginRuntimes should not run in dashboard contract tests"))),
+        listPlugins:
+          rpcMethods?.listPlugins ??
+          (() => Promise.reject(new Error("listPlugins should not run in dashboard contract tests"))),
         listNotepad:
           rpcMethods?.listNotepad ??
           (() => {
@@ -2035,6 +2107,8 @@ test("dashboard home no longer replays mock summon or voice presets when live re
   assert.doesNotMatch(dashboardHomeServiceSource, /return sequences.length > 0 \? sequences : dashboardVoiceSequences\.map/);
   assert.match(dashboardHomeSource, /if \(data\.summonTemplates\.length === 0\) \{/);
   assert.match(dashboardHomeSource, /data\.loadWarnings\.length > 0/);
+  assert.match(dashboardHomeSource, /部分模块未同步/);
+  assert.match(dashboardHomeSource, /useDesktopOnboardingLoading\("dashboard"\)/);
 });
 
 test("dashboard event panel routes task-detail actions through the shared navigation helper", () => {
@@ -2169,12 +2243,12 @@ test("security audit cards and mirror cards stay aligned with the v6 frontend pr
   assert.match(securityAppSource, /const auditFilterTaskId = auditScope === "focused_task" \? focusedTaskId : null/);
   assert.match(securityAppSource, /const rpcAuditRequiresTaskContext = moduleData\?\.source === "rpc"/);
   assert.match(securityAppSource, /disabled=\{rpcAuditRequiresTaskContext\}/);
-  assert.match(securityAppSource, /当前后端仅支持按 task 查看审计记录/);
+  assert.match(securityAppSource, /当前只支持从带任务上下文的安全入口或任务详情查看审计记录/);
   assert.match(securityAppSource, /loadSecurityAuditRecords\(moduleData\.source, auditFilterTaskId/);
   assert.match(securityAppSource, /loadSecurityFocusedTaskDetail\(focusedTaskId, moduleData\?\.source \?\? "rpc"\)/);
   assert.match(securityAppSource, /当前屏幕任务治理链/);
-  assert.match(securityAppSource, /正式授权锚点/);
-  assert.match(securityAppSource, /正式引用/);
+  assert.match(securityAppSource, /授权依据/);
+  assert.match(securityAppSource, /引用/);
   assert.match(securityAppSource, /latest_failure_category/);
   assert.match(securityAppSource, /title: "审计记录"/);
   assert.doesNotMatch(securityAppSource, /decisionHistory/);
@@ -2275,7 +2349,7 @@ test("task page keeps waiting-auth anchors and routes follow-up steering through
   assert.doesNotMatch(taskPageSource, /item\.task\.status === "confirming_intent" \|\| item\.task\.status === "processing"/);
   assert.match(taskPageSource, /onSteerTask=\{handleSteerTask\}/);
   assert.match(taskDetailPanelSource, /const canSteerTask = task \? canTaskAcceptSteering\(task\) : false;/);
-  assert.match(taskDetailPanelSource, /当前任务仍在等待确认处理方式；确认后才会开放正式 `agent\.task\.steer` 追加要求。/);
+  assert.match(taskDetailPanelSource, /当前任务仍在等待确认处理方式；确认后才会开放追加要求。/);
   assert.match(taskDetailPanelSource, /当前任务还在等待确认处理方式，确认后才能继续追加要求。/);
   assert.match(taskDetailPanelSource, /placeholder=\{steeringPlaceholder\}/);
 });
@@ -3531,20 +3605,22 @@ test("control panel about service exposes fallback metadata and feedback channel
       title: "GitHub Issues",
     },
     {
-      description: "预留微信群、QQ群或 Discord 等社群二维码图片。",
+      description: "扫码加入微信社群，获取版本动态与协作交流入口。",
       id: "community_qr",
-      kind: "placeholder",
-      note: "后续放入二维码图片后，会在这里直接显示预览。",
-      placeholderLabel: "待放置二维码图片",
-      title: "社群二维码",
+      kind: "image",
+      note: "微信扫码后可加入 CialloClaw 社群。",
+      previewAlt: "CialloClaw 微信社群二维码",
+      previewSrc: "/src/assets/about/wechat-qr.jpg",
+      title: "微信社群",
     },
     {
-      description: "预留邮箱、工单表单或其它定向联系入口。",
-      id: "contact_form",
-      kind: "placeholder",
-      note: "支持后续替换成链接、表单地址或其它说明文本。",
-      placeholderLabel: "待放置链接或表单",
-      title: "邮箱 / 表单",
+      actionLabel: "复制链接",
+      description: "访问官网展示页，查看产品介绍、界面预览与公开说明。",
+      href: "https://1024xengineer.github.io/CialloClaw/",
+      hrefLabel: "1024xengineer.github.io/CialloClaw/",
+      id: "official_site",
+      kind: "link",
+      title: "官网展示页",
     },
   ]);
 });
@@ -4699,6 +4775,248 @@ test("control panel data clears stale runtime workspace paths when host verifica
   }
 });
 
+test("control-panel plugin snapshot keeps live runtime data separate from local mock toggles", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const listPluginCalls: Array<{ limit: number; offset: number }> = [];
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, { window: { localStorage } });
+  localStorage.setItem(
+    "cialloclaw.control-panel.plugin-mocks",
+    JSON.stringify({
+      ocr_worker: {
+        enabled: false,
+        updated_at: "2026-05-13T04:30:00.000Z",
+      },
+    }),
+  );
+
+  try {
+    const { loadControlPanelPluginDetail, loadControlPanelPluginSnapshot } = loadControlPanelPluginServiceModule({
+      listPlugins: async (params) => {
+        const request = params as {
+          page: {
+            limit: number;
+            offset: number;
+          };
+          request_meta?: {
+            trace_id?: string;
+          };
+        };
+
+        listPluginCalls.push({
+          limit: request.page.limit,
+          offset: request.page.offset,
+        });
+        assert.equal(request.page.limit, 100);
+        assert.match(request.request_meta?.trace_id ?? "", /^trace_control_panel_plugin_/);
+
+        if (request.page.offset === 0) {
+          return {
+            items: [
+              {
+                plugin_id: "ocr_worker",
+                name: "ocr_worker",
+                display_name: "OCR Worker",
+                summary: "Read text from images and PDFs.",
+                version: "1.0.0",
+                source: "builtin",
+                entry: "workers/ocr",
+                enabled: true,
+                permissions: ["workspace.read"],
+                capabilities: [
+                  {
+                    tool_name: "extract_text",
+                    display_name: "Extract Text",
+                    description: "Extract OCR text.",
+                    source: "worker",
+                    risk_hint: "green",
+                  },
+                ],
+                runtimes: [
+                  {
+                    name: "ocr_worker",
+                    kind: "worker",
+                    status: "running",
+                    transport: "stdio",
+                    health: "healthy",
+                    last_seen_at: "2026-05-13T04:29:00.000Z",
+                    last_error: null,
+                    capabilities: ["extract_text"],
+                  },
+                ],
+              },
+            ],
+            page: {
+              limit: 100,
+              offset: 0,
+              total: 2,
+              has_more: true,
+            },
+          };
+        }
+
+        return {
+          items: [
+            {
+              plugin_id: "browser_sidecar",
+              name: "browser_sidecar",
+              display_name: "Browser Sidecar",
+              summary: "Expose browser observations.",
+              version: "0.9.0",
+              source: "github",
+              entry: "sidecars/browser",
+              enabled: false,
+              permissions: ["browser.read"],
+              capabilities: [],
+              runtimes: [
+                {
+                  name: "browser_sidecar",
+                  kind: "sidecar",
+                  status: "stopped",
+                  transport: "named_pipe",
+                  health: "stopped",
+                  last_seen_at: "2026-05-13T03:00:00.000Z",
+                  last_error: null,
+                  capabilities: [],
+                },
+              ],
+            },
+          ],
+          page: {
+            limit: 100,
+            offset: 1,
+            total: 2,
+            has_more: false,
+          },
+        };
+      },
+      getPluginDetail: async (params) => {
+        const request = params as {
+          include_events: boolean;
+          include_metrics: boolean;
+          include_runtime: boolean;
+          plugin_id: string;
+        };
+        assert.equal(request.plugin_id, "ocr_worker");
+        assert.equal(request.include_runtime, true);
+        assert.equal(request.include_metrics, false);
+        assert.equal(request.include_events, true);
+
+        return {
+          plugin: {
+            plugin_id: "ocr_worker",
+            name: "ocr_worker",
+            display_name: "OCR Worker",
+            summary: "Read text from images and PDFs.",
+            version: "1.0.0",
+            source: "builtin",
+            entry: "workers/ocr",
+            enabled: true,
+            permissions: ["workspace.read"],
+            capabilities: [],
+          },
+          runtimes: [],
+          metrics: [],
+          recent_events: [],
+          tools: [],
+        };
+      },
+    });
+
+    const snapshot = await loadControlPanelPluginSnapshot();
+    assert.equal(snapshot.summary.total, 2);
+    assert.equal(snapshot.summary.healthy, 1);
+    assert.equal(snapshot.summary.stopped, 1);
+    assert.equal(snapshot.summary.mock_overrides, 1);
+    assert.equal(snapshot.items[0]?.plugin.plugin_id, "browser_sidecar");
+    assert.equal(snapshot.items[1]?.plugin.plugin_id, "ocr_worker");
+    assert.equal(snapshot.items[1]?.runtime_health, "healthy");
+    assert.equal(snapshot.items[1]?.control.source, "mock");
+    assert.equal(snapshot.items[1]?.control.effective_enabled, false);
+    assert.deepEqual(listPluginCalls, [
+      { limit: 100, offset: 0 },
+      { limit: 100, offset: 1 },
+    ]);
+
+    const detail = await loadControlPanelPluginDetail("ocr_worker");
+    assert.equal(detail.control.source, "mock");
+    assert.equal(detail.control.effective_enabled, false);
+    assert.equal(detail.plugin.enabled, true);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("control-panel plugin mock toggle only persists overrides that differ from live state", () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, { window: { localStorage } });
+
+  try {
+    const { saveControlPanelPluginMockEnabled } = loadControlPanelPluginServiceModule();
+
+    const stopped = saveControlPanelPluginMockEnabled("ocr_worker", false, true);
+    assert.equal(stopped.source, "mock");
+    assert.equal(stopped.effective_enabled, false);
+    assert.match(stopped.updated_at ?? "", /^2026|^20/);
+
+    const persistedAfterStop = JSON.parse(localStorage.getItem("cialloclaw.control-panel.plugin-mocks") ?? "{}");
+    assert.equal(persistedAfterStop.ocr_worker.enabled, false);
+
+    const restored = saveControlPanelPluginMockEnabled("ocr_worker", true, true);
+    assert.equal(restored.source, "live");
+    assert.equal(restored.updated_at, null);
+
+    const persistedAfterRestore = JSON.parse(localStorage.getItem("cialloclaw.control-panel.plugin-mocks") ?? "{}");
+    assert.deepEqual(persistedAfterRestore, {});
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("control-panel app exposes the plugin extension section with Chinese user-facing copy", () => {
+  const controlPanelAppSource = readFileSync(resolve(desktopRoot, "src/features/control-panel/ControlPanelApp.tsx"), "utf8");
+
+  assert.match(controlPanelAppSource, /navLabel: "插件扩展"/);
+  assert.match(controlPanelAppSource, /本页启用/);
+  assert.match(controlPanelAppSource, /当前页面的展示状态/);
+  assert.match(controlPanelAppSource, /状态：\{formatPluginRuntimeStatusLabel\(runtime\.status\)\}/);
+  assert.doesNotMatch(controlPanelAppSource, /Mock Start|Mock Stop|本地 mock 覆盖|不会向后端提交正式 enable \/ disable/);
+  assert.match(controlPanelAppSource, /\[selectedPluginId, pluginReloadToken\]/);
+});
+
 test("control panel saves full floating-ball ownership through the real rpc settings flow", async () => {
   const { loadSettings } = loadSettingsServiceModule();
   const strongholdStatus = {
@@ -5710,7 +6028,7 @@ test("mirror app reuses the mutation snapshot instead of triggering a second mir
     /const handleSettingsUpdate = useCallback\([\s\S]*loadMirrorOverviewData\(dataMode\)/,
   );
   assert.match(mirrorDetailSource, /settingsSnapshotUsesWarningBaseline/);
-  assert.match(mirrorDetailSource, /本地回退快照/);
+  assert.match(mirrorDetailSource, /回退快照/);
 });
 
 test("dashboard settings mutation keeps transport failures visible and does not mutate local settings", async () => {
@@ -6597,7 +6915,8 @@ test("task workspace routes formal delivery through a dedicated page and keeps l
   assert.match(taskDeliverySource, /isAllowedTaskOpenUrl/);
   assert.match(taskDeliverySource, /formalDeliveryUrlIsAllowed/);
   assert.doesNotMatch(taskDeliverySource, /href=\{formalDeliveryResult\.payload\.url\}/);
-  assert.match(taskDeliverySource, /当前正式结果已经在交付页中展示/);
+  assert.match(taskDeliverySource, /任务交付/);
+  assert.match(taskDeliverySource, /当前结果已经在交付页中展示/);
   assert.match(taskDeliverySource, /onOpenTaskDelivery:/);
 
   assert.doesNotMatch(taskDetailSource, /当前协议尚未提供稳定的 artifact\.open 能力/);
@@ -7408,7 +7727,7 @@ test("note conversion and confirming-intent surfaces use direct task handoff wor
   const voiceFieldSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/components/DashboardVoiceField.tsx"), "utf8");
   const homeServiceSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/home/dashboardHome.service.ts"), "utf8");
 
-  assert.match(noteActionBarSource, /会按这条便签生成正式任务并跳转到任务页。/);
+  assert.match(noteActionBarSource, /会按这条便签生成任务并跳转到任务页。/);
   assert.doesNotMatch(noteActionBarSource, /会直接生成任务并跳转到任务页。/);
   assert.match(notePageSource, /function getNoteConvertSuccessFeedback\(status: Task\["status"\]\)/);
   assert.match(notePageSource, /已按这条便签生成任务，正在打开任务详情。/);
@@ -7811,7 +8130,7 @@ test("note page can pin a pending created source note before the formal bucket i
   assert.match(notePageSource, /function findPreferredItemIdForSourceNote\(/);
   assert.match(notePageSource, /const nextItemId = replacementItemId \?\? findPreferredItemIdForSourceNote\(/);
   assert.match(notePageSource, /if \(nextItem\.sourceNote\?\.localOnly\) \{/);
-  assert.match(notePageSource, /showFeedback\("新便签已放到网格里，正在同步正式分组。"\);/);
+  assert.match(notePageSource, /showFeedback\("新便签已放到网格里，正在同步分组。"\);/);
 });
 
 test("note page upgrades canvas and selected source-note cards to their formal items once sync completes", () => {
@@ -9953,7 +10272,7 @@ test("TaskDetailPanel keeps evidence artifacts scoped to formal citation links",
   assert.match(panelSource, /const formalEvidenceCount = new Set\(/);
   assert.match(panelSource, /const hasEvidenceContent = evidenceItems\.length > 0 \|\| evidenceArtifacts\.length > 0;/);
   assert.match(panelSource, /if \(!isScreenTask \|\| detail === null \|\| !hasEvidenceContent\) \{/);
-  assert.match(panelSource, /该区域只在屏幕类任务中展示正式截图、OCR 摘要与引用片段。/);
+  assert.match(panelSource, /该区域只在屏幕类任务中展示截图、OCR 摘要与引用片段。/);
   assert.match(panelSource, /return sourceRef\.length > 0 \? sourceRef : citation\.citation_id/);
   assert.match(panelSource, /evidenceArtifacts\.map\(\(artifact\) => \(/);
   assert.match(panelSource, /outputArtifacts\.map\(\(artifact\) => \(/);
@@ -9986,14 +10305,15 @@ test("TaskDetailPanel renders formal delivery as a first-class output entry", ()
   assert.match(panelSource, /citation\.excerpt_text/);
 });
 
-test("TaskDetailPanel renders a formal screen governance section only for screen tasks with synced detail", () => {
+test("TaskDetailPanel renders the screen safety section only for screen tasks with synced detail", () => {
   const panelSource = readFileSync(resolve(desktopRoot, "src/features/dashboard/tasks/components/TaskDetailPanel.tsx"), "utf8");
 
   assert.match(panelSource, /const isScreenTask = task\?\.source_type === "screen_capture" \|\| detail\?\.task\.intent\?\.name === "screen_analyze"/);
   assert.match(panelSource, /if \(!isScreenTask \|\| shouldDeferSecuritySummary \|\| !runtimeSummary \|\| detail === null\) \{/);
-  assert.match(panelSource, /Screen Governance/);
-  assert.match(panelSource, /屏幕授权、恢复与失败收口/);
-  assert.match(panelSource, /该区域只消费正式 `approval_request`、`authorization_record`、`audit_record`、`recovery_point` 与 `runtime_summary` 字段/);
+  assert.match(panelSource, /证据链/);
+  assert.match(panelSource, /屏幕安全与恢复/);
+  assert.match(panelSource, /运行事件/);
+  assert.match(panelSource, /该区域只展示授权、恢复点、审计记录与运行摘要，不读取未整理的工作输出。/);
   assert.match(panelSource, /runtimeSummary\.latest_failure_category/);
   assert.match(panelSource, /detail\.approval_request/);
   assert.match(panelSource, /detail\.authorization_record/);
@@ -10025,7 +10345,8 @@ test("TaskDetailPanel exposes formal runtime event filters and applies them expl
 
   assert.match(panelSource, /agent\.task\.events\.list/);
   assert.match(panelSource, /事件类型/);
-  assert.match(panelSource, /Run ID/);
+  assert.match(panelSource, /运行编号/);
+  assert.match(panelSource, /例如 run-runtime/);
   assert.match(panelSource, /最近 24 小时/);
   assert.match(panelSource, /应用筛选/);
   assert.match(panelSource, /setEventFilterDraft\(DEFAULT_TASK_EVENT_FILTERS\)/);

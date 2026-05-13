@@ -71,7 +71,7 @@ function createTaskActions(item: NoteListItem): NoteActionDescriptor[] {
       {
         action: "open-linked-task",
         label: "打开关联任务",
-        tooltip: "跳转到这条便签已经关联的正式任务详情。",
+        tooltip: "跳转到这条便签已经关联的任务详情。",
       },
     ];
   }
@@ -84,7 +84,7 @@ function createTaskActions(item: NoteListItem): NoteActionDescriptor[] {
     {
       action: "convert-to-task",
       label: "转交给 Agent",
-      tooltip: "会按这条便签生成正式任务并跳转到任务页。",
+      tooltip: "会按这条便签生成任务并跳转到任务页。",
     },
   ];
 }

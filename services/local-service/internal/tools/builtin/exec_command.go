@@ -23,7 +23,7 @@ func NewExecCommandTool() *ExecCommandTool {
 			Description:     "通过受控执行后端运行命令并返回最小结果摘要",
 			Source:          tools.ToolSourceBuiltin,
 			RiskHint:        "red",
-			TimeoutSec:      20,
+			TimeoutSec:      tools.DefaultTimeoutSec,
 			InputSchemaRef:  "tools/exec_command/input",
 			OutputSchemaRef: "tools/exec_command/output",
 			SupportsDryRun:  true,

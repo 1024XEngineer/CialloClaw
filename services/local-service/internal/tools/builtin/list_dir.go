@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"strings"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
@@ -19,10 +20,10 @@ func NewListDirTool() *ListDirTool {
 		meta: tools.ToolMetadata{
 			Name:            "list_dir",
 			DisplayName:     "列出目录",
-			Description:     "列出受控工作区内目录的子项信息",
+			Description:     "列出受控本地路径范围内目录的子项信息",
 			Source:          tools.ToolSourceBuiltin,
 			RiskHint:        "green",
-			TimeoutSec:      10,
+			TimeoutSec:      tools.DefaultTimeoutSec,
 			InputSchemaRef:  "tools/list_dir/input",
 			OutputSchemaRef: "tools/list_dir/output",
 			SupportsDryRun:  true,
@@ -147,10 +148,39 @@ func summarizeDirEntries(entries []fs.DirEntry, limit int) ([]map[string]any, in
 }
 
 func buildListDirSummary(raw map[string]any) map[string]any {
+	// Keep one compact entry preview in the summary so agent-loop observations can
+	// see concrete directory contents instead of only entry counts. This reduces
+	// repeated list_dir probes when the planner is trying to ground an uncertain path.
 	return map[string]any{
-		"path":           raw["path"],
-		"entry_count":    raw["entry_count"],
-		"returned_count": raw["returned_count"],
-		"truncated":      raw["truncated"],
+		"path":                 raw["path"],
+		"entry_count":          raw["entry_count"],
+		"returned_count":       raw["returned_count"],
+		"truncated":            raw["truncated"],
+		"entries_preview":      summarizeListDirEntryNames(raw["entries"]),
+		"entries_preview_text": strings.Join(summarizeListDirEntryNames(raw["entries"]), ", "),
 	}
+}
+
+func summarizeListDirEntryNames(rawEntries any) []string {
+	entries, ok := rawEntries.([]map[string]any)
+	if !ok || len(entries) == 0 {
+		return nil
+	}
+
+	preview := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name, _ := entry["name"].(string)
+		if name == "" {
+			continue
+		}
+		if isDir, _ := entry["is_dir"].(bool); isDir {
+			preview = append(preview, name+"/")
+			continue
+		}
+		preview = append(preview, name)
+	}
+	if len(preview) == 0 {
+		return nil
+	}
+	return preview
 }

@@ -135,7 +135,7 @@ function MirrorHistoryDetail({
             <p className="mirror-page__summary-copy">{conversationSummary.latest_agent_text ?? conversationSummary.latest_user_text ?? "下一条本地记录会显示在这里。"}</p>
           </article>
           <article className="mirror-page__continuity-card">
-            <p className="mirror-page__micro-label">挂载任务记录</p>
+            <p className="mirror-page__micro-label">关联任务记录</p>
             <p className="mirror-page__stage-headline">{taskLinkedConversationCount} 条</p>
             <p className="mirror-page__summary-copy">这些记录可以直接回跳到对应任务详情，不需要把镜子当成聊天历史翻页。</p>
           </article>
@@ -147,7 +147,7 @@ function MirrorHistoryDetail({
               <article key={`${item}-${index}`} className="mirror-page__history-item">
                 <div className="mirror-page__history-index">0{index + 1}</div>
                 <div className="mirror-page__history-copy">
-                  <p className="mirror-page__history-label">后端历史概要 {index + 1}</p>
+                  <p className="mirror-page__history-label">历史概要 {index + 1}</p>
                   <p className="mirror-page__history-text">{item}</p>
                 </div>
               </article>
@@ -550,7 +550,7 @@ function MirrorProfileDetail({
     <Tabs className="mirror-page__detail-tabs" defaultValue={defaultTab}>
       <TabsList className="mirror-page__detail-tab-list" variant="line">
         <TabsTrigger className="mirror-page__detail-tab-trigger" value="backend">
-          后端画像字段
+          你的画像
         </TabsTrigger>
         <TabsTrigger className="mirror-page__detail-tab-trigger" value="local">
           最近本地统计
@@ -560,16 +560,16 @@ function MirrorProfileDetail({
       <TabsContent className="mirror-page__detail-tab-panel" value="backend">
         <div className="mirror-page__profile-local-note">
           <BrainCircuit className="mirror-page__profile-icon" />
-          <p className="mirror-page__summary-copy">这里直接展示后端 `mirror overview` 返回的 profile 字段。</p>
+          <p className="mirror-page__summary-copy">这里直接展示你的画像概览。</p>
         </div>
 
-        <MirrorProfileGrid badgeTone="green" emptyState="当前没有后端画像字段。" items={backendItems} />
+        <MirrorProfileGrid badgeTone="green" emptyState="当前没有你的画像信息。" items={backendItems} />
       </TabsContent>
 
       <TabsContent className="mirror-page__detail-tab-panel" value="local">
         <div className="mirror-page__profile-local-note">
           <BrainCircuit className="mirror-page__profile-icon" />
-          <p className="mirror-page__summary-copy">这里的条目只按最近 100 条本地对话机械统计，用于展示近期使用情况，并与后端画像字段分层展示。</p>
+          <p className="mirror-page__summary-copy">这里的条目只按最近 100 条本地对话统计，用于展示近期使用情况，并与你的画像分层展示。</p>
         </div>
 
         <MirrorProfileGrid badgeTone="processing" emptyState="当前没有可展示的最近本地统计。" items={localItems} />
@@ -654,7 +654,7 @@ function MirrorMemoryDetail({
           <div className="mirror-page__memory-list mirror-page__memory-list--expanded">
             <div className="mirror-page__profile-local-note">
               <BookMarked className="mirror-page__memory-icon" />
-              <p className="mirror-page__summary-copy">当前协议只返回 `memory_id / reason / summary`，还没有时间、来源 task 或命中场景明细，所以这里按后端真源直出，不伪造额外来源字段。</p>
+              <p className="mirror-page__summary-copy">这里目前只展示记忆编号、原因和摘要，还没有时间、来源任务或命中场景明细，所以不额外补充来源信息。</p>
             </div>
 
             {overview.memory_references.map((reference, index) => (
@@ -696,10 +696,10 @@ function MirrorMemoryDetail({
           <article className="mirror-page__risk-card">
             <div className="mirror-page__stage-card-top">
               <div>
-                <p className="mirror-page__micro-label">最近后端记忆引用</p>
+                <p className="mirror-page__micro-label">最近记忆引用</p>
                 <p className="mirror-page__stage-headline">{overview.memory_references[0]?.memory_id ?? "暂无"}</p>
               </div>
-              <StatusBadge tone="green">backend</StatusBadge>
+              <StatusBadge tone="green">记忆</StatusBadge>
             </div>
             <p className="mirror-page__summary-copy">{overview.memory_references[0]?.reason ?? "当前还没有新的记忆命中说明。"}</p>
           </article>
@@ -707,12 +707,12 @@ function MirrorMemoryDetail({
           <article className="mirror-page__risk-card">
             <div className="mirror-page__stage-card-top">
               <div>
-                <p className="mirror-page__micro-label">RPC 同步状态</p>
+                <p className="mirror-page__micro-label">同步状态</p>
                 <p className="mirror-page__stage-headline">{rpcContext.serverTime ? "已同步" : "本地视图"}</p>
               </div>
               <StatusBadge tone={rpcContext.warnings.length > 0 ? "yellow" : "processing"}>{rpcContext.warnings.length > 0 ? "带提醒" : "稳定"}</StatusBadge>
             </div>
-            <p className="mirror-page__summary-copy">{rpcContext.warnings.length > 0 ? rpcContext.warnings.join("；") : "当前没有额外 RPC warnings。"}</p>
+            <p className="mirror-page__summary-copy">{rpcContext.warnings.length > 0 ? rpcContext.warnings.join("；") : "当前没有额外提醒。"}</p>
           </article>
 
           {recentTaskLinkedConversations.length > 0 ? (
@@ -722,9 +722,9 @@ function MirrorMemoryDetail({
                   <p className="mirror-page__micro-label">近期可回跳任务</p>
                   <p className="mirror-page__stage-headline">{recentTaskLinkedConversations.length} 条 task 入口</p>
                 </div>
-                <StatusBadge tone="processing">task</StatusBadge>
+                <StatusBadge tone="processing">任务</StatusBadge>
               </div>
-              <p className="mirror-page__summary-copy">这些 task 来自本地连续记录，可用于回跳任务详情；它们不代表后端记忆引用的正式来源字段。</p>
+              <p className="mirror-page__summary-copy">这些任务来自本地连续记录，可用于回跳任务详情；它们不是记忆引用的直接来源。</p>
               <div className="mirror-page__conversation-actions">
                 {recentTaskLinkedConversations.map((record) => (
                   <button key={record.task_id} type="button" className="mirror-page__task-link" onClick={() => onOpenTaskDetail(record.task_id!)}>
@@ -814,7 +814,7 @@ function MirrorMemoryDetail({
               </div>
               <StatusBadge tone="processing">summary</StatusBadge>
             </div>
-            <p className="mirror-page__summary-copy">这里展示 `settings.memory.work_summary_interval`，用于解释工作总结类镜像的刷新节奏。</p>
+            <p className="mirror-page__summary-copy">这里展示 `settings.memory.work_summary_interval`，用于解释工作总结内容的刷新节奏。</p>
           </article>
 
           <article className="mirror-page__risk-card">
@@ -825,23 +825,23 @@ function MirrorMemoryDetail({
               </div>
               <StatusBadge tone="processing">profile</StatusBadge>
             </div>
-            <p className="mirror-page__summary-copy">这里展示 `settings.memory.profile_refresh_interval`，用于解释画像字段多久刷新一次。</p>
+            <p className="mirror-page__summary-copy">这里展示 `settings.memory.profile_refresh_interval`，用于解释你的画像多久更新一次。</p>
           </article>
 
           <article className="mirror-page__risk-card">
             <div className="mirror-page__stage-card-top">
               <div>
                 <p className="mirror-page__micro-label">设置来源</p>
-                <p className="mirror-page__stage-headline">{settingsSnapshotUsesWarningBaseline ? "本地回退快照" : "settings.get"}</p>
+                <p className="mirror-page__stage-headline">{settingsSnapshotUsesWarningBaseline ? "回退快照" : "同步快照"}</p>
               </div>
-              <StatusBadge tone={settingsSnapshotUsesWarningBaseline ? "yellow" : "green"}>{settingsSnapshot.source}</StatusBadge>
+              <StatusBadge tone={settingsSnapshotUsesWarningBaseline ? "yellow" : "green"}>{settingsSnapshotUsesWarningBaseline ? "回退" : "同步"}</StatusBadge>
             </div>
             <p className="mirror-page__summary-copy">
               {settingsSnapshot.rpcContext.serverTime
                 ? `服务端快照时间：${settingsSnapshot.rpcContext.serverTime}`
                 : settingsSnapshotUsesWarningBaseline
-                  ? "当前展示的是本地缓存的 settings 快照，用于在 settings.get 失败时维持页面可读性。"
-                  : "当前展示的是正式 settings 快照。"}
+                  ? "当前展示的是本地缓存的设置快照，用于在同步失败时维持页面可读性。"
+                  : "当前展示的是同步设置快照。"}
             </p>
             {settingsSnapshot.rpcContext.warnings.length > 0 ? (
               <div className="mirror-page__conversation-actions">

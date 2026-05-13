@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/intent"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/languagepolicy"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/model"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/presentation"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
@@ -16,7 +17,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/textutil"
 )
 
-const taskConfirmQuestionModelTimeout = 3 * time.Second
+const taskConfirmQuestionModelTimeout = 5 * time.Minute
 
 func (s *Service) bubbleTextForInput(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) string {
 	return s.bubbleTextForConfirmation(task, snapshot, suggestion, false)
@@ -27,14 +28,15 @@ func (s *Service) bubbleTextForStart(task runengine.TaskRecord, snapshot taskcon
 }
 
 func (s *Service) bubbleTextForConfirmation(task runengine.TaskRecord, snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, startFlow bool) string {
+	replyLanguage := s.confirmationReplyLanguage(snapshot)
 	if !suggestion.RequiresConfirm {
 		return suggestion.ResultBubbleText
 	}
 	if shouldUseClarificationBubble(suggestion) {
 		if !suggestion.IntentConfirmed {
-			return initialClarificationPromptForLanguage(snapshot, startFlow, snapshot.SessionReplyLanguage)
+			return initialClarificationPromptForLanguage(snapshot, startFlow, replyLanguage)
 		}
-		return clarificationBubbleTextForLanguage(suggestion.Intent, s.clarificationPreviewHits(task, snapshot), clarificationReplyLanguage(snapshot))
+		return clarificationBubbleTextForLanguage(suggestion.Intent, s.clarificationPreviewHits(task, snapshot), replyLanguage)
 	}
 	if !suggestion.IntentConfirmed {
 		if startFlow {
@@ -57,13 +59,14 @@ func shouldUseClarificationBubble(suggestion intent.Suggestion) bool {
 // runtime model is unavailable or returns unusable text, the backend falls back
 // to a deterministic question so the confirmation gate remains stable.
 func (s *Service) confirmIntentText(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) string {
-	if question := s.modelBackedConfirmIntentText(snapshot, suggestion); question != "" {
+	replyLanguage := s.confirmationReplyLanguage(snapshot)
+	if question := s.modelBackedConfirmIntentText(snapshot, suggestion, replyLanguage); question != "" {
 		return question
 	}
-	return fallbackConfirmIntentText(snapshot, suggestion)
+	return fallbackConfirmIntentText(snapshot, suggestion, replyLanguage)
 }
 
-func (s *Service) modelBackedConfirmIntentText(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) string {
+func (s *Service) modelBackedConfirmIntentText(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, replyLanguage string) string {
 	modelService := s.currentModel()
 	if modelService == nil || !shouldUseModelBackedConfirmIntentText(suggestion) {
 		return ""
@@ -72,7 +75,7 @@ func (s *Service) modelBackedConfirmIntentText(snapshot taskcontext.TaskContextS
 	ctx, cancel := context.WithTimeout(context.Background(), taskConfirmQuestionModelTimeout)
 	defer cancel()
 	response, err := modelService.GenerateText(ctx, model.GenerateTextRequest{
-		Input: buildTaskConfirmQuestionPrompt(snapshot, suggestion),
+		Input: buildTaskConfirmQuestionPrompt(snapshot, suggestion, replyLanguage),
 	})
 	if err != nil {
 		return ""
@@ -96,27 +99,39 @@ func shouldUseModelBackedConfirmIntentText(suggestion intent.Suggestion) bool {
 // runtime model is unavailable. It still derives the question from the formal
 // task title and current object context instead of restoring a frontend phrase
 // table or a per-intent copy map.
-func fallbackConfirmIntentText(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) string {
+func fallbackConfirmIntentText(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, replyLanguage string) string {
 	action, subject := intentConfirmTitleParts(suggestion.TaskTitle)
 	if subject == "" {
-		action = intentConfirmAction(snapshot, suggestion.Intent)
+		action = intentConfirmAction(snapshot, suggestion.Intent, replyLanguage)
 		subject = intentConfirmSubject(snapshot, suggestion.Intent)
 	}
 
 	switch {
 	case action != "" && subject != "":
+		if isEnglishReplyLanguage(replyLanguage) {
+			return fmt.Sprintf("Do you want me to %s \"%s\"?", action, subject)
+		}
 		return fmt.Sprintf("你现在是希望我%s「%s」吗？", action, subject)
 	case action != "":
+		if isEnglishReplyLanguage(replyLanguage) {
+			return fmt.Sprintf("Do you want me to %s?", action)
+		}
 		return fmt.Sprintf("你现在是希望我%s吗？", action)
 	default:
+		if isEnglishReplyLanguage(replyLanguage) {
+			return "Please confirm how you want me to handle this content."
+		}
 		return presentation.Text(presentation.MessageBubbleConfirmDefault, nil)
 	}
 }
 
-func intentConfirmAction(snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any) string {
+func intentConfirmAction(snapshot taskcontext.TaskContextSnapshot, taskIntent map[string]any, replyLanguage string) string {
 	intentName := strings.TrimSpace(stringValue(taskIntent, "name", ""))
 	if intentName == "" {
 		return ""
+	}
+	if isEnglishReplyLanguage(replyLanguage) {
+		return englishIntentConfirmAction(snapshot, intentName)
 	}
 	const subjectMarker = "__confirm_subject__"
 	title := presentation.TaskTitle(intentName, presentation.TaskTitleOptions{
@@ -131,15 +146,33 @@ func intentConfirmAction(snapshot taskcontext.TaskContextSnapshot, taskIntent ma
 	return strings.TrimSpace(strings.TrimRight(prefix, "：:"))
 }
 
-func buildTaskConfirmQuestionPrompt(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion) string {
+func englishIntentConfirmAction(snapshot taskcontext.TaskContextSnapshot, intentName string) string {
+	switch intentName {
+	case "rewrite":
+		return "rewrite"
+	case "translate":
+		return "translate"
+	case "explain":
+		if strings.TrimSpace(snapshot.ErrorText) != "" {
+			return "explain"
+		}
+		return "explain"
+	case "summarize":
+		return "summarize"
+	case "screen_analyze":
+		if strings.TrimSpace(snapshot.ErrorText) != "" {
+			return "analyze"
+		}
+		return "analyze"
+	default:
+		return "handle"
+	}
+}
+
+func buildTaskConfirmQuestionPrompt(snapshot taskcontext.TaskContextSnapshot, suggestion intent.Suggestion, replyLanguage string) string {
 	intentPayload, _ := json.Marshal(suggestion.Intent)
-	lines := []string{
-		"You write one confirmation question for CialloClaw before the task executes.",
-		"Return exactly one concise Chinese question and nothing else.",
-		"Use the inferred operation and the most specific target object you can justify from the intent payload and task context.",
-		"Do not mention internal labels such as intent, task title, current intent, JSON, payload, or field names.",
-		"Do not explain your reasoning. Do not add bullets, quotes, or multiple options.",
-		"If the task changes files, pages, or other state, make that action explicit in the question.",
+	lines := taskConfirmQuestionPromptInstructions(replyLanguage)
+	lines = append(lines,
 		"",
 		fmt.Sprintf("task_title=%s", strings.TrimSpace(suggestion.TaskTitle)),
 		fmt.Sprintf("intent_payload=%s", string(intentPayload)),
@@ -148,8 +181,86 @@ func buildTaskConfirmQuestionPrompt(snapshot taskcontext.TaskContextSnapshot, su
 		"",
 		"task_context:",
 		taskConfirmQuestionContextSummary(snapshot),
-	}
+	)
 	return strings.Join(lines, "\n")
+}
+
+func clarificationLanguageEvidence(snapshot taskcontext.TaskContextSnapshot) string {
+	for _, value := range []string{
+		snapshot.Text,
+		snapshot.ErrorText,
+		snapshot.SelectionText,
+		firstSnapshotFile(snapshot),
+		snapshot.VisibleText,
+		snapshot.ScreenSummary,
+		snapshot.PageTitle,
+		snapshot.WindowTitle,
+		snapshot.ClipboardText,
+		snapshot.HoverTarget,
+	} {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func firstSnapshotFile(snapshot taskcontext.TaskContextSnapshot) string {
+	if len(snapshot.Files) == 0 {
+		return ""
+	}
+	return snapshot.Files[0]
+}
+
+// confirmationReplyLanguage keeps clarification and confirmation copy on the
+// same language path so default settings can drive UI text when the current
+// input is too ambiguous to infer reliably.
+func (s *Service) confirmationReplyLanguage(snapshot taskcontext.TaskContextSnapshot) string {
+	preferredInput := clarificationLanguageEvidence(snapshot)
+	if preferredInput != "" {
+		currentLanguage := languagepolicy.PreferredReplyLanguage(preferredInput)
+		if shouldPreferRememberedSessionLanguage(snapshot, currentLanguage) {
+			return strings.TrimSpace(snapshot.SessionReplyLanguage)
+		}
+		return currentLanguage
+	}
+	if rememberedLanguage := strings.TrimSpace(snapshot.SessionReplyLanguage); rememberedLanguage != "" {
+		return rememberedLanguage
+	}
+	return settingsDefaultReplyLanguage(s.runEngine.Settings())
+}
+
+func taskConfirmQuestionPromptInstructions(replyLanguage string) []string {
+	if isEnglishReplyLanguage(replyLanguage) {
+		return []string{
+			"You write one confirmation question for CialloClaw before the task executes.",
+			"Return exactly one concise English question and nothing else.",
+			"Use the inferred operation and the most specific target object you can justify from the intent payload and task context.",
+			"Do not mention internal labels such as intent, task title, current intent, JSON, payload, or field names.",
+			"Do not explain your reasoning. Do not add bullets, quotes, or multiple options.",
+			"If the task changes files, pages, or other state, make that action explicit in the question.",
+		}
+	}
+	return []string{
+		"You write one confirmation question for CialloClaw before the task executes.",
+		"Return exactly one concise Chinese question and nothing else.",
+		"Use the inferred operation and the most specific target object you can justify from the intent payload and task context.",
+		"Do not mention internal labels such as intent, task title, current intent, JSON, payload, or field names.",
+		"Do not explain your reasoning. Do not add bullets, quotes, or multiple options.",
+		"If the task changes files, pages, or other state, make that action explicit in the question.",
+	}
+}
+
+func settingsDefaultReplyLanguage(settings map[string]any) string {
+	general := cloneMap(mapValue(normalizeSettingsSnapshot(settings), "general"))
+	switch strings.TrimSpace(stringValue(general, "language", "")) {
+	case languagepolicy.ReplyLanguageEnglish:
+		return languagepolicy.ReplyLanguageEnglish
+	case languagepolicy.ReplyLanguageChinese:
+		return languagepolicy.ReplyLanguageChinese
+	default:
+		return languagepolicy.ReplyLanguageChinese
+	}
 }
 
 func taskConfirmQuestionContextSummary(snapshot taskcontext.TaskContextSnapshot) string {

@@ -39,8 +39,8 @@ export const dashboardHomeStates: Record<DashboardHomeEventStateKey, DashboardHo
     accentColor: "#7C9EC8",
     tag: "正在推进",
     tagTone: "active",
-    headline: "已完成资料检索，正在整理关键任务线索",
-    subline: "从 47 个来源中筛出 6 个高相关片段，正在提炼本轮任务最重要的推进顺序。",
+    headline: "正在整理当前任务的真实信号",
+    subline: "这里只保留返回的任务摘要，不再放入来源计数类示意文案。",
     progress: 42,
     progressLabel: "执行中",
     progressSteps: [
@@ -50,9 +50,9 @@ export const dashboardHomeStates: Record<DashboardHomeEventStateKey, DashboardHo
       { label: "生成结果", status: "pending" },
     ],
     context: [
-      { iconKey: "search", text: "已扫描 47 个来源", time: "2 分钟前", type: "normal" },
-      { iconKey: "sparkles", text: "筛选出 6 个高相关结果", time: "1 分钟前", type: "normal" },
-      { iconKey: "loader", text: "正在提炼核心观点与下一步动作", time: "进行中", type: "active" },
+      { iconKey: "search", text: "已接入当前任务概览", time: "刚刚", type: "normal" },
+      { iconKey: "sparkles", text: "优先展示返回的重点信号", time: "刚刚", type: "normal" },
+      { iconKey: "loader", text: "正在对齐任务主链路", time: "进行中", type: "active" },
     ],
     breathSpeed: 1.8,
   },
@@ -366,7 +366,7 @@ export const dashboardHomeStates: Record<DashboardHomeEventStateKey, DashboardHo
     signals: [
       { iconKey: "shield", label: "风险等级", value: "中", level: "warn", translation: "建议先确认再继续" },
       { iconKey: "lock", label: "待授权", value: "1", level: "critical", translation: "存在一个待确认操作" },
-      { iconKey: "history", label: "恢复点", value: "可用", level: "normal", translation: "当前已挂载回退点" },
+      { iconKey: "history", label: "恢复点", value: "可用", level: "normal", translation: "当前已有回退点" },
     ],
     anomaly: {
       title: "检测到边界风险",

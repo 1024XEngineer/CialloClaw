@@ -24,11 +24,11 @@ export const manifest = {
   ],
 };
 
-const browserTimeoutMS = 30000;
+const browserTimeoutMS = 300000;
 const defaultCDPEndpointURL = "http://127.0.0.1:9222";
 const defaultManagedCDPEndpointURL = "http://127.0.0.1:9333";
 const defaultSearchEngineURL = "https://duckduckgo.com/html/";
-const managedBrowserStartupTimeoutMS = 10000;
+const managedBrowserStartupTimeoutMS = 300000;
 const managedBrowserRetryIntervalMS = 250;
 const managedBrowserUserDataRoot = path.join(os.tmpdir(), "cialloclaw-playwright-browser");
 const managedWorkerPageName = "cialloclaw-playwright-worker";
@@ -902,28 +902,28 @@ async function interactWithPage(request, actions, deps) {
       const selector = String(action?.selector ?? "").trim();
       switch (type) {
         case "click":
-          await pageActionTarget(page, selector).click({ timeout: 10000 });
+          await pageActionTarget(page, selector).click({ timeout: 300000 });
           applied += 1;
           break;
         case "fill":
-          await pageActionTarget(page, selector).fill(String(action?.value ?? ""), { timeout: 10000 });
+          await pageActionTarget(page, selector).fill(String(action?.value ?? ""), { timeout: 300000 });
           applied += 1;
           break;
         case "press":
-          await pageActionTarget(page, selector).press(String(action?.key ?? "Enter"), { timeout: 10000 });
+          await pageActionTarget(page, selector).press(String(action?.key ?? "Enter"), { timeout: 300000 });
           applied += 1;
           break;
         case "check":
-          await pageActionTarget(page, selector).check({ timeout: 10000 });
+          await pageActionTarget(page, selector).check({ timeout: 300000 });
           applied += 1;
           break;
         case "uncheck":
-          await pageActionTarget(page, selector).uncheck({ timeout: 10000 });
+          await pageActionTarget(page, selector).uncheck({ timeout: 300000 });
           applied += 1;
           break;
         case "wait_for":
           if (selector) {
-            await pageActionTarget(page, selector).waitFor({ timeout: 10000 });
+            await pageActionTarget(page, selector).waitFor({ timeout: 300000 });
           } else {
             await page.waitForTimeout(Number(action?.timeout_ms ?? 500));
           }

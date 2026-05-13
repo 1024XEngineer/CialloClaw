@@ -37,10 +37,10 @@ func NewWriteFileTool() *WriteFileTool {
 		meta: tools.ToolMetadata{
 			Name:            "write_file",
 			DisplayName:     "写入文件",
-			Description:     "在受控工作区内创建或覆盖文本文件",
+			Description:     "在受控本地路径范围内创建或覆盖文本文件",
 			Source:          tools.ToolSourceBuiltin,
 			RiskHint:        "yellow",
-			TimeoutSec:      10,
+			TimeoutSec:      tools.DefaultTimeoutSec,
 			InputSchemaRef:  "tools/write_file/input",
 			OutputSchemaRef: "tools/write_file/output",
 			SupportsDryRun:  true,

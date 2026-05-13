@@ -136,24 +136,34 @@ func TestServiceAssess(t *testing.T) {
 			want: AssessmentResult{RiskLevel: RiskLevelGreen, Reason: ReasonNormal, ImpactScope: ImpactScope{Webpages: []string{"https://example.com/demo"}, Apps: []string{"chrome"}}},
 		},
 		{
-			name: "browser_tabs_list_requires_approval",
+			name: "browser_tabs_list_stays_low_risk",
 			input: AssessmentInput{
 				OperationName:       "browser_tabs_list",
 				TargetObject:        "browser_tab:0",
 				CapabilityAvailable: true,
 				ImpactScope:         ImpactScope{Apps: []string{"chrome"}},
 			},
-			want: AssessmentResult{RiskLevel: RiskLevelYellow, ApprovalRequired: true, Reason: ReasonWebpageApproval, ImpactScope: ImpactScope{Apps: []string{"chrome"}}},
+			want: AssessmentResult{RiskLevel: RiskLevelGreen, Reason: ReasonNormal, ImpactScope: ImpactScope{Apps: []string{"chrome"}}},
 		},
 		{
-			name: "browser_navigate_requires_approval",
+			name: "browser_navigate_public_target_stays_low_risk",
 			input: AssessmentInput{
 				OperationName:       "browser_navigate",
 				TargetObject:        "https://example.com/next",
 				CapabilityAvailable: true,
 				ImpactScope:         ImpactScope{Webpages: []string{"https://example.com/next"}, Apps: []string{"edge"}},
 			},
-			want: AssessmentResult{RiskLevel: RiskLevelYellow, ApprovalRequired: true, Reason: ReasonWebpageApproval, ImpactScope: ImpactScope{Webpages: []string{"https://example.com/next"}, Apps: []string{"edge"}}},
+			want: AssessmentResult{RiskLevel: RiskLevelGreen, Reason: ReasonNormal, ImpactScope: ImpactScope{Webpages: []string{"https://example.com/next"}, Apps: []string{"edge"}}},
+		},
+		{
+			name: "browser_tab_focus_stays_low_risk",
+			input: AssessmentInput{
+				OperationName:       "browser_tab_focus",
+				TargetObject:        "browser_tab:2",
+				CapabilityAvailable: true,
+				ImpactScope:         ImpactScope{Webpages: []string{"browser_tab:2"}, Apps: []string{"chrome"}},
+			},
+			want: AssessmentResult{RiskLevel: RiskLevelGreen, Reason: ReasonNormal, ImpactScope: ImpactScope{Webpages: []string{"browser_tab:2"}, Apps: []string{"chrome"}}},
 		},
 		{
 			name: "browser_interact_requires_approval",
@@ -186,7 +196,7 @@ func TestServiceAssess(t *testing.T) {
 			},
 		},
 		{
-			name: "browser_navigate_requires_approval",
+			name: "browser_navigate_public_target_stays_low_risk_duplicate",
 			input: AssessmentInput{
 				OperationName:       "browser_navigate",
 				TargetObject:        "https://example.com/next",
@@ -197,9 +207,8 @@ func TestServiceAssess(t *testing.T) {
 				},
 			},
 			want: AssessmentResult{
-				RiskLevel:        RiskLevelYellow,
-				ApprovalRequired: true,
-				Reason:           ReasonWebpageApproval,
+				RiskLevel: RiskLevelGreen,
+				Reason:    ReasonNormal,
 				ImpactScope: ImpactScope{
 					Webpages: []string{"https://example.com/next"},
 					Apps:     []string{"edge"},
