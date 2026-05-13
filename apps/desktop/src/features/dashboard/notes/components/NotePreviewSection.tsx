@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { ArrowRight, Clock3, RefreshCcw } from "lucide-react";
 import { cn } from "@/utils/cn";
 import type { NoteListItem, NotePreviewGroupKey } from "../notePage.types";
 import { NotePreviewCard } from "./NotePreviewCard";
@@ -34,6 +35,19 @@ type NotePreviewSectionProps = {
   variant?: "default" | "hint";
 };
 
+function getBucketIcon(bucketKey: NotePreviewGroupKey) {
+  switch (bucketKey) {
+    case "upcoming":
+      return Clock3;
+    case "later":
+      return ArrowRight;
+    case "recurring_rule":
+      return RefreshCcw;
+    default:
+      return Clock3;
+  }
+}
+
 /**
  * Renders one drawer bucket and highlights the matching group when a board
  * card is dragged back toward the sidebar.
@@ -57,6 +71,8 @@ export function NotePreviewSection({
   trailing,
   variant = "default",
 }: NotePreviewSectionProps) {
+  const Icon = getBucketIcon(bucketKey);
+
   return (
     <article
       className={cn(
@@ -68,7 +84,10 @@ export function NotePreviewSection({
       data-note-bucket={bucketKey}
     >
       <button aria-expanded={isExpanded} className="note-preview-shell__bucket-toggle" onClick={onToggle} type="button">
-        <p className="dashboard-card__kicker">{title}</p>
+        <span className="note-preview-shell__bucket-title">
+          <Icon className="note-preview-shell__bucket-title-icon" />
+          <p className="dashboard-card__kicker">{title}</p>
+        </span>
         {trailing}
       </button>
 

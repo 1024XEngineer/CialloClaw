@@ -7,7 +7,7 @@ import { useUnmount } from "ahooks";
 import type { CSSProperties, PointerEvent as ReactPointerEvent, UIEvent } from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, ArrowLeft, ArrowUpRight, FilePlus2, PanelLeftClose, PanelLeftOpen, RefreshCcw, ScanSearch, X } from "lucide-react";
+import { AlertTriangle, Archive, ArrowLeft, ArrowUpRight, FilePlus2, Info, PanelLeftClose, PanelLeftOpen, RefreshCcw, ScanSearch, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import type { NotepadAction, Task, TodoItem } from "@cialloclaw/protocol";
 import { Badge } from "@/components/ui/badge";
@@ -2949,7 +2949,10 @@ export function NotePage() {
 
                     <article className={cn("dashboard-card note-preview-shell", activeRailDropBucket === "closed" && "is-drop-target", expandedBucket === "closed" ? "is-expanded" : "is-collapsed")}>
                       <button aria-expanded={expandedBucket === "closed"} className="note-preview-shell__bucket-toggle" onClick={() => toggleBucket("closed")} type="button">
-                        <p className="dashboard-card__kicker">已结束</p>
+                        <span className="note-preview-shell__bucket-title">
+                          <Archive className="note-preview-shell__bucket-title-icon" />
+                          <p className="dashboard-card__kicker">已结束</p>
+                        </span>
                         <span className="note-preview-shell__count">{closedQuery.isPending && !closedQuery.data ? "..." : railClosedItems.length}</span>
                       </button>
 
@@ -3206,12 +3209,13 @@ export function NotePage() {
               <motion.aside
                 animate={{ opacity: 1, y: 0 }}
                 className="note-preview-page__floating-card"
+                data-tone={feedback ? "success" : "warn"}
                 exit={{ opacity: 0, y: 12 }}
                 initial={{ opacity: 0, y: 16 }}
                 transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
               >
-                <div className="note-preview-page__floating-card-icon">
-                  <AlertTriangle className="h-4 w-4" />
+                <div className="note-preview-page__floating-card-icon" data-tone={feedback ? "success" : "warn"}>
+                  {feedback ? <Info className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
                 </div>
                 <div className="note-preview-page__floating-card-copy">
                   <p className="note-preview-page__floating-card-title">{feedback ? "操作提示" : "便签同步失败"}</p>
