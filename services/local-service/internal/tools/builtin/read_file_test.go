@@ -72,12 +72,40 @@ type stubReadFileInfo struct {
 	size int64
 }
 
+type stubReadFileOCR struct {
+	result      tools.OCRTextResult
+	err         error
+	calledPaths []string
+}
+
 func (s stubReadFileInfo) Name() string       { return s.name }
 func (s stubReadFileInfo) Size() int64        { return s.size }
 func (s stubReadFileInfo) Mode() fs.FileMode  { return 0o644 }
 func (s stubReadFileInfo) ModTime() time.Time { return time.Time{} }
 func (s stubReadFileInfo) IsDir() bool        { return false }
 func (s stubReadFileInfo) Sys() any           { return nil }
+
+func (s *stubReadFileOCR) ExtractText(_ context.Context, path string) (tools.OCRTextResult, error) {
+	s.calledPaths = append(s.calledPaths, path)
+	if s.err != nil {
+		return tools.OCRTextResult{}, s.err
+	}
+	return s.result, nil
+}
+
+func (s *stubReadFileOCR) OCRImage(_ context.Context, _, _ string) (tools.OCRTextResult, error) {
+	if s.err != nil {
+		return tools.OCRTextResult{}, s.err
+	}
+	return s.result, nil
+}
+
+func (s *stubReadFileOCR) OCRPDF(_ context.Context, _, _ string) (tools.OCRTextResult, error) {
+	if s.err != nil {
+		return tools.OCRTextResult{}, s.err
+	}
+	return s.result, nil
+}
 
 func TestReadFileToolExecuteSuccess(t *testing.T) {
 	workspace := filepath.Clean("D:/workspace")
@@ -147,6 +175,65 @@ func TestReadFileToolDecodesWorkspaceTextEncodings(t *testing.T) {
 	}
 	if _, ok := utf16Result.SummaryOutput["text_encoding"]; ok {
 		t.Fatalf("read_file summary output must not expose undocumented text_encoding: %+v", utf16Result.SummaryOutput)
+	}
+}
+
+func TestReadFileToolFallsBackToOCRForDocumentAttachments(t *testing.T) {
+	workspace := filepath.Clean("D:/workspace")
+	platform := newStubReadFilePlatform(workspace)
+	target := filepath.Join(workspace, "notes", "report.docx")
+	platform.files[target] = []byte{0x50, 0x4b, 0x03, 0x04, 0xff}
+	ocr := &stubReadFileOCR{result: tools.OCRTextResult{Path: target, Text: "Document body text", Language: "docx_text", PageCount: 1, Source: "ocr_worker_docx"}}
+	tool := NewReadFileTool()
+
+	result, err := tool.Execute(context.Background(), &tools.ToolExecuteContext{WorkspacePath: workspace, Platform: platform, OCR: ocr}, map[string]any{"path": target})
+	if err != nil {
+		t.Fatalf("Execute returned error for docx file: %v", err)
+	}
+	if len(ocr.calledPaths) != 1 || ocr.calledPaths[0] != target {
+		t.Fatalf("expected read_file to invoke OCR for the document path, got %+v", ocr.calledPaths)
+	}
+	if result.Error != nil {
+		t.Fatalf("expected OCR-backed read_file result to succeed, got %+v", result.Error)
+	}
+	if result.RawOutput["content"] != "Document body text" {
+		t.Fatalf("expected OCR-extracted content, got %+v", result.RawOutput)
+	}
+	if result.SummaryOutput["content_preview"] != "Document body text" {
+		t.Fatalf("expected OCR preview content, got %+v", result.SummaryOutput)
+	}
+	if result.RawOutput["text_type"] == "document_extracted" {
+		t.Fatalf("read_file OCR fallback must not expose undocumented text_type values: %+v", result.RawOutput)
+	}
+	if _, ok := result.RawOutput["extracted"]; ok {
+		t.Fatalf("read_file OCR fallback must not expose undocumented extracted flag: %+v", result.RawOutput)
+	}
+}
+
+func TestReadFileToolReturnsDocumentExtractionFailureForUnreadableDocumentAttachments(t *testing.T) {
+	workspace := filepath.Clean("D:/workspace")
+	platform := newStubReadFilePlatform(workspace)
+	target := filepath.Join(workspace, "notes", "report.docx")
+	platform.files[target] = []byte{0x50, 0x4b, 0x03, 0x04, 0xff}
+	ocr := &stubReadFileOCR{err: errors.New("ocr failed")}
+	tool := NewReadFileTool()
+
+	result, err := tool.Execute(context.Background(), &tools.ToolExecuteContext{WorkspacePath: workspace, Platform: platform, OCR: ocr}, map[string]any{"path": target})
+	if !errors.Is(err, tools.ErrToolExecutionFailed) {
+		t.Fatalf("expected OCR failure to keep tool execution failure semantics, got %v", err)
+	}
+	if result == nil || result.Error == nil {
+		t.Fatalf("expected OCR-backed document failure to return a tool result error, got %+v", result)
+	}
+	if result.Error.Message != readFileDocumentExtractFailedUserMessage {
+		t.Fatalf("expected document extraction failure message, got %+v", result.Error)
+	}
+	preview, _ := result.SummaryOutput["content_preview"].(string)
+	if preview != readFileDocumentExtractFailedUserMessage {
+		t.Fatalf("expected document extraction failure preview, got %+v", result.SummaryOutput)
+	}
+	if strings.Contains(preview, "UTF-8") {
+		t.Fatalf("expected document failure to avoid text-encoding guidance, got %q", preview)
 	}
 }
 

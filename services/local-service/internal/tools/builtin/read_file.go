@@ -19,6 +19,7 @@ import (
 const readFilePreviewLimit = 200
 const readFileMaxBytes int64 = 1 << 20
 const readFileDefaultTextType = "text/plain"
+const readFileDocumentExtractFailedUserMessage = "文档正文提取失败，请稍后重试；若仍失败，请改用 extract_text。"
 
 // ---------------------------------------------------------------------------
 // ReadFileTool: workspace file reader
@@ -108,17 +109,38 @@ func (t *ReadFileTool) Execute(ctx context.Context, execCtx *tools.ToolExecuteCo
 	mimeType, textType := detectReadFileTypes(readPath, content)
 	decodedContent, err := decodeReadFileContent(content)
 	if err != nil {
+		// Document-style attachments can legitimately fail strict text decoding even
+		// when the OCR worker already knows how to extract their body text. Keep
+		// read_file tolerant here so planner mistakes do not surface as fake
+		// encoding failures for docx/pdf/image inputs.
+		if extractedText, ok := tryExtractDocumentText(ctx, execCtx, safePath); ok {
+			rawOutput := map[string]any{
+				"path":      safePath,
+				"content":   extractedText,
+				"mime_type": mimeType,
+				"text_type": textType,
+			}
+			return &tools.ToolResult{
+				ToolName:      t.meta.Name,
+				RawOutput:     rawOutput,
+				SummaryOutput: buildReadFileSummary(rawOutput, ""),
+			}, nil
+		}
 		rawOutput := map[string]any{
 			"path":      safePath,
 			"mime_type": mimeType,
 			"text_type": textType,
 		}
+		contentPreview := textdecode.UnsupportedEncodingUserMessage
+		if supportsReadFileDocumentExtraction(safePath) {
+			contentPreview = readFileDocumentExtractFailedUserMessage
+		}
 		return &tools.ToolResult{
 			ToolName:      t.meta.Name,
 			RawOutput:     rawOutput,
-			SummaryOutput: buildReadFileSummary(rawOutput, textdecode.UnsupportedEncodingUserMessage),
+			SummaryOutput: buildReadFileSummary(rawOutput, contentPreview),
 			Error: &tools.ToolResultError{
-				Message: textdecode.UnsupportedEncodingUserMessage,
+				Message: contentPreview,
 			},
 		}, fmt.Errorf("%w: %w", tools.ErrToolExecutionFailed, err)
 	}
@@ -248,5 +270,32 @@ func inferReadFileTextType(mimeType string) string {
 		return "structured_text"
 	default:
 		return readFileDefaultTextType
+	}
+}
+
+func tryExtractDocumentText(ctx context.Context, execCtx *tools.ToolExecuteContext, filePath string) (string, bool) {
+	if execCtx == nil || execCtx.OCR == nil {
+		return "", false
+	}
+	if !supportsReadFileDocumentExtraction(filePath) {
+		return "", false
+	}
+	result, err := execCtx.OCR.ExtractText(ctx, filePath)
+	if err != nil {
+		return "", false
+	}
+	text := strings.TrimSpace(result.Text)
+	if text == "" {
+		return "", false
+	}
+	return text, true
+}
+
+func supportsReadFileDocumentExtraction(filePath string) bool {
+	switch strings.ToLower(filepath.Ext(filePath)) {
+	case ".bmp", ".doc", ".docx", ".gif", ".jpeg", ".jpg", ".pdf", ".png", ".pptx", ".tif", ".tiff", ".webp", ".xlsx":
+		return true
+	default:
+		return false
 	}
 }
