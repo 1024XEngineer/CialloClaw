@@ -201,7 +201,6 @@ export function MockMirrorMemoryOverview() {
                       </div>
                       <span className="mirror-memory-pill">观察中</span>
                     </div>
-                    <p>当前样本还很少，我只记录这次协作中比较明确的偏好。</p>
                   </div>
 
                   <div className="mirror-memory-metric-grid">
@@ -213,11 +212,6 @@ export function MockMirrorMemoryOverview() {
                     ))}
                   </div>
                 </div>
-              </div>
-
-              <div className="mirror-memory-note-band">
-                <Sparkles className="mirror-memory-note-icon" />
-                <p>当前只形成了一个初步协作样本，更多使用后才会逐步看到更稳定的观察。</p>
               </div>
             </div>
           ) : (
