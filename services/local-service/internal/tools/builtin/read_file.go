@@ -46,7 +46,7 @@ func NewReadFileTool() *ReadFileTool {
 			Description:     "读取受控本地路径范围内指定文件的内容",
 			Source:          tools.ToolSourceBuiltin,
 			RiskHint:        "green",
-			TimeoutSec:      10,
+			TimeoutSec:      tools.DefaultTimeoutSec,
 			InputSchemaRef:  "tools/read_file/input",
 			OutputSchemaRef: "tools/read_file/output",
 			SupportsDryRun:  true,

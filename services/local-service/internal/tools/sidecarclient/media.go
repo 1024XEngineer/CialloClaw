@@ -218,7 +218,7 @@ func (r *MediaWorkerRuntime) invokeTranscodeAction(ctx context.Context, request 
 type TranscodeMediaTool struct{ meta tools.ToolMetadata }
 
 func NewTranscodeMediaTool() *TranscodeMediaTool {
-	return &TranscodeMediaTool{meta: tools.ToolMetadata{Name: "transcode_media", DisplayName: "媒体转码", Description: "通过 Media worker 执行音视频转码", Source: tools.ToolSourceWorker, RiskHint: "green", TimeoutSec: 60, InputSchemaRef: "tools/transcode_media/input", OutputSchemaRef: "tools/transcode_media/output"}}
+	return &TranscodeMediaTool{meta: tools.ToolMetadata{Name: "transcode_media", DisplayName: "媒体转码", Description: "通过 Media worker 执行音视频转码", Source: tools.ToolSourceWorker, RiskHint: "green", TimeoutSec: tools.DefaultTimeoutSec, InputSchemaRef: "tools/transcode_media/input", OutputSchemaRef: "tools/transcode_media/output"}}
 }
 
 func (t *TranscodeMediaTool) Metadata() tools.ToolMetadata { return t.meta }
@@ -241,7 +241,7 @@ func (t *TranscodeMediaTool) Execute(ctx context.Context, execCtx *tools.ToolExe
 type NormalizeRecordingTool struct{ meta tools.ToolMetadata }
 
 func NewNormalizeRecordingTool() *NormalizeRecordingTool {
-	return &NormalizeRecordingTool{meta: tools.ToolMetadata{Name: "normalize_recording", DisplayName: "录屏归一化", Description: "通过 Media worker 归一化录屏或录音结果", Source: tools.ToolSourceWorker, RiskHint: "green", TimeoutSec: 60, InputSchemaRef: "tools/normalize_recording/input", OutputSchemaRef: "tools/normalize_recording/output"}}
+	return &NormalizeRecordingTool{meta: tools.ToolMetadata{Name: "normalize_recording", DisplayName: "录屏归一化", Description: "通过 Media worker 归一化录屏或录音结果", Source: tools.ToolSourceWorker, RiskHint: "green", TimeoutSec: tools.DefaultTimeoutSec, InputSchemaRef: "tools/normalize_recording/input", OutputSchemaRef: "tools/normalize_recording/output"}}
 }
 
 func (t *NormalizeRecordingTool) Metadata() tools.ToolMetadata { return t.meta }
@@ -264,7 +264,7 @@ func (t *NormalizeRecordingTool) Execute(ctx context.Context, execCtx *tools.Too
 type ExtractFramesTool struct{ meta tools.ToolMetadata }
 
 func NewExtractFramesTool() *ExtractFramesTool {
-	return &ExtractFramesTool{meta: tools.ToolMetadata{Name: "extract_frames", DisplayName: "抽取帧", Description: "通过 Media worker 从视频中抽取关键帧", Source: tools.ToolSourceWorker, RiskHint: "green", TimeoutSec: 60, InputSchemaRef: "tools/extract_frames/input", OutputSchemaRef: "tools/extract_frames/output"}}
+	return &ExtractFramesTool{meta: tools.ToolMetadata{Name: "extract_frames", DisplayName: "抽取帧", Description: "通过 Media worker 从视频中抽取关键帧", Source: tools.ToolSourceWorker, RiskHint: "green", TimeoutSec: tools.DefaultTimeoutSec, InputSchemaRef: "tools/extract_frames/input", OutputSchemaRef: "tools/extract_frames/output"}}
 }
 
 func (t *ExtractFramesTool) Metadata() tools.ToolMetadata { return t.meta }

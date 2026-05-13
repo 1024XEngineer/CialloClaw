@@ -1244,6 +1244,66 @@ function loadMirrorServiceModule() {
   });
 }
 
+function loadControlPanelPluginServiceModule(rpcMethods?: DashboardContractRpcMethodOverrides) {
+  return withDesktopAliasRuntime((requireFn) => {
+    const modulePath = resolve(desktopRoot, "src/services/controlPanelPluginService.ts");
+    delete requireFn.cache[modulePath];
+
+    return requireFn(modulePath) as {
+      loadControlPanelPluginSnapshot: () => Promise<{
+        items: Array<{
+          plugin: {
+            plugin_id: string;
+            enabled: boolean;
+            display_name: string;
+            name: string;
+          };
+          runtime_health: string;
+          control: {
+            baseline_enabled: boolean;
+            effective_enabled: boolean;
+            source: string;
+            updated_at: string | null;
+          };
+        }>;
+        summary: {
+          total: number;
+          healthy: number;
+          degraded: number;
+          failed: number;
+          stopped: number;
+          unavailable: number;
+          unknown: number;
+          live_enabled: number;
+          mock_overrides: number;
+        };
+      }>;
+      loadControlPanelPluginDetail: (pluginId: string) => Promise<{
+        plugin: {
+          plugin_id: string;
+          enabled: boolean;
+        };
+        control: {
+          baseline_enabled: boolean;
+          effective_enabled: boolean;
+          source: string;
+          updated_at: string | null;
+        };
+      }>;
+      saveControlPanelPluginMockEnabled: (
+        pluginId: string,
+        nextEnabled: boolean,
+        baselineEnabled: boolean,
+      ) => {
+        baseline_enabled: boolean;
+        effective_enabled: boolean;
+        source: string;
+        updated_at: string | null;
+      };
+    };
+  }, rpcMethods);
+}
+
 function findRenderedElement(
   node: unknown,
   predicate: (element: { props: Record<string, unknown>; type: unknown }) => boolean,
@@ -1285,6 +1345,7 @@ type DashboardContractRpcMethodOverrides = {
   getDashboardModule?: (params: unknown) => Promise<unknown>;
   getDashboardOverview?: (params: unknown) => Promise<unknown>;
   getMirrorOverview?: (params: unknown) => Promise<unknown>;
+  getPluginDetail?: (params: unknown) => Promise<unknown>;
   getRecommendations?: (params: unknown) => Promise<unknown>;
   getMirrorOverviewDetailed?: (params: unknown) => Promise<unknown>;
   getSecuritySummary?: (params: unknown) => Promise<unknown>;
@@ -1297,6 +1358,8 @@ type DashboardContractRpcMethodOverrides = {
   listSecurityAuditDetailed?: (params: unknown) => Promise<unknown>;
   listSecurityPendingDetailed?: (params: unknown) => Promise<unknown>;
   listSecurityRestorePointsDetailed?: (params: unknown) => Promise<unknown>;
+  listPluginRuntimes?: (params: unknown) => Promise<unknown>;
+  listPlugins?: (params: unknown) => Promise<unknown>;
   listTaskArtifacts?: (params: AgentTaskArtifactListParams) => Promise<AgentTaskArtifactListResult>;
   listNotepad?: (params: AgentNotepadListParams) => Promise<AgentNotepadListResult>;
   listTasks?: (params: AgentTaskListParams) => Promise<AgentTaskListResult>;
@@ -1449,6 +1512,9 @@ function withDesktopAliasRuntime<T>(
         getMirrorOverview:
           rpcMethods?.getMirrorOverview ??
           (() => Promise.reject(new Error("getMirrorOverview should not run in dashboard contract tests"))),
+        getPluginDetail:
+          rpcMethods?.getPluginDetail ??
+          (() => Promise.reject(new Error("getPluginDetail should not run in dashboard contract tests"))),
         getRecommendations:
           rpcMethods?.getRecommendations ??
           (() => Promise.reject(new Error("getRecommendations should not run in dashboard contract tests"))),
@@ -1464,6 +1530,12 @@ function withDesktopAliasRuntime<T>(
         listSecurityPendingDetailed:
           rpcMethods?.listSecurityPendingDetailed ??
           (() => Promise.reject(new Error("listSecurityPendingDetailed should not run in dashboard contract tests"))),
+        listPluginRuntimes:
+          rpcMethods?.listPluginRuntimes ??
+          (() => Promise.reject(new Error("listPluginRuntimes should not run in dashboard contract tests"))),
+        listPlugins:
+          rpcMethods?.listPlugins ??
+          (() => Promise.reject(new Error("listPlugins should not run in dashboard contract tests"))),
         listNotepad:
           rpcMethods?.listNotepad ??
           (() => {
@@ -4707,6 +4779,248 @@ test("control panel data clears stale runtime workspace paths when host verifica
       Object.assign(globalThis, { window: originalWindow });
     }
   }
+});
+
+test("control-panel plugin snapshot keeps live runtime data separate from local mock toggles", async () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const listPluginCalls: Array<{ limit: number; offset: number }> = [];
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, { window: { localStorage } });
+  localStorage.setItem(
+    "cialloclaw.control-panel.plugin-mocks",
+    JSON.stringify({
+      ocr_worker: {
+        enabled: false,
+        updated_at: "2026-05-13T04:30:00.000Z",
+      },
+    }),
+  );
+
+  try {
+    const { loadControlPanelPluginDetail, loadControlPanelPluginSnapshot } = loadControlPanelPluginServiceModule({
+      listPlugins: async (params) => {
+        const request = params as {
+          page: {
+            limit: number;
+            offset: number;
+          };
+          request_meta?: {
+            trace_id?: string;
+          };
+        };
+
+        listPluginCalls.push({
+          limit: request.page.limit,
+          offset: request.page.offset,
+        });
+        assert.equal(request.page.limit, 100);
+        assert.match(request.request_meta?.trace_id ?? "", /^trace_control_panel_plugin_/);
+
+        if (request.page.offset === 0) {
+          return {
+            items: [
+              {
+                plugin_id: "ocr_worker",
+                name: "ocr_worker",
+                display_name: "OCR Worker",
+                summary: "Read text from images and PDFs.",
+                version: "1.0.0",
+                source: "builtin",
+                entry: "workers/ocr",
+                enabled: true,
+                permissions: ["workspace.read"],
+                capabilities: [
+                  {
+                    tool_name: "extract_text",
+                    display_name: "Extract Text",
+                    description: "Extract OCR text.",
+                    source: "worker",
+                    risk_hint: "green",
+                  },
+                ],
+                runtimes: [
+                  {
+                    name: "ocr_worker",
+                    kind: "worker",
+                    status: "running",
+                    transport: "stdio",
+                    health: "healthy",
+                    last_seen_at: "2026-05-13T04:29:00.000Z",
+                    last_error: null,
+                    capabilities: ["extract_text"],
+                  },
+                ],
+              },
+            ],
+            page: {
+              limit: 100,
+              offset: 0,
+              total: 2,
+              has_more: true,
+            },
+          };
+        }
+
+        return {
+          items: [
+            {
+              plugin_id: "browser_sidecar",
+              name: "browser_sidecar",
+              display_name: "Browser Sidecar",
+              summary: "Expose browser observations.",
+              version: "0.9.0",
+              source: "github",
+              entry: "sidecars/browser",
+              enabled: false,
+              permissions: ["browser.read"],
+              capabilities: [],
+              runtimes: [
+                {
+                  name: "browser_sidecar",
+                  kind: "sidecar",
+                  status: "stopped",
+                  transport: "named_pipe",
+                  health: "stopped",
+                  last_seen_at: "2026-05-13T03:00:00.000Z",
+                  last_error: null,
+                  capabilities: [],
+                },
+              ],
+            },
+          ],
+          page: {
+            limit: 100,
+            offset: 1,
+            total: 2,
+            has_more: false,
+          },
+        };
+      },
+      getPluginDetail: async (params) => {
+        const request = params as {
+          include_events: boolean;
+          include_metrics: boolean;
+          include_runtime: boolean;
+          plugin_id: string;
+        };
+        assert.equal(request.plugin_id, "ocr_worker");
+        assert.equal(request.include_runtime, true);
+        assert.equal(request.include_metrics, false);
+        assert.equal(request.include_events, true);
+
+        return {
+          plugin: {
+            plugin_id: "ocr_worker",
+            name: "ocr_worker",
+            display_name: "OCR Worker",
+            summary: "Read text from images and PDFs.",
+            version: "1.0.0",
+            source: "builtin",
+            entry: "workers/ocr",
+            enabled: true,
+            permissions: ["workspace.read"],
+            capabilities: [],
+          },
+          runtimes: [],
+          metrics: [],
+          recent_events: [],
+          tools: [],
+        };
+      },
+    });
+
+    const snapshot = await loadControlPanelPluginSnapshot();
+    assert.equal(snapshot.summary.total, 2);
+    assert.equal(snapshot.summary.healthy, 1);
+    assert.equal(snapshot.summary.stopped, 1);
+    assert.equal(snapshot.summary.mock_overrides, 1);
+    assert.equal(snapshot.items[0]?.plugin.plugin_id, "browser_sidecar");
+    assert.equal(snapshot.items[1]?.plugin.plugin_id, "ocr_worker");
+    assert.equal(snapshot.items[1]?.runtime_health, "healthy");
+    assert.equal(snapshot.items[1]?.control.source, "mock");
+    assert.equal(snapshot.items[1]?.control.effective_enabled, false);
+    assert.deepEqual(listPluginCalls, [
+      { limit: 100, offset: 0 },
+      { limit: 100, offset: 1 },
+    ]);
+
+    const detail = await loadControlPanelPluginDetail("ocr_worker");
+    assert.equal(detail.control.source, "mock");
+    assert.equal(detail.control.effective_enabled, false);
+    assert.equal(detail.plugin.enabled, true);
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("control-panel plugin mock toggle only persists overrides that differ from live state", () => {
+  const originalWindow = globalThis.window;
+  const storage = new Map<string, string>();
+  const localStorage = {
+    getItem(key: string) {
+      return storage.get(key) ?? null;
+    },
+    setItem(key: string, value: string) {
+      storage.set(key, value);
+    },
+    removeItem(key: string) {
+      storage.delete(key);
+    },
+  };
+
+  Object.assign(globalThis, { window: { localStorage } });
+
+  try {
+    const { saveControlPanelPluginMockEnabled } = loadControlPanelPluginServiceModule();
+
+    const stopped = saveControlPanelPluginMockEnabled("ocr_worker", false, true);
+    assert.equal(stopped.source, "mock");
+    assert.equal(stopped.effective_enabled, false);
+    assert.match(stopped.updated_at ?? "", /^2026|^20/);
+
+    const persistedAfterStop = JSON.parse(localStorage.getItem("cialloclaw.control-panel.plugin-mocks") ?? "{}");
+    assert.equal(persistedAfterStop.ocr_worker.enabled, false);
+
+    const restored = saveControlPanelPluginMockEnabled("ocr_worker", true, true);
+    assert.equal(restored.source, "live");
+    assert.equal(restored.updated_at, null);
+
+    const persistedAfterRestore = JSON.parse(localStorage.getItem("cialloclaw.control-panel.plugin-mocks") ?? "{}");
+    assert.deepEqual(persistedAfterRestore, {});
+  } finally {
+    if (originalWindow === undefined) {
+      Reflect.deleteProperty(globalThis, "window");
+    } else {
+      Object.assign(globalThis, { window: originalWindow });
+    }
+  }
+});
+
+test("control-panel app exposes the plugin extension section with Chinese user-facing copy", () => {
+  const controlPanelAppSource = readFileSync(resolve(desktopRoot, "src/features/control-panel/ControlPanelApp.tsx"), "utf8");
+
+  assert.match(controlPanelAppSource, /navLabel: "插件扩展"/);
+  assert.match(controlPanelAppSource, /本页启用/);
+  assert.match(controlPanelAppSource, /当前页面的展示状态/);
+  assert.match(controlPanelAppSource, /状态：\{formatPluginRuntimeStatusLabel\(runtime\.status\)\}/);
+  assert.doesNotMatch(controlPanelAppSource, /Mock Start|Mock Stop|本地 mock 覆盖|不会向后端提交正式 enable \/ disable/);
+  assert.match(controlPanelAppSource, /\[selectedPluginId, pluginReloadToken\]/);
 });
 
 test("control panel saves full floating-ball ownership through the real rpc settings flow", async () => {

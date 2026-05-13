@@ -23,7 +23,7 @@ func NewListDirTool() *ListDirTool {
 			Description:     "列出受控本地路径范围内目录的子项信息",
 			Source:          tools.ToolSourceBuiltin,
 			RiskHint:        "green",
-			TimeoutSec:      10,
+			TimeoutSec:      tools.DefaultTimeoutSec,
 			InputSchemaRef:  "tools/list_dir/input",
 			OutputSchemaRef: "tools/list_dir/output",
 			SupportsDryRun:  true,
@@ -148,6 +148,9 @@ func summarizeDirEntries(entries []fs.DirEntry, limit int) ([]map[string]any, in
 }
 
 func buildListDirSummary(raw map[string]any) map[string]any {
+	// Keep one compact entry preview in the summary so agent-loop observations can
+	// see concrete directory contents instead of only entry counts. This reduces
+	// repeated list_dir probes when the planner is trying to ground an uncertain path.
 	return map[string]any{
 		"path":                 raw["path"],
 		"entry_count":          raw["entry_count"],
@@ -163,6 +166,7 @@ func summarizeListDirEntryNames(rawEntries any) []string {
 	if !ok || len(entries) == 0 {
 		return nil
 	}
+
 	preview := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		name, _ := entry["name"].(string)

@@ -34,7 +34,7 @@ import (
 
 const (
 	defaultAgentLoopIntentName  = "agent_loop"
-	defaultAgentLoopTimeout     = 90 * time.Second
+	defaultAgentLoopTimeout     = 5 * time.Minute
 	internalScreenAnalyzeIntent = "screen_analyze_candidate"
 	deliveryPreviewMaxLength    = 120
 	inputPreviewMaxLength       = 96

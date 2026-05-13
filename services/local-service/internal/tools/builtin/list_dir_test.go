@@ -164,4 +164,8 @@ func TestListDirToolLimitTruncatesEntries(t *testing.T) {
 	if result.RawOutput["returned_count"] != 2 || result.RawOutput["truncated"] != true {
 		t.Fatalf("unexpected truncation output: %+v", result.RawOutput)
 	}
+	preview, ok := result.SummaryOutput["entries_preview"].([]string)
+	if !ok || len(preview) != 2 || preview[0] != "a.txt" || preview[1] != "b.txt" {
+		t.Fatalf("unexpected truncated summary preview: %+v", result.SummaryOutput)
+	}
 }
