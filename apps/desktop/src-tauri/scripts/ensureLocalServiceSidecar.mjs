@@ -1,6 +1,6 @@
 /* global process, console */
 import { spawnSync } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, cpSync, existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -114,9 +114,17 @@ function assertFileExists(filePath, label) {
   }
 }
 
+function isDirectoryPath(candidatePath) {
+  return existsSync(candidatePath) && statSync(candidatePath).isDirectory();
+}
+
+function isFilePath(candidatePath) {
+  return existsSync(candidatePath) && statSync(candidatePath).isFile();
+}
+
 function copyRuntimePath(sourcePath, targetPath, label) {
   if (statSync(sourcePath).isDirectory()) {
-    cpSync(sourcePath, targetPath, { recursive: true, force: true });
+    cpSync(sourcePath, targetPath, { recursive: true, force: true, dereference: true });
     return;
   }
   throw new Error(`${label} must be a directory: ${sourcePath}`);
@@ -127,6 +135,46 @@ function removeRuntimePathIfPresent(targetPath) {
     return;
   }
   rmSync(targetPath, { recursive: true, force: true });
+}
+
+function resolveFirstExistingDirectory(candidates, label) {
+  for (const candidate of candidates) {
+    if (isDirectoryPath(candidate)) {
+      return candidate;
+    }
+  }
+
+  throw new Error(`Missing ${label}: ${candidates.join(", ")}`);
+}
+
+function stageBundledNodeRuntime(stagingRoot, runtimeSourceRoot) {
+  const runtimeNodeDir = resolve(runtimeSourceRoot, "node");
+  const targetNodeDir = resolve(stagingRoot, "node");
+  removeRuntimePathIfPresent(targetNodeDir);
+  mkdirSync(targetNodeDir, { recursive: true });
+
+  if (isDirectoryPath(runtimeNodeDir)) {
+    copyRuntimePath(runtimeNodeDir, targetNodeDir, "bundled Node runtime source");
+    return targetNodeDir;
+  }
+
+  const currentNodeExecutable = process.execPath;
+  if (!isFilePath(currentNodeExecutable)) {
+    throw new Error(`Missing bundled Node runtime source: ${runtimeNodeDir}`);
+  }
+
+  copyFileSync(currentNodeExecutable, resolve(targetNodeDir, process.platform === "win32" ? "node.exe" : "node"));
+  return targetNodeDir;
+}
+
+function resolveFallbackPlaywrightBrowserDirectory() {
+  const candidates = [
+    process.env.PLAYWRIGHT_BROWSERS_PATH,
+    process.env.LOCALAPPDATA ? resolve(process.env.LOCALAPPDATA, "ms-playwright") : null,
+    process.env.HOME ? resolve(process.env.HOME, ".cache", "ms-playwright") : null,
+  ].filter(Boolean);
+
+  return resolveFirstExistingDirectory(candidates, "bundled Playwright browser source");
 }
 
 function resolvePnpmHoistedPackageSource(nodeModulesPath, packageName) {
@@ -145,49 +193,67 @@ function resolvePnpmHoistedPackageSource(nodeModulesPath, packageName) {
   throw new Error(`Missing hoisted package ${packageName} in ${virtualStoreRoot}`);
 }
 
+function resolvePackageSourceFromNodeModulesRoots(nodeModulesRoots, packageName) {
+  for (const nodeModulesRoot of nodeModulesRoots) {
+    if (!isDirectoryPath(nodeModulesRoot)) {
+      continue;
+    }
+
+    const directPackagePath = resolve(nodeModulesRoot, packageName);
+    if (isDirectoryPath(directPackagePath)) {
+      return directPackagePath;
+    }
+
+    try {
+      return resolvePnpmHoistedPackageSource(nodeModulesRoot, packageName);
+    } catch {
+      // Fall through to the next candidate root.
+    }
+  }
+
+  throw new Error(`Missing runtime package ${packageName} in ${nodeModulesRoots.join(", ")}`);
+}
+
 export function preparePlaywrightBundleRuntime() {
   const repoRoot = resolve(currentDirectory, "..", "..", "..", "..");
   const srcTauriRoot = resolve(currentDirectory, "..");
   const runtimeSourceRoot = resolve(srcTauriRoot, "runtime");
-  const stagingRoot = resolve(srcTauriRoot, "resources", "playwright-runtime");
+  const stagingRoot = resolve(srcTauriRoot, "generated-resources", "playwright-runtime");
   const workerSourceRoot = resolve(repoRoot, "workers", "playwright-worker");
   const bundledWorkerRuntimeRoot = resolve(runtimeSourceRoot, "workers", "playwright-worker");
 
-  const nodeRuntimeSource = resolve(runtimeSourceRoot, "node");
-  const browserRuntimeSource = resolve(runtimeSourceRoot, "ms-playwright");
-  const workerModulesSource = resolve(bundledWorkerRuntimeRoot, "node_modules");
+  const browserRuntimeSource = isDirectoryPath(resolve(runtimeSourceRoot, "ms-playwright"))
+    ? resolve(runtimeSourceRoot, "ms-playwright")
+    : resolveFallbackPlaywrightBrowserDirectory();
+  const workerNodeModulesRoots = [
+    resolve(bundledWorkerRuntimeRoot, "node_modules"),
+    resolve(workerSourceRoot, "node_modules"),
+    resolve(repoRoot, "node_modules"),
+  ];
   const workerScriptSource = resolve(workerSourceRoot, "src");
   const workerPackageSource = resolve(workerSourceRoot, "package.json");
+  const playwrightPackageSource = resolvePackageSourceFromNodeModulesRoots(workerNodeModulesRoots, "playwright");
+  const playwrightCorePackageSource = resolvePackageSourceFromNodeModulesRoots(workerNodeModulesRoots, "playwright-core");
 
-  assertDirectoryExists(nodeRuntimeSource, "bundled Node runtime source");
   assertDirectoryExists(browserRuntimeSource, "bundled Playwright browser source");
-  assertDirectoryExists(workerModulesSource, "bundled Playwright worker node_modules source");
   assertDirectoryExists(workerScriptSource, "Playwright worker source");
   assertFileExists(workerPackageSource, "Playwright worker package.json");
 
   mkdirSync(stagingRoot, { recursive: true });
-  removeRuntimePathIfPresent(resolve(stagingRoot, "node"));
   removeRuntimePathIfPresent(resolve(stagingRoot, "ms-playwright"));
   removeRuntimePathIfPresent(resolve(stagingRoot, "workers"));
 
-  copyRuntimePath(nodeRuntimeSource, resolve(stagingRoot, "node"), "bundled Node runtime source");
+  stageBundledNodeRuntime(stagingRoot, runtimeSourceRoot);
   copyRuntimePath(browserRuntimeSource, resolve(stagingRoot, "ms-playwright"), "bundled Playwright browser source");
 
   const stagedWorkerRoot = resolve(stagingRoot, "workers", "playwright-worker");
   mkdirSync(stagedWorkerRoot, { recursive: true });
-  copyRuntimePath(workerModulesSource, resolve(stagedWorkerRoot, "node_modules"), "bundled Playwright worker node_modules source");
+  const stagedWorkerNodeModulesRoot = resolve(stagedWorkerRoot, "node_modules");
+  mkdirSync(stagedWorkerNodeModulesRoot, { recursive: true });
+  copyRuntimePath(playwrightPackageSource, resolve(stagedWorkerNodeModulesRoot, "playwright"), "bundled Playwright runtime package");
+  copyRuntimePath(playwrightCorePackageSource, resolve(stagedWorkerNodeModulesRoot, "playwright-core"), "bundled Playwright core package");
   copyRuntimePath(workerScriptSource, resolve(stagedWorkerRoot, "src"), "Playwright worker source");
   cpSync(workerPackageSource, resolve(stagedWorkerRoot, "package.json"), { force: true });
-
-  const stagedWorkerNodeModulesRoot = resolve(stagedWorkerRoot, "node_modules");
-  const stagedPlaywrightCoreRoot = resolve(stagedWorkerNodeModulesRoot, "playwright-core");
-  if (!existsSync(stagedPlaywrightCoreRoot)) {
-    copyRuntimePath(
-      resolvePnpmHoistedPackageSource(workerModulesSource, "playwright-core"),
-      stagedPlaywrightCoreRoot,
-      "bundled Playwright worker hoisted playwright-core package",
-    );
-  }
 
   return stagingRoot;
 }
