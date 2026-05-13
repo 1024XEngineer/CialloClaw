@@ -29,7 +29,7 @@ const (
 	dockerSandboxDefaultMemory     = "512m"
 	dockerSandboxDefaultPIDsLimit  = 128
 	dockerSandboxDefaultTmpfsBytes = 134217728
-	dockerSandboxCleanupTimeout    = 5 * time.Minute
+	dockerSandboxCleanupTimeout    = 5 * time.Second
 )
 
 var defaultDockerSandboxCommands = map[string]struct{}{

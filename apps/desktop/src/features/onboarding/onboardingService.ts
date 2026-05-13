@@ -71,7 +71,7 @@ const DESKTOP_ONBOARDING_STATUS_KEY = "cialloclaw.desktop.onboarding.status";
 const DESKTOP_ONBOARDING_SESSION_KEY = "cialloclaw.desktop.onboarding.session";
 const DESKTOP_ONBOARDING_PRESENTATION_KEY = "cialloclaw.desktop.onboarding.presentation";
 const DESKTOP_ONBOARDING_RESET_MARKER_KEY = "cialloclaw.desktop.onboarding.reset.v1";
-const DESKTOP_ONBOARDING_READY_TIMEOUT_MS = 300_000;
+const DESKTOP_ONBOARDING_READY_TIMEOUT_MS = 10_000;
 const DESKTOP_ONBOARDING_FALLBACK_FRAME = {
   height: 860,
   width: 1280,
