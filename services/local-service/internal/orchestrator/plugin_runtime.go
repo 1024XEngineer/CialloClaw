@@ -1,6 +1,8 @@
 package orchestrator
 
 import (
+	"context"
+
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/runengine"
 )
@@ -43,7 +45,7 @@ func (s *Service) SecuritySummaryGet() (map[string]any, error) {
 			"security_status":        aggregateSecurityStatus(allTasks, pendingTotal),
 			"pending_authorizations": pendingTotal,
 			"latest_restore_point":   latestRestorePoint,
-			"token_cost_summary":     aggregateTokenCostSummary(unfinishedTasks, finishedTasks, boolValue(modelCredentials, "budget_auto_downgrade", true)),
+			"token_cost_summary":     aggregateTokenCostSummary(unfinishedTasks, finishedTasks, boolValue(modelCredentials, "budget_auto_downgrade", true), s.inspectorTitleGenerationUsage(context.Background())),
 		},
 	}, nil
 }

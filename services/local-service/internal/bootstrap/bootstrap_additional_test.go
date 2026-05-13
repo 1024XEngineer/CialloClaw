@@ -19,6 +19,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/platform"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/plugin"
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/storage"
+	"github.com/cialloclaw/cialloclaw/services/local-service/internal/taskinspector"
 )
 
 type failingPluginManifestStore struct{ err error }
@@ -64,6 +65,53 @@ func appRuntimeModelService(t *testing.T, app *App) *model.Service {
 	}
 	service, _ := modelValue.Interface().(*model.Service)
 	return service
+}
+
+func appTaskInspectorService(t *testing.T, app *App) *taskinspector.Service {
+	t.Helper()
+	if app == nil || app.server == nil {
+		t.Fatal("expected app server to be wired")
+	}
+	serverValue := reflect.ValueOf(app.server).Elem()
+	orchestratorField := serverValue.FieldByName("orchestrator")
+	orchestratorValue := reflect.NewAt(orchestratorField.Type(), unsafe.Pointer(orchestratorField.UnsafeAddr())).Elem()
+	if orchestratorValue.IsNil() {
+		t.Fatal("expected bootstrap orchestrator to be wired")
+	}
+	serviceValue := orchestratorValue.Elem()
+	inspectorField := serviceValue.FieldByName("inspector")
+	inspectorValue := reflect.NewAt(inspectorField.Type(), unsafe.Pointer(inspectorField.UnsafeAddr())).Elem()
+	if inspectorValue.IsNil() {
+		return nil
+	}
+	service, _ := inspectorValue.Interface().(*taskinspector.Service)
+	return service
+}
+
+func taskInspectorHasTitleGenerator(t *testing.T, service *taskinspector.Service) bool {
+	t.Helper()
+	if service == nil {
+		return false
+	}
+	serviceValue := reflect.ValueOf(service).Elem()
+	field := serviceValue.FieldByName("titlegen")
+	return !reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().IsNil()
+}
+
+func TestNewWiresTitleGeneratorIntoTaskInspector(t *testing.T) {
+	cfg := newBootstrapTestConfig(t)
+	seedBootstrapModelSecret(t, cfg)
+
+	app, err := New(cfg)
+	if err != nil {
+		t.Fatalf("bootstrap returned error: %v", err)
+	}
+	defer func() { _ = app.Close() }()
+
+	inspector := appTaskInspectorService(t, app)
+	if !taskInspectorHasTitleGenerator(t, inspector) {
+		t.Fatal("expected bootstrap task inspector to share the runtime title generator")
+	}
 }
 
 func TestPersistPluginManifestsHandlesNilAndSuccessPaths(t *testing.T) {

@@ -136,6 +136,7 @@ func (s *Service) ConfirmTask(params map[string]any) (map[string]any, error) {
 		return nil, ErrTaskNotFound
 	}
 	executionSnapshot := snapshotFromTask(updatedTask)
+	s.refreshTitleAfterGovernance(updatedTask, executionSnapshot, intentValue)
 
 	updatedTask, resultBubble, deliveryResult, _, err := s.executeTaskWithReplyLanguage(updatedTask, executionSnapshot, intentValue, replyLanguage)
 	if err != nil {

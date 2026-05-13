@@ -177,6 +177,7 @@ func (s *Service) advanceRestartedTaskAttempt(previousTask, task runengine.TaskR
 		}
 		return governedTask, bubble, nil
 	}
+	s.refreshTitleAfterGovernance(governedTask, snapshotFromTask(governedTask), governedTask.Intent)
 
 	restartedTask, restartBubble, _, _, restartErr := s.executeTaskAttempt(previousTask, governedTask, snapshotFromTask(governedTask), governedTask.Intent)
 	if restartErr != nil {

@@ -55,6 +55,52 @@ func (s *streamConnState) isClosed() bool {
 	}
 }
 
+type streamConnTaskSet struct {
+	mu      sync.RWMutex
+	taskIDs map[string]bool
+}
+
+// streamConnTaskSet keeps task ownership learned across the lifetime of one
+// desktop named-pipe session so late async updates can still be routed after
+// the request that created or listed the task has already completed.
+func newStreamConnTaskSet() *streamConnTaskSet {
+	return &streamConnTaskSet{taskIDs: map[string]bool{}}
+}
+
+func (s *streamConnTaskSet) add(taskID string) {
+	trimmed := strings.TrimSpace(taskID)
+	if s == nil || trimmed == "" {
+		return
+	}
+	s.mu.Lock()
+	s.taskIDs[trimmed] = true
+	s.mu.Unlock()
+}
+
+func (s *streamConnTaskSet) addAll(taskIDs map[string]bool) {
+	for taskID, tracked := range taskIDs {
+		if tracked {
+			s.add(taskID)
+		}
+	}
+}
+
+func (s *streamConnTaskSet) addSlice(taskIDs []string) {
+	for _, taskID := range taskIDs {
+		s.add(taskID)
+	}
+}
+
+func (s *streamConnTaskSet) has(taskID string) bool {
+	trimmed := strings.TrimSpace(taskID)
+	if s == nil || trimmed == "" {
+		return false
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.taskIDs[trimmed]
+}
+
 type streamEnvelopeWriter struct {
 	encoder      *json.Encoder
 	onWriteError func()
@@ -86,6 +132,64 @@ func (s *streamPendingState) isBlocked() bool {
 	return s != nil && s.blocked.Load()
 }
 
+type streamConnNotificationTracker struct {
+	mu     sync.Mutex
+	counts map[string]int
+}
+
+func newStreamConnNotificationTracker() *streamConnNotificationTracker {
+	return &streamConnNotificationTracker{
+		counts: map[string]int{},
+	}
+}
+
+func (t *streamConnNotificationTracker) reserve(method, taskID string, params map[string]any) string {
+	if t == nil {
+		return ""
+	}
+	key := streamConnNotificationKey(method, taskID, params)
+	t.mu.Lock()
+	t.counts[key]++
+	t.mu.Unlock()
+	return key
+}
+
+func (t *streamConnNotificationTracker) release(key string) {
+	if t == nil || key == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.counts[key] == 0 {
+		return
+	}
+	t.counts[key]--
+	if t.counts[key] == 0 {
+		delete(t.counts, key)
+	}
+}
+
+func (t *streamConnNotificationTracker) shouldSkipBuffered(method, taskID string, params map[string]any) bool {
+	if t == nil {
+		return false
+	}
+	key := streamConnNotificationKey(method, taskID, params)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.counts[key] == 0 {
+		return false
+	}
+	t.counts[key]--
+	if t.counts[key] == 0 {
+		delete(t.counts, key)
+	}
+	return true
+}
+
+func streamConnNotificationKey(method, taskID string, params map[string]any) string {
+	return notificationKey(method, taskID, params)
+}
+
 type streamTaskLockEntry struct {
 	mu   sync.Mutex
 	refs int
@@ -94,6 +198,11 @@ type streamTaskLockEntry struct {
 type streamTaskCoordinator struct {
 	mu    sync.Mutex
 	locks map[string]*streamTaskLockEntry
+}
+
+type bufferedTaskNotifications struct {
+	taskID        string
+	notifications []map[string]any
 }
 
 func newStreamTaskCoordinator() *streamTaskCoordinator {
@@ -169,6 +278,22 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 		encoder:      json.NewEncoder(conn),
 		onWriteError: connState.close,
 	}
+	connectionTasks := newStreamConnTaskSet()
+	connectionNotifications := newStreamConnNotificationTracker()
+	unsubscribeConnectionRuntime := s.orchestrator.SubscribeRuntimeNotifications(func(taskID string, method string, params map[string]any) {
+		if connState.isClosed() || method != "task.updated" {
+			return
+		}
+		notificationTaskID := runtimeNotificationTaskID(taskID, params)
+		if notificationTaskID == "" || !connectionTasks.has(notificationTaskID) {
+			return
+		}
+		reservationKey := connectionNotifications.reserve(method, notificationTaskID, params)
+		if err := writer.writeEnvelope(newNotificationEnvelope(method, params)); err != nil {
+			connectionNotifications.release(reservationKey)
+		}
+	})
+	defer unsubscribeConnectionRuntime()
 	taskCoordinator := newStreamTaskCoordinator()
 	pendingState := &streamPendingState{}
 	pendingRequests := make(chan struct{}, maxPendingStreamRequests)
@@ -231,7 +356,7 @@ func (s *Server) handleStreamConn(conn net.Conn) {
 				})
 			}
 			defer releasePending()
-			s.handleStreamRequest(request, writer, connState, pendingState, taskCoordinator, &taskStartRequestMu, releasePending)
+			s.handleStreamRequest(request, writer, connState, connectionTasks, connectionNotifications, pendingState, taskCoordinator, &taskStartRequestMu, releasePending)
 		}(request)
 	}
 }
@@ -262,7 +387,7 @@ func streamReaderReachedEOF(reader *bufio.Reader, conn net.Conn) bool {
 	return !errors.As(err, &netErr)
 }
 
-func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnvelopeWriter, connState *streamConnState, pendingState *streamPendingState, taskCoordinator *streamTaskCoordinator, taskStartMu *sync.RWMutex, releasePending func()) {
+func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnvelopeWriter, connState *streamConnState, connectionTasks *streamConnTaskSet, connectionNotifications *streamConnNotificationTracker, pendingState *streamPendingState, taskCoordinator *streamTaskCoordinator, taskStartMu *sync.RWMutex, releasePending func()) {
 	if connState.isClosed() {
 		return
 	}
@@ -329,6 +454,7 @@ func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnve
 					return
 				}
 				tracker.addTaskID(taskID)
+				connectionTasks.add(taskID)
 			})
 		}
 
@@ -355,20 +481,33 @@ func (s *Server) handleStreamRequest(request requestEnvelope, writer *streamEnve
 			if connState.isClosed() {
 				return
 			}
+			bufferedNotifications := make([]bufferedTaskNotifications, 0, len(ownedTaskIDs))
+			for _, taskID := range ownedTaskIDs {
+				notifications, err := s.orchestrator.DrainNotifications(taskID)
+				if err != nil || len(notifications) == 0 {
+					continue
+				}
+				bufferedNotifications = append(bufferedNotifications, bufferedTaskNotifications{
+					taskID:        taskID,
+					notifications: notifications,
+				})
+			}
 			if err := writer.writeEnvelope(response); err != nil {
 				return
 			}
+			if _, ok := response.(successEnvelope); ok {
+				connectionTasks.addAll(initialTaskIDs)
+			}
+			connectionTasks.addSlice(taskIDsFromResponse(response))
 
-			for _, taskID := range ownedTaskIDs {
-				notifications, err := s.orchestrator.DrainNotifications(taskID)
-				if err != nil {
-					continue
-				}
-
-				for _, notification := range notifications {
+			for _, buffered := range bufferedNotifications {
+				for _, notification := range buffered.notifications {
 					method := stringValue(notification, "method", "task.updated")
 					params := mapValue(notification, "params")
-					if tracker.shouldSkipBufferedRuntime(method, taskID, params) {
+					if connectionNotifications.shouldSkipBuffered(method, buffered.taskID, params) {
+						continue
+					}
+					if tracker.shouldSkipBufferedRuntime(method, buffered.taskID, params) {
 						continue
 					}
 					if err := writer.writeEnvelope(newNotificationEnvelope(method, params)); err != nil {
