@@ -166,7 +166,7 @@ export async function respondToApproval(
   } catch (error) {
     if (isRpcChannelUnavailable(error)) {
       logRpcMockFallback("security approval response blocked", error);
-      throw new Error("JSON-RPC 当前不可用，安全审批未提交。请恢复连接后重试。");
+      throw new Error("当前服务不可用，安全审批未提交。请恢复连接后重试。");
     }
 
     throw error;
@@ -245,7 +245,7 @@ export async function loadSecurityAuditRecords(
   const normalizedTaskId = taskId?.trim() || null;
 
   if (!normalizedTaskId) {
-    throw new Error("Security audit list requires task context in RPC mode.");
+    throw new Error("当前没有任务上下文，无法查看安全审计记录。");
   }
 
   const params: AgentSecurityAuditListParams = {
@@ -291,7 +291,7 @@ export async function applySecurityRestorePoint(
   } catch (error) {
     if (isRpcChannelUnavailable(error)) {
       logRpcMockFallback("security restore apply blocked", error);
-      throw new Error("JSON-RPC 当前不可用，恢复点申请未提交。请恢复连接后重试。");
+      throw new Error("当前服务不可用，恢复点申请未提交。请恢复连接后重试。");
     }
 
     throw error;

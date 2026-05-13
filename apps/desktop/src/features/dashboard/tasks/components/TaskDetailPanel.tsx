@@ -112,8 +112,8 @@ export function TaskDetailPanel({
   const shouldDeferSecuritySummary = detailState !== "ready" || detail === null;
   const canSteerTask = task ? canTaskAcceptSteering(task) : false;
   const steeringHint = task?.status === "confirming_intent"
-    ? "当前任务仍在等待确认处理方式；确认后才会开放正式 `agent.task.steer` 追加要求。"
-    : "这会调用正式 `agent.task.steer`，把补充说明排入当前任务后续执行。";
+    ? "当前任务仍在等待确认处理方式；确认后才会开放追加要求。"
+    : "这会把补充说明排入当前任务后续执行。";
   const steeringPlaceholder = canSteerTask
     ? "例如：保留现有结果，再额外补一份简短结论。"
     : task?.status === "confirming_intent"
@@ -183,7 +183,7 @@ export function TaskDetailPanel({
           <div>
             <p className="task-detail-shell__eyebrow">任务详情</p>
             <h2 className="task-detail-shell__title">正在打开任务详情</h2>
-            <p className="task-detail-shell__subtitle">正在等待正式任务详情返回。</p>
+            <p className="task-detail-shell__subtitle">正在等待任务详情返回。</p>
           </div>
 
           <div className="task-detail-shell__status-wrap">
@@ -304,17 +304,17 @@ export function TaskDetailPanel({
             value={eventFilterDraft.eventType}
           />
         </label>
-        <label className="task-detail-runtime-filters__field">
-          <span>Run ID</span>
-          <input
-            className="task-detail-runtime-filters__input"
+          <label className="task-detail-runtime-filters__field">
+            <span>运行编号</span>
+            <input
+              className="task-detail-runtime-filters__input"
             onChange={(event) =>
               setEventFilterDraft((current) => ({
                 ...current,
                 runId: event.target.value,
               }))
             }
-            placeholder="例如 run_001"
+            placeholder="例如 run-runtime"
             value={eventFilterDraft.runId}
           />
         </label>
@@ -402,11 +402,11 @@ export function TaskDetailPanel({
       <section className="task-detail-card">
         <div className="task-detail-card__header">
           <div>
-            <p className="task-detail-card__eyebrow">Evidence Chain</p>
-            <h3 className="task-detail-card__title">截图证据与正式引用</h3>
+            <p className="task-detail-card__eyebrow">证据链</p>
+            <h3 className="task-detail-card__title">截图证据与引用</h3>
           </div>
         </div>
-        <p className="task-detail-card__hint">该区域只在屏幕类任务中展示正式截图、OCR 摘要与引用片段。</p>
+        <p className="task-detail-card__hint">该区域只在屏幕类任务中展示截图、OCR 摘要与引用片段。</p>
         <div className="task-detail-output-list">
           {evidenceItems.length > 0
             ? evidenceItems.map((citation) => (
@@ -530,23 +530,23 @@ export function TaskDetailPanel({
       <section className="task-detail-card">
         <div className="task-detail-card__header">
           <div>
-            <p className="task-detail-card__eyebrow">Screen Governance</p>
-            <h3 className="task-detail-card__title">屏幕授权、恢复与失败收口</h3>
+            <p className="task-detail-card__eyebrow">屏幕安全与恢复</p>
+            <h3 className="task-detail-card__title">屏幕安全与恢复</h3>
           </div>
         </div>
-        <p className="task-detail-card__hint">该区域只消费正式 `approval_request`、`authorization_record`、`audit_record`、`recovery_point` 与 `runtime_summary` 字段，不读取裸 worker 输出。</p>
+        <p className="task-detail-card__hint">该区域只展示授权、恢复点、审计记录与运行摘要，不读取未整理的工作输出。</p>
         <div className="task-detail-current-grid">
           <article className="task-detail-current-card">
             <ShieldAlert className="h-4 w-4" />
             <div>
-              <p className="task-detail-current-card__label">Approval anchor</p>
+              <p className="task-detail-current-card__label">授权依据</p>
               <p className="task-detail-current-card__text">{approvalAnchor?.operation_name ?? "当前没有活跃授权"}</p>
             </div>
           </article>
           <article className="task-detail-current-card">
             <SendHorizonal className="h-4 w-4" />
             <div>
-              <p className="task-detail-current-card__label">Authorization record</p>
+              <p className="task-detail-current-card__label">授权记录</p>
               <p className="task-detail-current-card__text">
                 {authorizationRecord ? `${authorizationRecord.decision} · ${authorizationRecord.operator}` : "当前没有授权记录"}
               </p>
@@ -555,28 +555,28 @@ export function TaskDetailPanel({
           <article className="task-detail-current-card">
             <Clock3 className="h-4 w-4" />
             <div>
-              <p className="task-detail-current-card__label">Latest restore point</p>
+              <p className="task-detail-current-card__label">最近恢复点</p>
               <p className="task-detail-current-card__text">{restorePoint?.summary ?? "当前没有恢复点"}</p>
             </div>
           </article>
           <article className="task-detail-current-card">
             <AlertTriangle className="h-4 w-4" />
             <div>
-              <p className="task-detail-current-card__label">Latest failure category</p>
+              <p className="task-detail-current-card__label">最近失败类别</p>
               <p className="task-detail-current-card__text">{latestFailureLabel}</p>
             </div>
           </article>
           <article className="task-detail-current-card">
             <FolderOutput className="h-4 w-4" />
             <div>
-              <p className="task-detail-current-card__label">Audit record</p>
+              <p className="task-detail-current-card__label">审计记录</p>
               <p className="task-detail-current-card__text">{auditRecord ? `${auditRecord.action} · ${auditRecord.result}` : "当前没有审计记录"}</p>
             </div>
           </article>
           <article className="task-detail-current-card">
             <FolderOutput className="h-4 w-4" />
             <div>
-              <p className="task-detail-current-card__label">Formal evidence count</p>
+              <p className="task-detail-current-card__label">证据数量</p>
               <p className="task-detail-current-card__text">{formalEvidenceCount}</p>
             </div>
           </article>
@@ -594,10 +594,10 @@ export function TaskDetailPanel({
     return (
       <section className="task-detail-card">
         <div className="task-detail-card__header">
-          <p className="task-detail-card__eyebrow">Runtime Events</p>
+          <p className="task-detail-card__eyebrow">运行事件</p>
           <h3 className="task-detail-card__title">执行事件与循环回流</h3>
         </div>
-        <p className="task-detail-card__hint">通过正式 `agent.task.events.list` 查询当前任务的运行时事件，可按事件类型、Run ID 与时间范围筛选。</p>
+        <p className="task-detail-card__hint">通过任务运行事件列表查看当前任务的运行时事件，可按事件类型、运行编号与时间范围筛选。</p>
         {renderRuntimeSummarySection()}
         {renderRuntimeEventFilters()}
         {eventErrorMessage ? <p className="task-detail-card__hint">{eventErrorMessage}</p> : null}
@@ -736,7 +736,7 @@ export function TaskDetailPanel({
                     <ShieldAlert className="h-4 w-4" />
                     <div>
                       <p className="task-detail-current-card__label">当前提醒</p>
-                      <p className="task-detail-current-card__text">{experience?.nextAction ?? "正式详情返回后补充下一步建议。"}</p>
+                      <p className="task-detail-current-card__text">{experience?.nextAction ?? "详情返回后补充下一步建议。"}</p>
                     </div>
                   </article>
                 </div>

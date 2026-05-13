@@ -64,7 +64,7 @@ function getTaskPhase(task: Task) {
   }
 
   if (task.status === "processing") {
-    return "等待正式时间线返回当前步骤。";
+    return "等待时间线返回当前步骤。";
   }
 
   return `当前状态：${getTaskPreviewStatusLabel(task.status)}`;
@@ -133,7 +133,7 @@ function getTaskNextAction(task: Task, detail?: AgentTaskDetailGetResult) {
   }
 
   if (task.status === "processing") {
-    return "等待正式时间线、交付结果或运行时通知继续推进。";
+    return "等待时间线、交付结果或运行时通知继续推进。";
   }
 
   const blockedReason = getTaskBlockedReason(task, detail);
@@ -141,7 +141,7 @@ function getTaskNextAction(task: Task, detail?: AgentTaskDetailGetResult) {
     return blockedReason;
   }
 
-  return getTaskEndedSummary(task, detail) ?? "查看正式交付或重新启动任务。";
+  return getTaskEndedSummary(task, detail) ?? "查看交付或重新启动任务。";
 }
 
 function buildProtocolTaskExperience(task: Task, detail?: AgentTaskDetailGetResult): TaskExperience {
@@ -153,20 +153,20 @@ function buildProtocolTaskExperience(task: Task, detail?: AgentTaskDetailGetResu
   return {
     acceptance: [],
     assistantState: {
-      hint: "当前面板只消费正式 task/detail 返回内容，不再复用 mock 任务说明。",
+      hint: "当前面板只消费任务详情返回内容，不再复用示意说明。",
       label: getTaskPreviewStatusLabel(task.status),
     },
-    background: "当前说明直接基于正式 task/detail 数据生成，只保留协议已返回的任务事实与本地展示性文案。",
-    constraints: ["不推断未返回的正式上下文。"],
+    background: "当前说明直接基于任务详情数据生成，只保留已返回的任务事实与本地展示性文案。",
+    constraints: ["不推断未返回的上下文。"],
     dueAt: null,
     goal: task.title,
     nextAction,
-    noteDraft: "当前笔记草稿仍保留在本地，不会替代正式任务与交付对象。",
+    noteDraft: "当前笔记草稿仍保留在本地，不会替代任务与交付对象。",
     noteEntries: [],
     outputs: [],
     phase: getTaskPhase(task),
     priority: getTaskPriority(task),
-    progressHint: "当前页面说明来自正式 task/detail；更细上下文需等待后端返回。",
+    progressHint: "当前页面说明来自任务详情；更细上下文需等待后端返回。",
     quickContext: [
       { id: `${task.task_id}_ctx_source`, label: "来源", content: formatTaskSourceLabel(task.source_type) },
       { id: `${task.task_id}_ctx_status`, label: "当前状态", content: getTaskPreviewStatusLabel(task.status) },
@@ -410,7 +410,7 @@ function recoverTaskDetailFromInvalidCollections(detail: AgentTaskDetailGetResul
         artifacts: [],
       };
     } else if (/citations/i.test(currentError.message)) {
-      warnings.push("任务引用信息暂时无法完整展示，已先隐藏格式不符合要求的正式引用。");
+      warnings.push("任务引用信息暂时无法完整展示，已先隐藏格式不符合要求的引用。");
       candidate = {
         ...candidate,
         citations: [],

@@ -252,7 +252,7 @@ function isFocusedScreenTask(detail: AgentTaskDetailGetResult | null) {
 
 function formatFocusedTaskFailure(detail: AgentTaskDetailGetResult | null) {
   if (!detail) {
-    return "当前 task 还没有失败记录。";
+    return "当前任务还没有失败记录。";
   }
 
   const parts = [
@@ -261,7 +261,7 @@ function formatFocusedTaskFailure(detail: AgentTaskDetailGetResult | null) {
     detail.runtime_summary.latest_failure_summary,
   ].filter((value): value is string => typeof value === "string" && value.trim().length > 0);
 
-  return parts.length > 0 ? parts.join(" · ") : "当前 task 还没有失败记录。";
+  return parts.length > 0 ? parts.join(" · ") : "当前任务还没有失败记录。";
 }
 
 function formatCitationEvidence(citation: AgentTaskDetailGetResult["citations"][number]) {
@@ -547,13 +547,13 @@ function getCardPreview(
     const restorePoint = activeRestorePointOverride ?? moduleData.summary.latest_restore_point;
 
     return {
-      eyebrow: "restore point",
+      eyebrow: "恢复点",
       title: "恢复点",
-      badgeLabel: restorePoint ? "restore point" : "no restore point",
+      badgeLabel: restorePoint ? "恢复点" : "无恢复点",
       badgeColor: "orange",
       headline: restorePoint?.summary ?? "当前无可用恢复点",
-      supporting: restorePoint ? `task ${restorePoint.task_id}` : "等待新的恢复点快照",
-      meta: restorePoint ? `${formatDateTime(restorePoint.created_at)} · ${restorePoint.objects.length} 个对象` : "restore timeline pending",
+      supporting: restorePoint ? `任务 ${restorePoint.task_id}` : "等待新的恢复点快照",
+      meta: restorePoint ? `${formatDateTime(restorePoint.created_at)} · ${restorePoint.objects.length} 个对象` : "恢复时间线待同步",
       icon: History,
     };
   }
@@ -584,7 +584,7 @@ function getCardPreview(
       badgeLabel: latestRestorePoint ? "restore ready" : "audit",
       badgeColor: latestRestorePoint ? "orange" : "gray",
       headline: latestRestorePoint?.summary ?? "查看任务与全局审计",
-      supporting: latestRestorePoint ? `最近恢复点 ${formatDateTime(latestRestorePoint.created_at)}` : "只保留后端真实返回的审计与恢复信息",
+      supporting: latestRestorePoint ? `最近恢复点 ${formatDateTime(latestRestorePoint.created_at)}` : "当前仅展示已同步的审计与恢复记录。",
       meta: moduleData.summary.pending_authorizations > 0 ? `${moduleData.summary.pending_authorizations} 条待确认` : "无待确认授权",
       icon: Siren,
     };
@@ -1208,7 +1208,7 @@ export function SecurityApp() {
     );
   }
 
-  const sourceBadgeLabel = moduleData.source === "rpc" ? "RPC" : "MOCK";
+  const sourceBadgeLabel = moduleData.source === "rpc" ? "同步" : "本地";
   const sourceBadgeColor = moduleData.source === "rpc" ? "green" : "amber";
 
   const handleRespond = async (approval: ApprovalRequest, decision: ApprovalDecision, rememberRule: boolean) => {
@@ -1458,7 +1458,7 @@ export function SecurityApp() {
                   <span className="security-page__detail-label">{formatDateTime(approval.created_at)}</span>
                   <strong className="security-page__detail-selection-title">{approval.operation_name}</strong>
                   <span className="security-page__detail-copy">
-                    risk {approval.risk_level} · task {approval.task_id} · {approval.target_object}
+                    风险 {approval.risk_level} · 任务 {approval.task_id} · {approval.target_object}
                   </span>
                 </button>
               ))}
@@ -1525,7 +1525,7 @@ export function SecurityApp() {
                   className={`security-page__detail-filter-chip${restoreScope === "focused_task" ? " is-active" : ""}`}
                   onClick={() => setRestoreScope("focused_task")}
                 >
-                  当前 task
+                  当前任务
                 </button>
               ) : null}
               <button
@@ -1542,7 +1542,7 @@ export function SecurityApp() {
           {restorePointsError ? <div className="security-page__detail-callout">恢复点同步失败：{restorePointsError}</div> : null}
           {!restorePointsLoading && !restorePointsError && restorePoints.length === 0 ? (
             <p className="security-page__empty-state">
-              {restoreFilterTaskId ? `当前 task ${restoreFilterTaskId} 还没有恢复点。` : "当前没有恢复点。"}
+              {restoreFilterTaskId ? `当前任务 ${restoreFilterTaskId} 还没有恢复点。` : "当前没有恢复点。"}
             </p>
           ) : null}
         </div>
@@ -1553,7 +1553,7 @@ export function SecurityApp() {
               <article className="security-page__detail-card">
                 <p className="security-page__detail-label">恢复点 ID</p>
                 <p className="security-page__detail-value security-page__detail-value--mono">{selectedRestorePoint.recovery_point_id}</p>
-                <p className="security-page__detail-copy">task {selectedRestorePoint.task_id}</p>
+                <p className="security-page__detail-copy">任务 {selectedRestorePoint.task_id}</p>
               </article>
               <article className="security-page__detail-card">
                 <p className="security-page__detail-label">创建时间</p>
@@ -1580,8 +1580,8 @@ export function SecurityApp() {
                 <div className="security-page__detail-grid">
                   <article className="security-page__detail-card">
                     <p className="security-page__detail-label">恢复结果</p>
-                    <p className="security-page__detail-value">{resolvedRestoreOutcome.applied ? "completed" : "pending"}</p>
-                    <p className="security-page__detail-copy">task {resolvedRestoreOutcome.task.status}</p>
+                    <p className="security-page__detail-value">{resolvedRestoreOutcome.applied ? "已完成" : "待处理"}</p>
+                    <p className="security-page__detail-copy">任务状态 {resolvedRestoreOutcome.task.status}</p>
                   </article>
                   <article className="security-page__detail-card">
                     <p className="security-page__detail-label">审计记录</p>
@@ -1591,7 +1591,7 @@ export function SecurityApp() {
                     <p className="security-page__detail-copy">
                       {resolvedRestoreOutcome.audit_record
                         ? `${resolvedRestoreOutcome.audit_record.result} · ${formatDateTime(resolvedRestoreOutcome.audit_record.created_at)}`
-                        : "最近一次恢复响应没有返回 audit_record。"}
+                        : "最近一次恢复响应没有返回审计记录。"}
                     </p>
                   </article>
                   <article className="security-page__detail-card">
@@ -1649,7 +1649,7 @@ export function SecurityApp() {
                   <span className="security-page__detail-label">{formatDateTime(item.created_at)}</span>
                   <strong className="security-page__detail-selection-title">{item.summary}</strong>
                   <span className="security-page__detail-copy">
-                    {item.recovery_point_id} · {item.objects.length} 个对象 · task {item.task_id}
+                    {item.recovery_point_id} · {item.objects.length} 个对象 · 任务 {item.task_id}
                   </span>
                 </button>
               ))}
@@ -1732,8 +1732,8 @@ export function SecurityApp() {
         <div className="security-page__detail-grid">
           <article className="security-page__detail-card">
             <p className="security-page__detail-label">审计范围</p>
-            <p className="security-page__detail-value">{auditFilterTaskId ? "当前 task" : "全局"}</p>
-            <p className="security-page__detail-copy">{auditFilterTaskId ? `task ${auditFilterTaskId}` : "全部任务"}</p>
+            <p className="security-page__detail-value">{auditFilterTaskId ? "当前任务" : "全局"}</p>
+            <p className="security-page__detail-copy">{auditFilterTaskId ? `任务 ${auditFilterTaskId}` : "全部任务"}</p>
           </article>
           <article className="security-page__detail-card">
             <p className="security-page__detail-label">待确认授权</p>
@@ -1750,7 +1750,7 @@ export function SecurityApp() {
         {focusedTaskId ? (
           <div className="security-page__detail-section">
             <div className="security-page__detail-toolbar">
-              <p className="security-page__detail-label">{focusedTaskIsScreenTask ? "当前屏幕任务治理链" : "当前 task 治理链"}</p>
+              <p className="security-page__detail-label">{focusedTaskIsScreenTask ? "当前屏幕任务治理链" : "当前任务治理链"}</p>
               <Button variant="soft" color="gray" onClick={() => openTaskDetail(focusedTaskId)}>
                 查看关联任务
                 <ArrowUpRight className="h-4 w-4" />
@@ -1758,25 +1758,25 @@ export function SecurityApp() {
             </div>
 
             {focusedTaskDetailError ? <div className="security-page__detail-callout">任务详情同步失败：{focusedTaskDetailError}</div> : null}
-            {!focusedTaskDetail && !focusedTaskDetailError ? <div className="security-page__detail-note">正在同步当前 task 的正式治理对象…</div> : null}
+            {!focusedTaskDetail && !focusedTaskDetailError ? <div className="security-page__detail-note">正在同步当前任务的安全信息…</div> : null}
 
             {focusedTaskDetail ? (
               <>
                 <div className="security-page__detail-grid">
                   <article className="security-page__detail-card">
-                    <p className="security-page__detail-label">当前 task</p>
+                    <p className="security-page__detail-label">当前任务</p>
                     <p className="security-page__detail-value">{focusedTaskDetail.task.title}</p>
                     <p className="security-page__detail-copy">
-                      task {focusedTaskDetail.task.task_id} · {focusedTaskDetail.task.intent?.name ?? focusedTaskDetail.task.source_type} · {focusedTaskDetail.task.status}
+                      任务 {focusedTaskDetail.task.task_id} · {focusedTaskDetail.task.intent?.name ?? focusedTaskDetail.task.source_type} · {focusedTaskDetail.task.status}
                     </p>
                   </article>
                   <article className="security-page__detail-card">
-                    <p className="security-page__detail-label">正式授权锚点</p>
+                    <p className="security-page__detail-label">授权依据</p>
                     <p className="security-page__detail-value">{focusedTaskApproval ? focusedTaskApproval.operation_name : "无活跃授权"}</p>
                     <p className="security-page__detail-copy">
                       {focusedTaskApproval
                         ? `${focusedTaskApproval.risk_level} · ${focusedTaskApproval.status} · ${focusedTaskApproval.target_object}`
-                        : "当前 task 没有活跃 approval_request。"}
+                        : "当前任务没有活跃授权。"}
                     </p>
                   </article>
                   <article className="security-page__detail-card">
@@ -1791,22 +1791,22 @@ export function SecurityApp() {
                     <p className="security-page__detail-value">
                       {focusedTaskRestorePoint ? formatDateTime(focusedTaskRestorePoint.created_at) : "暂无"}
                     </p>
-                    <p className="security-page__detail-copy">{focusedTaskRestorePoint?.summary ?? "当前 task 没有 recovery_point。"}</p>
+                    <p className="security-page__detail-copy">{focusedTaskRestorePoint?.summary ?? "当前任务没有恢复点。"}</p>
                   </article>
                 </div>
 
                 <article className="security-page__detail-list-item">
-                  <p className="security-page__detail-label">正式引用</p>
+                  <p className="security-page__detail-label">引用</p>
                   {renderDetailEntryList(
                     focusedTaskEvidence,
-                    focusedTaskIsScreenTask ? "当前屏幕任务还没有 formal citation。" : "当前 task 还没有 formal citation。",
+                    focusedTaskIsScreenTask ? "当前屏幕任务还没有引用。" : "当前任务还没有引用。",
                     "focused-task-citation",
                   )}
                 </article>
 
                 <article className="security-page__detail-list-item">
-                  <p className="security-page__detail-label">正式产物</p>
-                  {renderDetailEntryList(focusedTaskArtifacts, "当前 task 还没有可回看的正式产物。", "focused-task-artifact")}
+                  <p className="security-page__detail-label">产物</p>
+                  {renderDetailEntryList(focusedTaskArtifacts, "当前任务还没有可回看的产物。", "focused-task-artifact")}
                 </article>
               </>
             ) : null}
@@ -1832,7 +1832,7 @@ export function SecurityApp() {
                 disabled={!focusedTaskId}
                 onClick={() => setAuditScope("focused_task")}
               >
-                当前 task
+                当前任务
               </button>
               <button
                 type="button"
@@ -1867,14 +1867,14 @@ export function SecurityApp() {
 
           {!canLoadAuditRecords ? (
             <div className="security-page__detail-callout">
-              当前后端仅支持按 task 查看审计记录。请从带 task 上下文的安全入口或任务详情进入。
+              当前只支持从带任务上下文的安全入口或任务详情查看审计记录。
             </div>
           ) : null}
           {auditRecordsLoading ? <div className="security-page__detail-note">正在同步审计记录…</div> : null}
           {auditRecordsError ? <div className="security-page__detail-callout">审计记录同步失败：{auditRecordsError}</div> : null}
           {!auditRecordsLoading && !auditRecordsError && activeAuditRecordsData && activeAuditRecordsData.items.length === 0 ? (
             <p className="security-page__empty-state">
-              {auditFilterTaskId ? `当前 task ${auditFilterTaskId} 还没有审计记录。` : "当前没有审计记录。"}
+              {auditFilterTaskId ? `当前任务 ${auditFilterTaskId} 还没有审计记录。` : "当前没有审计记录。"}
             </p>
           ) : null}
           {!auditRecordsLoading &&
@@ -1972,7 +1972,7 @@ export function SecurityApp() {
           <article className="security-page__detail-card">
             <p className="security-page__detail-label">目标对象</p>
             <p className="security-page__detail-value">{approval.target_object}</p>
-            <p className="security-page__detail-copy">task {approval.task_id}</p>
+            <p className="security-page__detail-copy">任务 {approval.task_id}</p>
           </article>
           <article className="security-page__detail-card">
             <p className="security-page__detail-label">审批标识</p>
@@ -1995,7 +1995,7 @@ export function SecurityApp() {
                 <p className="security-page__detail-label">响应结果</p>
                 <p className="security-page__detail-value">{authorizationRecord.decision}</p>
                 <p className="security-page__detail-copy">
-                  remember_rule {formatBooleanLabel(authorizationRecord.remember_rule)} · task {responseTask.status}
+                  记住规则 {formatBooleanLabel(authorizationRecord.remember_rule)} · 任务状态 {responseTask.status}
                 </p>
               </article>
               <article className="security-page__detail-card">
@@ -2044,7 +2044,7 @@ export function SecurityApp() {
             }}
           />
           <span className="security-page__approval-remember-copy">
-            <span className="security-page__detail-label">remember_rule</span>
+            <span className="security-page__detail-label">记住规则</span>
             <span className="security-page__detail-copy">后续同类请求沿用这次决策。</span>
           </span>
         </label>

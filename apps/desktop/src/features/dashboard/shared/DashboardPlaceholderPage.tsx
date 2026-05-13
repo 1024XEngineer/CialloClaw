@@ -65,7 +65,7 @@ export function DashboardPlaceholderPage({ route }: DashboardPlaceholderPageProp
         <article className="dashboard-card">
           <p className="dashboard-card__kicker">路由策略</p>
           <p>
-            当前模块已经接入 `HashRouter`。后续新增子页面时，可以直接在 `{module.path}` 下继续挂载二级路由。
+            当前模块已经接入路由。后续新增子页面时，可以直接在 `{module.path}` 下继续添加二级页面。
           </p>
         </article>
 
