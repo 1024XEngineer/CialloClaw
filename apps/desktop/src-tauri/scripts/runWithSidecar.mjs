@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildLocalServiceSidecar } from "./ensureLocalServiceSidecar.mjs";
+import { buildLocalServiceSidecar, preparePlaywrightBundleRuntime } from "./ensureLocalServiceSidecar.mjs";
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
 
@@ -46,6 +46,10 @@ if (commandName !== "dev" && commandName !== "build") {
 try {
   const sidecarPath = buildLocalServiceSidecar();
   console.log(`Prepared local-service sidecar: ${sidecarPath}`);
+  if (commandName === "build") {
+    const runtimePath = preparePlaywrightBundleRuntime();
+    console.log(`Prepared Playwright bundle runtime: ${runtimePath}`);
+  }
 } catch (error) {
   console.error(error instanceof Error ? error.message : error);
   process.exit(1);

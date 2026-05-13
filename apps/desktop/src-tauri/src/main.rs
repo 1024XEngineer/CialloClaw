@@ -550,6 +550,20 @@ fn resolve_required_path(path: PathBuf, label: &str) -> Result<String, String> {
     Ok(resolved)
 }
 
+/// resolve_bundled_playwright_runtime_dir points the packaged local-service at
+/// the staged runtime bundle only when the installer payload actually contains it.
+fn resolve_bundled_playwright_runtime_dir(app: &tauri::AppHandle) -> Result<Option<String>, String> {
+    let resource_dir = app
+        .path()
+        .resource_dir()
+        .map_err(|error| format!("failed to resolve resource dir: {error}"))?;
+    let runtime_dir = resource_dir.join("playwright-runtime");
+    if !runtime_dir.is_dir() {
+        return Ok(None);
+    }
+    resolve_required_path(runtime_dir, "playwright runtime dir").map(Some)
+}
+
 /// derive_local_service_pipe_name uses the per-user application data directory
 /// as a stable input so packaged desktop builds do not collide with other local
 /// CialloClaw sessions that may already own the default global pipe name.
@@ -661,15 +675,27 @@ fn start_local_service_sidecar(
         }
     };
 
+    let mut sidecar_command = sidecar_command.args([
+        "--data-dir",
+        app_data_dir_arg.as_str(),
+        "--named-pipe",
+        named_pipe_path,
+        "--debug-http",
+        "127.0.0.1:0",
+    ]);
+    if let Some(playwright_runtime_dir) = resolve_bundled_playwright_runtime_dir(app)? {
+        append_local_service_log(
+            app,
+            &format!(
+                "configuring bundled Playwright runtime dir={playwright_runtime_dir}"
+            ),
+        );
+        sidecar_command = sidecar_command
+            .env("CIALLOCLAW_PLAYWRIGHT_RUNTIME_DIR", playwright_runtime_dir)
+            .env("CIALLOCLAW_PLAYWRIGHT_PREFER_BUNDLED", "1");
+    }
+
     let (mut rx, child) = sidecar_command
-        .args([
-            "--data-dir",
-            app_data_dir_arg.as_str(),
-            "--named-pipe",
-            named_pipe_path,
-            "--debug-http",
-            "127.0.0.1:0",
-        ])
         .spawn()
         .map_err(|error| format!("failed to start local service sidecar: {error}"))?;
     sidecar_state.store(child)?;

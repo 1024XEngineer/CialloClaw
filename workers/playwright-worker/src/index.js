@@ -278,7 +278,22 @@ export async function launchManagedBrowser(deps = defaultDependencies) {
   throw new Error("failed to launch a managed local browser");
 }
 
+function shouldPreferBundledBrowser(env = process.env) {
+  return env.CIALLOCLAW_PLAYWRIGHT_PREFER_BUNDLED === "1";
+}
+
 async function acquireBrowserSession(deps = defaultDependencies) {
+  if (shouldPreferBundledBrowser(deps.env ?? process.env)) {
+    return {
+      browser: await deps.launchBrowser(),
+      browserKind: undefined,
+      browserTransport: "launch",
+      endpointURL: undefined,
+      managed: false,
+      source: "playwright_worker_browser",
+    };
+  }
+
   let managedError;
   try {
     return await deps.launchManagedBrowser(deps);

@@ -653,6 +653,64 @@ func TestResolveRelativePathFromRootsFindsWorkerEntry(t *testing.T) {
 	}
 }
 
+func TestResolveWorkerEntryPathPrefersBundledRuntimeDir(t *testing.T) {
+	runtimeRoot := t.TempDir()
+	entryPath := filepath.Join(runtimeRoot, "workers", "playwright-worker", "src", "index.js")
+	if err := os.MkdirAll(filepath.Dir(entryPath), 0o755); err != nil {
+		t.Fatalf("mkdir bundled worker path: %v", err)
+	}
+	if err := os.WriteFile(entryPath, []byte("console.log('ok')\n"), 0o644); err != nil {
+		t.Fatalf("write bundled worker entry: %v", err)
+	}
+	t.Setenv(playwrightRuntimeDirEnv, runtimeRoot)
+	resolved, err := resolveWorkerEntryPath()
+	if err != nil {
+		t.Fatalf("resolveWorkerEntryPath returned error: %v", err)
+	}
+	if resolved != entryPath {
+		t.Fatalf("expected bundled worker entry %q, got %q", entryPath, resolved)
+	}
+}
+
+func TestNewPlaywrightCommandWorkerInvokerUsesBundledRuntime(t *testing.T) {
+	runtimeRoot := t.TempDir()
+	entryPath := filepath.Join(runtimeRoot, "workers", "playwright-worker", "src", "index.js")
+	nodePath := filepath.Join(runtimeRoot, "node", "node.exe")
+	browsersPath := filepath.Join(runtimeRoot, "ms-playwright")
+	if err := os.MkdirAll(filepath.Dir(entryPath), 0o755); err != nil {
+		t.Fatalf("mkdir bundled worker path: %v", err)
+	}
+	if err := os.WriteFile(entryPath, []byte("console.log('ok')\n"), 0o644); err != nil {
+		t.Fatalf("write bundled worker entry: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(nodePath), 0o755); err != nil {
+		t.Fatalf("mkdir bundled node path: %v", err)
+	}
+	if err := os.WriteFile(nodePath, []byte(""), 0o644); err != nil {
+		t.Fatalf("write bundled node executable: %v", err)
+	}
+	if err := os.MkdirAll(browsersPath, 0o755); err != nil {
+		t.Fatalf("mkdir bundled browser path: %v", err)
+	}
+	t.Setenv(playwrightRuntimeDirEnv, runtimeRoot)
+	invoker, err := newPlaywrightCommandWorkerInvoker(entryPath)
+	if err != nil {
+		t.Fatalf("newPlaywrightCommandWorkerInvoker returned error: %v", err)
+	}
+	if invoker.command != nodePath {
+		t.Fatalf("expected bundled node command %q, got %q", nodePath, invoker.command)
+	}
+	if invoker.workingDir != filepath.Dir(entryPath) {
+		t.Fatalf("expected working dir %q, got %q", filepath.Dir(entryPath), invoker.workingDir)
+	}
+	if !strings.Contains(strings.Join(invoker.env, "\n"), playwrightBrowsersPathEnv+"="+browsersPath) {
+		t.Fatalf("expected invoker env to include bundled browsers path, got %v", invoker.env)
+	}
+	if !strings.Contains(strings.Join(invoker.env, "\n"), playwrightPreferBundledBrowserEnv+"=1") {
+		t.Fatalf("expected invoker env to prefer bundled browser, got %v", invoker.env)
+	}
+}
+
 func TestCommandWorkerInvokerInvokeReturnsStructuredRequestError(t *testing.T) {
 	entryPath := writeTempWorkerScript(t, `process.stdin.resume(); process.stdin.on("end", () => { process.stdout.write(JSON.stringify({ ok: false, error: { code: "http_404", message: "page not found" } })); process.exitCode = 1; });`)
 	invoker := newCommandWorkerInvoker(entryPath)

@@ -22,6 +22,9 @@ import (
 const sidecarHealthTimeout = 5 * time.Second
 const sidecarDefaultTimeout = 20 * time.Second
 const playwrightWorkerRelativePath = "workers/playwright-worker/src/index.js"
+const playwrightRuntimeDirEnv = "CIALLOCLAW_PLAYWRIGHT_RUNTIME_DIR"
+const playwrightPreferBundledBrowserEnv = "CIALLOCLAW_PLAYWRIGHT_PREFER_BUNDLED"
+const playwrightBrowsersPathEnv = "PLAYWRIGHT_BROWSERS_PATH"
 
 type workerInvoker interface {
 	Invoke(ctx context.Context, request sidecarRequest) (sidecarResponse, error)
@@ -58,6 +61,8 @@ type commandWorkerInvoker struct {
 	entryPath string
 	command   string
 	args      []string
+	workingDir string
+	env       []string
 }
 
 type sidecarTransportError struct {
@@ -98,6 +103,32 @@ func newCommandWorkerInvoker(entryPath string) commandWorkerInvoker {
 	}
 }
 
+func newPlaywrightCommandWorkerInvoker(entryPath string) (commandWorkerInvoker, error) {
+	runtimeDir := strings.TrimSpace(os.Getenv(playwrightRuntimeDirEnv))
+	if runtimeDir == "" {
+		return newCommandWorkerInvoker(entryPath), nil
+	}
+	nodeCommand, err := resolveBundledNodePath(runtimeDir)
+	if err != nil {
+		return commandWorkerInvoker{}, err
+	}
+	browsersPath, err := resolveBundledBrowsersPath(runtimeDir)
+	if err != nil {
+		return commandWorkerInvoker{}, err
+	}
+	return commandWorkerInvoker{
+		entryPath:  entryPath,
+		command:    nodeCommand,
+		args:       []string{entryPath},
+		workingDir: filepath.Dir(entryPath),
+		env: append(os.Environ(),
+			playwrightRuntimeDirEnv+"="+runtimeDir,
+			playwrightBrowsersPathEnv+"="+browsersPath,
+			playwrightPreferBundledBrowserEnv+"=1",
+		),
+	}, nil
+}
+
 func (i commandWorkerInvoker) Invoke(ctx context.Context, request sidecarRequest) (sidecarResponse, error) {
 	payload, err := json.Marshal(request)
 	if err != nil {
@@ -107,6 +138,12 @@ func (i commandWorkerInvoker) Invoke(ctx context.Context, request sidecarRequest
 		return sidecarResponse{}, sidecarTransportError{err: errors.New("worker entry path is required")}
 	}
 	cmd := exec.CommandContext(ctx, i.command, i.args...)
+	if strings.TrimSpace(i.workingDir) != "" {
+		cmd.Dir = i.workingDir
+	}
+	if len(i.env) > 0 {
+		cmd.Env = i.env
+	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -410,8 +447,13 @@ func NewPlaywrightSidecarRuntime(pluginService *plugin.Service, osCapability pla
 		markPluginRuntimeFailed(pluginService, plugin.RuntimeKindSidecar, spec.Name, err)
 		return runtime, err
 	}
+	invoker, err := newPlaywrightCommandWorkerInvoker(entryPath)
+	if err != nil {
+		markPluginRuntimeFailed(pluginService, plugin.RuntimeKindSidecar, spec.Name, err)
+		return runtime, err
+	}
 	runtime.available = true
-	runtime.invoker = newCommandWorkerInvoker(entryPath)
+	runtime.invoker = invoker
 	return runtime, nil
 }
 
@@ -629,7 +671,48 @@ func cloneAttachConfigPtr(input *tools.BrowserAttachConfig) *tools.BrowserAttach
 }
 
 func resolveWorkerEntryPath() (string, error) {
+	if bundledRuntimeDir := strings.TrimSpace(os.Getenv(playwrightRuntimeDirEnv)); bundledRuntimeDir != "" {
+		return resolveBundledWorkerEntryPath(bundledRuntimeDir)
+	}
 	return resolveRelativePathFromRoots(playwrightWorkerRelativePath, workerSearchRoots())
+}
+
+func resolveBundledWorkerEntryPath(runtimeDir string) (string, error) {
+	entryPath := filepath.Join(runtimeDir, playwrightWorkerRelativePath)
+	info, err := os.Stat(entryPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve bundled playwright worker entry: %w", err)
+	}
+	if info.IsDir() {
+		return "", fmt.Errorf("bundled playwright worker entry is a directory: %s", entryPath)
+	}
+	return entryPath, nil
+}
+
+func resolveBundledNodePath(runtimeDir string) (string, error) {
+	candidates := []string{
+		filepath.Join(runtimeDir, "node", "node.exe"),
+		filepath.Join(runtimeDir, "node", "node"),
+		filepath.Join(runtimeDir, "node", "bin", "node"),
+	}
+	for _, candidate := range candidates {
+		if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+			return candidate, nil
+		}
+	}
+	return "", fmt.Errorf("bundled Node executable not found under %s", runtimeDir)
+}
+
+func resolveBundledBrowsersPath(runtimeDir string) (string, error) {
+	browsersPath := filepath.Join(runtimeDir, "ms-playwright")
+	info, err := os.Stat(browsersPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve bundled Playwright browsers path: %w", err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("bundled Playwright browsers path is not a directory: %s", browsersPath)
+	}
+	return browsersPath, nil
 }
 
 func workerSearchRoots() []string {
