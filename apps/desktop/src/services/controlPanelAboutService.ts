@@ -1,4 +1,3 @@
-import wechatQrImage from "@/assets/about/wechat-qr.jpg";
 import { openDesktopRuntimeDataDirectory } from "@/platform/desktopRuntimeDefaults";
 import { loadDesktopRuntimeDefaultsSnapshot } from "@/services/settingsService";
 
@@ -42,6 +41,7 @@ const CONTROL_PANEL_ABOUT_URLS = {
   feedback: "https://github.com/1024XEngineer/CialloClaw/issues",
   officialSite: "https://1024xengineer.github.io/CialloClaw/",
   share: "https://github.com/1024XEngineer/CialloClaw",
+  wechatQrImage: "/src/assets/about/wechat-qr.jpg",
 } as const;
 
 const CONTROL_PANEL_ABOUT_FEEDBACK_CHANNELS = [
@@ -60,7 +60,7 @@ const CONTROL_PANEL_ABOUT_FEEDBACK_CHANNELS = [
     kind: "image",
     note: "微信扫码后可加入 CialloClaw 社群。",
     previewAlt: "CialloClaw 微信社群二维码",
-    previewSrc: wechatQrImage,
+    previewSrc: CONTROL_PANEL_ABOUT_URLS.wechatQrImage,
     title: "微信社群",
   },
   {
