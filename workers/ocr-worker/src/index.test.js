@@ -201,6 +201,8 @@ test("extract_text parses PPTX slides without external converters", async () => 
     readFile: async (targetPath, encoding) => {
       if (targetPath === "workspace/demo.pptx") {
         return buildStoredZip({
+          "ppt/presentation.xml": "<p:presentation><p:sldIdLst><p:sldId id=\"257\" r:id=\"rId2\"/><p:sldId id=\"258\" r:id=\"rId1\"/></p:sldIdLst></p:presentation>",
+          "ppt/_rels/presentation.xml.rels": "<Relationships><Relationship Id=\"rId1\" Target=\"slides/slide1.xml\"/><Relationship Id=\"rId2\" Target=\"slides/slide2.xml\"/></Relationships>",
           "ppt/slides/slide2.xml": "<p:sld><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Second slide body</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>",
           "ppt/slides/slide1.xml": "<p:sld><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Title slide</a:t></a:r></a:p><a:p><a:r><a:t>Agenda item</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>",
         });
@@ -215,6 +217,7 @@ test("extract_text parses PPTX slides without external converters", async () => 
   assert.match(response.result.text, /Title slide/);
   assert.match(response.result.text, /Agenda item/);
   assert.match(response.result.text, /Second slide body/);
+  assert.ok(response.result.text.indexOf("Second slide body") < response.result.text.indexOf("Title slide"));
 });
 
 test("extract_text parses XLSX worksheets without external converters", async () => {
@@ -222,8 +225,11 @@ test("extract_text parses XLSX worksheets without external converters", async ()
     readFile: async (targetPath, encoding) => {
       if (targetPath === "workspace/demo.xlsx") {
         return buildStoredZip({
+          "xl/workbook.xml": "<workbook><sheets><sheet name=\"Backlog\" sheetId=\"2\" r:id=\"rId2\"/><sheet name=\"Summary\" sheetId=\"1\" r:id=\"rId1\"/></sheets></workbook>",
+          "xl/_rels/workbook.xml.rels": "<Relationships><Relationship Id=\"rId1\" Target=\"worksheets/sheet2.xml\"/><Relationship Id=\"rId2\" Target=\"worksheets/sheet1.xml\"/></Relationships>",
           "xl/sharedStrings.xml": "<sst><si><t>Name</t></si><si><t>Status</t></si></sst>",
           "xl/worksheets/sheet1.xml": "<worksheet><sheetData><row r=\"1\"><c r=\"A1\" t=\"s\"><v>0</v></c><c r=\"B1\" t=\"s\"><v>1</v></c></row><row r=\"2\"><c r=\"A2\" t=\"inlineStr\"><is><t>Build</t></is></c><c r=\"B2\"><v>42</v></c></row></sheetData></worksheet>",
+          "xl/worksheets/sheet2.xml": "<worksheet><sheetData><row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>Owner</t></is></c><c r=\"B1\" t=\"inlineStr\"><is><t>Alice</t></is></c></row></sheetData></worksheet>",
         });
       }
       throw new Error(`unexpected readFile target: ${targetPath} (${encoding ?? "buffer"})`);
@@ -233,9 +239,13 @@ test("extract_text parses XLSX worksheets without external converters", async ()
   assert.equal(response.ok, true);
   assert.equal(response.result.source, "ocr_worker_xlsx");
   assert.equal(response.result.language, "xlsx_text");
-  assert.match(response.result.text, /Sheet 1:/);
+  assert.match(response.result.text, /Backlog:/);
+  assert.match(response.result.text, /Summary:/);
+  assert.ok(response.result.text.indexOf("Backlog:") < response.result.text.indexOf("Summary:"));
+  assert.doesNotMatch(response.result.text, /Sheet 1:/);
   assert.match(response.result.text, /Name\tStatus/);
   assert.match(response.result.text, /Build\t42/);
+  assert.match(response.result.text, /Owner\tAlice/);
 });
 
 test("extract_text converts legacy doc files with soffice when available", async () => {

@@ -369,15 +369,71 @@ function worksheetNumberFromEntryName(name) {
   return match ? Number.parseInt(match[1], 10) : Number.MAX_SAFE_INTEGER;
 }
 
+function parseXMLAttributes(rawAttributes) {
+  const attributes = new Map();
+  for (const match of String(rawAttributes ?? "").matchAll(/\b([\w:.-]+)="([^"]*)"/g)) {
+    attributes.set(match[1], decodeXMLText(match[2]));
+  }
+  return attributes;
+}
+
+function parseOOXMLRelationships(value, baseDir) {
+  const relationships = new Map();
+  for (const match of String(value ?? "").matchAll(/<Relationship\b([^>]*)\/?>/gi)) {
+    const attributes = parseXMLAttributes(match[1]);
+    const identifier = attributes.get("Id");
+    const target = attributes.get("Target");
+    if (!identifier || !target || /^https?:\/\//i.test(target)) {
+      continue;
+    }
+    relationships.set(identifier, path.posix.normalize(path.posix.join(baseDir, target)));
+  }
+  return relationships;
+}
+
+function orderedArchiveEntries(preferredEntries, candidateNames, sequenceNumber) {
+  const ordered = [];
+  const seen = new Set();
+  for (const entryName of preferredEntries) {
+    if (!candidateNames.includes(entryName) || seen.has(entryName)) {
+      continue;
+    }
+    ordered.push(entryName);
+    seen.add(entryName);
+  }
+  for (const entryName of candidateNames.sort((left, right) => sequenceNumber(left) - sequenceNumber(right))) {
+    if (seen.has(entryName)) {
+      continue;
+    }
+    ordered.push(entryName);
+  }
+  return ordered;
+}
+
+function orderedPPTXSlideNames(archive) {
+  const candidateNames = Array.from(archive.keys()).filter((name) => pptxSlideEntryPattern.test(name));
+  const relationships = parseOOXMLRelationships(archive.get("ppt/_rels/presentation.xml.rels")?.toString("utf8") ?? "", "ppt");
+  const preferredEntries = [];
+  for (const match of String(archive.get("ppt/presentation.xml")?.toString("utf8") ?? "").matchAll(/<(?:\w+:)?sldId\b([^>]*)\/?>/gi)) {
+    const attributes = parseXMLAttributes(match[1]);
+    const targetName = relationships.get(attributes.get("r:id") ?? "");
+    if (targetName && pptxSlideEntryPattern.test(targetName)) {
+      preferredEntries.push(targetName);
+    }
+  }
+  return orderedArchiveEntries(preferredEntries, candidateNames, slideNumberFromEntryName);
+}
+
 async function extractPPTXText(targetPath, deps) {
   const archive = await readOOXMLArchive(targetPath, "pptx", deps, {
     includeEntry(name) {
-      return pptxSlideEntryPattern.test(name);
+      return pptxSlideEntryPattern.test(name)
+        || name === "ppt/presentation.xml"
+        || name === "ppt/_rels/presentation.xml.rels";
     },
   });
-  const candidateNames = Array.from(archive.keys()).sort((left, right) => slideNumberFromEntryName(left) - slideNumberFromEntryName(right));
   const sections = [];
-  for (const name of candidateNames) {
+  for (const name of orderedPPTXSlideNames(archive)) {
     const value = normalizePresentationXML(archive.get(name)?.toString("utf8") ?? "");
     if (value !== "") {
       sections.push(value);
@@ -458,6 +514,28 @@ function sheetLabelFromEntryName(name) {
   return `Sheet ${match[1]}`;
 }
 
+function orderedXLSXSheets(archive) {
+  const candidateNames = Array.from(archive.keys()).filter((name) => xlsxSheetEntryPattern.test(name));
+  const relationships = parseOOXMLRelationships(archive.get("xl/_rels/workbook.xml.rels")?.toString("utf8") ?? "", "xl");
+  const preferredSheets = [];
+  for (const match of String(archive.get("xl/workbook.xml")?.toString("utf8") ?? "").matchAll(/<sheet\b([^>]*)\/?>/gi)) {
+    const attributes = parseXMLAttributes(match[1]);
+    const targetName = relationships.get(attributes.get("r:id") ?? "");
+    if (!targetName || !xlsxSheetEntryPattern.test(targetName)) {
+      continue;
+    }
+    preferredSheets.push({
+      label: attributes.get("name") || sheetLabelFromEntryName(targetName),
+      name: targetName,
+    });
+  }
+  const orderedNames = orderedArchiveEntries(preferredSheets.map((sheet) => sheet.name), candidateNames, worksheetNumberFromEntryName);
+  return orderedNames.map((name) => ({
+    label: preferredSheets.find((sheet) => sheet.name === name)?.label ?? sheetLabelFromEntryName(name),
+    name,
+  }));
+}
+
 function extractXLSXSheetText(value, sharedStrings, label) {
   const rows = [];
   for (const rowMatch of String(value ?? "").matchAll(/<row\b[^>]*>([\s\S]*?)<\/row>/gi)) {
@@ -481,16 +559,19 @@ function extractXLSXSheetText(value, sharedStrings, label) {
 async function extractXLSXText(targetPath, deps) {
   const archive = await readOOXMLArchive(targetPath, "xlsx", deps, {
     includeEntry(name) {
-      return name === "xl/sharedStrings.xml" || xlsxSheetEntryPattern.test(name);
+      return name === "xl/sharedStrings.xml"
+        || name === "xl/workbook.xml"
+        || name === "xl/_rels/workbook.xml.rels"
+        || xlsxSheetEntryPattern.test(name);
     },
   });
   const sharedStrings = parseXLSXSharedStrings(archive.get("xl/sharedStrings.xml")?.toString("utf8") ?? "");
-  const candidateNames = Array.from(archive.keys())
-    .filter((name) => xlsxSheetEntryPattern.test(name))
-    .sort((left, right) => worksheetNumberFromEntryName(left) - worksheetNumberFromEntryName(right));
   const sections = [];
-  for (const name of candidateNames) {
-    const value = extractXLSXSheetText(archive.get(name)?.toString("utf8") ?? "", sharedStrings, sheetLabelFromEntryName(name));
+  // Workbook metadata defines the visible tab order and display names users
+  // expect to see in summaries. Fall back to sheetN.xml ordering only when
+  // that metadata is missing from the archive.
+  for (const sheet of orderedXLSXSheets(archive)) {
+    const value = extractXLSXSheetText(archive.get(sheet.name)?.toString("utf8") ?? "", sharedStrings, sheet.label);
     if (value !== "") {
       sections.push(value);
     }
