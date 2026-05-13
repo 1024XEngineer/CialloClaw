@@ -30,6 +30,7 @@ import { getShellBallMotionConfig } from "./shellBall.motion";
 import { collectShellBallSpeechTranscript, composeShellBallSpeechDraft } from "./shellBall.speech";
 import {
   resolveDeliveryReadyVoiceNotificationText,
+  resolveShellBallIdleClickGreetingText,
   resolveShellBallStartupGreetingText,
   resolveVoiceNotificationVoice,
 } from "../../services/voiceNotificationService";
@@ -44,6 +45,7 @@ import {
   normalizeShellBallFloatingSize,
   resolveShellBallInlineInputMode,
   ShellBallApp,
+  shouldSpeakShellBallIdleClickGreeting,
   shouldRetainShellBallEdgeDockReveal,
   shouldArmShellBallTextDropTarget,
   shouldShowShellBallFileDropOverlay,
@@ -2539,6 +2541,7 @@ test("shell-ball speech transcript collection merges recognition chunks", () => 
 
 test("voice notification helpers keep startup greeting and formal delivery reminders short", () => {
   assert.equal(resolveShellBallStartupGreetingText(), "CialloClaw 已启动");
+  assert.equal(resolveShellBallIdleClickGreetingText(), "CialloClaw");
   assert.equal(
     resolveDeliveryReadyVoiceNotificationText({
       task_id: "task-bubble-delivery",
@@ -2566,10 +2569,11 @@ test("voice notification helpers prefer the saved voice type and matching locale
     voices: [
       { lang: "en-US", name: "Alloy" },
       { lang: "ja-JP", name: "Sakura Female" },
+      { lang: "zh-CN", name: "Xiaoyi" },
       { lang: "zh-CN", name: "Xiaoxiao" },
     ],
   });
-  assert.equal(resolvedDefaultFemale?.name, "Xiaoxiao");
+  assert.equal(resolvedDefaultFemale?.name, "Xiaoyi");
 
   const resolvedCustomVoice = resolveVoiceNotificationVoice({
     language: "zh-CN",
@@ -8223,7 +8227,7 @@ test("shell-ball floating size normalization falls back to medium", () => {
   assert.equal(normalizeShellBallFloatingSize(undefined), "medium");
 });
 
-test("shell-ball mascot hotspot policy only opens primary click for selected-text prompts", () => {
+test("shell-ball mascot hotspot policy opens primary click for idle acknowledgement and prompt intake", () => {
   assert.equal(
     getShellBallMascotHotspotGestureAction({
       visualState: "voice_locked",
@@ -8239,7 +8243,7 @@ test("shell-ball mascot hotspot policy only opens primary click for selected-tex
       gesture: "single_click",
       suppressed: false,
     }),
-    "noop",
+    "primary_click",
   );
 
   assert.equal(
@@ -8259,6 +8263,53 @@ test("shell-ball mascot hotspot policy only opens primary click for selected-tex
       selectionIndicatorVisible: true,
     }),
     "primary_click",
+  );
+});
+
+test("shell-ball idle click greeting only speaks from the true resting state", () => {
+  assert.equal(
+    shouldSpeakShellBallIdleClickGreeting({
+      clipboardPromptActive: false,
+      hasPendingAgentLoading: false,
+      hasPendingApproval: false,
+      hasPendingFiles: false,
+      hasVisibleBubbleItems: false,
+      hasWrittenInput: false,
+      onboardingActive: false,
+      selectionPromptActive: false,
+      visualState: "idle",
+    }),
+    true,
+  );
+
+  assert.equal(
+    shouldSpeakShellBallIdleClickGreeting({
+      clipboardPromptActive: false,
+      hasPendingAgentLoading: false,
+      hasPendingApproval: false,
+      hasPendingFiles: false,
+      hasVisibleBubbleItems: true,
+      hasWrittenInput: false,
+      onboardingActive: false,
+      selectionPromptActive: false,
+      visualState: "idle",
+    }),
+    false,
+  );
+
+  assert.equal(
+    shouldSpeakShellBallIdleClickGreeting({
+      clipboardPromptActive: false,
+      hasPendingAgentLoading: false,
+      hasPendingApproval: false,
+      hasPendingFiles: false,
+      hasVisibleBubbleItems: false,
+      hasWrittenInput: false,
+      onboardingActive: false,
+      selectionPromptActive: false,
+      visualState: "hover_input",
+    }),
+    false,
   );
 });
 
@@ -8922,12 +8973,19 @@ test("shell-ball routes active resumable text follow-ups through task steer", ()
 
 test("shell-ball voice notifications are consumed locally from startup and formal task notifications", () => {
   const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
+  const mascotSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/components/ShellBallMascot.tsx"), "utf8");
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");
   const voiceServiceSource = readFileSync(resolve(desktopRoot, "src/services/voiceNotificationService.ts"), "utf8");
 
   assert.match(appSource, /speakShellBallClipboardDetectedNotification/);
+  assert.match(appSource, /speakShellBallIdleGreeting/);
   assert.match(appSource, /speakShellBallSelectionDetectedNotification/);
   assert.match(appSource, /speakShellBallStartupGreeting/);
+  assert.match(appSource, /const SHELL_BALL_IDLE_CLICK_GREETING_DELAY_MS = 220;/);
+  assert.match(appSource, /const idleClickGreetingTimeoutRef = useRef<number \| null>\(null\);/);
+  assert.match(appSource, /export function shouldSpeakShellBallIdleClickGreeting/);
+  assert.match(appSource, /void speakShellBallIdleGreeting\(\);/);
+  assert.match(appSource, /cancelIdleClickGreeting\(\);/);
   assert.match(appSource, /const startupGreetingPlayedRef = useRef\(false\);/);
   assert.match(appSource, /const selectionPromptVoiceSnapshotRef = useRef<ShellBallSelectionSnapshot \| null>\(null\);/);
   assert.match(appSource, /const clipboardPromptVoiceRef = useRef<ShellBallClipboardVoicePrompt \| null>\(null\);/);
@@ -8938,10 +8996,12 @@ test("shell-ball voice notifications are consumed locally from startup and forma
   assert.match(appSource, /startupGreetingPlayedRef\.current = true;\s*void speakShellBallStartupGreeting\(\);/);
   assert.match(appSource, /void speakShellBallSelectionDetectedNotification\(\);/);
   assert.match(appSource, /void speakShellBallClipboardDetectedNotification\(\);/);
+  assert.match(mascotSource, /input\.selectionIndicatorVisible \|\| input\.alertOpportunityAvailable \|\| input\.visualState === "idle"/);
   assert.match(coordinatorSource, /import \{ speakApprovalPendingNotification, speakDeliveryReadyNotification \} from "@\/services\/voiceNotificationService";/);
   assert.match(coordinatorSource, /speakApprovalPendingNotification\(\{\s*approval_request: input\.approvalRequest,\s*task_id: input\.taskId,\s*\}\);/);
   assert.match(coordinatorSource, /speakDeliveryReadyNotification\(\{\s*delivery_result: input\.deliveryResult,\s*task_id: input\.taskId,\s*\}\);/);
   assert.match(voiceServiceSource, /const STARTUP_GREETING_TEXT = "CialloClaw 已启动";/);
+  assert.match(voiceServiceSource, /const IDLE_CLICK_GREETING_TEXT = "CialloClaw";/);
   assert.match(voiceServiceSource, /const SELECTION_DETECTED_TEXT = "检测到选中文本";/);
   assert.match(voiceServiceSource, /const CLIPBOARD_DETECTED_TEXT = "检测到剪贴板内容";/);
   assert.match(voiceServiceSource, /const APPROVAL_PENDING_TEXT = "有一个操作需要你确认";/);
@@ -8950,6 +9010,8 @@ test("shell-ball voice notifications are consumed locally from startup and forma
   assert.match(voiceServiceSource, /let latestVoiceNotificationRequestId = 0;/);
   assert.match(voiceServiceSource, /const requestId = \+\+latestVoiceNotificationRequestId;/);
   assert.match(voiceServiceSource, /if \(requestId !== latestVoiceNotificationRequestId\) \{\s*return false;\s*\}/);
+  assert.match(voiceServiceSource, /const latestSettings = getVoiceNotificationSettings\(\);/);
+  assert.match(voiceServiceSource, /if \(!latestSettings\.voice_notification_enabled\) \{\s*return false;\s*\}/);
   assert.match(voiceServiceSource, /addEventListener\("voiceschanged", handleVoicesChanged\)/);
   assert.match(voiceServiceSource, /return payload\.delivery_result\.type === "bubble" \? null : DELIVERY_READY_TEXT;/);
 });

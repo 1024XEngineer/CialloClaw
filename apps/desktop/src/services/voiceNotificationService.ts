@@ -3,6 +3,7 @@ import { loadSettings } from "./settingsService";
 
 type VoiceNotificationKind =
   | "startup_greeting"
+  | "idle_click_greeting"
   | "selection_detected"
   | "clipboard_detected"
   | "approval_pending"
@@ -24,6 +25,7 @@ type SpeechSynthesisLike = {
 };
 
 const STARTUP_GREETING_TEXT = "CialloClaw 已启动";
+const IDLE_CLICK_GREETING_TEXT = "CialloClaw";
 const SELECTION_DETECTED_TEXT = "检测到选中文本";
 const CLIPBOARD_DETECTED_TEXT = "检测到剪贴板内容";
 const APPROVAL_PENDING_TEXT = "有一个操作需要你确认";
@@ -60,13 +62,14 @@ function getVoiceTypePreferences(voiceType: string, language: string) {
   if (normalizedVoiceType === "default_female") {
     return [
       language.toLowerCase(),
-      "female",
-      "woman",
-      "girl",
-      "xiaoxiao",
       "xiaoyi",
+      "xiaoxiao",
       "tingting",
       "yunxia",
+      "girl",
+      "young",
+      "female",
+      "woman",
     ];
   }
 
@@ -159,9 +162,22 @@ export function resolveShellBallStartupGreetingText() {
   return STARTUP_GREETING_TEXT;
 }
 
+/**
+ * Builds the idle-click acknowledgement spoken from the resting floating ball.
+ *
+ * @returns The short idle greeting used for single-click acknowledgement.
+ */
+export function resolveShellBallIdleClickGreetingText() {
+  return IDLE_CLICK_GREETING_TEXT;
+}
+
 function resolveVoiceNotificationText(kind: VoiceNotificationKind, payload?: ApprovalPendingNotification | DeliveryReadyNotification) {
   if (kind === "startup_greeting") {
     return resolveShellBallStartupGreetingText();
+  }
+
+  if (kind === "idle_click_greeting") {
+    return resolveShellBallIdleClickGreetingText();
   }
 
   if (kind === "selection_detected") {
@@ -231,8 +247,8 @@ async function speakVoiceNotification(input: {
     return false;
   }
 
-  const settings = getVoiceNotificationSettings();
-  if (!settings.voice_notification_enabled) {
+  const initialSettings = getVoiceNotificationSettings();
+  if (!initialSettings.voice_notification_enabled) {
     return false;
   }
 
@@ -244,17 +260,26 @@ async function speakVoiceNotification(input: {
   const language = resolveVoiceNotificationLanguage();
   const utterance = new host.utteranceConstructor(text);
   const availableVoices = await waitForVoiceNotificationVoices(host.synthesizer);
-  const resolvedVoice = resolveVoiceNotificationVoice({
-    language,
-    voiceType: settings.voice_type,
-    voices: availableVoices,
-  });
 
   // Voice discovery can resolve out of order during startup, so only the most
   // recent local notification is allowed to claim the shared synthesizer.
   if (requestId !== latestVoiceNotificationRequestId) {
     return false;
   }
+
+  // The control panel can change local voice settings while the browser is
+  // still resolving system voices, so re-read the latest snapshot right before
+  // claiming the shared synthesizer.
+  const latestSettings = getVoiceNotificationSettings();
+  if (!latestSettings.voice_notification_enabled) {
+    return false;
+  }
+
+  const resolvedVoice = resolveVoiceNotificationVoice({
+    language,
+    voiceType: latestSettings.voice_type,
+    voices: availableVoices,
+  });
 
   utterance.lang = language;
   if (resolvedVoice !== null) {
@@ -273,6 +298,15 @@ async function speakVoiceNotification(input: {
  */
 export function speakShellBallStartupGreeting() {
   return speakVoiceNotification({ kind: "startup_greeting" });
+}
+
+/**
+ * Plays a short idle acknowledgement when the resting shell-ball is clicked.
+ *
+ * @returns Whether the local desktop runtime attempted speech playback.
+ */
+export function speakShellBallIdleGreeting() {
+  return speakVoiceNotification({ kind: "idle_click_greeting" });
 }
 
 /**
