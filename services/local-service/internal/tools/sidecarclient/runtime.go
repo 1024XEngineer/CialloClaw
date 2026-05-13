@@ -19,7 +19,7 @@ import (
 	"github.com/cialloclaw/cialloclaw/services/local-service/internal/tools"
 )
 
-const sidecarHealthTimeout = 5 * time.Minute
+const sidecarHealthTimeout = 5 * time.Second
 const sidecarDefaultTimeout = 5 * time.Minute
 const playwrightWorkerRelativePath = "workers/playwright-worker/src/index.js"
 
