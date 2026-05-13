@@ -226,8 +226,8 @@ func TestLocalFileSystemAdapterRejectsInvalidFSPaths(t *testing.T) {
 		t.Fatalf("expected invalid path error, got %v", err)
 	}
 
-	if _, err := fs.ReadDir(adapter, "/absolute"); !errors.Is(err, fs.ErrInvalid) {
-		t.Fatalf("expected invalid directory path error, got %v", err)
+	if _, err := fs.ReadDir(adapter, "/absolute"); !errors.Is(err, ErrPathOutsideWorkspace) {
+		t.Fatalf("expected path outside workspace error, got %v", err)
 	}
 
 	if err := adapter.WriteFile(filepath.Join("..", "outside.md"), []byte("blocked")); err == nil {

@@ -61,9 +61,15 @@ func TestAgentLoopToolDefinitionsExposeBrowserToolsWhenSnapshotSupportsAttach(t 
 	}
 
 	wantNames := []string{"read_file", "list_dir", "extract_text", "browser_attach_current", "browser_snapshot", "browser_tabs_list", "page_read", "page_search", "browser_navigate", "browser_tab_focus", "web_search"}
+	names := make([]string, 0, len(definitions))
+	browserAttachIndex := -1
 	for index, want := range wantNames {
+		names = append(names, definitions[index].Name)
 		if definitions[index].Name != want {
 			t.Fatalf("unexpected browser-aware tool definition order at %d: got %q want %q", index, definitions[index].Name, want)
+		}
+		if definitions[index].Name == "browser_attach_current" {
+			browserAttachIndex = index
 		}
 	}
 	for _, want := range []string{"read_file", "list_dir", "extract_text", "browser_attach_current", "browser_snapshot", "page_read", "page_search", "web_search"} {
