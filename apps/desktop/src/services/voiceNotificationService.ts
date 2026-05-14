@@ -300,7 +300,10 @@ function resolveVoiceNotificationLanguage() {
 
 function waitForVoiceNotificationVoices(synthesizer: SpeechSynthesisLike) {
   const availableVoices = synthesizer.getVoices();
-  if (availableVoices.length > 0 || synthesizer.addEventListener === undefined || synthesizer.removeEventListener === undefined) {
+  const addVoiceListener = synthesizer.addEventListener;
+  const removeVoiceListener = synthesizer.removeEventListener;
+
+  if (availableVoices.length > 0 || addVoiceListener === undefined || removeVoiceListener === undefined) {
     return Promise.resolve(availableVoices);
   }
 
@@ -314,7 +317,7 @@ function waitForVoiceNotificationVoices(synthesizer: SpeechSynthesisLike) {
 
       settled = true;
       window.clearTimeout(timeoutId);
-      synthesizer.removeEventListener?.("voiceschanged", handleVoicesChanged);
+      removeVoiceListener("voiceschanged", handleVoicesChanged);
       resolve(synthesizer.getVoices());
     };
 
@@ -328,7 +331,7 @@ function waitForVoiceNotificationVoices(synthesizer: SpeechSynthesisLike) {
       finalize();
     }, VOICE_LIST_READY_TIMEOUT_MS);
 
-    synthesizer.addEventListener("voiceschanged", handleVoicesChanged);
+    addVoiceListener("voiceschanged", handleVoicesChanged);
   });
 }
 
