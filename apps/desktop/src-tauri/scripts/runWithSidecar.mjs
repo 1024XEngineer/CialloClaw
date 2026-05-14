@@ -6,6 +6,24 @@ import { buildLocalServiceSidecar } from "./ensureLocalServiceSidecar.mjs";
 
 const currentDirectory = dirname(fileURLToPath(import.meta.url));
 
+function escapePowerShellLiteral(value) {
+  return value.replace(/'/g, "''");
+}
+
+function buildStopStaleBundledSidecarsCommand(targetRoot) {
+  const escapedTargetRoot = escapePowerShellLiteral(targetRoot);
+  return [
+    `$targetRoot = ([System.IO.Path]::GetFullPath('${escapedTargetRoot}')).TrimEnd('\\') + '\\'`,
+    "Get-CimInstance Win32_Process | Where-Object {",
+    "  $executablePath = $_.ExecutablePath",
+    "  if (-not $executablePath) { return $false }",
+    "  $fullPath = [System.IO.Path]::GetFullPath($executablePath)",
+    "  $fileName = [System.IO.Path]::GetFileName($fullPath)",
+    "  $fullPath.StartsWith($targetRoot, [System.StringComparison]::OrdinalIgnoreCase) -and $fileName.StartsWith('cialloclaw-service', [System.StringComparison]::OrdinalIgnoreCase)",
+    "} | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+  ].join("; ");
+}
+
 function resolveCommand(name) {
   return process.platform === "win32" && name === "corepack" ? "corepack.cmd" : name;
 }
@@ -41,16 +59,19 @@ function stopStaleBundledSidecars() {
     return;
   }
 
+  const staleSidecarTargetRoot = resolve(currentDirectory, "..", "target");
+
   // Tauri copies the bundled sidecar into `src-tauri/target/*` before booting
   // the app. On Windows, a stale child keeps that copied executable locked and
   // the next build panics with `PermissionDenied` while refreshing the bundle.
+  // Only terminate copied sidecars for the current workspace target directory.
   const result = spawnSync(
     "powershell.exe",
     [
       "-NoProfile",
       "-NonInteractive",
       "-Command",
-      "Stop-Process -Name cialloclaw-service -Force -ErrorAction SilentlyContinue",
+      buildStopStaleBundledSidecarsCommand(staleSidecarTargetRoot),
     ],
     {
       stdio: "pipe",
@@ -60,6 +81,12 @@ function stopStaleBundledSidecars() {
 
   if (result.error) {
     console.warn("Failed to stop stale bundled sidecars before launching Tauri.");
+    return;
+  }
+
+  if (result.status !== 0) {
+    const details = result.stderr?.trim() || result.stdout?.trim();
+    console.warn(`Failed to stop stale bundled sidecars before launching Tauri.${details ? ` ${details}` : ""}`);
   }
 }
 
