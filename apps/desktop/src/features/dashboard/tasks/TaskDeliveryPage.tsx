@@ -2,12 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ArrowLeft, ArrowUpRight, FolderOutput, Link2, RefreshCcw } from "lucide-react";
-import { Link, NavLink, Navigate, useNavigate, useParams } from "react-router-dom";
+import { Navigate, useNavigate, useParams } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import { buildDashboardTaskDetailRouteState } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
-import { resolveDashboardModuleRoutePath, resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
+import { resolveDashboardModuleRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import { subscribeDeliveryReady, subscribeTaskRuntime, subscribeTaskUpdated } from "@/rpc/subscriptions";
 import { cn } from "@/utils/cn";
 import { formatTimestamp } from "@/utils/formatters";
@@ -301,25 +300,7 @@ export function TaskDeliveryPage() {
 
   return (
     <main className="dashboard-page task-delivery-page" style={pageStyle}>
-      <header className="dashboard-page__topbar">
-        <div className="task-delivery-page__topbar-actions">
-          <Link className="dashboard-page__home-link" to={resolveDashboardRoutePath("home")}>
-            <ArrowLeft className="h-4 w-4" />
-            返回首页
-          </Link>
-          <Button className="task-delivery-page__detail-link" onClick={openTaskDetail} type="button" variant="ghost">
-            返回任务详情
-          </Button>
-        </div>
-
-        <nav aria-label="Dashboard modules" className="dashboard-page__module-nav">
-          {dashboardModules.map((item) => (
-            <NavLink key={item.route} className={({ isActive }) => cn("dashboard-page__module-link", isActive && "is-active")} to={item.path}>
-              {item.title}
-            </NavLink>
-          ))}
-        </nav>
-      </header>
+      <div aria-hidden="true" className="dashboard-page__topbar-spacer" />
 
       <section className="task-delivery-page__hero">
         <div className="task-delivery-page__hero-copy">
@@ -334,6 +315,10 @@ export function TaskDeliveryPage() {
         </div>
 
         <div className="task-delivery-page__hero-actions">
+          <Button className="task-delivery-page__detail-link" onClick={openTaskDetail} type="button" variant="ghost">
+            <ArrowLeft className="h-4 w-4" />
+            返回任务详情
+          </Button>
           {detailData ? (
             <>
               <Badge className={cn("border-0 px-3 py-1 text-[0.74rem] ring-1", getTaskStatusBadgeClass(detailData.task.status))}>
