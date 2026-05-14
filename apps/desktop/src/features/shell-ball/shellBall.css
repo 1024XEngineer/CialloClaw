@@ -90,11 +90,17 @@ body[data-app-window="shell-ball"],
 
 .shell-ball-surface {
   --shell-ball-helper-width: min(33rem, calc(100vw - 0.5rem));
+  --shell-ball-mascot-bounds-height-scale: 0.76;
+  --shell-ball-mascot-bounds-width-scale: 0.8;
+  --shell-ball-file-drop-overlay-offset: 0.9rem;
+  --shell-ball-file-drop-core-size: calc(clamp(10.36rem, 19.8vw, 12.6rem) * var(--shell-ball-mascot-scale));
+  --shell-ball-file-drop-overlay-size: calc(var(--shell-ball-file-drop-core-size) + var(--shell-ball-file-drop-overlay-offset));
+  --shell-ball-file-drop-plus-size: 1.9rem;
   --shell-ball-size-multiplier: 2;
   --shell-ball-scale: 1;
   --shell-ball-mascot-scale: 1.32;
-  --shell-ball-mascot-shell-height: calc((clamp(16.2rem, 30.6vw, 21.6rem) * var(--shell-ball-mascot-scale)) + 10px);
-  --shell-ball-mascot-shell-width: calc((clamp(14.86rem, 27.9vw, 17.1rem) * var(--shell-ball-mascot-scale)) + 10px);
+  --shell-ball-mascot-shell-height: calc((clamp(16.2rem, 30.6vw, 21.6rem) * var(--shell-ball-mascot-scale) * var(--shell-ball-mascot-bounds-height-scale)) + 6px);
+  --shell-ball-mascot-shell-width: calc((clamp(14.86rem, 27.9vw, 17.1rem) * var(--shell-ball-mascot-scale) * var(--shell-ball-mascot-bounds-width-scale)) + 6px);
   --shell-ball-stage-anchor-x: 50%;
   --shell-ball-stage-anchor-y: 50%;
   --shell-ball-bubble-reserve-height: clamp(18rem, 63vh, 28rem);
@@ -135,16 +141,28 @@ body[data-app-window="shell-ball"],
 }
 
 .shell-ball-surface[data-floating-ball-size="small"] {
+  --shell-ball-mascot-bounds-height-scale: 0.78;
+  --shell-ball-mascot-bounds-width-scale: 0.82;
+  --shell-ball-file-drop-overlay-offset: 0.5rem;
+  --shell-ball-file-drop-plus-size: 1.3rem;
   --shell-ball-size-multiplier: 1;
   --shell-ball-mascot-scale: 0.66;
 }
 
 .shell-ball-surface[data-floating-ball-size="medium"] {
+  --shell-ball-mascot-bounds-height-scale: 0.77;
+  --shell-ball-mascot-bounds-width-scale: 0.81;
+  --shell-ball-file-drop-overlay-offset: 0.7rem;
+  --shell-ball-file-drop-plus-size: 1.6rem;
   --shell-ball-size-multiplier: 1.5;
   --shell-ball-mascot-scale: 0.99;
 }
 
 .shell-ball-surface[data-floating-ball-size="large"] {
+  --shell-ball-mascot-bounds-height-scale: 0.76;
+  --shell-ball-mascot-bounds-width-scale: 0.8;
+  --shell-ball-file-drop-overlay-offset: 0.9rem;
+  --shell-ball-file-drop-plus-size: 1.9rem;
   --shell-ball-size-multiplier: 2;
   --shell-ball-mascot-scale: 1.32;
 }
@@ -995,7 +1013,7 @@ body[data-app-window="shell-ball"],
   border: 2px dashed rgba(120, 128, 138, 0.64);
   border-radius: 999px;
   display: grid;
-  height: calc(var(--shell-ball-mascot-shell-height) + 8px);
+  height: var(--shell-ball-file-drop-overlay-size);
   justify-items: center;
   left: 50%;
   opacity: 0;
@@ -1007,7 +1025,7 @@ body[data-app-window="shell-ball"],
     opacity 180ms ease,
     transform 180ms ease,
     box-shadow 180ms ease;
-  width: calc(var(--shell-ball-mascot-shell-width) + 8px);
+  width: var(--shell-ball-file-drop-overlay-size);
   z-index: 9;
 }
 
@@ -1022,12 +1040,12 @@ body[data-app-window="shell-ball"],
 
 .shell-ball-surface__file-drop-plus--horizontal {
   border-top-width: 2px;
-  width: 3rem;
+  width: var(--shell-ball-file-drop-plus-size);
 }
 
 .shell-ball-surface__file-drop-plus--vertical {
   border-left-width: 2px;
-  height: 3rem;
+  height: var(--shell-ball-file-drop-plus-size);
 }
 
 .shell-ball-surface__text-drop-target {
