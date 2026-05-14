@@ -222,6 +222,13 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - 安全类接口：统一返回 `approval_request / authorization_record / audit_record / recovery_point`，按需附带 `impact_scope`
 - 设置类接口：统一返回 `effective_settings` 或 `setting_item`、`apply_mode`、`need_restart`
 
+### 4.7 上下文归一规则
+
+- 正式协议中的上下文字段优先使用嵌套结构，扁平字段只作为旧客户端或平台桥兼容入口。
+- 当 `context.selection.text` 与 `context.selection_text` 同时存在时，以 `context.selection.text` 为准；`context.screen.summary` 与 `context.screen_summary` 同理。
+- 后端在进入任务创建、推荐、记忆查询、运行快照或审计前，必须把兼容输入收敛为一份 canonical context。
+- 前端不得依赖“同时写嵌套字段和扁平字段且由后端猜测取值”的隐式行为。
+
 ---
 
 ## 5. 正式状态枚举与直观解释
@@ -320,6 +327,11 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `error_signal`
 - `screen_capture`
 
+补充约束：
+
+- `screen_capture` 表示任务正式围绕当前屏幕 / 页面采样证据展开，即使入口文本来自语音、轻量输入或悬浮球点击，也应以该来源类型回写对外 `task.source_type`。
+- `Task` 与 `Run` 等兼容执行对象中涉及来源类型的 schema / type 必须保持一致；不得出现 `task.source_type` 支持 `screen_capture`，但执行链 `run.source_type` 无法表达同一来源的情况。
+
 ### 5.13 气泡类型 `bubble_message_type`
 
 - `status`
@@ -354,6 +366,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - 对外产品态统一以 `task_status` 为主。
 - 内核态 `run_status` 仅保留最小兼容状态，不得替代 `task_status` 对外暴露。
+- `run_status = completed` 只表示该次 run 生命周期结束，不等于任务成功完成；任务是否完成、失败、取消、暂停或阻塞，仍必须由 `task_status` 与正式事件链表达。
 - 悬浮球主状态机、承接状态机、气泡生命周期都属于前端局部状态，不直接进入正式状态枚举。
 - 文档中未登记的状态值不得进入实现。
 
@@ -361,9 +374,15 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - `plugin_kind`：`worker / sidecar`
 - `plugin_source_type`：`builtin / local_dir / github / marketplace`
+- `plugin_runtime_status`：`declared / starting / running / stopped / unavailable / failed`
 - `plugin_health_status`：`unknown / healthy / degraded / failed / stopped / unavailable`
 - `plugin_tool_source_type`：`builtin / worker / sidecar`
 - `plugin_tool_contract.risk_hint`：对齐 `risk_level` 语义，当前允许返回 `green / yellow / red`
+
+补充约束：
+
+- `plugin_runtime_status` 描述插件生命周期阶段，例如已声明、启动中、运行中、停止、不可用或失败。
+- `plugin_health_status` 描述插件健康度，不等同于生命周期状态；前端展示插件运行态时不得只根据 `health` 推断插件是否正在运行。
 
 ## 6. 错误码设计
 
@@ -543,6 +562,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - `agent.settings.get`
 - `agent.settings.update`
+- `agent.settings.model.validate`
 
 #### E. 插件扩展
 
@@ -646,6 +666,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - `agent.task.start` 不接受显式 `intent` 入参；若客户端误传该字段，协议层应忽略，并继续由后端结合 `input / context` 统一推断，不需要新增平行入口。
 - 当客户端省略 `session_id` 时，后端应负责选择或创建隐藏协作 session，并把最终使用的 `session_id` 写回返回的 `task` 对象，而不是要求前端自行猜测生命周期。
 - 当普通文本被判定为无任务锚点的纯社交 / 闲聊输入时，后端可返回 `data.task = null`、`data.delivery_result = null` 与 `task_id` 为空的 `bubble_message`；前端只能把它当作轻量承接反馈，不得写入正式任务链、任务详情或正式交付出口。
+- 上述无任务锚点轻量气泡属于 detached bubble；`bubble_message.task_id` 必须返回 `null`，不得使用空字符串、占位 ID 或伪 task ID。
 - 若现有 task 已处于 `waiting_auth`、`blocked` 或 `paused`，后端不得通过隐式 follow-up 直接改写原 task 的后续执行语义；此时应新开 task 或等待显式恢复/授权链路处理。
 - 若同一 `session` 内只有一个 `waiting_input / confirming_intent` 任务，普通文本补充可续接到该任务；`options.confirm_required = true` 只表示本次补充后仍需确认，不应把普通文本补充机械拆成新 task。
 - 文件、选区、错误等结构化补充证据若要续接旧 task，仍必须存在共享页面 / 窗口 / App 锚点、共享选区 / 报错 / 附件血缘，或其他能证明属于旧任务的 lineage。
@@ -824,6 +845,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - 这类视觉型任务的 `task.source_type` 应返回 `screen_capture`，表示正式任务围绕当前屏幕采样展开，而不是普通 `hover_input` 文本处理。
 - `agent.task.start` 不接受显式 `intent` 入参；视觉型任务仍由后端根据 `input / context / delivery` 统一推断，不要求前端发明平行入口。
 - `options.confirm_required = true` 仅表示调用方要求先进入意图确认；`false` 或省略只表示不强制确认，不得跳过风险授权、审计、恢复点或必要澄清。
+- `options.confirm_required` 必须同时进入 `agent.task.start` 的类型定义与 JSON Schema；前端不得再发明 `need_confirm`、`force_confirm` 等平行字段表达同一语义。
 - 当 `input.type = file` 且 `input.text` 已包含用户对附件的明确说明时，后端应直接进入 Agent Loop / 治理 / 执行链路，不应重复返回通用意图确认气泡。
 - 当 `input.type = file` 但缺少明确说明时，后端仍可进入意图确认或补充输入状态，避免对裸附件直接执行不明确任务。
 - 当客户端省略 `session_id` 时，后端应负责选择或创建隐藏协作 session，并把最终使用的 `session_id` 写回返回的 `task` 对象；若判断为同一任务的补充输入，则应续到原 task 而不是机械新开 task。
@@ -1127,6 +1149,11 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - **入参**：任务 ID、产物 ID
 - **出参**：产物对象、交付结果、打开动作、解析后的载荷
 
+补充约束：
+
+- `agent.task.artifact.open` 只用于“打开具体 artifact”，不替代任务当前最新正式交付的统一入口。
+- 当前端入口已经明确指向任务详情中的某张产物卡片、文件按钮或 artifact 列表项时，应优先调用本接口。
+
 ### agent.task.artifact.open 入参说明
 
 | 字段          | 中文说明 |
@@ -1213,6 +1240,12 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
   - 返回统一的 `delivery_result`、`open_action`、`resolved_payload`
 - **入参**：任务 ID，可选产物 ID
 - **出参**：交付结果、打开动作、解析后的载荷，按需附带产物对象
+
+补充约束：
+
+- `agent.delivery.open` 的目标是“打开当前任务最新正式交付”，适用于任务主结果、气泡“打开结果”或结果页“打开正式交付”等入口。
+- `artifact_id` 在本接口中只作为兼容入口；前端如果已经明确要打开某个具体 artifact，应优先走 `agent.task.artifact.open`。
+- 没有稳定 `task_id` 的轻量交付 payload 不得进入本接口；detached bubble 不得伪装成正式 delivery。
 
 ### agent.delivery.open 入参说明
 
@@ -2734,6 +2767,10 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `data.overview.global_state`      | 全局状态     |
 | `data.overview.high_value_signal` | 重点事件提示 |
 
+补充约束：
+
+- 仪表盘 `trust_summary` 只作为统一 `SecuritySummary` 的视图投影；不得在仪表盘层发明与任务详情或安全卫士不兼容的安全摘要结构。
+
 ### agent.dashboard.overview.get 出参示例
 
 ```json
@@ -3040,6 +3077,12 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - **入参**：无业务入参
 - **出参**：安全总览
 
+补充约束：
+
+- `agent.security.summary.get` 返回的 `summary` 是统一 `SecuritySummary` 基线模型，至少包含 `security_status`、`pending_authorizations`、`latest_restore_point`、`risk_level`。
+- `token_cost_summary` 作为安全总览的扩展视图附带返回，但不替代上述基线字段。
+- 任务详情中的 `security_summary` 与仪表盘 `trust_summary` 只能作为这份基线模型的投影或扩展，不应各自发明不兼容形状。
+
 ### agent.security.summary.get 入参示例
 
 ```json
@@ -3063,6 +3106,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `data.summary.security_status`        | 安全状态         |
 | `data.summary.pending_authorizations` | 待确认数量       |
 | `data.summary.latest_restore_point`   | 最近恢复点       |
+| `data.summary.risk_level`             | 当前风险等级     |
 | `data.summary.token_cost_summary`     | Token 与费用摘要 |
 
 ### agent.security.summary.get 出参示例
@@ -3076,6 +3120,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
       "summary": {
         "security_status": "pending_confirmation",
         "pending_authorizations": 1,
+        "risk_level": "yellow",
         "latest_restore_point": {
           "recovery_point_id": "rp_001",
           "created_at": "2026-04-07T10:15:00+08:00"
@@ -3590,6 +3635,7 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 
 - `agent.settings.get` 返回的是设置读取快照，其中模型配置使用 `models.credentials.*` 组织敏感配置状态与连接信息。
 - `provider_api_key_configured` 只表示当前提供方凭证是否已配置成功，不回传任何明文密钥。
+- `agent.settings.get` 的 `models.credentials.*` 只用于读侧快照回填；前端不得把它原样回传给 `agent.settings.update` 或 `agent.settings.model.validate`。
 
 ### agent.settings.get 入参说明
 
@@ -3734,8 +3780,11 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 补充约束：
 
 - `agent.settings.update` 的 `models` 采用写入导向结构，使用扁平字段提交提供方、凭证和模型选择。
+- `agent.settings.update` 与 `agent.settings.model.validate` 使用同一套写入导向 `models.*` patch 结构；前端不得把 `settings.get` 返回的 `models.credentials.*` 直接当作更新入参。
 - 本接口响应里的 `effective_settings.models.*` 保持与更新请求相同的扁平路径，便于前端直接对照本次保存结果。
 - `models.api_key` 仅在本次请求内使用；响应体里只通过 `provider_api_key_configured` 回传布尔状态。
+- `models.delete_api_key = true` 表示删除已保存密钥；保存时应按删除后的草稿态生效，而不是和旧密钥混用。
+- 当本次更新涉及模型配置时，请求应携带最近一次成功 `agent.settings.model.validate` 返回的 `expected_validated_config_hash`；若保存时 patch 与最近一次成功校验不一致，后端应拒绝或返回结构化 warning / error。
 - `models.provider`、`models.base_url`、`models.model` 以及模型凭证写入/删除返回 `apply_mode = next_task_effective`；当前正在执行的任务继续使用原有运行时模型快照，后续新任务使用更新后的运行时模型配置。
 - 打包版默认 `general.download.workspace_path` 会解析为用户本机的 `AppLocalData/CialloClaw/workspace`，历史 `workspace` 相对占位值会在 settings snapshot 读取时迁移到该绝对目录。
 - 打包版默认 `task_automation.task_sources` 会解析为 `${workspace_path}/todos`；settings snapshot 读取时仅会把历史默认占位值（`workspace/todos` 或旧的 `D:/workspace/todos`）迁移到该绝对目录，用户自定义的 `workspace/...` 多根来源会保持原样。
@@ -3758,8 +3807,10 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `models.provider`                         | 要切换到的模型提供方 |
 | `models.budget_auto_downgrade`            | 预算不足时是否自动降级 |
 | `models.api_key`                          | 当前请求临时写入 Stronghold 的 API Key；保存后不回显 |
+| `models.delete_api_key`                   | 是否删除当前已保存的 API Key |
 | `models.base_url`                         | 模型服务基地址 |
 | `models.model`                            | 目标模型名 |
+| `expected_validated_config_hash`          | 最近一次成功模型校验返回的配置指纹，用于保证校验草稿与保存草稿一致 |
 
 ### agent.settings.update 入参示例
 
@@ -3790,7 +3841,8 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
       "api_key": "sk-example",
       "base_url": "https://api.openai.com/v1",
       "model": "gpt-3.5-turbo"
-    }
+    },
+    "expected_validated_config_hash": "cfgval_8b7d3e6c"
   }
 }
 ```
@@ -3825,8 +3877,46 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 补充约束：
 
 - 本接口是只读探测，不会修改正式设置快照、Stronghold 密钥或当前任务状态。
-- `models.api_key` 若在本次请求中提供，仅用于本次校验，不会回显明文。
+- `models.api_key` 若在本次请求中提供，仅用于本次校验，不会回显明文，也不会持久化到正式设置或 Stronghold。
+- 前端或用户侧可以提交展示别名 provider（例如 `openai`）；后端路由、审计和排障统一以返回的 `canonical_provider` 为准。
+- `models.delete_api_key = true` 时，校验针对的是“删除已保存密钥后的当前草稿态”，而不是继续沿用旧密钥。
 - 返回 `ok = true` 时表示当前模型配置已通过文本生成与工具调用校验；返回 `ok = false` 时，控制面板应阻止本次保存并直接展示校验失败原因。
+
+### agent.settings.model.validate 入参说明
+
+| 字段 | 中文说明 |
+| --- | --- |
+| `request_meta.trace_id` | 请求链路追踪 ID |
+| `request_meta.client_time` | 前端发起时间 |
+| `models.provider` | 待校验的模型提供方展示名或别名；省略时沿用当前有效设置 |
+| `models.budget_auto_downgrade` | 当前草稿是否开启预算自动降级 |
+| `models.api_key` | 本次校验临时使用的 API Key；不会落盘或回显 |
+| `models.delete_api_key` | 是否删除已保存密钥并按删除后的草稿态校验 |
+| `models.base_url` | 待校验的模型服务基地址；省略时沿用当前有效设置 |
+| `models.model` | 待校验的模型名；省略时沿用当前有效设置 |
+
+### agent.settings.model.validate 入参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_model_validate_001",
+  "method": "agent.settings.model.validate",
+  "params": {
+    "request_meta": {
+      "trace_id": "trace_model_validate_001",
+      "client_time": "2026-04-07T11:08:00+08:00"
+    },
+    "models": {
+      "provider": "openai",
+      "budget_auto_downgrade": true,
+      "api_key": "sk-example",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-3.5-turbo"
+    }
+  }
+}
+```
 
 ### agent.settings.model.validate 出参关键字段
 
@@ -3841,6 +3931,34 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 | `data.model` | 本次校验使用的模型名 |
 | `data.text_generation_ready` | 文本生成探测是否成功 |
 | `data.tool_calling_ready` | 工具调用探测是否成功 |
+| `data.validated_config_hash` | 本次成功校验的模型配置指纹；供后续 `agent.settings.update` 携带 `expected_validated_config_hash` 使用 |
+
+### agent.settings.model.validate 出参示例
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": "req_model_validate_001",
+  "result": {
+    "data": {
+      "ok": true,
+      "status": "ready",
+      "message": "模型连接与工具调用能力校验通过。",
+      "provider": "openai",
+      "canonical_provider": "openai_responses",
+      "base_url": "https://api.openai.com/v1",
+      "model": "gpt-3.5-turbo",
+      "text_generation_ready": true,
+      "tool_calling_ready": true,
+      "validated_config_hash": "cfgval_8b7d3e6c"
+    },
+    "meta": {
+      "server_time": "2026-04-07T11:08:01+08:00"
+    },
+    "warnings": []
+  }
+}
+```
 
 ### agent.settings.update 出参示例
 
@@ -4385,6 +4503,15 @@ Notification 只负责“状态变化推送”，不承载复杂业务命令。
 - 订阅只用于状态同步，不绕过正式请求。
 - Notification 到达后，前端应按正式主键刷新对应对象：`task.*` 以 `task_id` 为主键，`plugin.*` 以 `plugin_id` 或运行态主键 `name + kind` 为锚点，而不是临时拼装新对象。
 - 若通知缺少关键主键，视为非法事件。
+
+### 9.3 Subscription 传输规则
+
+- Windows 正式运行态以 Named Pipe 作为订阅通道；调试态本地 IPC / localhost HTTP / SSE 仅用于开发兼容，不构成正式生产承诺。
+- 订阅建立后必须返回可取消句柄或等价取消能力；前端窗口卸载、任务详情关闭或仪表盘模块切换时必须释放对应订阅。
+- 断线、重连或宿主恢复后，前端应重新订阅，并通过 `agent.task.detail.get`、`agent.task.list`、`agent.security.pending.list`、`agent.plugin.runtime.list` 等正式查询接口补齐状态。
+- Notification payload 只作为刷新触发器，不作为长期真源；复杂对象展示必须回到对应 stable 查询接口获取正式对象。
+- 事件顺序只在同一连接、同一任务或同一插件锚点内尽力保持；跨任务、跨插件、跨连接恢复不得依赖全局顺序。
+- 前端需要按正式主键和事件时间 / 版本信息做幂等去重；重复事件不得导致气泡、任务列表、插件状态或安全待确认项重复创建。
 
 ---
 
