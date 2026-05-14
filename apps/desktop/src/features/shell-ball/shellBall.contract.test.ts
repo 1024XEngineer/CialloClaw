@@ -8906,6 +8906,21 @@ test("shell-ball clipboard prompts stay active for 10 seconds after clipboard re
   );
 });
 
+test("shell-ball selected-text prompts revalidate every 2 seconds and suppress stale Ctrl+X selections", () => {
+  const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
+  const shellBallWindowSource = readFileSync(resolve(desktopRoot, "src/platform/shellBallWindow.ts"), "utf8");
+  const hostSelectionSource = readFileSync(resolve(desktopRoot, "src-tauri/src/selection/windows.rs"), "utf8");
+
+  assert.match(appSource, /const SHELL_BALL_SELECTION_REVALIDATION_INTERVAL_MS = 2_000;/);
+  assert.match(appSource, /await readShellBallSelectionSnapshot\(\);/);
+  assert.match(appSource, /window\.setInterval\(\(\) => \{\s*void revalidateSelectionPrompt\(\);\s*\}, SHELL_BALL_SELECTION_REVALIDATION_INTERVAL_MS\);/s);
+  assert.match(shellBallWindowSource, /export async function readShellBallSelectionSnapshot\(\)/);
+  assert.match(hostSelectionSource, /invalidated_fingerprint: Option<String>/);
+  assert.match(hostSelectionSource, /if should_invalidate_selection_from_key_event\(keyboard_info\.vkCode\) \{\s*invalidate_current_selection\(\);\s*\}/s);
+  assert.match(hostSelectionSource, /if fingerprint\.is_some\(\) && fingerprint == invalidated_fingerprint \{\s*return None;\s*\}/s);
+  assert.match(hostSelectionSource, /state\.invalidated_fingerprint = fingerprint;/);
+});
+
 test("shell-ball app routes fresh clipboard prompts through the formal text submit path", () => {
   const appSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/ShellBallApp.tsx"), "utf8");
   const coordinatorSource = readFileSync(resolve(desktopRoot, "src/features/shell-ball/useShellBallCoordinator.ts"), "utf8");

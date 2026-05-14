@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
-import { Link, NavLink, useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangle,
   Archive,
-  ArrowLeft,
   Clock3,
   PlaneTakeoff,
   Radar,
@@ -18,7 +17,6 @@ import { useDashboardEscapeHandler } from "@/features/dashboard/shared/dashboard
 import { readDashboardTaskDetailRouteState } from "@/features/dashboard/shared/dashboardTaskDetailNavigation";
 import { buildDashboardSafetyNavigationState } from "@/features/dashboard/shared/dashboardSafetyNavigation";
 import { resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
-import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import { cn } from "@/utils/cn";
 import {
   buildTaskTowerCode,
@@ -70,9 +68,13 @@ import type { TaskEventFilters, TaskListItem, TaskPrimaryAction } from "./taskPa
 import "./taskPage.css";
 
 type TaskClusterKey = "archive" | "departure" | "holding" | "irregular";
+type ArchiveTabKey = "recent" | "weekly";
+
+function isArchiveTabKey(value: string): value is ArchiveTabKey {
+  return value === "recent" || value === "weekly";
+}
 
 type TaskClusterSection = {
-  code: string;
   emptyCopy: string;
   items: TaskListItem[];
   key: TaskClusterKey;
@@ -108,7 +110,7 @@ export function TaskPage() {
   const [requestedTaskId, setRequestedTaskId] = useState<string | null>(null);
   const [stageInitialized, setStageInitialized] = useState(false);
   const [detailOpen, setDetailOpen] = useState(false);
-  const [showMoreFinished, setShowMoreFinished] = useState(false);
+  const [activeArchiveTab, setActiveArchiveTab] = useState<ArchiveTabKey>("recent");
   const [expandedClusterKey, setExpandedClusterKey] = useState<TaskClusterKey | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
   const [steeringSuccessVersion, setSteeringSuccessVersion] = useState(0);
@@ -160,19 +162,14 @@ export function TaskPage() {
     () => finishedTasks.filter((item) => getTaskRunwayTone(item.task.status) === "archive"),
     [finishedTasks],
   );
-  const hasArchiveOlderItems = useMemo(() => {
-    const now = Date.now();
-    return archiveTasks.some((item) => {
-      const finishedAt = item.task.finished_at ? new Date(item.task.finished_at).getTime() : now;
-      const diffDays = (now - finishedAt) / (1000 * 60 * 60 * 24);
-      return diffDays > 7;
-    });
-  }, [archiveTasks]);
-  const archiveGroups = useMemo(() => getFinishedTaskGroups(archiveTasks, showMoreFinished), [archiveTasks, showMoreFinished]);
+  const archiveGroups = useMemo(() => getFinishedTaskGroups(archiveTasks, false), [archiveTasks]);
+  const activeArchiveGroup = useMemo(
+    () => archiveGroups.find((group) => group.key === activeArchiveTab) ?? archiveGroups[0] ?? null,
+    [activeArchiveTab, archiveGroups],
+  );
   const clusterSections = useMemo<TaskClusterSection[]>(
     () => [
       {
-        code: "Flow",
         emptyCopy: "当前还没有正在顺滑推进的任务。",
         items: departureTasks,
         key: "departure",
@@ -180,23 +177,20 @@ export function TaskPage() {
         title: "推进",
       },
       {
-        code: "Pause",
         emptyCopy: "当前没有等待补充或授权的任务。",
         items: holdingTasks,
         key: "holding",
-        subtitle: "这里聚合等待补充、授权或继续指令的事项。",
+        subtitle: "等待补充、授权或继续指令的事项。",
         title: "待命",
       },
       {
-        code: "Edge",
         emptyCopy: "当前没有需要排障解释的异常任务。",
         items: irregularTasks,
         key: "irregular",
-        subtitle: "把阻塞和失败集中收拢，方便快速看清原因。",
+        subtitle: "把阻塞和失败集中收拢。",
         title: "异常",
       },
       {
-        code: "Shelf",
         emptyCopy: "当前还没有可回看的已结束任务。",
         items: archiveTasks,
         key: "archive",
@@ -230,6 +224,16 @@ export function TaskPage() {
   useEffect(() => {
     setTaskEventFilters(DEFAULT_TASK_EVENT_FILTERS);
   }, [selectedTaskId]);
+
+  useEffect(() => {
+    if (activeArchiveGroup === null) {
+      return;
+    }
+
+    if (isArchiveTabKey(activeArchiveGroup.key) && activeArchiveGroup.key !== activeArchiveTab) {
+      setActiveArchiveTab(activeArchiveGroup.key);
+    }
+  }, [activeArchiveGroup, activeArchiveTab]);
 
   useEffect(() => {
     /**
@@ -685,29 +689,23 @@ export function TaskPage() {
     }
 
     if (section.key === "archive") {
+      if (activeArchiveGroup === null) {
+        return <div className="task-runway__empty">{section.emptyCopy}</div>;
+      }
+
       return (
-        <div className="task-runway__archive-groups">
-          {archiveGroups.map((group) => (
-            <section key={group.key} className="task-runway__archive-group">
-              <div className="task-runway__archive-head">
-                <p className="task-runway__archive-title">{group.title}</p>
-                <p className="task-runway__archive-copy">{group.description}</p>
-              </div>
-              <div className="task-runway__manifest task-runway__manifest--archive">
-                {group.items.map((item) => (
-                  <TaskPreviewCard
-                    key={item.task.task_id}
-                    isActive={item.task.task_id === selectedTaskId}
-                    item={item}
-                    onOpenDetail={handleOpenTaskDetail}
-                    onStage={handleSelectTask}
-                    runwayLabel={section.code}
-                  />
-                ))}
-              </div>
-            </section>
+        <>
+          {activeArchiveGroup.items.map((item) => (
+            <TaskPreviewCard
+              key={item.task.task_id}
+              hideStep
+              isActive={item.task.task_id === selectedTaskId}
+              item={item}
+              onOpenDetail={handleOpenTaskDetail}
+              onStage={handleSelectTask}
+            />
           ))}
-        </div>
+        </>
       );
     }
 
@@ -724,7 +722,6 @@ export function TaskPage() {
             item={item}
             onOpenDetail={handleOpenTaskDetail}
             onStage={handleSelectTask}
-            runwayLabel={section.code}
           />
         ))}
       </div>
@@ -734,7 +731,7 @@ export function TaskPage() {
   function renderClusterSection(section: TaskClusterSection) {
     const Icon = clusterIcons[section.key];
     const isExpanded = expandedClusterKey === section.key;
-    const shouldShowToggle = section.key === "archive" ? hasArchiveOlderItems : section.items.length > CLUSTER_PREVIEW_LIMIT;
+    const shouldShowToggle = section.key !== "archive" && section.items.length > CLUSTER_PREVIEW_LIMIT;
     const isFocused = selectedTaskId ? section.items.some((item) => item.task.task_id === selectedTaskId) : false;
 
     return (
@@ -745,45 +742,51 @@ export function TaskPage() {
               <Icon className="h-4 w-4" />
             </span>
             <div>
-              <span className="task-runway__code">{section.code}</span>
-              <h2>{section.title}</h2>
-              <p>{section.subtitle}</p>
+              <div className="task-cluster__title-row">
+                <h2>{section.title}</h2>
+                <p>{section.subtitle}</p>
+              </div>
             </div>
           </div>
 
           <div className="task-runway__header-actions">
-            <span className="task-runway__count">{section.items.length}</span>
+            {section.key === "archive" && archiveGroups.length > 0 ? (
+              <div className="task-runway__tabs" role="tablist" aria-label="归档时间范围切换">
+                {archiveGroups.map((group) => (
+                  <button
+                    key={group.key}
+                    aria-selected={activeArchiveGroup?.key === group.key}
+                    className={cn("task-runway__tab", activeArchiveGroup?.key === group.key && "is-active")}
+                    onClick={() => {
+                      if (isArchiveTabKey(group.key)) {
+                        setActiveArchiveTab(group.key);
+                      }
+                    }}
+                    role="tab"
+                    type="button"
+                  >
+                    {group.title}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+            <span className="task-runway__count">{section.key === "archive" ? (activeArchiveGroup?.items.length ?? 0) : section.items.length}</span>
             {shouldShowToggle ? (
-              <button className="task-runway__toggle" onClick={() => (section.key === "archive" ? setShowMoreFinished((current) => !current) : toggleCluster(section.key))} type="button">
-                {section.key === "archive" ? (showMoreFinished ? "收起" : "更多") : isExpanded ? "收起" : "更多"}
+              <button className="task-runway__toggle" onClick={() => toggleCluster(section.key)} type="button">
+                {isExpanded ? "收起" : "更多"}
               </button>
             ) : null}
           </div>
         </header>
 
-        <div className="task-runway__content">{renderClusterCards(section)}</div>
+        <div className={cn("task-runway__content", section.key === "archive" && "task-runway__content--archive")}>{renderClusterCards(section)}</div>
       </article>
     );
   }
 
   return (
     <main className="dashboard-page task-tower-page task-cloud-page" style={pageStyle}>
-      <header className="dashboard-page__topbar">
-        <div className="task-tower__topbar-actions">
-          <Link className="dashboard-page__home-link" to={resolveDashboardRoutePath("home")}>
-            <ArrowLeft className="h-4 w-4" />
-            返回首页
-          </Link>
-        </div>
-
-        <nav aria-label="Dashboard modules" className="dashboard-page__module-nav">
-          {dashboardModules.map((item) => (
-            <NavLink key={item.route} className={({ isActive }) => cn("dashboard-page__module-link", isActive && "is-active")} to={item.path}>
-              {item.title}
-            </NavLink>
-          ))}
-        </nav>
-      </header>
+      <div aria-hidden="true" className="dashboard-page__topbar-spacer" />
 
       <section className="task-tower task-cloud">
         <LayoutGroup id="task-cloud-layout">
@@ -835,9 +838,18 @@ export function TaskPage() {
                     </div>
 
                     <div className="task-cloud__stage-dock-meta">
-                      <span className="task-cloud__stage-chip">{getTaskPreviewStatusLabel(selectedTaskPreview.task.status)}</span>
-                      <span className="task-cloud__stage-chip">{selectedProgress.currentLabel}</span>
-                      <span className="task-cloud__stage-chip">{selectedTaskEnded ? "已结束" : `更新于 ${selectedUpdateLabel}`}</span>
+                      <span className="task-cloud__stage-chip" data-tone="status">
+                        <span className="task-cloud__stage-chip-label">状态</span>
+                        <span className="task-cloud__stage-chip-value">{getTaskPreviewStatusLabel(selectedTaskPreview.task.status)}</span>
+                      </span>
+                      <span className="task-cloud__stage-chip" data-tone="progress">
+                        <span className="task-cloud__stage-chip-label">阶段</span>
+                        <span className="task-cloud__stage-chip-value">{selectedProgress.currentLabel}</span>
+                      </span>
+                      <span className="task-cloud__stage-chip" data-tone="time">
+                        <span className="task-cloud__stage-chip-label">时间</span>
+                        <span className="task-cloud__stage-chip-value">{selectedTaskEnded ? "已结束" : `更新于 ${selectedUpdateLabel}`}</span>
+                      </span>
                     </div>
                     <p className="task-cloud__stage-description">{selectedStageDescription ?? selectedStateVoice.body}</p>
                   </section>

@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState } from "react";
-import { AnimatePresence, motion } from "motion/react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { HashRouter, Link, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
@@ -11,6 +10,7 @@ import {
 import { MemoryPage } from "@/features/dashboard/memory/MemoryPage";
 import { NotesPage } from "@/features/dashboard/notes/NotesPage";
 import { SafetyPage } from "@/features/dashboard/safety/SafetyPage";
+import { DashboardModuleFloatingNav } from "@/features/dashboard/shared/DashboardModuleFloatingNav";
 import {
   dashboardTaskDetailNavigationEvent,
   navigateToDashboardTaskDetail,
@@ -21,6 +21,7 @@ import {
   useDashboardEscapeCoordinator,
   useDashboardEscapeHandler,
 } from "@/features/dashboard/shared/dashboardEscapeCoordinator";
+import { dashboardModules } from "@/features/dashboard/shared/dashboardRoutes";
 import { resolveDashboardModuleRoutePath, resolveDashboardRoutePath } from "@/features/dashboard/shared/dashboardRouteTargets";
 import {
   dashboardTaskDeliveryNavigationEvent,
@@ -318,31 +319,29 @@ function DashboardRoutes() {
         />
       );
 
+  const activeSharedModule = useMemo(
+    () => dashboardModules.find((module) => location.pathname === module.path || location.pathname.startsWith(`${module.path}/`)) ?? null,
+    [location.pathname],
+  );
+
   return (
     <div className={cn("dashboard-app", isOpening && "is-opening")}>
-      <AnimatePresence mode="wait">
-        <motion.div
-          key={location.pathname}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          className="dashboard-route-layer"
-          exit={{ opacity: 0, scale: 0.988, y: -16 }}
-          initial={{ opacity: 0, scale: 0.958, y: 30 }}
-          style={{ transformOrigin: "50% 53.2%" }}
-          transition={{ duration: 0.46, ease: [0.22, 1, 0.36, 1] }}
-        >
-          <Routes location={location}>
-            <Route
-              element={dashboardHomeRoute}
-              path={resolveDashboardRoutePath("home")}
-            />
-            <Route element={<TasksPage />} path={`${resolveDashboardModuleRoutePath("tasks")}/*`} />
-            <Route element={<NotesPage />} path={`${resolveDashboardModuleRoutePath("notes")}/*`} />
-            <Route element={<MemoryPage />} path={`${resolveDashboardModuleRoutePath("memory")}/*`} />
-            <Route element={<SafetyPage />} path={`${resolveDashboardModuleRoutePath("safety")}/*`} />
-            <Route element={<Navigate replace to={resolveDashboardRoutePath("home")} />} path="*" />
-          </Routes>
-        </motion.div>
-      </AnimatePresence>
+      {activeSharedModule ? (
+        <DashboardModuleFloatingNav accentColor={activeSharedModule.accent} includeHomeLink />
+      ) : null}
+      <div className={cn("dashboard-route-layer", activeSharedModule && "dashboard-route-layer--with-shared-topbar")}>
+        <Routes location={location}>
+          <Route
+            element={dashboardHomeRoute}
+            path={resolveDashboardRoutePath("home")}
+          />
+          <Route element={<TasksPage />} path={`${resolveDashboardModuleRoutePath("tasks")}/*`} />
+          <Route element={<NotesPage />} path={`${resolveDashboardModuleRoutePath("notes")}/*`} />
+          <Route element={<MemoryPage />} path={`${resolveDashboardModuleRoutePath("memory")}/*`} />
+          <Route element={<SafetyPage />} path={`${resolveDashboardModuleRoutePath("safety")}/*`} />
+          <Route element={<Navigate replace to={resolveDashboardRoutePath("home")} />} path="*" />
+        </Routes>
+      </div>
       <DashboardVoiceField
         isOpen={voiceOpen}
         onClose={() => setVoiceOpen(false)}

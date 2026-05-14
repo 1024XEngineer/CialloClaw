@@ -150,11 +150,9 @@ export function NoteActionBar({ item, onAction }: NoteActionBarProps) {
 
         return (
           <Tooltip key={action.label}>
-            <TooltipTrigger>
-              <Button className="note-detail-actions__button" onClick={() => onAction(action.action)} variant="ghost">
-                <Icon className="h-4 w-4" />
-                {action.label}
-              </Button>
+            <TooltipTrigger render={<Button className="note-detail-actions__button" onClick={() => onAction(action.action)} variant="ghost" />}>
+              <Icon className="h-4 w-4" />
+              {action.label}
             </TooltipTrigger>
             <TooltipContent className="rounded-full bg-slate-900/90 px-3 py-1.5 text-[0.72rem] text-white">{action.tooltip}</TooltipContent>
           </Tooltip>

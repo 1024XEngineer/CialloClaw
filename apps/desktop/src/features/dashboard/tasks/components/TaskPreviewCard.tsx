@@ -17,18 +17,18 @@ import {
 import type { TaskListItem } from "../taskPage.types";
 
 type TaskPreviewCardProps = {
+  hideStep?: boolean;
   isActive: boolean;
   isPeeked?: boolean;
   item: TaskListItem;
   onOpenDetail: (taskId: string) => void;
   onStage: (taskId: string) => void;
-  runwayLabel: string;
 };
 
 /**
  * Renders a soft focus card for each task cluster in the dashboard scene.
  */
-export function TaskPreviewCard({ isActive, isPeeked = false, item, onOpenDetail, onStage, runwayLabel }: TaskPreviewCardProps) {
+export function TaskPreviewCard({ hideStep = false, isActive, isPeeked = false, item, onOpenDetail, onStage }: TaskPreviewCardProps) {
   const ended = isTaskEnded(item.task);
   const towerCode = buildTaskTowerCode(item.task.task_id);
   const tone = getTaskRunwayTone(item.task.status);
@@ -91,7 +91,7 @@ export function TaskPreviewCard({ isActive, isPeeked = false, item, onOpenDetail
       <div className="task-preview-card__signal">
         <div className="task-preview-card__signal-left">
           <motion.span className="task-preview-card__signal-orb" layoutId={`task-cloud-signal-${item.task.task_id}`} />
-          <span className="task-preview-card__runway">{runwayLabel}</span>
+          <p className="task-preview-card__kicker">{formatTaskSourceLabel(item.task.source_type)}</p>
         </div>
         <motion.span className="task-preview-card__flight-code" layoutId={`task-cloud-code-${item.task.task_id}`}>
           {towerCode}
@@ -100,17 +100,13 @@ export function TaskPreviewCard({ isActive, isPeeked = false, item, onOpenDetail
 
       <div className="task-preview-card__body">
         <div className="task-preview-card__top">
-          <div>
-            <p className="task-preview-card__kicker">{formatTaskSourceLabel(item.task.source_type)}</p>
-            <h3 className="task-preview-card__title">{item.task.title}</h3>
-          </div>
-
+          <h3 className="task-preview-card__title">{item.task.title}</h3>
           <Badge className={cn("task-preview-card__status border-0 px-3 py-1 text-[0.72rem] ring-1", getTaskStatusBadgeClass(item.task.status))}>
             {getTaskPreviewStatusLabel(item.task.status)}
           </Badge>
         </div>
 
-        <p className="task-preview-card__step">{summaryCopy}</p>
+        {hideStep ? null : <p className="task-preview-card__step">{summaryCopy}</p>}
 
         <div className="task-preview-card__meta">
           <span className="task-preview-card__meta-chip task-preview-card__meta-chip--priority">{getTaskPriorityLabel(item.experience.priority)}</span>

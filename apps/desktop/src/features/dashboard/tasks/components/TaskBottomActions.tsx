@@ -1,5 +1,4 @@
 import { FilePlus2, FolderPlus, Play, ScissorsLineDashed, Sparkles } from "lucide-react";
-import { motion } from "motion/react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { TaskActionShortcut } from "../taskPage.types";
@@ -25,13 +24,9 @@ export function TaskBottomActions({ actions, onAction }: TaskBottomActionsProps)
 
         return (
           <Tooltip key={action.id}>
-            <TooltipTrigger>
-              <motion.div whileHover={{ y: -3 }} whileTap={{ y: 1 }}>
-                <Button className="task-capsule-soft-button h-11 rounded-full px-5 text-sm font-medium" onClick={() => onAction(action.id)} variant="ghost">
-                  <Icon className="h-4 w-4" />
-                  {action.label}
-                </Button>
-              </motion.div>
+            <TooltipTrigger render={<Button className="task-capsule-soft-button h-11 rounded-full px-5 text-sm font-medium" onClick={() => onAction(action.id)} variant="ghost" />}>
+              <Icon className="h-4 w-4" />
+              {action.label}
             </TooltipTrigger>
             <TooltipContent className="rounded-full bg-slate-900/90 px-3 py-1.5 text-[0.72rem] text-white">
               {action.tooltip}
